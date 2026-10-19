@@ -1,3 +1,4 @@
+import { ComunicacaoHomologacao } from '../whatsapp/comunicacao-homologacao.js';
 import { iniciarAvisosPendenciasProfissionais } from './avisar-pendencias-profissionais.js';
 import { PostgresDadosProfissionaisService } from '../io/postgres/postgres-dados-profissionais-service.js';
 /**
@@ -56,26 +57,13 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
     config.evolutionAssistantInstanceName,
     config.evolutionOfficialInstanceName
   );
+  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient);
   const notificadorAlertas: NotificadorAlertas = {
     async notificarMedicoWhatsApp(params) {
       if (!params.medicoId || !params.solicitacaoId) {
         throw new Error('Identificadores do médico ou da solicitação ausentes para envio de notificação.');
       }
-      try {
-        const { rows } = await pool.query(
-          `select u.telefone from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1`,
-          [params.medicoId]
-        );
-        if (rows[0]?.telefone) {
-          await evolutionAssistantClient.enviarTexto({
-            contatoTelefone: rows[0].telefone,
-            texto: `Olá, Doutor(a). Identificamos uma ocorrência na emissão de NFS-e (solicitação ${params.solicitacaoId.slice(0, 8)}): ${params.motivoErro || 'Falha na comunicação com a prefeitura'}.`,
-            instanciaNome: config.evolutionAssistantInstanceName
-          });
-        }
-      } catch (err: any) {
-        console.warn('[WorkerEmbutido] Falha ao enviar aviso de emissão ao médico:', err?.message || err);
-      }
+      await comunicacaoHomologacao.medico({ medicoId: params.medicoId, acao: 'falha_emissao', chave: params.solicitacaoId });
     },
     async notificarDesenvolvedorEmail(params) {
       if (config.resendApiKey && config.devEmailAlerta) {
@@ -103,7 +91,10 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
           dadosProfissionais,
           emissorDps: item.emissaoComprovante && emissorComprovante ? emissorComprovante : emissorDps,
           enviarPdfDanfse: evolutionClient,
-          notificadorAlertas
+          notificadorAlertas,
+          aoAutorizarComprovante: async item => {
+            await comunicacaoHomologacao.medico({ medicoId: item.medicoId, acao: 'nota_gerada', chave: item.id });
+          }
         });
         console.log(`[WorkerEmbutido] Solicitação ${item.id} finalizada com status: ${res.status}`);
       } catch (err: any) {

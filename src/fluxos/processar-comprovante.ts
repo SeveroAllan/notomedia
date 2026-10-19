@@ -13,6 +13,7 @@ interface ProcessarComprovanteDeps {
   extrator: ExtratorComprovante;
   historico: Pick<HistoricoComunicacaoRepositorio, 'registrarComprovante'>;
   log: (nivel: 'erro', codigo: string) => void;
+  aoComunicar?: (decisao: DecisaoPedidoComprovante, lido: ResultadoExtracaoComprovante | null) => Promise<void>;
   aoDecidir?: (decisao: DecisaoPedidoComprovante, lido: ResultadoExtracaoComprovante | null, estado: EstadoPedidoComprovante) => Promise<void>;
 }
 
@@ -28,7 +29,7 @@ export async function orquestrarComprovante(
   const estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
   const decisao = await processarComprovante(contexto.mensagem, estado, deps);
   if (decisao.tipo === 'pedido_nota_pronto' && !deps.aoDecidir) deps.log('info', `pediria nota ${decisao.tipo}`);
-  if (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda') deps.log('info', `enviaria ${decisao.tipo}`);
+  if (!deps.aoComunicar && (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda')) deps.log('info', `enviaria ${decisao.tipo}`);
   return decisao;
 }
 
@@ -48,6 +49,10 @@ export async function processarComprovante(
   catch {
     deps.log('erro', 'AUDITORIA_COMPROVANTE_FALHOU');
     return { tipo: 'nenhuma', motivo: 'AUDITORIA_FALHOU' };
+  }
+  if (deps.aoComunicar && ['perguntar_medico', 'perguntar_pacote', 'pedir_agenda'].includes(decisao.tipo)) {
+    try { await deps.aoComunicar(decisao, lido); }
+    catch { deps.log('erro', 'COMUNICACAO_COMPROVANTE_FALHOU'); }
   }
   if (deps.aoDecidir && (decisao.tipo === 'pedido_nota_pronto' ||
       decisao.tipo === 'nenhuma' && decisao.motivo === 'COMPROVANTE_JA_PROCESSADO')) {

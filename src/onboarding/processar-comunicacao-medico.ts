@@ -10,11 +10,12 @@ export type EstadoComunicacaoMedico = Pick<Entrada, 'nomeMedico' | 'estado'>;
 // Serializa os gatilhos locais para que uma resposta não seja descartada por reserva ocupada.
 const processamentos = new Map<string, Promise<ProximaAcaoNoto>>();
 
-/** A flag habilita somente a simulação; não recebe transporte nem opção de envio real. */
+/** A comunicação externa recebe apenas ações determinísticas já auditadas. */
 export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string },
   deps: { ativo: boolean; memoriaConversa?: MemoriaConversaMedico; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
+    aoDecidir?: (acao: ProximaAcaoNoto, chave: string) => Promise<void>;
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
@@ -29,7 +30,8 @@ export async function processarComunicacaoMedico(
         texto: sanitizarTextoMedico(entrada.respostaMedico.texto),
         mensagensSeguras: memoriaConversa && conversa ? memoriaConversa.ler(entrada.medicoId, conversa) : entrada.respostaMedico.mensagensSeguras
       } : undefined;
-      const acao = await orquestrarComunicacao({ ...entrada, ...estado, respostaMedico }, { historico: deps.historico, log: deps.log, envioRealAtivo: false, extratorResposta: deps.extratorResposta });
+      const acao = await orquestrarComunicacao({ ...entrada, ...estado, respostaMedico }, { historico: deps.historico, log: deps.log, extratorResposta: deps.extratorResposta });
+      await deps.aoDecidir?.(acao, entrada.chaveProcessamento);
       if (memoriaConversa && conversa) {
         if (respostaMedico) memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
         const pergunta = montarPerguntaComunicacao(acao);

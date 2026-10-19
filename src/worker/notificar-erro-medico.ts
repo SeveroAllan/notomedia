@@ -1,6 +1,6 @@
 /**
  * Portas de notificação para falhas de emissão e incidentes operacionais.
- * 1. Avisa o médico pelo WhatsApp oficial da plataforma (nunca paciente, seção 3.2 item 7).
+ * 1. Avisa o médico pela instância assistente, com flag, homologação e allowlist.
  * 2. Avisa o desenvolvedor por e-mail via Resend em caso de bug inesperado (item 8).
  */
 

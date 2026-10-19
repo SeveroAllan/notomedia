@@ -7,7 +7,7 @@ export function gerarVariantesTelefoneBrasileiro(telefone: string): string[] {
   if (!digitos) return [];
 
   const locais = new Set<string>();
-  const numeroLocal = digitos.startsWith('55') ? digitos.slice(2) : digitos;
+  const numeroLocal = digitos.startsWith('55') && digitos.length >= 12 ? digitos.slice(2) : digitos;
   locais.add(numeroLocal);
 
   if (numeroLocal.length === 11 && numeroLocal[2] === '9') {

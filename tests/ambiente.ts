@@ -8,12 +8,13 @@ for (const nome of [
   'COFRE_ORIGEM', 'COFRE_CHAVE', 'COFRE_DIRETORIO', 'TRIBEMD_TESTE_ORIGEM',
   'TRIBEMD_TESTE_CHAVE', 'TRIBEMD_TESTE_DIRETORIO'
 ]) vi.stubEnv(nome, '');
+vi.stubEnv('ENVIO_REAL_ALLOWLIST', '');
 vi.stubEnv('DOTENV_CONFIG_PATH', '/dev/null');
 vi.stubEnv('SUPABASE_URL', 'https://supabase.invalid');
 vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'credencial-ficticia-de-teste');
 vi.stubEnv('ENCRYPTION_KEY', 'chave-ficticia-de-testes');
 vi.stubEnv('APP_PEPPER', 'pepper-ficticio-de-testes');
-for (const nome of ['AGENTE_FISCAL_ATIVO', 'PREPARACAO_FISCAL_ATIVA']) vi.stubEnv(nome, 'false');
+for (const nome of ['AGENTE_FISCAL_ATIVO', 'PREPARACAO_FISCAL_ATIVA', 'ENVIO_MEDICO_REAL_ATIVO', 'ENVIO_PACIENTE_REAL_ATIVO', 'EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA']) vi.stubEnv(nome, 'false');
 
 const fetchLocal = globalThis.fetch;
 vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: RequestInit) => {

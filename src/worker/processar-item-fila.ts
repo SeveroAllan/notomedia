@@ -20,6 +20,7 @@ export interface ProcessarItemFilaDeps {
   enviarPdfDanfse: EnviarPdfDanfse;
   notificadorAlertas: NotificadorAlertas;
   agora?: () => Date;
+  aoAutorizarComprovante?: (item: ItemFilaComTentativas) => Promise<void>;
   dadosProfissionais?: DadosProfissionaisService;
 }
 
@@ -64,7 +65,10 @@ async function tratarSucessoEmissao(item: ItemFilaComTentativas, emissao: any, d
     ...(item.emissaoComprovante ? { emissaoComprovante: true as const } : {})
   });
 
-  if (item.emissaoComprovante) return;
+  if (item.emissaoComprovante) {
+    try { await deps.aoAutorizarComprovante?.(item); } catch { /* Falha de comunicação não desfaz a nota nem libera nova emissão. */ }
+    return;
+  }
   const contexto = await deps.filaRepositorio.buscarContextoEnvio(item.id);
   if (contexto) {
     await deps.enviarPdfDanfse.enviarPdf({

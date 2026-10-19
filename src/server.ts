@@ -1,3 +1,5 @@
+import { chaveComprovante } from './atendimento/comprovante.js';
+import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
 import { CadastroCertificado } from './cadastro/cadastro-certificado.js';
@@ -79,6 +81,8 @@ export function criarAppExpress() {
     config.evolutionGlobalApiKey,
     config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
   );
+  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName));
   const dadosProfissionais = new PostgresDadosProfissionaisService(pool);
   const authAdminService = new SupabaseAuthAdminService(
     config.supabaseUrl,
@@ -142,6 +146,9 @@ export function criarAppExpress() {
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(config.nvidiaApiKey, config.nvidiaRegistroModel), historico: historicoComunicacao,
+      aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {
+        if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
+      } : undefined,
       lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),
       log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
     });
@@ -658,9 +665,16 @@ export function criarAppExpress() {
           historico: historicoComunicacao,
           fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
           consultaJaFaturada: emissaoComprovante ? (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id) : undefined,
+          aoComunicar: config.envioMedicoRealAtivo ? async (decisao, lido) => {
+            if (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda') {
+              await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: decisao.tipo, motivo: decisao.motivo,
+                chave: chaveComprovante(config.appPepper, lido) ?? JSON.stringify([contexto.mensagem.key.remoteJid, contexto.mensagem.key.id]) });
+            }
+          } : undefined,
           aoDecidir: emissaoComprovante ? async (decisao, lido, estado) => {
             const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta });
-            if (resultado.tipo === 'perguntar_medico') console.info('enviaria perguntar_medico');
+            if (resultado.tipo === 'perguntar_medico') await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: 'perguntar_medico', motivo: resultado.motivo,
+              chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
             if (resultado.tipo === 'enfileirada') console.info('Solicitação enfileirada por comprovante.');
           } : undefined,
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
