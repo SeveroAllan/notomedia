@@ -239,6 +239,18 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
 
         resSefinFinal = resSefin;
 
+        // [DIAG-TEMP] captura crua da resposta SEFIN + XML enviado (CPF mascarado) - REMOVER APOS DIAGNOSTICO
+        if (!resSefin.sucesso) {
+          try {
+            const xmlMascarado = xmlAssinado.replace(/<CPF>\d{11}<\/CPF>/g, '<CPF>***</CPF>');
+            console.warn('[DIAG_E0014]', JSON.stringify({
+              dpsId, nDPS: emissaoInput.nDPS, ambiente: prestadorConfig.ambiente,
+              httpStatus: resSefin.httpStatus, codigoErro: resSefin.codigoErro, motivo: resSefin.motivo,
+              respostaRaw: resSefin.respostaRaw, xmlEnviado: xmlMascarado
+            }));
+          } catch (e) { console.warn('[DIAG_E0014] falha ao logar diagnostico', (e as any)?.message); }
+        }
+
         if (resSefin.sucesso) {
           break;
         }
