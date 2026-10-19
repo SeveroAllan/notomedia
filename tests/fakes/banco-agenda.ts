@@ -12,12 +12,11 @@ export class BancoAgendaFalso {
       for (const consulta of lote) this.consultas.set(JSON.stringify([medico, fonte, consulta.id_externo]), { medico_id: medico, fonte, ...consulta });
       return { rows: [] };
     }
-    if (sql.includes('from pacientes p') && sql.includes('from public.noto_consultas_sincronizadas a') && sql.includes("a.status = 'realizada'")) {
-      const [medico, paciente] = parametros; const cadastro = this.pacientes.get(JSON.stringify([medico, paciente]));
-      if (!cadastro) return { rows: [] };
-      const ultima = [...this.consultas.values()].filter(c => c.medico_id === medico && c.paciente_id === paciente && c.status === 'realizada')
-        .sort((a, b) => Date.parse(b.data_hora) - Date.parse(a.data_hora))[0];
-      return { rows: [{ ...cadastro, consulta_id: ultima?.id_externo ?? null, valor_consulta_centavos: ultima?.valor_consulta_centavos ?? null }] };
+    if (sql.includes('from pacientes p')) {
+      if (sql.includes('noto_consultas_sincronizadas')) throw new Error('LEITURA_PERSISTIDA_PROIBIDA');
+      const [medico, paciente] = parametros;
+      const cadastro = this.pacientes.get(JSON.stringify([medico, paciente]));
+      return { rows: cadastro ? [{ ...cadastro }] : [] };
     }
     throw new Error('QUERY_FORA_DO_CONTRATO_AGENDA');
   }

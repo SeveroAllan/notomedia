@@ -25,6 +25,8 @@ export interface ExtratorComprovante {
 }
 export interface EstadoPedidoComprovante {
   medicoId: string;
+  duvidaVinculo?: string;
+  consulta?: { fonte: string; idExterno: string; dataHora: string; valorConsultaCentavos: number | null };
   paciente: { nome: string | null; cpf: string | null };
   ultimaConsulta: Pick<ConsultaEmAbertoRegistro, 'valorConsultaCentavos'> | null;
 }
@@ -34,7 +36,7 @@ export interface LeitorEstadoPedidoComprovante {
 export type DecisaoPedidoComprovante =
   | (Extract<ProximaAcaoNoto, { tipo: 'pedir_agenda' }> & { motivo: 'SEM_AGENDA_CONECTADA' })
   | { tipo: 'nenhuma'; motivo: 'COMPROVANTE_JA_PROCESSADO' | 'AUDITORIA_FALHOU' }
-  | { tipo: 'perguntar_medico'; motivo: 'LEITURA_INDISPONIVEL' | 'COMPROVANTE_ILEGIVEL' | 'NAO_COMPROVANTE'
+  | { tipo: 'perguntar_medico'; motivo: 'VINCULO_TELEFONE_INDEFINIDO' | 'CONSULTA_AMBIGUA_OU_AUSENTE' | 'LEITURA_INDISPONIVEL' | 'COMPROVANTE_ILEGIVEL' | 'NAO_COMPROVANTE'
       | 'CAMPO_OBRIGATORIO_AUSENTE' | 'CONFIANCA_INSUFICIENTE' | 'CADASTRO_INCOMPLETO' | 'VALOR_DIVERGENTE' | 'PDF_NAO_SUPORTADO' | 'FONTE_INDISPONIVEL' | 'ACESSO_EXPIRADO' }
   | { tipo: 'perguntar_pacote'; motivo: 'VALOR_MULTIPLO_CONSULTA' }
   | { tipo: 'pedido_nota_pronto'; motivo: 'VALOR_IGUAL_ULTIMA_CONSULTA'; pedido: {
@@ -57,6 +59,7 @@ export function decidirPedidoComprovante(
     if (agenda.codigo === 'SEM_AGENDA_CONECTADA') return { tipo: 'pedir_agenda', agendaInformada: null, motivo: agenda.codigo };
     return { tipo: 'perguntar_medico', motivo: agenda.codigo };
   }
+  if (estado.duvidaVinculo === 'VINCULO_TELEFONE_INDEFINIDO' || estado.duvidaVinculo === 'CONSULTA_AMBIGUA_OU_AUSENTE') return { tipo: 'perguntar_medico', motivo: estado.duvidaVinculo };
   if (!lido) return { tipo: 'perguntar_medico', motivo: 'LEITURA_INDISPONIVEL' };
   if (lido.tipo === 'pdf_nao_suportado') return { tipo: 'perguntar_medico', motivo: 'PDF_NAO_SUPORTADO' };
   if (lido.tipo === 'ilegivel') return { tipo: 'perguntar_medico', motivo: 'COMPROVANTE_ILEGIVEL' };

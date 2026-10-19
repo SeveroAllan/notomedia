@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
-import { decidirPedidoComprovante, type DecisaoPedidoComprovante, type ResultadoExtracaoComprovante } from '../../atendimento/comprovante.js';
+import { decidirPedidoComprovante, type DecisaoPedidoComprovante, type ResultadoExtracaoComprovante, type EstadoPedidoComprovante } from '../../atendimento/comprovante.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
 import { PostgresEmissaoApiRepositorio } from './postgres-emissao-api-repositorio.js';
 
 type Pronto = Extract<DecisaoPedidoComprovante, { tipo: 'pedido_nota_pronto' }>;
 interface EntradaEmissaoComprovante {
+  consulta?: EstadoPedidoComprovante['consulta'];
   medicoId: string; pacienteId: string; lido: ResultadoExtracaoComprovante | null; decisao: DecisaoPedidoComprovante;
 }
 export type ResultadoEmissaoComprovante = { tipo: 'enfileirada'; solicitacaoId: string }
@@ -49,10 +50,9 @@ export class PostgresEmissaoComprovante {
     const { rows: pacientes } = await client.query(`select p.nome, case when p.cpf_cnpj_encriptado is not null
       then pgp_sym_decrypt(p.cpf_cnpj_encriptado, $3) end as cpf from pacientes p
       where p.medico_id = $1 and p.id = $2 for share`, [medicoId, pacienteId, this.chaveCriptografia]);
-    const { rows: consultas } = await client.query(`select fonte, id_externo, data_hora, valor_consulta_centavos
-      from public.noto_consultas_sincronizadas where medico_id = $1 and paciente_id = $2 and status = 'realizada'
-      order by data_hora desc limit 1 for share`, [medicoId, pacienteId]);
-    const consulta = consultas[0];
+    const consulta = entrada.consulta ? { fonte: entrada.consulta.fonte, id_externo: entrada.consulta.idExterno,
+      data_hora: entrada.consulta.dataHora, valor_consulta_centavos: entrada.consulta.valorConsultaCentavos } : null;
+    if (!consulta) return perguntar('CONSULTA_AMBIGUA_OU_AUSENTE');
     const atual = decidirPedidoComprovante(lido, { medicoId, paciente: pacientes[0] ?? { nome: null, cpf: null },
       ultimaConsulta: consulta ? { valorConsultaCentavos: consulta.valor_consulta_centavos } : null }, []);
     const auditada = auditorias[0].decisao as DecisaoPedidoComprovante;

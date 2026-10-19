@@ -55,18 +55,18 @@ describe('leitor de estado usa dados existentes sem inventar', () => {
     [{ nome: 'Paciente Ficticio', cpf: '52998224725', consulta_id: 'consulta-ficticia', valor_consulta_centavos: null }, 'perguntar_medico'],
     [null, 'perguntar_medico']
   ] as const)('linha %j gera %s', async (linha, tipo) => {
-    const query = vi.fn(async (_sql: string, _params: unknown[]) => ({ rows: linha ? [linha] : [] }));
+    const query = vi.fn(async (_sql: string, _params: unknown[]) => ({ rows: linha ? [{ nome: linha.nome, cpf: linha.cpf }] : [] }));
     const leitor: LeitorEstadoPedidoComprovante = new PostgresAtendimentoRepositorio({ query } as unknown as pg.Pool, 'chave-ficticia');
     const estado = await leitor.lerEstado('medico-ficticio', 'paciente-ficticio');
     expect(estado).toEqual({ medicoId: 'medico-ficticio', paciente: { nome: linha?.nome ?? null, cpf: linha?.cpf ?? null },
-      ultimaConsulta: linha?.consulta_id ? { valorConsultaCentavos: linha.valor_consulta_centavos } : null });
+      ultimaConsulta: null });
     const [sql, params] = query.mock.calls[0];
     expect(params).toEqual(['medico-ficticio', 'paciente-ficticio', 'chave-ficticia']);
     expect(sql).toMatch(/pgp_sym_decrypt/); expect(sql).toMatch(/p\.medico_id\s*=\s*\$1/);
-    expect(sql).toMatch(/p\.id\s*=\s*\$2/); expect(sql).toMatch(/a\.medico_id\s*=\s*\$1/);
-    expect(sql).toMatch(/a\.paciente_id\s*=\s*\$2/); expect(sql).toMatch(/order by a\.data_hora desc/i);
+    expect(sql).toMatch(/p\.id\s*=\s*\$2/); expect(sql).not.toContain('noto_consultas_sincronizadas');
     const historico = new HistoricoComunicacaoEmMemoria(); const logs: string[] = [];
     const decisao = await orquestrarComprovante({ medicoId: 'medico-ficticio', pacienteId: 'paciente-ficticio', mensagem: mensagem({ imageMessage: {} }) }, {
+      fonteAgenda: { consultar: async () => ({ tipo: 'consultas', fonte: 'falsa', consultas: linha?.consulta_id ? [{ pacienteId: 'paciente-agenda', telefonePaciente: '11999990000', idExterno: linha.consulta_id, dataHora: '2026-10-18', status: 'realizada', valorConsultaCentavos: linha.valor_consulta_centavos }] : [] }) },
       lerEstado: leitor.lerEstado.bind(leitor), historico, extrator: { extrair: async () => leitura() }, log: (_nivel, texto) => logs.push(texto)
     });
     expect(decisao.tipo).toBe(tipo);

@@ -40,7 +40,7 @@ describe('gancho da emissão vem depois da auditoria real', () => {
     const segunda = await processarComprovante(mensagem, estado, deps);
     expect(segunda).toEqual({ tipo: 'nenhuma', motivo: 'COMPROVANTE_JA_PROCESSADO' });
     expect(aoDecidir).toHaveBeenCalledTimes(2);
-    expect(aoDecidir.mock.calls[1]).toEqual([segunda, lido]);
+    expect(aoDecidir.mock.calls[1]).toEqual([segunda, lido, estado]);
   });
   it('sem gancho mantém exatamente o resultado atual e apenas audita', async () => {
     const historico = new HistoricoComunicacaoEmMemoria(); const log = vi.fn();

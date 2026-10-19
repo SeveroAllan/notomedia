@@ -24,19 +24,13 @@ export class PostgresAtendimentoRepositorio implements AtendimentoRepositorio, L
   async lerEstado(medicoId: string, pacienteId: string): Promise<EstadoPedidoComprovante> {
     const { rows } = await this.pool.query(`
       select p.nome, case when p.cpf_cnpj_encriptado is not null
-        then pgp_sym_decrypt(p.cpf_cnpj_encriptado, $3) end as cpf,
-        consulta.id_externo as consulta_id, consulta.valor_consulta_centavos
+        then pgp_sym_decrypt(p.cpf_cnpj_encriptado, $3) end as cpf
       from pacientes p
-      left join lateral (
-        select a.id_externo, a.valor_consulta_centavos from public.noto_consultas_sincronizadas a
-        where a.medico_id = $1 and a.paciente_id = $2 and a.status = 'realizada'
-        order by a.data_hora desc limit 1
-      ) consulta on true
       where p.medico_id = $1 and p.id = $2
     `, [medicoId, pacienteId, this.chaveCriptografia]);
     const linha = rows[0];
     return { medicoId, paciente: { nome: linha?.nome ?? null, cpf: linha?.cpf ?? null },
-      ultimaConsulta: linha?.consulta_id ? { valorConsultaCentavos: linha.valor_consulta_centavos ?? null } : null };
+      ultimaConsulta: null };
   }
 
   async buscarInstanciaPorNome(nomeInstancia: string): Promise<InstanciaRegistro | null> {

@@ -1,3 +1,4 @@
+import type { FonteAgenda, ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 export class ErroCofre extends Error {
@@ -178,6 +179,29 @@ export class CofreTribemd {
     async desconectar(id: string) { await this.alterar(id, false); }
     async excluir(id: string) { await this.alterar(id, true); }
     async consultar(id: string) { return this.iniciar(id, undefined, true); }
+    readonly fonteAgenda: FonteAgenda = { consultar: async ({ medicoId }): Promise<ResultadoFonteAgenda> => {
+        try {
+            const status = await this.status(medicoId);
+            if (!status.salvo || !status.ativo) return { tipo: 'erro', codigo: 'SEM_AGENDA_CONECTADA' };
+            await this.consultar(medicoId);
+            await this.trabalhos.get(medicoId)?.finalizada;
+            const resultado = this.resultado(medicoId);
+            if (!resultado) return { tipo: 'erro', codigo: (await this.status(medicoId)).codigo === 'ACESSO_PRECISA_VERIFICACAO' ? 'ACESSO_EXPIRADO' : 'FONTE_INDISPONIVEL' };
+            const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+            if (resultado.cobertura !== 'intervalo_carregado_pelo_portal' || !resultado.agenda?.intervalo.fim ||
+                resultado.agenda.intervalo.fim < hoje || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
+                return { tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' };
+            }
+            return { tipo: 'consultas', fonte: 'tribemd', consultas: resultado.consultas.map(c => {
+                if (!c.pacienteId || !c.atendimentoId || !c.dataConsultaObservada || c.dados?.codigo) throw new ErroCofre('LEITURA_INCOMPLETA');
+                const valor = c.dados?.valorConsulta;
+                return { pacienteId: c.pacienteId, idExterno: c.atendimentoId, dataHora: c.dataConsultaObservada,
+                    telefonePaciente: c.dados?.contato.celular ?? c.dados?.contato.telefone ?? undefined,
+                    status: 'realizada' as const, valorConsultaCentavos: valor && /^\d+\.\d{2}$/.test(valor) ? Number(valor.replace('.', '')) : null };
+            }) };
+        } catch { return { tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' }; }
+        finally { this.limparResultado(medicoId); }
+    } };
     resultado(id: string) { return this.resultados.get(id)?.resultado ?? null; }
     async encerrar() { this.parando = true; await Promise.all([...this.trabalhos.keys()].map(id => this.interromper(id))); for (const id of this.resultados.keys())
         this.limparResultado(id); }

@@ -656,8 +656,9 @@ export function criarAppExpress() {
         aoReceberMensagemMedico: contexto => comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa),
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
           historico: historicoComunicacao,
-          aoDecidir: emissaoComprovante ? async (decisao, lido) => {
-            const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido });
+          fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
+          aoDecidir: emissaoComprovante ? async (decisao, lido, estado) => {
+            const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta });
             if (resultado.tipo === 'perguntar_medico') console.info('enviaria perguntar_medico');
             if (resultado.tipo === 'enfileirada') console.info('Solicitação enfileirada por comprovante.');
           } : undefined,
