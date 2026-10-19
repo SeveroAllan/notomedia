@@ -23,6 +23,8 @@ export type ResultadoExtracaoComprovante =
   | { tipo: 'extraido'; campos: CamposComprovante }
   | { tipo: 'ilegivel' }
   | { tipo: 'pdf_nao_suportado' }
+  | { tipo: 'nota_pdf'; campos?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null;
+      nomeTomador: string | null; confianca?: Record<string, number> } }
   | { tipo: 'nao_comprovante' };
 export interface ExtratorComprovante {
   extrair(mensagem: DadosMensagemEvolution): Promise<ResultadoExtracaoComprovante>;
@@ -30,6 +32,8 @@ export interface ExtratorComprovante {
 export interface EstadoPedidoComprovante {
   medicoId: string;
   duvidaVinculo?: string;
+  duvidaConsultas?: { dataHora: string }[];
+  notaFaseInicial?: boolean;
   consulta?: { fonte: string; idExterno: string; dataHora: string; valorConsultaCentavos: number | null };
   paciente: { nome: string | null; cpf: string | null };
   ultimaConsulta: Pick<ConsultaEmAbertoRegistro, 'valorConsultaCentavos'> | null;
@@ -41,7 +45,10 @@ export type DecisaoPedidoComprovante =
   | (Extract<ProximaAcaoNoto, { tipo: 'pedir_agenda' }> & { motivo: 'SEM_AGENDA_CONECTADA' })
   | { tipo: 'nenhuma'; motivo: 'COMPROVANTE_JA_PROCESSADO' | 'AUDITORIA_FALHOU' }
   | { tipo: 'perguntar_medico'; motivo: 'VINCULO_TELEFONE_INDEFINIDO' | 'CONSULTA_AMBIGUA_OU_AUSENTE' | 'LEITURA_INDISPONIVEL' | 'COMPROVANTE_ILEGIVEL' | 'NAO_COMPROVANTE'
-      | 'CAMPO_OBRIGATORIO_AUSENTE' | 'CONFIANCA_INSUFICIENTE' | 'CADASTRO_INCOMPLETO' | 'VALOR_DIVERGENTE' | 'PDF_NAO_SUPORTADO' | 'FONTE_INDISPONIVEL' | 'ACESSO_EXPIRADO' }
+      | 'CAMPO_OBRIGATORIO_AUSENTE' | 'CONFIANCA_INSUFICIENTE' | 'CADASTRO_INCOMPLETO' | 'VALOR_DIVERGENTE' | 'PDF_NAO_SUPORTADO' | 'FONTE_INDISPONIVEL' | 'ACESSO_EXPIRADO'
+      | 'CONSULTA_APOS_PAGAMENTO' | 'MULTIPLAS_CONSULTAS_SEM_NOTA' | 'NOTA_FASE_INICIAL' | 'NAO_COMPROVANTE'; detalhe?: {
+      pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
+      detalheNota?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null } }
   | { tipo: 'perguntar_pacote'; motivo: 'VALOR_MULTIPLO_CONSULTA' }
   | { tipo: 'pedido_nota_pronto'; motivo: 'VALOR_IGUAL_ULTIMA_CONSULTA'; pedido: {
       medicoId: string; valorCentavos: number; dataPagamento: string;
@@ -63,9 +70,25 @@ export function decidirPedidoComprovante(
     if (agenda.codigo === 'SEM_AGENDA_CONECTADA') return { tipo: 'pedir_agenda', agendaInformada: null, motivo: agenda.codigo };
     return { tipo: 'perguntar_medico', motivo: agenda.codigo };
   }
-  if (estado.duvidaVinculo === 'VINCULO_TELEFONE_INDEFINIDO' || estado.duvidaVinculo === 'CONSULTA_AMBIGUA_OU_AUSENTE') return { tipo: 'perguntar_medico', motivo: estado.duvidaVinculo };
+  if (estado.duvidaVinculo === 'VINCULO_TELEFONE_INDEFINIDO' || estado.duvidaVinculo === 'CONSULTA_AMBIGUA_OU_AUSENTE'
+    || estado.duvidaVinculo === 'CONSULTA_APOS_PAGAMENTO' || estado.duvidaVinculo === 'MULTIPLAS_CONSULTAS_SEM_NOTA') {
+    const detalhe = estado.duvidaVinculo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && estado.duvidaConsultas?.length
+      ? { pacienteNome: estado.paciente.nome,
+          valorCentavos: lido?.tipo === 'extraido' && Number.isSafeInteger(lido.campos.valorCentavos) ? lido.campos.valorCentavos ?? null : null,
+          consultas: estado.duvidaConsultas }
+      : undefined;
+    return { tipo: 'perguntar_medico', motivo: estado.duvidaVinculo, ...(detalhe ? { detalhe } : {}) };
+  }
   if (!lido) return { tipo: 'perguntar_medico', motivo: 'LEITURA_INDISPONIVEL' };
   if (lido.tipo === 'pdf_nao_suportado') return { tipo: 'perguntar_medico', motivo: 'PDF_NAO_SUPORTADO' };
+  if (lido.tipo === 'nota_pdf') {
+    if (!estado.notaFaseInicial) return { tipo: 'perguntar_medico', motivo: 'NAO_COMPROVANTE' };
+    const c = lido.campos;
+    return { tipo: 'perguntar_medico', motivo: 'NOTA_FASE_INICIAL', detalheNota: {
+      numeroNota: c?.numeroNota ?? null, dataEmissao: c?.dataEmissao ?? null,
+      valorCentavos: c && Number.isSafeInteger(c.valorCentavos) ? c.valorCentavos ?? null : null,
+      nomeTomador: c?.nomeTomador ?? null } };
+  }
   if (lido.tipo === 'ilegivel') return { tipo: 'perguntar_medico', motivo: 'COMPROVANTE_ILEGIVEL' };
   if (lido.tipo === 'nao_comprovante') return { tipo: 'perguntar_medico', motivo: 'NAO_COMPROVANTE' };
   const { valorCentavos, dataPagamento, nomePagador, nomeFavorecido, confianca } = lido.campos;

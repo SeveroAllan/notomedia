@@ -19,6 +19,7 @@ const duvidas: Record<string, string> = {
   LEITURA_INDISPONIVEL: 'Não consegui ler o comprovante. Pode conferir e me orientar?',
   COMPROVANTE_ILEGIVEL: 'O comprovante está ilegível. Pode enviar uma imagem mais nítida?',
   NAO_COMPROVANTE: 'O arquivo recebido não foi reconhecido como comprovante. Pode conferir?',
+  NOTA_FASE_INICIAL: 'Recebi um PDF de nota fiscal. Pode confirmar se ela já cobre a consulta correspondente?',
   CAMPO_OBRIGATORIO_AUSENTE: 'Faltam dados obrigatórios no comprovante. Pode conferir?',
   CONFIANCA_INSUFICIENTE: 'Não consegui ler todos os dados do comprovante com segurança. Pode conferir?',
   CADASTRO_INCOMPLETO: 'Faltam dados do paciente ou da consulta para emitir a nota. Pode conferir?',
@@ -28,6 +29,8 @@ const duvidas: Record<string, string> = {
   ACESSO_EXPIRADO: 'O acesso à sua agenda expirou. Pode reconectar para eu conferir a consulta?',
   VINCULO_TELEFONE_INDEFINIDO: 'Não consegui identificar um único paciente na agenda pelo telefone que enviou o comprovante. Pode confirmar quem é?',
   CONSULTA_AMBIGUA_OU_AUSENTE: 'Não encontrei uma única última consulta realizada sem nota para este telefone. Pode confirmar a consulta?',
+  CONSULTA_APOS_PAGAMENTO: 'Recebi um comprovante, mas não encontrei nenhuma consulta realizada deste paciente até a data do pagamento. Pode conferir se a consulta aconteceu e está na agenda?',
+  MULTIPLAS_CONSULTAS_SEM_NOTA: 'Encontrei mais de uma consulta realizada sem nota para este comprovante. Pode confirmar de qual consulta é?',
   COMPROVANTE_SEM_AUDITORIA_PRONTA: 'Não encontrei a conferência deste comprovante. Pode revisar antes de emitir?',
   CADASTRO_OU_CONSULTA_DIVERGENTE: 'Os dados mudaram depois da conferência do comprovante. Pode revisar?',
   PEDIDO_DIVERGENTE: 'O pedido está diferente da conferência do comprovante. Pode revisar?',
@@ -37,19 +40,45 @@ const duvidas: Record<string, string> = {
   ENFILEIRAMENTO_COMPROVANTE_FALHOU: 'Não consegui registrar o pedido de emissão. Pode revisar antes de prosseguir?'
 };
 
+function montarPerguntaMultiplasConsultas(detalhe: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] }): string {
+  const nome = detalhe.pacienteNome?.trim() || 'o paciente';
+  const valor = Number.isSafeInteger(detalhe.valorCentavos) ? `R$ ${((detalhe.valorCentavos as number) / 100).toFixed(2).replace('.', ',')}` : 'valor não identificado';
+  const datas = detalhe.consultas.map(c => {
+    const d = new Date(c.dataHora);
+    return Number.isFinite(d.getTime()) ? d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : c.dataHora;
+  });
+  return `Doutor(a), ${nome} enviou um comprovante de ${valor}. Encontrei ${detalhe.consultas.length} consultas realizadas sem nota até a data do pagamento (${datas.join(', ')}). Quer que eu emita para a consulta mais recente (${datas[0]}) ou para uma das anteriores?`;
+}
+
+function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null }): string {
+  const partes = [
+    nota.numeroNota ? `nº ${nota.numeroNota}` : null,
+    Number.isSafeInteger(nota.valorCentavos) ? `R$ ${((nota.valorCentavos as number) / 100).toFixed(2).replace('.', ',')}` : null,
+    nota.dataEmissao ? `emissão ${nota.dataEmissao.split('-').reverse().join('/')}` : null,
+    nota.nomeTomador ? `tomador ${nota.nomeTomador}` : null
+  ].filter(Boolean).join(', ');
+  return `Doutor(a), recebi um PDF de nota fiscal${partes ? ` (${partes})` : ''}. Como está na fase inicial, vou considerar que essa nota já foi emitida fora do Noto e não vou emitir outra para a consulta correspondente. Se não for isso, me avise?`;
+}
+
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
     private readonly transporte: EnviarMensagemPaciente, private readonly log: (texto: string) => void = console.info) {}
 
-  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
-    const { medicoId, acao, chave, motivo } = entrada;
+  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string;
+    detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
+    detalheNota?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null } }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    const { medicoId, acao, chave, motivo, detalhe, detalheNota } = entrada;
     if (!this.config.envioMedicoRealAtivo) return this.simular(acao);
     try {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
-      const texto = acao === 'perguntar_medico' && motivo && Object.hasOwn(duvidas, motivo) ? `Doutor(a), ${duvidas[motivo]}` : textos[acao];
+      const texto = acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
+        ? montarPerguntaMultiplasConsultas(detalhe)
+        : acao === 'perguntar_medico' && motivo === 'NOTA_FASE_INICIAL' && detalheNota
+          ? montarAvisoNotaFaseInicial(detalheNota)
+          : acao === 'perguntar_medico' && motivo && Object.hasOwn(duvidas, motivo) ? `Doutor(a), ${duvidas[motivo]}` : textos[acao];
       return await this.enviarUnico(medicoId, acao, chave, async () => (await this.transporte.enviarTexto({
         instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto
       })).sucesso);

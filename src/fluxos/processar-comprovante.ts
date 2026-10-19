@@ -10,6 +10,7 @@ interface ProcessarComprovanteDeps {
   agenda?: ResultadoFonteAgenda;
   fonteAgenda?: FonteAgenda;
   consultaJaFaturada?: (fonte: string, idExterno: string) => Promise<boolean>;
+  medicoEmFaseInicial?: (medicoId: string) => Promise<boolean>;
   extrator: ExtratorComprovante;
   historico: Pick<HistoricoComunicacaoRepositorio, 'registrarComprovante'>;
   log: (nivel: 'erro', codigo: string) => void;
@@ -41,7 +42,11 @@ export async function processarComprovante(
     try { lido = await deps.extrator.extrair(mensagem); }
     catch { /* A indisponibilidade é auditada sem inventar campos ou expor o erro do provedor. */ }
   }
-  const consultado = await consultarEstadoAgenda(mensagem, estado, deps);
+  if (lido?.tipo === 'nota_pdf' && deps.medicoEmFaseInicial) {
+    try { estado = { ...estado, notaFaseInicial: await deps.medicoEmFaseInicial(estado.medicoId) }; }
+    catch { /* Sem a fase confirmada, a nota segue como dúvida ao médico. */ }
+  }
+  const consultado = await consultarEstadoAgenda(mensagem, estado, deps, lido);
   estado = consultado.estado;
   const agenda = consultado.agenda;
   let decisao: DecisaoPedidoComprovante;
@@ -62,7 +67,7 @@ export async function processarComprovante(
   return decisao;
 }
 
-async function consultarEstadoAgenda(mensagem: DadosMensagemEvolution, estado: EstadoPedidoComprovante, deps: ProcessarComprovanteDeps) {
+async function consultarEstadoAgenda(mensagem: DadosMensagemEvolution, estado: EstadoPedidoComprovante, deps: ProcessarComprovanteDeps, lido: ResultadoExtracaoComprovante | null) {
   if (!deps.fonteAgenda) return { estado, agenda: deps.agenda };
   const semConsulta = { ...estado, ultimaConsulta: null, consulta: undefined };
   try {
@@ -74,8 +79,10 @@ async function consultarEstadoAgenda(mensagem: DadosMensagemEvolution, estado: E
     }));
     const telefone = extrairTelefoneJid(mensagem.key.remoteJidAlt) || extrairTelefoneJid(mensagem.key.remoteJid) || '';
     // O seletor verifica telefone compartilhado antes de excluir consultas faturadas.
-    const selecionada = selecionarConsultaComprovante(agenda.consultas, telefone, faturadas);
-    if (selecionada.tipo === 'perguntar_medico') return { estado: { ...semConsulta, duvidaVinculo: selecionada.motivo }, agenda };
+    const selecionada = selecionarConsultaComprovante(agenda.consultas, telefone, faturadas,
+      lido?.tipo === 'extraido' ? lido.campos.dataPagamento : undefined);
+    if (selecionada.tipo === 'perguntar_medico') return { estado: { ...semConsulta, duvidaVinculo: selecionada.motivo,
+      ...(selecionada.motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' ? { duvidaConsultas: selecionada.consultas } : {}) }, agenda };
     const c = selecionada.consulta;
     return { agenda, estado: { ...semConsulta, ultimaConsulta: { valorConsultaCentavos: c.valorConsultaCentavos ?? null },
       consulta: { idExterno: c.idExterno, dataHora: c.dataHora, fonte: agenda.fonte, valorConsultaCentavos: c.valorConsultaCentavos ?? null } } };

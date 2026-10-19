@@ -69,3 +69,17 @@ it.each(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA'] as con
   expect(decisao).toMatchObject({ tipo: codigo === 'SEM_AGENDA_CONECTADA' ? 'pedir_agenda' : 'perguntar_medico', motivo: codigo });
   expect((await h.lerComprovantes('m'))[0].decisao).toMatchObject(decisao);
 });
+
+it('com dataPagamento: sem consulta anterior pergunta, uma anterior vira candidata, duas ou mais perguntam qual', () => {
+  const base = { pacienteId: 'p1', telefonePaciente: '11999990000', idExterno: 'c1', dataHora: '2026-10-10T14:00:00-03:00', status: 'realizada' as const, valorConsultaCentavos: 20000 };
+  const antiga = { ...base, idExterno: 'c2', dataHora: '2026-10-05T14:00:00-03:00' };
+  const posterior = { ...base, idExterno: 'c3', dataHora: '2026-10-20T14:00:00-03:00' };
+  expect(selecionarConsultaComprovante([base], '11999990000', new Set(), '2026-10-19')).toEqual({ tipo: 'consulta', consulta: base });
+  expect(selecionarConsultaComprovante([base, antiga], '11999990000', new Set(), '2026-10-19')).toEqual({
+    tipo: 'perguntar_medico', motivo: 'MULTIPLAS_CONSULTAS_SEM_NOTA',
+    consultas: [{ dataHora: base.dataHora }, { dataHora: antiga.dataHora }] });
+  expect(selecionarConsultaComprovante([posterior], '11999990000', new Set(), '2026-10-19')).toEqual({
+    tipo: 'perguntar_medico', motivo: 'CONSULTA_APOS_PAGAMENTO' });
+  expect(selecionarConsultaComprovante([base, antiga], '11999990000', new Set(['c2']), '2026-10-19')).toEqual({ tipo: 'consulta', consulta: base });
+  expect(selecionarConsultaComprovante([base, antiga], '11999990000', new Set(), undefined).tipo).toBe('consulta');
+});

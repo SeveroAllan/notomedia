@@ -41,6 +41,7 @@ import { PostgresEmissaoComprovante } from './io/postgres/postgres-emissao-compr
 import { PostgresHistoricoComunicacao } from './io/postgres/postgres-historico-comunicacao.js';
 import { ExtratorRespostaMedicoNvidia } from './io/nvidia/extrator-resposta-medico.js';
 import { ExtratorComprovanteNvidia } from './io/nvidia/extrator-comprovante.js';
+import { completarNvidia, completarOpenAi } from './io/nvidia/chat-client.js';
 
 import { processarOnboardingXml } from './onboarding/fluxos/processar-onboarding-xml.js';
 import { ErroAdocaoReferencia } from './onboarding/io/confirmar-politica-emissao.js';
@@ -114,9 +115,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const hubCpfClient = config.hubDesenvolvedorToken
     ? new HubDesenvolvedorCpfClient(config.hubDesenvolvedorToken)
     : undefined;
-  const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!config.nvidiaApiKey;
+  // Provedor de IA: OpenAI quando OPENAI_API_KEY está configurada; NVIDIA como legado. Mesma chave/modelo por finalidade.
+  const iaOpenAiAtiva=!!config.openaiApiKey;
+  const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
+  const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
+  const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  const iaModeloVisao=(iaOpenAiAtiva?config.openaiVisaoModel:config.nvidiaRegistroModel) ?? '';
+  const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
-    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:config.nvidiaApiKey,modelo:config.nvidiaRegistroModel,incluirDiagnostico:true})
+    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
+        completar:(mensagens)=>completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, { temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1 })})
     : new PesquisaRegistroIndisponivel();
   const cadastroCertificado = new CadastroCertificado(new PostgresCadastro(pool), criarConsultaEmpresa(config.hubDesenvolvedorToken), consultaRegistro,
     async (medicoId, certificadoId) => {
@@ -147,7 +155,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(config.nvidiaApiKey, config.nvidiaRegistroModel), historico: historicoComunicacao,
+    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {
         if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
       } : undefined,
@@ -686,9 +694,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           historico: historicoComunicacao,
           fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
           consultaJaFaturada: emissaoComprovante ? (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id) : undefined,
+          medicoEmFaseInicial: async medicoId => {
+            const { rows } = await pool.query('select 1 from notas_fiscais where medico_id = $1 limit 1', [medicoId]);
+            return rows.length === 0;
+          },
           aoComunicar: config.envioMedicoRealAtivo ? async (decisao, lido) => {
             if (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda') {
               await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: decisao.tipo, motivo: decisao.motivo,
+                ...(decisao.tipo === 'perguntar_medico' && decisao.detalhe ? { detalhe: decisao.detalhe } : {}),
+                ...(decisao.tipo === 'perguntar_medico' && decisao.detalheNota ? { detalheNota: decisao.detalheNota } : {}),
                 chave: chaveComprovante(config.appPepper, lido) ?? JSON.stringify([contexto.mensagem.key.remoteJid, contexto.mensagem.key.id]) });
             }
           } : undefined,
@@ -699,8 +713,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             if (resultado.tipo === 'enfileirada') console.info('Solicitação enfileirada por comprovante.');
           } : undefined,
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
-          extrator: new ExtratorComprovanteNvidia(config.nvidiaApiKey, config.nvidiaRegistroModel,
-            mensagem => evolutionClient.obterBase64MensagemMidia(req.body.instance, mensagem.key.id)),
+          extrator: new ExtratorComprovanteNvidia(iaApiKey, iaModeloVisao,
+            mensagem => evolutionClient.obterBase64MensagemMidia(req.body.instance, mensagem.key.id), completarIa),
           log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
         }),
         async aoAtualizarConexao(evento) {

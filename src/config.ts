@@ -30,6 +30,9 @@ export interface AppConfig {
   openserpBaseUrl?: string;
   nvidiaApiKey?: string;
   nvidiaRegistroModel?: string;
+  openaiApiKey?: string;
+  openaiVisaoModel?: string;
+  openaiTextoModel?: string;
   agenteFiscalAtivo?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
@@ -69,6 +72,9 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     openserpBaseUrl: env['OPENSERP_BASE_URL']?.trim() || undefined,
     nvidiaApiKey: env['NVIDIA_API_KEY']?.trim() || undefined,
     nvidiaRegistroModel: env['NVIDIA_REGISTRO_MODEL']?.trim() || 'meta/llama-3.2-90b-vision-instruct',
+    openaiApiKey: env['OPENAI_API_KEY']?.trim() || undefined,
+    openaiVisaoModel: env['OPENAI_VISAO_MODEL']?.trim() || 'gpt-4o-mini',
+    openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',

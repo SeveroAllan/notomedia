@@ -64,12 +64,12 @@ describe('injeção real do ciclo no servidor com fronteiras falsas', () => {
     expect(banco.comprovantes.map(a => a.decisao.tipo)).toEqual(['perguntar_medico', 'nenhuma']);
     expect(intencoes()).toHaveLength(1);
   });
-  it('PDF no servidor vira dúvida própria, sem download nem IA', async () => {
+  it('PDF no servidor é lido de forma determinística; mídia ilegível vira dúvida própria, sem IA', async () => {
     expect((await receber({ documentMessage: { mimetype: 'application/pdf' } })).status).toBe(200);
     expect(banco.comprovantes).toHaveLength(1);
-    expect(banco.comprovantes[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'PDF_NAO_SUPORTADO' });
+    expect(banco.comprovantes[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'COMPROVANTE_ILEGIVEL' });
     expect(intencoes()).toEqual([['enviaria perguntar_medico']]); expect(erro).not.toHaveBeenCalled();
-    expect(midia).not.toHaveBeenCalled(); expect(fronteiras.completar).not.toHaveBeenCalled();
+    expect(midia).toHaveBeenCalledTimes(1); expect(fronteiras.completar).not.toHaveBeenCalled();
   });
   it('cadastro ausente não ganha CPF ou consulta inventados', async () => {
     fronteiras.query.mockResolvedValue({ rows: [] }); await receber(imagem);

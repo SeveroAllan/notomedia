@@ -82,8 +82,8 @@ describe('leitor de estado usa dados existentes sem inventar', () => {
   });
 });
 
-describe('PDF sem leitura visual tem motivo próprio, sem erro', () => {
-  it('audita dúvida PDF sem pedir mídia ou chamar IA e mantém o webhook normal', async () => {
+describe('PDF é lido de forma determinística, sem IA', () => {
+  it('PDF sem mídia disponível vira leitura indisponível, sem chamar IA, e mantém o webhook normal', async () => {
     const banco = bancoWebhook(); const historico = new HistoricoComunicacaoEmMemoria(); const lerMidia = vi.fn();
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw new Error('REDE_PROIBIDA'); });
     const erro = vi.spyOn(console, 'error').mockImplementation(() => {}); const logs: string[] = [];
@@ -93,8 +93,8 @@ describe('PDF sem leitura visual tem motivo próprio, sem erro', () => {
       'segredo-ficticio', { ...banco, segredoConfigurado: 'segredo-ficticio', pepper: 'pepper-ficticio', aoReceberComprovante: contexto =>
         orquestrarComprovante(contexto, { lerEstado: leitor.lerEstado, historico, extrator, log: (_nivel, texto) => logs.push(texto) }) });
     expect(resultado).toEqual({ ok: true, acao: 'mensagem_registrada' });
-    expect((await historico.lerComprovantes('medico-ficticio'))[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'PDF_NAO_SUPORTADO' });
+    expect((await historico.lerComprovantes('medico-ficticio'))[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'LEITURA_INDISPONIVEL' });
     expect(logs).toEqual(['enviaria perguntar_medico']); expect(erro).not.toHaveBeenCalled();
-    expect(lerMidia).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+    expect(lerMidia).toHaveBeenCalledTimes(1); expect(fetch).not.toHaveBeenCalled();
   });
 });
