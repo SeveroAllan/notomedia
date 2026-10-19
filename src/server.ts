@@ -1,3 +1,5 @@
+import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
+import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { chaveComprovante } from './atendimento/comprovante.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
@@ -23,7 +25,7 @@ import { dirname, join } from 'node:path';
 
 import { config } from './config.js';
 import { pool } from './io/postgres/pool.js';
-import { PostgresOtpRepositorio } from './io/postgres/postgres-otp-repositorio.js';
+import { PostgresOtpRepositorio, PostgresOtpEmailRepositorio } from './io/postgres/postgres-otp-repositorio.js';
 import { PostgresAtendimentoRepositorio } from './io/postgres/postgres-atendimento-repositorio.js';
 import { EvolutionApiClient } from './io/evolution/evolution-api-client.js';
 import { SupabaseAuthAdminService } from './io/supabase/supabase-auth-admin-service.js';
@@ -67,7 +69,7 @@ import { registrarSinaisDeProcesso } from './processo/registrar-sinais-de-proces
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-export function criarAppExpress() {
+export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = {}) {
   const app = express();
   configurarDesempenhoHttp(app);
 
@@ -266,6 +268,25 @@ export function criarAppExpress() {
     } catch (err: any) {
       console.error('Erro na verificação de OTP:', err);
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro interno do servidor' });
+    }
+  });
+
+  const depsOtpEmail = { config, repositorio: new PostgresOtpEmailRepositorio(pool), authAdminService,
+    enviador: opcoes.enviadorOtpEmail ?? new EnviarOtpEmailResend(config.resendApiKey, config.loginOtpEmailFrom) };
+  const rotasOtpEmail = [
+    { caminho: '/api/auth/otp/email/solicitar', processar: (body: Record<string, unknown>) => solicitarOtpEmail(body.email, depsOtpEmail) },
+    { caminho: '/api/auth/otp/email/verificar', processar: (body: Record<string, unknown>) => autenticarComOtpEmail(body.email, body.codigo, depsOtpEmail) }
+  ];
+  for (const { caminho, processar } of rotasOtpEmail) app.post(caminho, async (req: Request, res: Response) => {
+    try {
+      const resultado = await processar(req.body || {});
+      if (resultado.ok) return res.json(resultado);
+      const status = resultado.motivo === 'canal_desativado' ? 404 : resultado.motivo === 'email_nao_permitido' ? 403
+        : caminho.endsWith('/verificar') ? 401 : 400;
+      return res.status(status).json(resultado);
+    } catch {
+      console.error('LOGIN_OTP_EMAIL_FALHOU');
+      return res.status(500).json({ ok: false, motivo: 'otp_email_indisponivel' });
     }
   });
 

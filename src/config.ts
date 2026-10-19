@@ -24,6 +24,7 @@ export interface AppConfig {
   evolutionAssistantWebhookSecret: string;
   loginOtpEmailEnabled?: boolean;
   loginOtpEmailAllowlist?: string[];
+  loginOtpEmailFrom?: string;
   resendApiKey?: string;
   devEmailAlerta?: string;
   openserpBaseUrl?: string;
@@ -62,6 +63,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     evolutionAssistantWebhookSecret: env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] || env['EVOLUTION_WEBHOOK_SECRET'] || '',
     loginOtpEmailEnabled: env['LOGIN_OTP_EMAIL_ENABLED'] === 'true',
     loginOtpEmailAllowlist: (env['LOGIN_OTP_EMAIL_ALLOWLIST'] || '').split(/[,;\s]+/).filter(Boolean),
+    loginOtpEmailFrom: env['LOGIN_OTP_EMAIL_FROM']?.trim() || undefined,
     resendApiKey: env['RESEND_API_KEY'],
     devEmailAlerta: env['DEV_EMAIL_ALERTA'],
     openserpBaseUrl: env['OPENSERP_BASE_URL']?.trim() || undefined,

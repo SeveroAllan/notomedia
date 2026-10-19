@@ -75,6 +75,20 @@ export class SupabaseAuthAdminService implements AuthAdminService {
     };
   }
 
+  async buscarPorEmail(email: string): Promise<UsuarioAutenticadoInfo | null> {
+    const { rows } = await this.pool.query(`select u.id as usuario_id, u.auth_user_id, u.papel, u.nome, m.id as medico_id
+      from usuarios u left join medicos m on m.usuario_id = u.id
+      where lower(trim(u.email::text)) = $1 and u.ativo = true limit 2`, [email]);
+    if (rows.length !== 1 || !rows[0].auth_user_id) return null;
+    const candidato = rows[0];
+    const { data, error } = await this.supabase.auth.admin.getUserById(candidato.auth_user_id);
+    // O contato editável só localiza um candidato; quem prova a identidade é o Auth confirmado.
+    if (error || !data.user || data.user.id !== candidato.auth_user_id || !data.user.email_confirmed_at ||
+        data.user.email?.trim().toLowerCase() !== email) return null;
+    return { usuarioId: candidato.usuario_id, medicoId: candidato.medico_id || undefined, authUserId: candidato.auth_user_id,
+      nome: candidato.nome || undefined, papel: candidato.papel, ehNovoUsuario: false };
+  }
+
   async cadastrarNovoMedico(params: {
     telefone: string;
     nomePadrao?: string;
