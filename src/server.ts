@@ -72,7 +72,7 @@ export function criarAppExpress() {
   // Instanciação dos adaptadores de infraestrutura
   const otpRepo = new PostgresOtpRepositorio(pool);
   const atendimentoRepo = new PostgresAtendimentoRepositorio(pool, config.encryptionKey);
-  const historicoComunicacao = new PostgresHistoricoComunicacao(pool);
+  const historicoComunicacao = new PostgresHistoricoComunicacao(pool, config.appPepper);
   const memoriaConversa = new MemoriaConversaMedico();
   const evolutionClient = new EvolutionApiClient(
     config.evolutionApiUrl,
@@ -657,6 +657,7 @@ export function criarAppExpress() {
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
           historico: historicoComunicacao,
           fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
+          consultaJaFaturada: emissaoComprovante ? (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id) : undefined,
           aoDecidir: emissaoComprovante ? async (decisao, lido, estado) => {
             const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta });
             if (resultado.tipo === 'perguntar_medico') console.info('enviaria perguntar_medico');

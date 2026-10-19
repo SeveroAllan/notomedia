@@ -1,3 +1,4 @@
+import { auditarComprovante } from '../src/atendimento/comprovante.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { criarAppExpress } from '../src/server.js';
@@ -49,7 +50,7 @@ const imagem = { imageMessage: { mimetype: 'image/jpeg' } };
 const intencoes = () => info.mock.calls.filter((args: unknown[]) => typeof args[0] === 'string' && /^(enviaria|pediria nota) /.test(args[0]));
 
 describe('injeção real do ciclo no servidor com fronteiras falsas', () => {
-  it('handler usa leitor Postgres, extrator NVIDIA e auditoria Postgres; repete sem duplicar', async () => {
+  it('handler sem agenda usa cadastro e auditoria sem inventar consulta; repete sem duplicar', async () => {
     const primeira = await receber(imagem);
     expect({ status: primeira.status, corpo: primeira.corpo }).toEqual({ status: 200, corpo: { ok: true, acao: 'mensagem_registrada' } });
     expect(fronteiras.query).toHaveBeenCalledTimes(1);
@@ -57,10 +58,10 @@ describe('injeção real do ciclo no servidor com fronteiras falsas', () => {
     expect(midia).toHaveBeenCalledExactlyOnceWith('clinica-ficticia', 'mensagem-ficticia');
     expect(fronteiras.completar.mock.calls[0].slice(0, 2)).toEqual(['chave-ficticia', 'modelo-ficticio']);
     expect(banco.comprovantes).toHaveLength(1);
-    expect(banco.comprovantes[0].decisao.tipo).toBe('pedido_nota_pronto');
-    expect(intencoes()).toEqual([['pediria nota pedido_nota_pronto']]);
+    expect(banco.comprovantes[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'CADASTRO_INCOMPLETO' });
+    expect(intencoes()).toEqual([['enviaria perguntar_medico']]);
     await receber(imagem, primeira.app);
-    expect(banco.comprovantes.map(a => a.decisao.tipo)).toEqual(['pedido_nota_pronto', 'nenhuma']);
+    expect(banco.comprovantes.map(a => a.decisao.tipo)).toEqual(['perguntar_medico', 'nenhuma']);
     expect(intencoes()).toHaveLength(1);
   });
   it('PDF no servidor vira dúvida própria, sem download nem IA', async () => {
@@ -73,7 +74,8 @@ describe('injeção real do ciclo no servidor com fronteiras falsas', () => {
   it('cadastro ausente não ganha CPF ou consulta inventados', async () => {
     fronteiras.query.mockResolvedValue({ rows: [] }); await receber(imagem);
     expect(banco.comprovantes).toHaveLength(1);
-    expect(banco.comprovantes[0].estado).toEqual({ medicoId: medico, paciente: { nome: null, cpf: null }, ultimaConsulta: null });
+    expect(banco.comprovantes[0].estado).toEqual(auditarComprovante(config.appPepper, { medicoId: medico, paciente: { nome: null, cpf: null }, ultimaConsulta: null }, null, { tipo: 'perguntar_medico', motivo: 'CADASTRO_INCOMPLETO' }).estado);
+    expect(JSON.stringify(banco.comprovantes)).not.toContain('52998224725');
     expect(banco.comprovantes).toHaveLength(1);
     expect(banco.comprovantes[0].decisao.tipo).toBe('perguntar_medico');
     expect(intencoes()).toEqual([['enviaria perguntar_medico']]);

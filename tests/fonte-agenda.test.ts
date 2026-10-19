@@ -1,3 +1,5 @@
+import { config } from '../src/config.js';
+import { auditarComprovante, type DecisaoPedidoComprovante } from '../src/atendimento/comprovante.js';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
@@ -15,7 +17,7 @@ import type { ResultadoExtracaoComprovante } from '../src/atendimento/comprovant
 const medico = '00000000-0000-4000-8000-000000000001', paciente = '00000000-0000-4000-8000-000000000002';
 const entrada: EntradaFonteAgenda = { medicoId: medico, referenciaCofre: 'referencia-opaca-ficticia' };
 function agenda(): Extract<ResultadoFonteAgenda, { tipo: 'consultas' }> {
-  return { tipo: 'consultas', fonte: 'agenda-falsa', consultas: [{ pacienteId: paciente, idExterno: 'consulta-externa-ficticia',
+  return { tipo: 'consultas', fonte: 'agenda-falsa', consultas: [{ pacienteId: paciente, telefonePaciente: '11999990000', idExterno: 'consulta-externa-ficticia',
     dataHora: '2026-10-18T12:00:00Z', status: 'realizada', valorConsultaCentavos: 35000 }] };
 }
 class FonteFalsa implements FonteAgenda {
@@ -84,34 +86,34 @@ for (const armazenamento of ['memoria', 'postgres'] as const) describe('ciclo co
     const decisao = await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, {
       agenda: resultado, lerEstado: c.leitor.lerEstado.bind(c.leitor), historico, extrator: { extrair }, log: (_nivel, texto) => logs.push(texto)
     });
-    const esperada = codigo === 'SEM_AGENDA_CONECTADA'
+    const esperada: DecisaoPedidoComprovante = codigo === 'SEM_AGENDA_CONECTADA'
       ? { tipo: 'pedir_agenda', agendaInformada: null, motivo: codigo }
       : { tipo: 'perguntar_medico', motivo: codigo };
     expect(decisao).toEqual(esperada); expect(extrair).not.toHaveBeenCalled();
-    expect((await historico.lerComprovantes(medico))[0]).toEqual({ lido: null, estado: await c.leitor.lerEstado(medico, paciente), decisao: esperada });
+    expect((await historico.lerComprovantes(medico))[0]).toEqual(auditarComprovante(config.appPepper, await c.leitor.lerEstado(medico, paciente), null, esperada));
     expect(logs).toEqual(['enviaria ' + esperada.tipo]);
   });
 });
-it('leitor usa a última realizada sincronizada; ciclo com fonte conectada não inventa consulta ou valor', async () => {
+it('ciclo usa a última realizada sob demanda sem persistir consulta ou inventar valor', async () => {
   const c = cenario(); const historico = new HistoricoComunicacaoEmMemoria(); const logs: string[] = [];
-  let resultado = await sincronizarAgenda(entrada, c.fonte, c.repositorio);
-  const deps = { agenda: resultado, lerEstado: c.leitor.lerEstado.bind(c.leitor), historico,
+  const deps = { fonteAgenda: c.fonte, lerEstado: c.leitor.lerEstado.bind(c.leitor), historico,
     extrator: { extrair: async () => lido }, log: (_nivel: 'info' | 'erro', texto: string) => logs.push(texto) };
   expect((await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, deps)).tipo).toBe('pedido_nota_pronto');
   const semValor = agenda(); delete semValor.consultas[0].valorConsultaCentavos;
-  c.fonte.resultado = semValor; resultado = await sincronizarAgenda(entrada, c.fonte, c.repositorio);
-  expect((await c.leitor.lerEstado(medico, paciente)).ultimaConsulta).toEqual({ valorConsultaCentavos: null });
+  c.fonte.resultado = semValor;
+  expect(c.banco.consultas.size).toBe(0);
+  expect((await c.leitor.lerEstado(medico, paciente)).ultimaConsulta).toBeNull();
   const outroHistorico = new HistoricoComunicacaoEmMemoria();
-  expect(await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, { ...deps, agenda: resultado, historico: outroHistorico }))
+  expect(await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, { ...deps, historico: outroHistorico }))
     .toEqual({ tipo: 'perguntar_medico', motivo: 'CADASTRO_INCOMPLETO' });
 });
 it('agenda conectada sem consultas não é interpretada como desconexão', async () => {
   const c = cenario({ tipo: 'consultas', fonte: 'agenda-falsa', consultas: [] });
-  const resultado = await sincronizarAgenda(entrada, c.fonte, c.repositorio); const historico = new HistoricoComunicacaoEmMemoria();
+  const historico = new HistoricoComunicacaoEmMemoria();
   expect(c.banco.consultas.size).toBe(0);
-  expect(await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, { agenda: resultado,
+  expect(await orquestrarComprovante({ medicoId: medico, pacienteId: paciente, mensagem }, { fonteAgenda: c.fonte,
     lerEstado: c.leitor.lerEstado.bind(c.leitor), historico, extrator: { extrair: async () => lido }, log: () => {} }))
-    .toEqual({ tipo: 'perguntar_medico', motivo: 'CADASTRO_INCOMPLETO' });
+    .toEqual({ tipo: 'perguntar_medico', motivo: 'VINCULO_TELEFONE_INDEFINIDO' });
 });
 it('migração e fixtures não contêm segredos nem dados pessoais na tabela normalizada', async () => {
   const info = vi.spyOn(console, 'info').mockImplementation(() => {}); const erro = vi.spyOn(console, 'error').mockImplementation(() => {});

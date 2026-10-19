@@ -1,6 +1,7 @@
+import { config } from '../config.js';
 import type { ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
 import type { EstadoMedicoAposOnboarding, ProximaAcaoNoto } from './regras/decidir-proxima-acao.js';
-import { decidirPedidoComprovante, type AuditoriaComprovante, type EstadoPedidoComprovante,
+import { auditarComprovante, chaveComprovante, decidirPedidoComprovante, type AuditoriaComprovante, type EstadoPedidoComprovante,
   type ResultadoExtracaoComprovante, type DecisaoPedidoComprovante } from '../atendimento/comprovante.js';
 
 export type ModoComunicacao = 'simulado' | 'real';
@@ -41,7 +42,7 @@ export interface EntradaMedico {
 
 /** Implementação local: não fornece persistência entre reinícios nem trava entre processos. */
 export class HistoricoComunicacaoEmMemoria implements HistoricoComunicacaoRepositorio {
-  constructor(private medicos = new Map<string, EntradaMedico>()) {}
+  constructor(private medicos = new Map<string, EntradaMedico>(), private readonly pepper = config.appPepper) {}
   private comprovantes = new Map<string, AuditoriaComprovante[]>();
 
   async lerComprovantes(medicoId: string): Promise<AuditoriaComprovante[]> {
@@ -51,8 +52,8 @@ export class HistoricoComunicacaoEmMemoria implements HistoricoComunicacaoReposi
   async registrarComprovante(estado: EstadoPedidoComprovante, lido: ResultadoExtracaoComprovante | null, agenda?: ResultadoFonteAgenda): Promise<DecisaoPedidoComprovante> {
     const anteriores = this.comprovantes.get(estado.medicoId) ?? [];
     // Sem await entre leitura, deduplicação e gravação: decisão e auditoria são atômicas nesta memória.
-    const decisao = decidirPedidoComprovante(lido, estado, anteriores.map(registro => registro.lido), agenda);
-    this.comprovantes.set(estado.medicoId, [...anteriores, structuredClone({ lido, estado, decisao })]);
+    const decisao = decidirPedidoComprovante(lido, estado, anteriores.some(r => r.lido?.tipo === 'extraido' && r.lido.campos.comprovanteHash === chaveComprovante(this.pepper, lido)) ? [lido] : [], agenda);
+    this.comprovantes.set(estado.medicoId, [...anteriores, structuredClone(auditarComprovante(this.pepper, estado, lido, decisao))]);
     return structuredClone(decisao);
   }
 

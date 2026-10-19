@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import type { ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
 import type { ProximaAcaoNoto } from '../onboarding/regras/decidir-proxima-acao.js';
 import { validarCpf } from '../paciente/validar-cpf.js';
@@ -9,6 +10,9 @@ type CampoComprovante = 'valorCentavos' | 'dataPagamento' | 'nomePagador' | 'nom
 export const CONFIANCA_MINIMA_COMPROVANTE = 0.90;
 
 export interface CamposComprovante {
+  comprovanteHash?: string;
+  nomePagadorHash?: string;
+  nomeFavorecidoHash?: string;
   valorCentavos?: number | null;
   dataPagamento?: string | null;
   nomePagador?: string | null;
@@ -45,8 +49,8 @@ export type DecisaoPedidoComprovante =
     } };
 export interface AuditoriaComprovante {
   lido: ResultadoExtracaoComprovante | null;
-  estado: EstadoPedidoComprovante;
-  decisao: DecisaoPedidoComprovante;
+  estado: EstadoPedidoComprovante & { nomePresente?: boolean; cpfValido?: boolean; pacienteHash?: string; consultaChave?: string };
+  decisao: Pick<DecisaoPedidoComprovante, 'tipo' | 'motivo'> & { pedidoHash?: string };
 }
 
 export function decidirPedidoComprovante(
@@ -92,4 +96,31 @@ export function decidirPedidoComprovante(
     return { tipo: 'perguntar_pacote', motivo: 'VALOR_MULTIPLO_CONSULTA' };
   }
   return { tipo: 'perguntar_medico', motivo: 'VALOR_DIVERGENTE' };
+}
+
+export function chaveConsulta(pepper: string, medicoId: string, fonte: string, idExterno: string): string {
+  return createHmac('sha256', pepper).update(JSON.stringify([medicoId, fonte, idExterno])).digest('hex');
+}
+export function chaveComprovante(pepper: string, lido: ResultadoExtracaoComprovante | null): string | null {
+  if (lido?.tipo !== 'extraido') return null;
+  return createHmac('sha256', pepper).update(JSON.stringify([lido.campos.valorCentavos, lido.campos.dataPagamento, lido.campos.nomePagador])).digest('hex');
+}
+export function hashPedidoComprovante(pepper: string, pedido: Extract<DecisaoPedidoComprovante, { tipo: 'pedido_nota_pronto' }>['pedido']): string {
+  return createHmac('sha256', pepper).update(JSON.stringify(pedido)).digest('hex');
+}
+export function auditarComprovante(pepper: string, estado: EstadoPedidoComprovante, lido: ResultadoExtracaoComprovante | null, decisao: DecisaoPedidoComprovante): AuditoriaComprovante {
+  const hash = (valor: unknown) => createHmac('sha256', pepper).update(JSON.stringify(valor ?? null)).digest('hex');
+  return {
+    estado: { medicoId: estado.medicoId, paciente: { nome: null, cpf: null }, ultimaConsulta: null,
+      nomePresente: !!estado.paciente.nome?.trim(), cpfValido: !!estado.paciente.cpf && validarCpf(estado.paciente.cpf),
+      pacienteHash: hash([estado.paciente.nome, estado.paciente.cpf]),
+      ...(estado.consulta ? { consultaChave: chaveConsulta(pepper, estado.medicoId, estado.consulta.fonte, estado.consulta.idExterno) } : {}) },
+    lido: lido?.tipo === 'extraido' ? { tipo: 'extraido', campos: { comprovanteHash: chaveComprovante(pepper, lido)!,
+      nomePagadorHash: hash(lido.campos.nomePagador), nomeFavorecidoHash: hash(lido.campos.nomeFavorecido), confianca: Object.fromEntries(
+        (['valorCentavos', 'dataPagamento', 'nomePagador', 'nomeFavorecido'] as const).flatMap(campo => {
+          const valor = lido.campos.confianca?.[campo];
+          return typeof valor === 'number' && Number.isFinite(valor) ? [[campo, valor]] : [];
+        })) } } : lido ? { tipo: lido.tipo } : null,
+    decisao: { tipo: decisao.tipo, motivo: decisao.motivo, ...(decisao.tipo === 'pedir_agenda' ? { agendaInformada: null } : {}), ...(decisao.tipo === 'pedido_nota_pronto' ? { pedidoHash: hashPedidoComprovante(pepper, decisao.pedido) } : {}) }
+  };
 }

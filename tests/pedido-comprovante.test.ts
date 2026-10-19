@@ -1,3 +1,5 @@
+import { config } from '../src/config.js';
+import { auditarComprovante } from '../src/atendimento/comprovante.js';
 import { describe, expect, it, vi } from 'vitest';
 import { decidirPedidoComprovante, type EstadoPedidoComprovante, type ExtratorComprovante,
   type ResultadoExtracaoComprovante } from '../src/atendimento/comprovante.js';
@@ -115,7 +117,7 @@ describe('extração e auditoria antes de devolver qualquer pedido', () => {
     const estado = cadastro(); const dados = mensagem();
     const decisao = await processarComprovante(dados, estado, deps);
     expect(extrator.recebidas).toEqual([dados]);
-    expect(await historico.lerComprovantes(estado.medicoId)).toEqual([{ lido, estado, decisao }]);
+    expect(await historico.lerComprovantes(estado.medicoId)).toEqual([auditarComprovante(config.appPepper, estado, lido, decisao)]);
     expect(decisao.motivo).toBeTruthy();
   });
   it.each(['perguntar_medico', 'perguntar_pacote'] as const)('audita também %s', async tipo => {
@@ -144,8 +146,9 @@ describe('extração e auditoria antes de devolver qualquer pedido', () => {
     const { deps, historico } = cenario();
     await processarComprovante(mensagem(), cadastro(), deps);
     expect((await processarComprovante(mensagem(), { ...cadastro(), medicoId: 'outro-medico-ficticio' }, deps)).tipo).toBe('pedido_nota_pronto');
-    const registros = await historico.lerComprovantes('medico-ficticio'); registros[0].estado.paciente.cpf = null;
-    expect((await historico.lerComprovantes('medico-ficticio'))[0].estado.paciente.cpf).toBe('52998224725');
+    const registros = await historico.lerComprovantes('medico-ficticio'); const hash = registros[0].estado.pacienteHash; registros[0].estado.pacienteHash = 'alterado';
+    expect((await historico.lerComprovantes('medico-ficticio'))[0].estado.pacienteHash).toBe(hash);
+    expect(JSON.stringify(await historico.lerComprovantes('medico-ficticio'))).not.toContain('52998224725');
   });
   it('falha de extração não inventa campos e é auditada como dúvida', async () => {
     const { deps, historico } = cenario(undefined, new Error('falha-ficticia-privada'));

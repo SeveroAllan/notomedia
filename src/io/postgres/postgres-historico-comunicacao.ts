@@ -1,14 +1,15 @@
+import { config } from '../../config.js';
 import type { ResultadoFonteAgenda } from '../../agenda/fonte-agenda.js';
 import type pg from 'pg';
 import { HistoricoComunicacaoEmMemoria, type HistoricoComunicacaoRepositorio, type EntradaMedico,
   type HistoricoComunicacao, type ModoComunicacao } from '../../onboarding/historico-comunicacao-repositorio.js';
-import { decidirPedidoComprovante, type AuditoriaComprovante, type EstadoPedidoComprovante,
+import { auditarComprovante, chaveComprovante, decidirPedidoComprovante, type AuditoriaComprovante, type EstadoPedidoComprovante,
   type ResultadoExtracaoComprovante } from '../../atendimento/comprovante.js';
 import type { ProximaAcaoNoto } from '../../onboarding/regras/decidir-proxima-acao.js';
 
 type Linha = Record<string, any>;
 export class PostgresHistoricoComunicacao implements HistoricoComunicacaoRepositorio {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(private readonly pool: pg.Pool, private readonly pepper = config.appPepper) {}
 
   ler(medico: string, modo: ModoComunicacao) { return this.executar(medico, modo, h => h.ler(medico, modo)); }
   reservar(medico: string, modo: ModoComunicacao, chave: string) { return this.executar(medico, modo, h => h.reservar(medico, modo, chave), chave); }
@@ -34,9 +35,10 @@ export class PostgresHistoricoComunicacao implements HistoricoComunicacaoReposit
       // Serializa a leitura/deduplicação/gravação por médico inclusive entre processos.
       await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [estado.medicoId]);
       const anteriores = await this.lerAuditoriaComprovantes(client, estado.medicoId);
-      const decisao = decidirPedidoComprovante(lido, estado, anteriores.map(registro => registro.lido), agenda);
+      const decisao = decidirPedidoComprovante(lido, estado, anteriores.some(r => r.lido?.tipo === 'extraido' && r.lido.campos.comprovanteHash === chaveComprovante(this.pepper, lido)) ? [lido] : [], agenda);
+      const auditoria = auditarComprovante(this.pepper, estado, lido, decisao);
       await client.query('insert into public.noto_auditoria_comprovantes (medico_id, lido, estado, decisao) values ($1, $2::jsonb, $3::jsonb, $4::jsonb)',
-        [estado.medicoId, lido === null ? null : JSON.stringify(lido), JSON.stringify(estado), JSON.stringify(decisao)]);
+        [estado.medicoId, auditoria.lido === null ? null : JSON.stringify(auditoria.lido), JSON.stringify(auditoria.estado), JSON.stringify(auditoria.decisao)]);
       return decisao;
     });
   }

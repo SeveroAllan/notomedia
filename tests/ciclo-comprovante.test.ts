@@ -1,3 +1,5 @@
+import { config } from '../src/config.js';
+import { auditarComprovante } from '../src/atendimento/comprovante.js';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { processarMensagemWebhook } from '../src/fluxos/processar-mensagem-webhook.js';
 import type { AtendimentoRepositorio } from '../src/atendimento/atendimento-repositorio.js';
@@ -75,7 +77,7 @@ describe('ciclo seco de comprovante pelo webhook', () => {
     expect(resultado.tipo).toBe(tipo);
     expect(c.extrator.extrair).toHaveBeenCalledExactlyOnceWith(payload.data);
     expect(c.lerEstado).toHaveBeenCalledExactlyOnceWith('medico-ficticio', 'paciente-ficticio');
-    expect(await c.historico.lerComprovantes('medico-ficticio')).toEqual([{ lido, estado: c.estado, decisao: resultado }]);
+    expect(await c.historico.lerComprovantes('medico-ficticio')).toEqual([auditarComprovante(config.appPepper, c.estado, lido, resultado)]);
     expect(c.logs).toEqual([['info', registro]]);
     if (resultado.tipo === 'pedido_nota_pronto') expect(resultado.pedido).toEqual({ medicoId: 'medico-ficticio',
       valorCentavos: 35000, dataPagamento: '2026-10-18', paciente: { nome: 'Paciente Ficticio', cpf: '52998224725' } });
@@ -142,8 +144,10 @@ describe('adaptador de extração reaproveita o cliente NVIDIA existente', () =>
     expect(mensagens[1]).toEqual({ role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2VtLWZpY3RpY2lh' } }] });
     expect(JSON.stringify(mensagens)).not.toContain('52998224725');
     const auditoria = await c.historico.lerComprovantes('medico-ficticio');
-    expect(auditoria[0].lido).toEqual(lido);
-    expect(auditoria[0].decisao).toEqual({ tipo: 'pedido_nota_pronto', motivo: 'VALOR_IGUAL_ULTIMA_CONSULTA', pedido: {
+    const decisao = await c.receber.mock.results[0].value;
+    expect(auditoria[0]).toEqual(auditarComprovante(config.appPepper, c.estado, lido, decisao));
+    expect(JSON.stringify(auditoria)).not.toContain('52998224725');
+    expect(decisao).toEqual({ tipo: 'pedido_nota_pronto', motivo: 'VALOR_IGUAL_ULTIMA_CONSULTA', pedido: {
       medicoId: 'medico-ficticio', valorCentavos: 35000, dataPagamento: '2026-10-18', paciente: c.estado.paciente } });
     expect(c.logs).toEqual([['info', 'pediria nota pedido_nota_pronto']]);
   });

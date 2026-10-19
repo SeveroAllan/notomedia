@@ -1,3 +1,5 @@
+import { config } from '../src/config.js';
+import { auditarComprovante } from '../src/atendimento/comprovante.js';
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type pg from 'pg';
@@ -17,7 +19,7 @@ const lido: ResultadoExtracaoComprovante = { tipo: 'extraido', campos: { valorCe
 it('comprovantes, reservas e balões usam tabelas próprias e nunca public.auditoria', async () => {
   const banco = new BancoHistoricoFalso(); const h = new PostgresHistoricoComunicacao(banco as unknown as pg.Pool);
   const decisao = await h.registrarComprovante(estado, lido);
-  expect(banco.comprovantes).toEqual([{ medico_id: medico, lido, estado, decisao, motivo: decisao.motivo, confianca: lido.campos.confianca }]);
+  expect(banco.comprovantes).toEqual([{ medico_id: medico, ...auditarComprovante(config.appPepper, estado, lido, decisao), motivo: decisao.motivo, confianca: lido.campos.confianca }]);
   const acao = { tipo: 'boas_vindas' as const, ultimaNota: null };
   await h.reservar(medico, 'real', 'envio'); await h.reservarEnvio(medico, 'envio', acao); await h.confirmarBalao(medico, 'envio', 0);
   expect(banco.reservas.get(JSON.stringify([medico, 'real']))).toEqual({ medico_id: medico, modo: 'real', chave_processamento: 'envio' });
@@ -50,12 +52,12 @@ it('migração nova cria só as tabelas faltantes com RLS, revokes e cascata por
   expect(sql).toContain('references public.noto_comunicacao_tentativas');
   expect(sql).not.toMatch(/\bpublic\.auditoria\b/);
 });
-it('última consulta vem da tabela sincronizada com status normalizado, sem inventar ausência', async () => {
+it('leitor de cadastro não lê tabela sincronizada nem inventa consulta', async () => {
   const query = vi.fn(async (_sql: string, _params: unknown[]) => ({ rows: [] }));
   const h = new PostgresAtendimentoRepositorio({ query } as unknown as pg.Pool, 'chave-ficticia');
   expect(await h.lerEstado(medico, 'paciente-ficticio')).toEqual({ medicoId: medico, paciente: { nome: null, cpf: null }, ultimaConsulta: null });
-  expect(query.mock.calls[0][0]).toMatch(/from public\.noto_consultas_sincronizadas a/);
-  expect(query.mock.calls[0][0]).toMatch(/a\.status = 'realizada'/);
+  expect(query.mock.calls[0][0]).toMatch(/from pacientes p/);
+  expect(query.mock.calls[0][0]).not.toMatch(/noto_consultas_sincronizadas/);
   expect(query.mock.calls[0][0]).not.toMatch(/from agendamentos/);
   expect(query.mock.calls[0][1]).toEqual([medico, 'paciente-ficticio', 'chave-ficticia']);
 });

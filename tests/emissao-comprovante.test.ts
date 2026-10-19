@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { decidirPedidoComprovante, type ResultadoExtracaoComprovante } from '../src/atendimento/comprovante.js';
+import { createHmac } from 'node:crypto';
+import { auditarComprovante, decidirPedidoComprovante, type ResultadoExtracaoComprovante } from '../src/atendimento/comprovante.js';
 import { BancoEmissaoComprovante } from './fakes/banco-emissao-comprovante.js';
 
 const lido: ResultadoExtracaoComprovante = { tipo: 'extraido', campos: { valorCentavos: 20000, dataPagamento: '2026-10-19', nomePagador: 'Responsavel', nomeFavorecido: 'Medico', confianca: { valorCentavos: 1, dataPagamento: 1, nomePagador: 1, nomeFavorecido: 1 } } };
-function entrada(banco: BancoEmissaoComprovante, leitura = lido) {
-  const estado = { medicoId: 'medico', paciente: { nome: 'Ana', cpf: '52998224725' }, ultimaConsulta: { valorConsultaCentavos: 20000 } };
+function entrada(banco: BancoEmissaoComprovante, leitura = lido, consulta = { fonte: 'agenda', idExterno: 'consulta', dataHora: '2026-10-18T10:00:00Z', valorConsultaCentavos: 20000 }) {
+  const estado = { medicoId: 'medico', paciente: { nome: 'Ana', cpf: '52998224725' }, ultimaConsulta: { valorConsultaCentavos: consulta.valorConsultaCentavos }, consulta };
   const decisao = decidirPedidoComprovante(leitura, estado, []);
-  banco.auditorias.push({ id: `auditoria-${banco.auditorias.length}`, medico_id: 'medico', lido: leitura, estado, decisao });
-  return { medicoId: 'medico', pacienteId: 'paciente', lido: leitura, decisao };
+  banco.auditorias.push({ id: `auditoria-${banco.auditorias.length}`, medico_id: 'medico', ...auditarComprovante('pepper-teste', estado, leitura, decisao) });
+  return { medicoId: 'medico', pacienteId: 'paciente', lido: leitura, decisao, consulta };
 }
 async function adaptador(banco: BancoEmissaoComprovante) {
   const caminho = '../src/io/postgres/postgres-emissao-comprovante.js';
@@ -22,7 +22,7 @@ describe('emissão por comprovante no PostgreSQL', () => {
     expect(await (await adaptador(banco)).enfileirar(pedido)).toEqual({ tipo: 'enfileirada', solicitacaoId: 'solicitacao-0' });
     expect(banco.solicitacoes).toEqual([expect.objectContaining({ paciente_id: 'paciente', valor: 20000, origem: 'whatsapp', descricao: expect.stringContaining('Responsavel') })]);
     expect(banco.solicitacoes[0].descricao).toContain('REFERENTE A CONSULTAS');
-    expect(banco.emissoes[0]).toMatchObject({ auditoria_comprovante_id: 'auditoria-0', consulta_id_externo: 'consulta', estado: 'enfileirada', solicitacao_id: 'solicitacao-0', comprovante_chave: createHash('sha256').update(JSON.stringify([20000, '2026-10-19', 'Responsavel'])).digest('hex') });
+    expect(banco.emissoes[0]).toMatchObject({ auditoria_comprovante_id: 'auditoria-0', consulta_chave: createHmac('sha256', 'pepper-teste').update(JSON.stringify(['medico', 'agenda', 'consulta'])).digest('hex'), estado: 'enfileirada', solicitacao_id: 'solicitacao-0', comprovante_chave: createHmac('sha256', 'pepper-teste').update(JSON.stringify([20000, '2026-10-19', 'Responsavel'])).digest('hex') });
     expect(banco.comandos.filter(c => c === 'begin')).toHaveLength(1);
     expect(banco.comandos.some(c => c.includes('pg_advisory_xact_lock'))).toBe(true);
     expect(banco.comandos.at(-1)).toBe('commit');
@@ -49,7 +49,7 @@ describe('emissão por comprovante no PostgreSQL', () => {
   it.each(['paciente', 'valor', 'perfil', 'cpf'])('revalida %s atual sem criar fila', async caso => {
     const banco = new BancoEmissaoComprovante(); const pedido = entrada(banco);
     if (caso === 'paciente') pedido.pacienteId = 'outro';
-    if (caso === 'valor') banco.consultas[0].valor_consulta_centavos = 30000;
+    if (caso === 'valor') pedido.consulta.valorConsultaCentavos = 30000;
     if (caso === 'perfil') banco.perfilCompleto = false;
     if (caso === 'cpf') banco.paciente.cpf = '11111111111';
     expect(await (await adaptador(banco)).enfileirar(pedido)).toMatchObject({ tipo: 'perguntar_medico' }); expect(banco.solicitacoes).toHaveLength(0);
@@ -69,8 +69,8 @@ describe('emissão por comprovante no PostgreSQL', () => {
   });
   it('mesmo comprovante nunca enfileira outra consulta posterior', async () => {
     const banco = new BancoEmissaoComprovante(); const pedido = entrada(banco); const repo = await adaptador(banco);
-    await repo.enfileirar(pedido); banco.consultas.push({ ...banco.consultas[0], id_externo: 'posterior', data_hora: '2026-10-19T10:00:00Z' });
-    expect(await repo.enfileirar(pedido)).toEqual({ tipo: 'nenhuma' }); expect(banco.solicitacoes).toHaveLength(1);
+    await repo.enfileirar(pedido); const posterior = entrada(banco, lido, { ...pedido.consulta, idExterno: 'posterior', dataHora: '2026-10-19T10:00:00Z' });
+    expect(await repo.enfileirar(posterior)).toEqual({ tipo: 'nenhuma' }); expect(banco.solicitacoes).toHaveLength(1);
   });
   it('migração proposta protege vínculos, unicidades, estados e acesso sem dados pessoais', () => {
     const sql = readFileSync('scripts/migrations/20261019-emissao-comprovante.sql', 'utf8').toLowerCase();

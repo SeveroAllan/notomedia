@@ -1,3 +1,5 @@
+import { config } from '../src/config.js';
+import { auditarComprovante } from '../src/atendimento/comprovante.js';
 import { describe, expect, it } from 'vitest';
 import type pg from 'pg';
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
@@ -63,9 +65,10 @@ for (const tipo of ['memoria', 'postgres'] as const) describe('contrato do hist�
     const { historico: h } = criar(tipo);
     const resultados = await Promise.all([h.registrarComprovante(estado, lido), h.registrarComprovante(estado, lido)]);
     expect(resultados.map(r => r.tipo)).toEqual(['pedido_nota_pronto', 'nenhuma']);
-    expect(await h.lerComprovantes(medico)).toEqual(resultados.map(decisao => ({ lido, estado, decisao })));
-    const copias = await h.lerComprovantes(medico); copias[0].estado.paciente.cpf = null;
-    expect((await h.lerComprovantes(medico))[0].estado.paciente.cpf).toBe('52998224725');
+    expect(await h.lerComprovantes(medico)).toEqual(resultados.map(decisao => auditarComprovante(config.appPepper, estado, lido, decisao)));
+    const copias = await h.lerComprovantes(medico); const hash = copias[0].estado.pacienteHash; copias[0].estado.pacienteHash = 'alterado';
+    expect((await h.lerComprovantes(medico))[0].estado.pacienteHash).toBe(hash);
+    expect(JSON.stringify(await h.lerComprovantes(medico))).not.toContain('52998224725');
     expect((await h.registrarComprovante({ ...estado, medicoId: '00000000-0000-4000-8000-000000000002' }, lido)).tipo).toBe('pedido_nota_pronto');
   });
   it.each(['leitura', 'gravacao'] as const)('falha de %s não devolve pedido nem intenção seca', async falha => {
