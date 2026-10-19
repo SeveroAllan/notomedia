@@ -83,7 +83,7 @@ describe('parâmetros fiscais e IBS/CBS reais', () => {
     expect(parametrosEmissaoSchema.safeParse({ ...parametros, aliquotaCbs: 99 }).success).toBe(false);
   });
   it('serializa exatamente o grupo IBS/CBS confirmado', () => {
-    expect(gerarGrupoIbscbs(ibscbs)).toBe('<IBSCBS><finNFSe>0</finNFSe><indFinal>0</indFinal><cIndOp>100301</cIndOp><indDest>0</indDest><valores><trib><gIBSCBS><CST>200</CST><cClassTrib>200001</cClassTrib></gIBSCBS></trib></valores></IBSCBS>');
+    expect(gerarGrupoIbscbs(ibscbs)).toBe('<IBSCBS><indFinal>0</indFinal><cIndOp>100301</cIndOp><indDest>0</indDest><valores><trib><CST>200</CST><cClassTrib>200001</cClassTrib></trib></valores></IBSCBS>');
     expect(() => gerarGrupoIbscbs({ ...ibscbs, indDest: '1' } as any)).toThrow();
   });
   it('XML aplica IBS/CBS e consumidor final para CPF, sem alterar o objeto de parâmetros', () => {

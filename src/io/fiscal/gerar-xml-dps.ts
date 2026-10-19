@@ -92,6 +92,7 @@ export function gerarXmlDps(
         `<nDPS>${input.nDPS}</nDPS>` +
         `<dCompet>${input.fiscal?.competencia ?? dCompet}</dCompet>` +
         `<tpEmit>1</tpEmit>` +
+        `<finNFSe>0</finNFSe>` +
         `<cLocEmi>${codMun}</cLocEmi>` +
         `<prest>` +
           (cnpjLimpo.length === 11 ? `<CPF>${cnpjLimpo}</CPF>` : `<CNPJ>${cnpjLimpo}</CNPJ>`) +
