@@ -1,17 +1,19 @@
 import { createHmac } from 'node:crypto';
 import type pg from 'pg';
 import type { AppConfig } from '../config.js';
+import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
 import type { EnviarMensagemPaciente } from './enviar-mensagem-paciente.js';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
 
-type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel';
+type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega';
 const textos: Record<AcaoMedico, string> = {
   perguntar_medico: 'Doutor(a), preciso que confira este comprovante e me oriente antes de emitir a nota.',
   perguntar_pacote: 'Doutor(a), o valor do comprovante corresponde a mais de uma consulta. É um pacote? Preciso da sua confirmação antes de emitir.',
   pedir_agenda: 'Doutor(a), preciso de acesso à sua agenda para conferir a consulta deste comprovante. Pode me orientar?',
   falha_emissao: 'Doutor(a), não consegui concluir a emissão da nota. Pode revisar os dados fiscais e me orientar? Não vou tentar emitir novamente sozinho.',
   nota_gerada: 'Doutor(a), a nota de teste foi autorizada em homologação e não tem valor fiscal.',
-  instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.'
+  instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
+  falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
 };
 const duvidas: Record<string, string> = {
   LEITURA_INDISPONIVEL: 'Não consegui ler o comprovante. Pode conferir e me orientar?',
@@ -52,6 +54,39 @@ export class ComunicacaoHomologacao {
         instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto
       })).sucesso);
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
+  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
+    const { medicoId, solicitacaoId } = entrada;
+    try {
+      const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path,
+        p.telefone as contato_telefone, pf.ambiente, wi.nome_instancia,
+        wi.medico_id as instancia_medico_id, wi.status as instancia_status
+        from notas_fiscais nf join solicitacoes_nota sn on sn.id = nf.solicitacao_id
+        join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id = nf.id and ec.estado = 'nota_gerada'
+        join pacientes p on p.id = sn.paciente_id and p.medico_id = sn.medico_id
+        join medico_perfil_fiscal pf on pf.medico_id = sn.medico_id
+        left join lateral (select nome_instancia, medico_id, status from whatsapp_instancias
+          where medico_id = sn.medico_id and oficial = false and status = 'conectado'
+            and nome_instancia <> $3 and nome_instancia <> $4 order by criado_em desc limit 1) wi on true
+        where sn.id = $1 and sn.medico_id = $2 and nf.medico_id = $2 and nf.status = 'autorizada'`,
+        [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName]);
+      const nota = rows[0];
+      if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
+      const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
+        ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
+      if (!propria || !nota.pdf_storage_path) {
+        await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
+        return 'erro';
+      }
+      const resultado = await this.enviarUnico(medicoId, 'nota_paciente', nota.nota_fiscal_id, async () => (await transporte.enviarPdf({
+        instanciaNome: nota.nome_instancia, contatoTelefone: nota.contato_telefone, pdfPathOuUrl: nota.pdf_storage_path,
+        nomeArquivo: 'DANFSe.pdf', legenda: 'Segue sua nota enviada pelo consultório. Documento de homologação, sem valor fiscal.'
+      })).sucesso);
+      if (resultado === 'erro') await this.medico({ medicoId, acao: 'falha_entrega', chave: nota.nota_fiscal_id });
+      return resultado;
+    } catch { this.log('ENTREGA_COMPROVANTE_FALHOU'); return 'erro'; }
   }
 
   private permitido(ativo: boolean | undefined, ambiente: unknown, telefone: unknown): boolean {

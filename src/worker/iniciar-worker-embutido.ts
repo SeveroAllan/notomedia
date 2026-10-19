@@ -94,6 +94,7 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
           notificadorAlertas,
           aoAutorizarComprovante: async item => {
             await comunicacaoHomologacao.medico({ medicoId: item.medicoId, acao: 'nota_gerada', chave: item.id });
+            await comunicacaoHomologacao.paciente({ medicoId: item.medicoId, solicitacaoId: item.id }, evolutionClient);
           }
         });
         console.log(`[WorkerEmbutido] Solicitação ${item.id} finalizada com status: ${res.status}`);

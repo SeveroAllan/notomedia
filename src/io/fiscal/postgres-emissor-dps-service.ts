@@ -438,8 +438,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
     }
 
-    if (!item.emissaoComprovante && !pdfBytes) {
-      pdfBytes = await generateDanfsePdf(dadosDanfse);
+    if (!pdfBytes) {
+      try { pdfBytes = await generateDanfsePdf(dadosDanfse); }
+      catch (erro) {
+        if (!item.emissaoComprovante) throw erro;
+        // A autorização fiscal já ocorreu; conservar XML e nota para entrega posterior.
+      }
     }
 
     const xmlStoragePath = `notas/${item.medicoId}/${anoMes}/${chaveAcessoFinal}.xml`;

@@ -31,3 +31,11 @@ Uma tentativa por médico, ação e chave HMAC. Falha ou resultado incerto não 
 - `AMBIENTE_NAO_HOMOLOGACAO`: Doutor(a), A emissão de teste exige ambiente de homologação. Pode conferir a configuração?
 - `PERFIL_FISCAL_INCOMPLETO`: Doutor(a), Faltam dados fiscais para emitir a nota de teste. Pode conferir?
 - `ENFILEIRAMENTO_COMPROVANTE_FALHOU`: Doutor(a), Não consegui registrar o pedido de emissão. Pode revisar antes de prosseguir?
+
+## Entrega ao paciente
+
+Instância própria conectada do médico, nunca oficial nem assistente. Exige ENVIO_PACIENTE_REAL_ATIVO=true, perfil fiscal homologacao e telefone do paciente na mesma allowlist. Uma tentativa por nota_fiscal_id (armazenado como HMAC); falha de entrega não altera a nota nem reemite.
+
+Legenda fixa: “Segue sua nota enviada pelo consultório. Documento de homologação, sem valor fiscal.”
+
+Aviso `falha_entrega`: “Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.”

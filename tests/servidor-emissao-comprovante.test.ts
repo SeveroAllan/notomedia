@@ -15,9 +15,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { processarItemFila } from '../src/worker/processar-item-fila.js';
 import * as danfse from '../src/fiscal/danfse/gerar-danfse-pdf.js';
 
-const borda = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), extrair: vi.fn() }));
+const borda = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), extrair: vi.fn(), agenda: vi.fn() }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: borda }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: borda.extrair }));
+vi.mock('../src/cofre/router.js', async () => {
+  const { default: express } = await import('express');
+  return { criarCofreContas: () => ({ app: express(), encerrar: async () => {}, statusAgenda: async () => ({ nome: 'agenda-falsa', conectada: true }), fonteAgenda: { consultar: borda.agenda } }) };
+});
 
 const senha = 'senha-exclusiva-fixture', nome = 'Ana Oliveira Ficticia';
 const chaves = forge.pki.rsa.generateKeyPair(1024), cert = forge.pki.createCertificate();
@@ -44,7 +48,8 @@ function sqlServidor(sql: string, valores: any[], base?: { query: (s: string, p?
     return resultado();
   }
   if (s.startsWith('select lido, estado, decisao from public.noto_auditoria_comprovantes')) return resultado(banco.auditorias.filter(a => a.medico_id === valores[0]));
-  if (s.includes('consulta.id_externo as consulta_id')) return resultado([{ ...banco.paciente, consulta_id: 'consulta', valor_consulta_centavos: 20000 }]);
+  if (s.includes('from pacientes p')) return resultado([{ ...banco.paciente }]);
+  if (s.startsWith('select 1 from public.noto_emissoes_comprovantes')) return resultado(banco.emissoes.filter(e => e.medico_id === valores[0] && e.consulta_chave === valores[1] && e.estado === 'nota_gerada'));
   if (s.includes('from medicos m') && s.includes('cclass_trib_padrao')) return resultado([{ medico_id: 'medico', nome_completo: 'Clara Almeida Ficticia', crm: '12345/SC', confirmado_pelo_medico: true, ctrib_nac: '040101', cnbs: '122051000' }]);
   if (s.startsWith('with proximo as')) {
     const sol = banco.solicitacoes.find(sol => !sol.bloqueada && banco.emissoes.some(e => e.solicitacao_id === sol.id && e.estado === 'enfileirada'));
@@ -86,6 +91,7 @@ function sqlServidor(sql: string, valores: any[], base?: { query: (s: string, p?
 beforeEach(() => {
   vi.clearAllMocks(); banco = new BancoEmissaoComprovante(); banco.paciente = { nome, cpf: '52998224725' }; notas = [];
   config.emissaoComprovanteHomologacaoAtiva = true; config.comunicacaoMedicoAtiva = false; config.evolutionWebhookSecret = 'webhook-ficticio'; config.nvidiaApiKey = 'chave-ficticia';
+  borda.agenda.mockResolvedValue({ tipo: 'consultas', fonte: 'agenda', consultas: [{ pacienteId: 'id-externo-na-agenda', telefonePaciente: '11999990000', idExterno: 'consulta', dataHora: '2026-10-18T10:00:00Z', status: 'realizada', valorConsultaCentavos: 20000 }] });
   borda.query.mockImplementation((s, p = []) => sqlServidor(s, p));
   borda.connect.mockImplementation(async () => {
     const client = await banco.connect(); let antes: any[] = [];
@@ -130,7 +136,8 @@ function worker() {
 
 it('flag desligada preserva auditoria seca sem acessar vínculo novo ou SEFIN', async () => {
   config.emissaoComprovanteHomologacaoAtiva = false; app = criarAppExpress(); await receber();
-  expect(banco.auditorias[0].decisao.tipo).toBe('pedido_nota_pronto'); expect(banco.emissoes).toEqual([]); expect(banco.solicitacoes).toEqual([]);
+  expect(banco.auditorias[0].decisao).toEqual({ tipo: 'perguntar_medico', motivo: 'CADASTRO_INCOMPLETO' });
+  expect(borda.agenda).not.toHaveBeenCalled(); expect(banco.emissoes).toEqual([]); expect(banco.solicitacoes).toEqual([]);
   expect(banco.comandos.some(s => s.includes('noto_emissoes_comprovantes'))).toBe(false); expect(transmitir).not.toHaveBeenCalled();
 });
 it('webhook, auditoria, fila, assinatura e SEFIN falsa autorizam uma vez e vinculam consulta sem enviar ao paciente', async () => {
@@ -142,6 +149,8 @@ it('webhook, auditoria, fila, assinatura e SEFIN falsa autorizam uma vez e vincu
   const xml = gunzipSync(Buffer.from(JSON.parse(transmitir.mock.calls[0][1]).dpsXmlGZipB64, 'base64')).toString();
   expect(xml).toContain('<tpAmb>2</tpAmb>'); expect(xml).toContain('<CPF>52998224725</CPF>'); expect(xml).toContain('<Signature');
   expect(notas).toHaveLength(1); expect(banco.emissoes[0]).toMatchObject({ estado: 'nota_gerada', nota_fiscal_id: notas[0].id });
+  expect(notas[0].pdf_storage_path).toMatch(/^data:application\/pdf;base64,/);
+  expect(JSON.stringify(banco.auditorias)).not.toContain('52998224725');
   expect(perguntar).not.toHaveBeenCalled(); await receber(); expect(banco.solicitacoes).toHaveLength(1);
 });
 it('recusa SEFIN não marca gerada, registra erro e pergunta ao médico sem retransmitir', async () => {
@@ -165,7 +174,7 @@ it('indisponibilidade do PDF não apaga autorização SEFIN: comprovante guarda 
   const gerarPdf = vi.spyOn(danfse, 'generateDanfsePdf').mockRejectedValue(Error('PDF indisponível'));
   await receber(); const deps = worker(), item = await deps.filaRepositorio.buscarETravarProximoItem('worker'); expect(item).not.toBeNull();
   expect(await processarItemFila(item!, deps)).toMatchObject({ ok: true, status: 'emitida' });
-  expect(transmitir).toHaveBeenCalledTimes(1); expect(gerarPdf).not.toHaveBeenCalled();
+  expect(transmitir).toHaveBeenCalledTimes(1); expect(gerarPdf).toHaveBeenCalledTimes(1);
   expect(notas[0].pdf_storage_path).toBeNull();
   expect(notas).toHaveLength(1); expect(banco.emissoes[0]).toMatchObject({ estado: 'nota_gerada', nota_fiscal_id: notas[0].id });
   expect(perguntar).not.toHaveBeenCalled();
