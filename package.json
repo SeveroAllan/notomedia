@@ -14,6 +14,7 @@
     "migrate:comparacao": "node scripts/migrar-comparacao-fiscal.mjs",
     "migrate:perfil": "node scripts/migrar-dados-profissionais.mjs",
     "consultar:registro": "node --import tsx scripts/consultar-registro-profissional.mjs",
+    "migrate:conversa": "node scripts/migrar-conversa-mensagens.mjs",
     "migrate:cadastro": "node scripts/migrar-cadastro-certificado.mjs",
     "retry:nota": "node scripts/reprocessar-nota.mjs",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run"
