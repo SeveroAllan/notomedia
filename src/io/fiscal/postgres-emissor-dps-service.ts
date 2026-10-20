@@ -76,7 +76,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const { rows: profissionais } = await this.pool.query(
       'select m.nome_completo, m.crm, m.rqe, m.especialidade, s.aguardando_confirmacao_medico from medicos m join solicitacoes_nota s on s.medico_id=m.id where m.id=$1 and s.id=$2', [item.medicoId,item.id]);
     if (!profissionais[0] || !dadosProfissionaisCompletos(profissionais[0])) {
-      return { sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.',
+      return { sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.', codigoErroSefin: 'DADOS_PROFISSIONAIS_INCOMPLETOS',
         dadosProfissionaisPendentes: true, contextoTecnico: { etapa: 'dados_profissionais', transmitida: false } };
     }
     // Um item já reservado pode conter a identidade anterior à resposta do médico.
@@ -87,17 +87,17 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         crm:medico.crm, rqe:medico.rqe, especialidade:medico.especialidade}, datas)};
     }
     if ((this.modoAgenteConservador || this.preparacaoFiscalAtiva) && (!this.supabaseClient || !this.sefinClient)) {
-      return { sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.' };
+      return { sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' };
     }
     const prestadorConfig = await this.carregarPerfilFiscal(item.medicoId);
     if (!prestadorConfig) {
-      return { sucesso: false, erro: `Perfil fiscal não cadastrado para o médico ${item.medicoId}` };
+      return { sucesso: false, erro: `Perfil fiscal não cadastrado para o médico ${item.medicoId}`, codigoErroSefin: 'PERFIL_FISCAL_INCOMPLETO' };
     }
     if (item.emissaoComprovante && prestadorConfig.ambiente !== 2) {
       return { sucesso: false, erro: 'AMBIENTE_FISCAL_BLOQUEADO', codigoErroSefin: 'AMBIENTE_FISCAL_BLOQUEADO' };
     }
     if (prestadorConfig.referenciaImportada && !this.preparacaoFiscalAtiva) {
-      return { sucesso: false, erro: 'Ative a preparação fiscal para emitir com os parâmetros da referência importada.',
+      return { sucesso: false, erro: 'Ative a preparação fiscal para emitir com os parâmetros da referência importada.', codigoErroSefin: 'PREPARACAO_NECESSARIA',
         pendenciasFiscais: [{ campo: 'configuracao', codigo: 'PREPARACAO_NECESSARIA', mensagem: 'A preparação fiscal precisa estar ativa para validar os parâmetros importados.' }],
         contextoTecnico: { etapa: 'preparacao', transmitida: false } };
     }
@@ -106,12 +106,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }))
       : undefined;
     if (preparacao && !preparacao.ok) {
-      return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.',
+      return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
         pendenciasFiscais: preparacao.pendencias, contextoTecnico: { etapa: 'preparacao', transmitida: false } };
     }
     const tomador = await this.carregarDadosTomador(item.pacienteId);
     if (!tomador || !tomador.cpf) {
-      return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão` };
+      return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
 
     // Se o nome ainda não foi validado, tenta obter via cadastro existente no banco ou API da Receita
@@ -152,7 +152,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     if (!ehNomeCivilValido(tomador.nome)) {
       return {
         sucesso: false,
-        erro: `Paciente ${item.pacienteId} sem nome civil completo válido para emissão de NFS-e (nome atual: '${tomador.nome || 'nulo'}').`
+        erro: `Paciente ${item.pacienteId} sem nome civil completo válido para emissão de NFS-e (nome atual: '${tomador.nome || 'nulo'}').`, codigoErroSefin: 'PACIENTE_NOME_INVALIDO'
       };
     }
 
@@ -181,7 +181,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       prestadorConfig.regTrib.regEspTrib = p.regimeEspecialTributacao;
       prestadorConfig.pTotTribSN = p.percentualTotTribSN ?? 0; // MEI não serializa percentual.
       const pendencias = validarDadosDps(emissaoInput, prestadorConfig);
-      if (pendencias.length) return { sucesso: false, erro: 'Dados da DPS precisam de revisão antes do envio.',
+      if (pendencias.length) return { sucesso: false, erro: 'Dados da DPS precisam de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
         pendenciasFiscais: pendencias, contextoTecnico: { etapa: 'validacao', transmitida: false, origem: preparacao.origem } };
     }
     let ndpsAtual = correcao ? Number(correcao.contextoTecnico!.ndps) : ndps;
@@ -197,7 +197,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       if (!cert) {
         return {
           sucesso: false,
-          erro: `Médico ${item.medicoId} não possui certificado digital A1 ativo cadastrado no sistema para emissão com validade jurídica na SEFIN.`
+          erro: `Médico ${item.medicoId} não possui certificado digital A1 ativo cadastrado no sistema para emissão com validade jurídica na SEFIN.`, codigoErroSefin: 'CERTIFICADO_AUSENTE'
         };
       }
 
@@ -207,7 +207,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       } catch (err: any) {
         return {
           sucesso: false,
-          erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`
+          erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`, codigoErroSefin: 'CERTIFICADO_INVALIDO'
         };
       }
 

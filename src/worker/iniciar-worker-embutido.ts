@@ -63,7 +63,7 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
       if (!params.medicoId || !params.solicitacaoId) {
         throw new Error('Identificadores do médico ou da solicitação ausentes para envio de notificação.');
       }
-      await comunicacaoHomologacao.medico({ medicoId: params.medicoId, acao: 'falha_emissao', chave: params.solicitacaoId });
+      await comunicacaoHomologacao.medico({ medicoId: params.medicoId, acao: 'falha_emissao', chave: params.solicitacaoId, motivo: params.codigoErro ?? params.motivoErro });
     },
     async notificarDesenvolvedorEmail(params) {
       if (config.resendApiKey && config.devEmailAlerta) {

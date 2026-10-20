@@ -43,7 +43,7 @@ export async function processarItemFila(
       return { ok: true, status: 'emitida', chaveAcesso: emissao.chaveAcesso };
     }
     if (emissao.dadosProfissionaisPendentes) return aguardarDadosProfissionais(item, deps);
-    return tratarFalhaEmissao(item, tentativaAtual, emissao.erro, dataAtual, deps);
+    return tratarFalhaEmissao(item, tentativaAtual, emissao.erro, dataAtual, deps, emissao.codigoErroSefin ?? (emissao.httpStatus === 504 || emissao.httpStatus === 408 ? 'SEFIN_TIMEOUT' : emissao.httpStatus && emissao.httpStatus >= 500 || emissao.falhaAntesDoEnvio ? 'SEFIN_INDISPONIVEL' : undefined));
   } catch (erro: any) {
     return tratarExcecaoInesperada(item, tentativaAtual, erro, dataAtual, deps);
   }
@@ -85,7 +85,7 @@ async function tratarFalhaEmissao(
   tentativaAtual: number,
   erro: string,
   dataAtual: Date,
-  deps: ProcessarItemFilaDeps
+  deps: ProcessarItemFilaDeps, codigoErro?: string
 ): Promise<ResultadoProcessarItem> {
   if (excedeuTentativasEmissao(tentativaAtual)) {
     await deps.filaRepositorio.marcarFalhaDefinitiva({ solicitacaoId: item.id, tentativas: tentativaAtual, erro });
@@ -95,7 +95,7 @@ async function tratarFalhaEmissao(
         telefoneMedico: contexto.telefoneMedico, medicoId:item.medicoId, solicitacaoId:item.id,
         nomePaciente: contexto.nomePaciente,
         valorCentavos: item.valorServicoCentavos,
-        motivoErro: erro
+        motivoErro: erro, codigoErro
       });
     }
     return { ok: false, status: 'erro_definitivo', motivo: erro };
@@ -143,7 +143,7 @@ async function processarComprovante(item: ItemFilaComTentativas, deps: Processar
     if (!emissao.sucesso) {
       const codigo = emissao.codigoErroSefin === 'AMBIENTE_FISCAL_BLOQUEADO' ? 'AMBIENTE_FISCAL_BLOQUEADO' : 'EMISSAO_COMPROVANTE_RECUSADA';
       await deps.filaRepositorio.registrarFalhaComprovante?.({ solicitacaoId: item.id, erroCodigo: codigo });
-      await avisarFalhaComprovante(item, codigo, deps);
+      await avisarFalhaComprovante(item, codigo, deps, emissao.codigoErroSefin ?? (emissao.httpStatus === 504 || emissao.httpStatus === 408 ? 'SEFIN_TIMEOUT' : emissao.httpStatus && emissao.httpStatus >= 500 || emissao.falhaAntesDoEnvio ? 'SEFIN_INDISPONIVEL' : codigo));
       return { ok: false, status: 'necessita_intervencao', motivo: codigo };
     }
     autorizada = true;
@@ -160,10 +160,10 @@ async function processarComprovante(item: ItemFilaComTentativas, deps: Processar
   }
 }
 
-async function avisarFalhaComprovante(item: ItemFilaComTentativas, codigo: string, deps: ProcessarItemFilaDeps): Promise<void> {
+async function avisarFalhaComprovante(item: ItemFilaComTentativas, codigo: string, deps: ProcessarItemFilaDeps, codigoErro = codigo): Promise<void> {
   await deps.notificadorAlertas.notificarMedicoWhatsApp({
     telefoneMedico: '', medicoId: item.medicoId, solicitacaoId: item.id,
     nomePaciente: null, valorCentavos: item.valorServicoCentavos,
-    motivoErro: `${codigo}. Doutor(a), pode revisar os dados fiscais e orientar como prosseguir?`
+    codigoErro, motivoErro: `${codigo}. Doutor(a), pode revisar os dados fiscais e orientar como prosseguir?`
   });
 }

@@ -180,3 +180,21 @@ it.each([
   } else expect(enviarTexto).not.toHaveBeenCalled();
   expect(await c.medicoPermitido('medico')).toBe(esperado === 'enviado');
 });
+it.each([
+  [false, 'homologacao', true], [true, 'producao', true], [true, 'homologacao', false], [true, 'homologacao', true]
+] as const)('tradução de falha mantém flag=%s ambiente=%s allowlist=%s e dedup', async (ativo, ambiente, permitir) => {
+  const chaves = new Set<string>();
+  const query = vi.fn(async (sql: string, p: unknown[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente }] };
+    if (sql.includes('insert into public.noto_envios_homologacao')) { const k = JSON.stringify(p); if (chaves.has(k)) return { rows: [] }; chaves.add(k); return { rows: [{ id: 'r' }] }; }
+    if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] }; throw Error('SQL_NAO_MODELADO');
+  });
+  const enviarTexto = vi.fn(async () => ({ sucesso: true }));
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), envioMedicoRealAtivo: ativo, envioRealAllowlist: permitir ? ['+5551993527271'] : [] }, { enviarTexto }, vi.fn());
+  const entrada = { medicoId: 'm', acao: 'falha_emissao' as const, chave: 'sol', motivo: 'CERTIFICADO_AUSENTE' };
+  expect(await c.medico(entrada)).toBe(ativo && permitir && ambiente === 'homologacao' ? 'enviado' : 'simulado');
+  if (ativo && permitir && ambiente === 'homologacao') {
+    expect(enviarTexto.mock.calls[0]).toEqual([{ instanciaNome: carregarConfig({}).evolutionAssistantInstanceName, contatoTelefone: '+5551993527271', texto: 'Não encontrei um certificado digital ativo; cadastre um certificado válido antes de pedir uma nova tentativa. Não vou tentar emitir novamente sozinho.' }]);
+    expect(await c.medico(entrada)).toBe('repetido'); expect(enviarTexto).toHaveBeenCalledOnce();
+  } else expect(enviarTexto).not.toHaveBeenCalled();
+});

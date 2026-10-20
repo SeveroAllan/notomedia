@@ -1,3 +1,4 @@
+import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
 import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
 import { createHmac } from 'node:crypto';
 import type pg from 'pg';
@@ -11,7 +12,7 @@ const textos: Record<AcaoMedico, string> = {
   perguntar_medico: 'Doutor(a), preciso que confira este comprovante e me oriente antes de emitir a nota.',
   perguntar_pacote: 'Doutor(a), o valor do comprovante corresponde a mais de uma consulta. É um pacote? Preciso da sua confirmação antes de emitir.',
   pedir_agenda: 'Doutor(a), preciso de acesso à sua agenda para conferir a consulta deste comprovante. Pode me orientar?',
-  falha_emissao: 'Doutor(a), não consegui concluir a emissão da nota. Pode revisar os dados fiscais e me orientar? Não vou tentar emitir novamente sozinho.',
+  falha_emissao: traduzirFalhaEmissao(undefined),
   nota_gerada: 'Doutor(a), a nota de teste foi autorizada em homologação e não tem valor fiscal.',
   instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
   falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
@@ -75,7 +76,7 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
-      const texto = acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
+      const texto = acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
         ? montarPerguntaMultiplasConsultas(detalhe)
         : acao === 'perguntar_medico' && motivo === 'NOTA_FASE_INICIAL' && detalheNota
           ? montarAvisoNotaFaseInicial(detalheNota)

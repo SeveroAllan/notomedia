@@ -72,3 +72,11 @@ it('adaptador fiscal real recusa produção antes do cliente SEFIN', async () =>
   expect(transmitirDps).not.toHaveBeenCalled();
   expect(query).toHaveBeenCalledTimes(2);
 });
+it('falha do comprovante encaminha código estruturado sem enviar o detalhe técnico ao médico', async () => {
+  const { deps } = preparar();
+  deps.emissorDps.emitir.mockResolvedValue({ sucesso: false, erro: 'detalhe técnico privado', codigoErroSefin: 'CERTIFICADO_AUSENTE' });
+  await processarItemFila(item, deps);
+  expect(deps.notificadorAlertas.notificarMedicoWhatsApp).toHaveBeenCalledWith(expect.objectContaining({ codigoErro: 'CERTIFICADO_AUSENTE' }));
+  expect(JSON.stringify(deps.notificadorAlertas.notificarMedicoWhatsApp.mock.calls)).not.toContain('detalhe técnico privado');
+  expect(deps.filaRepositorio.reagendarTentativa).not.toHaveBeenCalled();
+});
