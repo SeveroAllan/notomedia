@@ -28,8 +28,6 @@ export interface AppConfig {
   resendApiKey?: string;
   devEmailAlerta?: string;
   openserpBaseUrl?: string;
-  nvidiaApiKey?: string;
-  nvidiaRegistroModel?: string;
   openaiApiKey?: string;
   openaiVisaoModel?: string;
   openaiTextoModel?: string;
@@ -71,8 +69,6 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     resendApiKey: env['RESEND_API_KEY'],
     devEmailAlerta: env['DEV_EMAIL_ALERTA'],
     openserpBaseUrl: env['OPENSERP_BASE_URL']?.trim() || undefined,
-    nvidiaApiKey: env['NVIDIA_API_KEY']?.trim() || undefined,
-    nvidiaRegistroModel: env['NVIDIA_REGISTRO_MODEL']?.trim() || 'meta/llama-3.2-90b-vision-instruct',
     openaiApiKey: env['OPENAI_API_KEY']?.trim() || undefined,
     openaiVisaoModel: env['OPENAI_VISAO_MODEL']?.trim() || 'gpt-4o-mini',
     openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',

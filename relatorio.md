@@ -102,3 +102,103 @@ Detalhes de implementação não definidos no prompt:
 - **decisão do Codex, não do dono**: atualizar o resumo depois de persistir a troca e entregar a fala simulada, preservando a resposta caso o resumo falhe. Sanitizar também a saída do modelo antes de persistir/logar.
 
 Não há dúvida funcional pendente anotada como resolvida por suposição. Fala real continua para etapa posterior; esta entrega não a habilita.
+
+
+---
+
+# Relatório — feat/conversa-etapa1
+
+Base confirmada: `ab233d7c89b7526297bae2973a3a397f05ecebfc`, repositório SeveroAllan/notomedia.
+
+## Plano registrado antes da implementação
+
+1. Em `src/server.ts`, `src/config.ts`, `.env.example`, `src/cadastro/google-registro.ts` e consumidores de `completarNvidia`, usar somente chave/modelos/cliente OpenAI. Remover o endpoint e a função NVIDIA, preservando os nomes legados de classes e pastas para limitar o diff. Atualizar também o script de consulta que consome a configuração removida.
+2. Ajustar apenas fixtures, mocks e cenários de seleção do provedor nos testes afetados, preservando os asserts de negócio. Substituir a cobertura do provedor removido pela rejeição explícita sem chave; verificar a pesquisa opcional de CRM.
+3. No segundo commit, acrescentar exclusivamente as duas referências com cascade na migration existente. Não executar SQL.
+4. Verificar typecheck, compilação dos testes, Vitest, ausência dos endpoints/modelos proibidos e diff; registrar evidências antes/depois e fazer push na mesma branch.
+
+## Antes de alterar código
+
+`npm ci` — exit 0:
+```text
+added 216 packages in 58s
+```
+
+`npm run typecheck` — exit 0, sem diagnósticos:
+```text
+> notomed-whats@0.1.0 typecheck
+> tsc --noEmit
+```
+
+`npx vitest run` — exit 1:
+```text
+Test Files  2 failed | 57 passed (59)
+     Tests  2 failed | 757 passed | 3 skipped (762)
+  Start at  14:01:18 UTC
+  Duration  252.46s (transform 35.33s, setup 8.11s, import 209.15s, tests 80.31s, environment 653ms)
+```
+
+As duas falhas foram `Test timed out in 5000ms`: fluxo completo de `tests/login-otp-email-http.test.ts` e cenário NVIDIA de `tests/servidor-conversa-livre.test.ts`. O total esperado de 759 aprovados não foi observado nessa primeira execução. Reexecução isolada dos dois arquivos iniciada sem modificar testes, mocks, asserts ou timeout.
+
+Ocorrência operacional: typecheck e Vitest foram inicialmente disparados antes de o npm ci terminar e retornaram `tsc: not found` / `vitest: not found`. Depois da instalação foram executados novamente; os resultados acima são dessa execução completa.
+
+Reteste antes da implementação — `npx vitest run tests/login-otp-email-http.test.ts tests/servidor-conversa-livre.test.ts`, exit 0:
+```text
+Test Files  2 passed (2)
+     Tests  9 passed (9)
+  Start at  14:05:41 UTC
+  Duration  21.07s (transform 12.11s, setup 1.44s, import 30.33s, tests 3.39s, environment 0ms)
+```
+Os dois arquivos passaram sem alterações ou aumento de timeout; a causa específica da lentidão da execução completa permanece hipótese.
+
+## Complemento: plano do terceiro commit
+
+Após os commits OpenAI e FK, acrescentar um método específico de conversa em `src/whatsapp/comunicacao-homologacao.ts`, reutilizando `permitido` e `enviarUnico`. A reserva cobre o lote inteiro de até três balões e permanece consumida em entrega incerta. Ligar o callback existente de fala livre em `src/server.ts` a esse método; nenhuma outra ação do orquestrador será habilitada. Atualizar somente o comentário do fallback, sem renomear sua constante ou alterar o texto informado no pedido.
+
+Em `tests/servidor-conversa-livre.test.ts`, manter a prova de memória e ausência de efeitos fiscais e acrescentar integração webhook → fala → envio falso, com allowlist única `+5551993527271`, JID sem nono dígito `555193527271`, outro telefone, flags desligadas, produção, reentrega e fallback. Em `tests/passo12-envio-medico.test.ts`, cobrir limite de balões, concorrência e falha com reserva consumida no novo método, reutilizando o mesmo desenho de fake SQL existente. Nenhuma configuração de servidor ou envio real será executado. `ENVIO_PACIENTE_REAL_ATIVO` permanece false nos cenários de integração.
+
+## Commit 1 — diff e explicação de cada teste alterado
+
+- `src/config.ts` e `.env.example`: removidas chave/modelo NVIDIA; exemplo passa a expor chave e modelos OpenAI de texto/visão.
+- `src/server.ts`: seleção fixa de OpenAI, mantendo pesquisa CRM desligada sem chave.
+- `src/cadastro/google-registro.ts` e `scripts/consultar-registro-profissional.mjs`: usam opção `openaiApiKey` e modelo OpenAI; retirado o desvio Kimi → Llama. Códigos de diagnóstico legados foram preservados para evitar mudança desnecessária de contrato.
+- `src/io/nvidia/chat-client.ts`: removidos função/endpoint NVIDIA e a configuração genérica de provedor sem outros consumidores; request só pode usar o endpoint OpenAI. Erro sem chave continua `IA_NAO_CONFIGURADA`.
+- Extratores e tipo do conversador: usam o mesmo cliente OpenAI; nomes de pastas/classes preservados.
+
+Testes alterados, com motivo:
+
+- `tests/ambiente.ts`: limpa `OPENAI_API_KEY`, agora a credencial usada, para não consumir a chave do ambiente real.
+- `tests/ia-provedor.test.ts`: conserva URL, modelo, Authorization, conteúdo e ausência de campos NVIDIA no request OpenAI; substitui o teste do provedor removido por rejeição `IA_NAO_CONFIGURADA` sem fetch. Acrescenta CRM desligado sem chave e extração padrão no endpoint/modelo OpenAI, cobrindo o consumidor que tinha fallback próprio.
+- `tests/servidor-conversa-livre.test.ts`: remove somente a variante NVIDIA e seu mock/fixture; conserva o cenário OpenAI, memória, sanitização e barreiras de envio/fiscal. O assert de não chamar o segundo provedor sai porque esse provedor deixa de existir; há prova de ausência de rede sem chave em `ia-provedor`.
+- `tests/ciclo-comprovante.test.ts`: mock do cliente muda para `completarOpenAi`; asserts intactos.
+- `tests/contexto-resposta-medico.test.ts`: mock do cliente muda para `completarOpenAi`; asserts intactos.
+- `tests/resposta-medico-ia.test.ts`: mock do cliente muda para `completarOpenAi`; asserts intactos.
+- `tests/passo12-servidor.test.ts`: mock e fixture da chave passam para OpenAI; asserts intactos.
+- `tests/servidor-ciclo-comprovante.test.ts`: mock, configuração/restauração e cenário de ausência de chave passam para OpenAI; asserts intactos.
+- `tests/servidor-comunicacao-medico.test.ts`: mock e configuração/restauração de chave/modelo passam para OpenAI; asserts intactos.
+- `tests/servidor-emissao-comprovante.test.ts`: mock e fixture da chave passam para OpenAI; asserts intactos.
+
+A remoção do cenário NVIDIA diminui um caso e os dois casos novos de CRM acrescentam dois: total esperado após este commit, 760 aprovados e 3 ignorados.
+
+## Atualização de evidência e escopo
+
+O usuário informou uma validação independente em clone de `ab233d7`: `npm ci`, `npm run typecheck` e `npx vitest run`, com 59 arquivos, 759 aprovados, 3 ignorados, 19,85s. Esse resultado foi informado pelo usuário, não executado por este agente. Os dois timeouts locais ocorreram antes de qualquer mudança e passaram no reteste; não constituem regressão introduzida neste trabalho. Nenhum timeout será alterado.
+
+Escopo atualizado do commit 2: além das duas FKs com cascade, acrescentar RLS em `public.conversa_mensagens` e `public.conversa_resumos` e `revoke all` das duas tabelas para `anon, authenticated`, sem políticas públicas. O usuário informou que está tratando a aplicação no Supabase separadamente. Nenhuma migration será executada no Codex.
+
+Durante a validação do commit 1, o teste de comprovante apontou que sua fixture ainda configurava o modelo de texto para uma imagem. A fixture/restauração de `tests/servidor-ciclo-comprovante.test.ts` foi corrigida para `openaiVisaoModel`; o assert exato de chave/modelo foi preservado. Isso verifica a separação de modelos por finalidade no servidor.
+
+## Validação do commit 1
+
+`npm run typecheck`: exit 0, sem diagnósticos. `npm test`: compilação de testes passou; execução inicial teve 759 aprovados, 3 ignorados e a única falha de fixture de modelo visual descrita acima (180,73s). Após corrigir a fixture, `npx vitest run`: exit 0. Nenhum timeout foi alterado.
+```text
+RUN  v4.1.12 /workspace/notomedia
+
+
+ Test Files  59 passed (59)
+      Tests  760 passed | 3 skipped (763)
+   Start at  14:12:07
+   Duration  119.36s (transform 11.79s, setup 5.64s, import 125.63s, tests 40.90s, environment 51ms)
+```
+
+Verificado: grep case insensitive por `llama|integrate.api.nvidia` em `src` e `.env.example` sem resultados (exit 1 por ausência de correspondências); `git diff --check` limpo. Hipótese/não exercitado: credencial OpenAI real, qualidade das respostas e deploy. Nenhum banco real ou envio real foi utilizado.

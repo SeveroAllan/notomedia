@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { completarNvidia } from '../io/nvidia/chat-client.js';
+import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
 // RASCUNHO: texto a aprovar pelo dono antes de qualquer envio real
@@ -10,7 +10,7 @@ const resumoSchema = z.object({ resumo: z.string().trim().min(1).max(600) }).str
 
 export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined,
-    private readonly completar: typeof completarNvidia) {}
+    private readonly completar: typeof completarOpenAi) {}
 
   async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; estado: unknown }): Promise<string[]> {
     try {

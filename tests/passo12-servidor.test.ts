@@ -8,7 +8,7 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 
 const portas = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), extrair: vi.fn(), agenda: vi.fn() }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: portas }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: portas.extrair }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: portas.extrair }));
 vi.mock('../src/cofre/router.js', async () => {
   const { default: express } = await import('express');
   return { criarCofreContas: () => ({ app: express(), encerrar: async () => {}, statusAgenda: async () => ({ nome: 'falsa', conectada: true }), fonteAgenda: { consultar: portas.agenda } }) };
@@ -27,7 +27,7 @@ it('handler montado usa agenda falsa após extração, passa consulta transitór
   portas.extrair.mockImplementation(async () => { eventos.push('extracao'); return JSON.stringify({ tipo: 'extraido', campos: { valorCentavos: 20000, dataPagamento: '2026-10-19', nomePagador: 'Ana Ficticia', nomeFavorecido: 'Medica Ficticia', confianca: { valorCentavos: .9, dataPagamento: .9, nomePagador: .9, nomeFavorecido: .9 } } }); });
   portas.agenda.mockImplementation(async () => { eventos.push('agenda'); return { tipo: 'consultas', fonte: 'agenda-falsa', consultas: [{ pacienteId: 'outro-id-na-agenda', telefonePaciente: '1199990000', idExterno: 'consulta-ficticia', dataHora: '2026-10-18', status: 'realizada', valorConsultaCentavos: 20000 }] }; });
   config.emissaoComprovanteHomologacaoAtiva = true; config.envioMedicoRealAtivo = false; config.envioPacienteRealAtivo = false;
-  config.nvidiaApiKey = 'chave-falsa'; config.evolutionWebhookSecret = 'segredo-falso';
+  config.openaiApiKey = 'chave-falsa'; config.evolutionWebhookSecret = 'segredo-falso';
   const enfileirar = vi.spyOn(PostgresEmissaoComprovante.prototype, 'enfileirar').mockResolvedValue({ tipo: 'enfileirada', solicitacaoId: 's' });
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarInstanciaPorNome').mockResolvedValue({ id: 'i', medicoId: 'm', nomeInstancia: 'medica', oficial: false });
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarMedicoPorTelefone').mockResolvedValue(null);

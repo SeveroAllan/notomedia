@@ -3,7 +3,7 @@ import { ExtratorRespostaMedicoNvidia } from '../src/io/nvidia/extrator-resposta
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
 import { orquestrarComunicacao } from '../src/onboarding/orquestrar-comunicacao.js';
 const cliente = vi.hoisted(() => vi.fn());
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: cliente }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: cliente }));
 const pergunta = 'Tem alguma nota para emitir? Desde que dia?';
 const perguntaAgenda = 'Para eu achar suas consultas, preciso da sua agenda. Posso te mandar o link?';
 const contexto = { acaoPendente: 'perguntar_nota_pendente' as const, pergunta, mensagens: ['Bom dia', pergunta] };

@@ -43,7 +43,7 @@ import { PostgresEmissaoComprovante } from './io/postgres/postgres-emissao-compr
 import { PostgresHistoricoComunicacao } from './io/postgres/postgres-historico-comunicacao.js';
 import { ExtratorRespostaMedicoNvidia } from './io/nvidia/extrator-resposta-medico.js';
 import { ExtratorComprovanteNvidia } from './io/nvidia/extrator-comprovante.js';
-import { completarNvidia, completarOpenAi } from './io/nvidia/chat-client.js';
+import { completarOpenAi } from './io/nvidia/chat-client.js';
 
 import { processarOnboardingXml } from './onboarding/fluxos/processar-onboarding-xml.js';
 import { ErroAdocaoReferencia } from './onboarding/io/confirmar-politica-emissao.js';
@@ -119,16 +119,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const hubCpfClient = config.hubDesenvolvedorToken
     ? new HubDesenvolvedorCpfClient(config.hubDesenvolvedorToken)
     : undefined;
-  // Provedor de IA: OpenAI quando OPENAI_API_KEY está configurada; NVIDIA como legado. Mesma chave/modelo por finalidade.
-  const iaOpenAiAtiva=!!config.openaiApiKey;
-  const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
-  const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
-  const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  // Mesma chave OpenAI, com modelo por finalidade.
+  const iaApiKey=config.openaiApiKey;
+  const completarIa=completarOpenAi;
+  const iaModeloTexto=config.openaiTextoModel ?? '';
   const conversador = config.conversaLivreAtiva ? new ConversadorMedico(iaApiKey, iaModeloTexto, completarIa) : undefined;
-  const iaModeloVisao=(iaOpenAiAtiva?config.openaiVisaoModel:config.nvidiaRegistroModel) ?? '';
+  const iaModeloVisao=config.openaiVisaoModel ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
-    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
+    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,openaiApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
         completar:(mensagens)=>completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, { temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1 })})
     : new PesquisaRegistroIndisponivel();
   const cadastroCertificado = new CadastroCertificado(new PostgresCadastro(pool), criarConsultaEmpresa(config.hubDesenvolvedorToken), consultaRegistro,

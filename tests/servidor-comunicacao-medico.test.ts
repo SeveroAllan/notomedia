@@ -4,7 +4,7 @@ import { criarAppExpress } from '../src/server.js';
 import { config } from '../src/config.js';
 import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js';
 const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), agenda: vi.fn(), completar: vi.fn(), sincronizar: vi.fn(), emitir: vi.fn() }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: fronteiras.completar }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.completar }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/cofre/router.js', async () => { const express = await import('express'); return { criarCofreContas: () => ({ app: express.default(), statusAgenda: fronteiras.agenda, encerrar: async () => {} }) }; });
 vi.mock('../src/onboarding/io/sincronizar-historico-evolution.js', () => ({ sincronizarHistoricoEvolutionUmaVez: fronteiras.sincronizar }));
@@ -12,9 +12,9 @@ vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ process
 const medico = '00000000-0000-4000-8000-000000000001';
 let banco: BancoHistoricoFalso; let logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 let rede: ReturnType<typeof vi.spyOn>, enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>;
-const anterior = { ativo: config.comunicacaoMedicoAtiva, segredo: config.evolutionWebhookSecret, apiKey: config.nvidiaApiKey, modelo: config.nvidiaRegistroModel };
+const anterior = { ativo: config.comunicacaoMedicoAtiva, segredo: config.evolutionWebhookSecret, apiKey: config.openaiApiKey, modelo: config.openaiTextoModel };
 beforeEach(() => {
-  vi.clearAllMocks(); banco = new BancoHistoricoFalso(); config.comunicacaoMedicoAtiva = true; config.evolutionWebhookSecret = 'segredo-ficticio'; config.nvidiaApiKey = 'credencial-ficticia'; config.nvidiaRegistroModel = 'modelo-ficticio';
+  vi.clearAllMocks(); banco = new BancoHistoricoFalso(); config.comunicacaoMedicoAtiva = true; config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'credencial-ficticia'; config.openaiTextoModel = 'modelo-ficticio';
   fronteiras.completar.mockResolvedValue(JSON.stringify({ temNota: 'não', desde: null, confianca: 0.90 }));
   fronteiras.connect.mockImplementation(() => banco.connect()); fronteiras.agenda.mockResolvedValue({ nome: null, conectada: false });
   fronteiras.sincronizar.mockResolvedValue({});
@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   expect(rede).not.toHaveBeenCalled(); expect(enviar).not.toHaveBeenCalled(); expect(pdf).not.toHaveBeenCalled(); expect(fronteiras.emitir).not.toHaveBeenCalled();
-  config.comunicacaoMedicoAtiva = anterior.ativo; config.evolutionWebhookSecret = anterior.segredo; config.nvidiaApiKey = anterior.apiKey; config.nvidiaRegistroModel = anterior.modelo; vi.restoreAllMocks();
+  config.comunicacaoMedicoAtiva = anterior.ativo; config.evolutionWebhookSecret = anterior.segredo; config.openaiApiKey = anterior.apiKey; config.openaiTextoModel = anterior.modelo; vi.restoreAllMocks();
 });
 function mensagem(id: string, texto = 'Olá') { return { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: {
   messageTimestamp: 1772422200, key: { id, remoteJid: '5511999990000@s.whatsapp.net', fromMe: false }, message: { conversation: texto }

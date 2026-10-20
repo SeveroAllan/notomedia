@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import { sanitizarTextoMedico } from '../../onboarding/contexto-conversa-medico.js';
-import { completarNvidia } from './chat-client.js';
+import { completarOpenAi } from './chat-client.js';
 import { respostaNotaExtraidaSchema, contextoRespostaMedicoSchema, LIMITE_MENSAGENS_CONTEXTO_MEDICO, type ContextoRespostaMedico, type ExtratorRespostaMedico } from '../../onboarding/regras/decidir-proxima-acao.js';
 
 export class ExtratorRespostaMedicoNvidia implements ExtratorRespostaMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined,
-    private readonly completar: typeof completarNvidia = completarNvidia) {}
+    private readonly completar: typeof completarOpenAi = completarOpenAi) {}
 
   async classificarAgenda(texto: string): Promise<string | null> {
     if (!this.apiKey?.trim() || !this.modelo?.trim()) return null;

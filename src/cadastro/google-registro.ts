@@ -3,7 +3,7 @@
  * contra evidência literal antes de expô-lo à confirmação humana.
  */
 import { nomeProfissionalValido, normalizarCrm } from '../conta/validar-dados-emissao.js';
-import { completarNvidia, ErroNvidiaChat, type MensagemNvidia } from '../io/nvidia/chat-client.js';
+import { completarOpenAi, ErroNvidiaChat, type MensagemNvidia } from '../io/nvidia/chat-client.js';
 import type { ConsultaRegistro, ResultadoConsulta, ResultadoConsultaRegistro } from './consultas.js';
 import type { DiagnosticoPesquisaRegistro } from './diagnostico-pesquisa-registro.js';
 export type { DiagnosticoPesquisaRegistro } from './diagnostico-pesquisa-registro.js';
@@ -22,7 +22,7 @@ export interface FontePesquisaRegistro {
 }
 export interface OpcoesGoogleRegistro {
   serperApiKey?: string;
-  nvidiaApiKey?: string;
+  openaiApiKey?: string;
   modelo?: string;
   requisitar?: typeof fetch;
   completar?: (mensagens: MensagemNvidia[]) => Promise<string>;
@@ -293,9 +293,9 @@ export class PesquisaRegistroProfissional implements ConsultaRegistro {
   private readonly modelo: string;
   constructor(private readonly opcoes: OpcoesGoogleRegistro) {
     this.requisitar = opcoes.requisitar ?? fetch;
-    this.modelo = (opcoes.modelo?.trim() === 'moonshotai/kimi-k3' ? 'meta/llama-3.2-90b-vision-instruct' : opcoes.modelo?.trim()) || 'meta/llama-3.2-90b-vision-instruct';
+    this.modelo = opcoes.modelo?.trim() || 'gpt-4o-mini';
     // O cadastro agenda as retentativas; não multiplicar o prazo dentro da chamada.
-    this.completar = opcoes.completar ?? (mensagens => completarNvidia(opcoes.nvidiaApiKey || '', this.modelo, mensagens, {
+    this.completar = opcoes.completar ?? (mensagens => completarOpenAi(opcoes.openaiApiKey || '', this.modelo, mensagens, {
       temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1
     }));
   }
@@ -308,8 +308,8 @@ export class PesquisaRegistroProfissional implements ConsultaRegistro {
   }
 
   private async pesquisar(nome: string, diagnosticar: Diagnosticar): Promise<ResultadoConsulta<DadosMedicoOnline[]>> {
-    const chaveNvidia = this.opcoes.nvidiaApiKey?.trim();
-    if (!(this.opcoes.fontePesquisa?.configurada ?? !!this.opcoes.serperApiKey?.trim()) || !chaveNvidia) return falha('CRM_FONTE_NAO_CONFIGURADA');
+    const chaveOpenAi = this.opcoes.openaiApiKey?.trim();
+    if (!(this.opcoes.fontePesquisa?.configurada ?? !!this.opcoes.serperApiKey?.trim()) || !chaveOpenAi) return falha('CRM_FONTE_NAO_CONFIGURADA');
     if (!nomeProfissionalValido(nome)) return falha(this.opcoes.fontePesquisa ? 'CRM_PARAMETRO_INVALIDO' : 'SERPER_PARAMETRO_INVALIDO');
     const pesquisa = await (this.opcoes.fontePesquisa?.pesquisar(nome, diagnosticar) ?? this.pesquisarSerper(nome, diagnosticar));
     if (pesquisa.estado !== 'consultado') return pesquisa;

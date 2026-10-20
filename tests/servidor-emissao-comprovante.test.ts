@@ -17,7 +17,7 @@ import * as danfse from '../src/fiscal/danfse/gerar-danfse-pdf.js';
 
 const borda = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), extrair: vi.fn(), agenda: vi.fn() }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: borda }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: borda.extrair }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: borda.extrair }));
 vi.mock('../src/cofre/router.js', async () => {
   const { default: express } = await import('express');
   return { criarCofreContas: () => ({ app: express(), encerrar: async () => {}, statusAgenda: async () => ({ nome: 'agenda-falsa', conectada: true }), fonteAgenda: { consultar: borda.agenda } }) };
@@ -90,7 +90,7 @@ function sqlServidor(sql: string, valores: any[], base?: { query: (s: string, p?
 
 beforeEach(() => {
   vi.clearAllMocks(); banco = new BancoEmissaoComprovante(); banco.paciente = { nome, cpf: '52998224725' }; notas = [];
-  config.emissaoComprovanteHomologacaoAtiva = true; config.comunicacaoMedicoAtiva = false; config.evolutionWebhookSecret = 'webhook-ficticio'; config.nvidiaApiKey = 'chave-ficticia';
+  config.emissaoComprovanteHomologacaoAtiva = true; config.comunicacaoMedicoAtiva = false; config.evolutionWebhookSecret = 'webhook-ficticio'; config.openaiApiKey = 'chave-ficticia';
   borda.agenda.mockResolvedValue({ tipo: 'consultas', fonte: 'agenda', consultas: [{ pacienteId: 'id-externo-na-agenda', telefonePaciente: '11999990000', idExterno: 'consulta', dataHora: '2026-10-18T10:00:00Z', status: 'realizada', valorConsultaCentavos: 20000 }] });
   borda.query.mockImplementation((s, p = []) => sqlServidor(s, p));
   borda.connect.mockImplementation(async () => {

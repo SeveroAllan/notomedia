@@ -5,7 +5,7 @@ import { ExtratorRespostaMedicoNvidia } from '../src/io/nvidia/extrator-resposta
 import { orquestrarComunicacao } from '../src/onboarding/orquestrar-comunicacao.js';
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
 const cliente = vi.hoisted(() => vi.fn());
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: cliente }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: cliente }));
 const contexto = { acaoPendente: 'perguntar_nota_pendente' as const, pergunta: 'Tem alguma nota para emitir? Desde que dia?', mensagens: [] };
 const data = '2026-03-02'; const agora = new Date('2026-10-18T15:00:00Z');
 let rede: ReturnType<typeof vi.spyOn>;
