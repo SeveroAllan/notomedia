@@ -146,7 +146,7 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
   const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, jid])).digest('hex');
   const registro = banco.mensagens.find(m => m.conversa === chave && m.mensagemId === 'noto:boas_vindas:unica');
   expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
-  expect(baloes[3]).toBe('Tem alguma nota de hoje que você quer organizar comigo?');
+  expect(baloes[3]).toBe('Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
   await receber(criarAppExpress(), 'resposta', 'quero');
   expect(fronteiras.openai).toHaveBeenCalledTimes(1);
   const dados = JSON.parse(fronteiras.openai.mock.calls[0][2][1].content);

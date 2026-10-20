@@ -100,14 +100,14 @@ export function montarBoasVindas(
     'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
     'Se você pedir, também entrego uma nota nova ou antiga por aqui.'
   ];
-  if (!ultimaNota?.paciente) return [...baloes, 'Tem alguma nota de hoje que você quer organizar comigo?'];
+  if (!ultimaNota?.paciente) return [...baloes, 'Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?'];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
   const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
-  const pergunta = 'Quer que eu te mande ela por aqui?';
+  const pergunta = 'Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?';
   return [...baloes, `${resumo.slice(0, 499 - pergunta.length)} ${pergunta}`];
 }
 
