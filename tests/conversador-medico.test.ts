@@ -112,6 +112,16 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('Não use "Isso não significa que a nota foi emitida" como fecho automático');
   expect(sistema.content).toContain('Só esclareça emissão/status quando perguntarem sobre isso, uma vez, sem repetir como muleta');
   expect(sistema.content).not.toContain('confirme esses três dados e diga que isso não significa nota emitida');
+  expect(sistema.content).toContain('Com relógio válido, "ontem" já informa a data exata');
+  expect(sistema.content).toContain('se hoje é 20/10, ontem é 19/10');
+  expect(sistema.content).toContain('não peça a data exata de novo quando paciente, ontem e valor já foram informados');
+  expect(sistema.content).toContain('Já tenho paciente, data e valor; só a emissão por aqui ainda não está disponível.');
+  expect(sistema.content).toContain('Só mencione "recibo" se o médico já tiver falado de recibo');
+  expect(sistema.content).toContain('Em "reembolso do João, manda a nota", confira primeiro o histórico: não pergunte valor e data já informados');
+  expect(sistema.content).toContain('variando a formulação sem frase fixa');
+  expect(sistema.content).not.toContain('Com isso eu não consigo ajudar por aqui');
+  expect(sistema.content).toContain('Não compartilho chaves.');
+  expect(sistema.content).toContain('não faça afirmações sobre notas emitidas nessa recusa');
   expect(dados.role).toBe('user');
   expect(JSON.parse(dados.content)).toEqual(contexto);
 });
