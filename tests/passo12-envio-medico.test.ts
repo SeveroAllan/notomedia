@@ -154,6 +154,6 @@ it.each([false, true])('boas-vindas enviam em ordem, uma única vez por médico,
   expect(await new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn()).boasVindas({
     medicoId: 'm', nomeMedico: 'Outro Nome', ultimaNota: null, aoEnviar
   })).toBe('repetido');
-  expect(enviarTexto).toHaveBeenCalledTimes(falha ? 2 : 4);
+  expect(enviarTexto).toHaveBeenCalledTimes(falha ? 2 : 5);
   expect(aoEnviar).toHaveBeenCalledTimes(falha ? 0 : 1);
 });

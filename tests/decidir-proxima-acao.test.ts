@@ -212,7 +212,7 @@ describe('contrato decidirProximaAcao(estado)', () => {
   });
 });
 
-describe('boas-vindas fixas em quatro balões', () => {
+describe('boas-vindas com última nota em cinco balões', () => {
   it.each([[0, 'hoje'], [1, 'ontem'], [2, 'há 2 dias'], [18, 'há 18 dias']] as const)(
     '%s dias desde a última nota escreve exatamente %s', (diasDesdeEmissao, quando) => {
       const nota = { paciente: 'Paciente Exemplo', dataEmissao: '2026-10-18', valorCentavos: 123456, diasDesdeEmissao };
@@ -221,7 +221,8 @@ describe('boas-vindas fixas em quatro balões', () => {
         'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
         'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
         'Se você pedir, também entrego uma nota nova ou antiga por aqui.',
-        `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}. Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?`
+        `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}.`,
+        'Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?'
       ]);
       expect(nota).toEqual(antes);
     }
@@ -229,7 +230,7 @@ describe('boas-vindas fixas em quatro balões', () => {
   it('formata centavos com duas casas sem arredondar para reais inteiros', () => {
     const nota = { paciente: 'Outro Exemplo', dataEmissao: '2026-10-18', valorCentavos: 105, diasDesdeEmissao: 0 };
     expect(montarBoasVindas('Outro Médico', nota)[3]).toBe(
-      'Vi que sua última nota foi para Outro Exemplo, de R$ 1,05, emitida hoje. Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?'
+      'Vi que sua última nota foi para Outro Exemplo, de R$ 1,05, emitida hoje.'
     );
   });
 });
@@ -258,5 +259,7 @@ it.each(['ALICE CASTRO MENEZES XAVIER', '  alice Castro  ', 'Alice'])('saúda so
 it('limita os balões a 500 caracteres sem perder a pergunta final', () => {
   const baloes = montarBoasVindas('A'.repeat(800), { paciente: 'P'.repeat(800), dataEmissao: '2026-10-20', valorCentavos: 30000, diasDesdeEmissao: 0 });
   expect(baloes.every(texto => texto.length <= 500)).toBe(true);
-  expect(baloes[3]).toMatch(/Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes\?$/);
+  expect(baloes).toHaveLength(5);
+  expect(baloes[3]).toHaveLength(500);
+  expect(baloes[4]).toBe('Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
 });

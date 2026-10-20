@@ -92,7 +92,7 @@ function decidirRepergunta(
 export function montarBoasVindas(
   nomeMedico: string,
   ultimaNota: UltimaNotaConhecida | null
-): [string, string, string, string] {
+): [string, string, string, string] | [string, string, string, string, string] {
   const primeiroNome = nomeMedico.trim().split(/\s+/)[0].toLocaleLowerCase('pt-BR').slice(0, 400);
   const nomeSaudacao = primeiroNome.charAt(0).toLocaleUpperCase('pt-BR') + primeiroNome.slice(1);
   const baloes: [string, string, string] = [
@@ -108,7 +108,7 @@ export function montarBoasVindas(
   });
   const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
   const pergunta = 'Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?';
-  return [...baloes, `${resumo.slice(0, 499 - pergunta.length)} ${pergunta}`];
+  return [...baloes, resumo.slice(0, 500), pergunta];
 }
 
 /** Reconhece somente respostas inequívocas; a data civil vem do chamador. */
