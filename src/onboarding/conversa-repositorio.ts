@@ -24,6 +24,12 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
       [medicoId, conversa, id, sanitizarTextoMedico(texto), papel]);
   }
 
+  async temBoasVindas(medicoId: string, conversa: string): Promise<boolean> {
+    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id=$3 limit 1',
+      [medicoId, conversa, 'noto:boas_vindas:unica']);
+    return rows.length > 0;
+  }
+
   async lerResumo(medicoId: string, conversa: string): Promise<ResumoConversa | null> {
     const { rows } = await this.pool.query<{ resumo: string; ate_id: string }>(
       'select resumo, ate_id::text from conversa_resumos where medico_id=$1 and conversa=$2', [medicoId, conversa]);

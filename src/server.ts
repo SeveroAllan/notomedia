@@ -9,7 +9,8 @@ import { criarConsultaEmpresa, PesquisaRegistroIndisponivel } from './cadastro/c
 import { criarRouterStatusWhatsapp } from './whatsapp/status-router.js';
 import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { diagnosticoEntradaWebhook, diagnosticoResultadoWebhook, diagnosticoErroWebhook } from './whatsapp/diagnostico-webhook.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
@@ -164,7 +165,19 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
-      aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {
+      aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
+        if (acao.tipo === 'boas_vindas' && contexto?.nomeMedico) {
+          await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota,
+            aoEnviar: async (telefone, baloes) => {
+              if (!config.conversaLivreAtiva || !memoriaPersistida) return;
+              // O JID pode vir com ou sem nono dígito, como na busca do médico.
+              for (const variante of gerarVariantesTelefoneBrasileiro(telefone)) {
+                const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, variante])).digest('hex');
+                await memoriaPersistida.registrar(medicoId, conversa, 'noto:boas_vindas:unica', baloes.join('\n'), 'noto');
+              }
+            } });
+          return;
+        }
         if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }
         if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
       } : undefined,

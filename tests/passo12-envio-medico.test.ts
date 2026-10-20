@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
 import { expect, it, vi } from 'vitest';
 import type pg from 'pg';
 import type { EnviarMensagemPacienteParams } from '../src/whatsapp/enviar-mensagem-paciente.js';
@@ -98,4 +100,60 @@ it.each(['sucesso', 'falha', 'excecao', 'confirmacao falha'])('conversa reserva 
   const banco = JSON.stringify(query.mock.calls);
   for (const texto of entrada.fala) expect(banco).not.toContain(texto);
   expect(banco).not.toContain('+5551993527271');
+});
+
+it.each([
+  [false, 'homologacao', ['11999990000']],
+  [true, 'producao', ['11999990000']],
+  [true, 'homologacao', ['11988880000']],
+  [true, null, ['11999990000']]
+])('boas-vindas bloqueadas por flag=%s ambiente=%s allowlist=%j', async (ativo, ambiente, allowlist) => {
+  const query = vi.fn(async (_sql: string) => ({ rows: [{ telefone: '5511999990000', ambiente }] }));
+  const enviarTexto = vi.fn(), aoEnviar = vi.fn(), log = vi.fn();
+  const config = { ...carregarConfig({}), envioMedicoRealAtivo: ativo, envioRealAllowlist: allowlist };
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, log);
+  expect(await c.boasVindas({ medicoId: 'm', nomeMedico: 'ALICE CASTRO', ultimaNota: null, aoEnviar })).toBe('simulado');
+  expect(enviarTexto).not.toHaveBeenCalled(); expect(aoEnviar).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledExactlyOnceWith('enviaria boas_vindas');
+  if (!ativo) expect(query).not.toHaveBeenCalled();
+  expect(query.mock.calls.filter(([sql]) => sql.includes('insert into'))).toEqual([]);
+});
+it.each([undefined, '', '   '])('boas-vindas recusam nome ausente/vazio %j', async nomeMedico => {
+  const query = vi.fn(), enviarTexto = vi.fn();
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, carregarConfig({}), { enviarTexto }, vi.fn());
+  expect(await c.boasVindas({ medicoId: 'm', nomeMedico, ultimaNota: null })).toBe('erro');
+  expect(query).not.toHaveBeenCalled(); expect(enviarTexto).not.toHaveBeenCalled();
+});
+it.each([false, true])('boas-vindas enviam em ordem, uma única vez por médico, com falha no segundo=%s', async falha => {
+  const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '5511999990000', ambiente: 'homologacao' }] };
+    if (sql.includes('insert into public.noto_envios_homologacao')) {
+      const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] };
+      reservas.add(chave); return { rows: [{ id: 'r' }] };
+    }
+    if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] };
+    throw Error('SQL_NAO_MODELADO');
+  });
+  const enviarTexto = vi.fn(async (_p: EnviarMensagemPacienteParams) => ({ sucesso: true }));
+  if (falha) enviarTexto.mockResolvedValueOnce({ sucesso: true }).mockResolvedValueOnce({ sucesso: false });
+  const aoEnviar = vi.fn(async (_telefone: string, _baloes: string[]) => {});
+  const config = { ...carregarConfig({}), envioMedicoRealAtivo: true, envioRealAllowlist: ['11999990000'] };
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn());
+  const ultimaNota = { paciente: 'Paciente Ficticio', dataEmissao: '2026-10-20', valorCentavos: 30000, diasDesdeEmissao: 0 };
+  const baloes = montarBoasVindas('ALICE CASTRO MENEZES XAVIER', ultimaNota);
+  expect(await c.boasVindas({ medicoId: 'm', nomeMedico: 'ALICE CASTRO MENEZES XAVIER', ultimaNota, aoEnviar })).toBe(falha ? 'erro' : 'enviado');
+  expect(enviarTexto.mock.calls.map(([p]) => p)).toEqual((falha ? baloes.slice(0, 2) : baloes).map(texto => ({
+    instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: '5511999990000', texto
+  })));
+  const hash = createHmac('sha256', config.appPepper).update(JSON.stringify(['m', 'boas_vindas', 'unica'])).digest('hex');
+  expect(query.mock.calls.find(([sql]) => sql.includes('insert into'))?.[1]).toEqual(['m', 'boas_vindas', hash]);
+  expect(query).toHaveBeenCalledWith('update public.noto_envios_homologacao set estado = $2 where id = $1', ['r', falha ? 'erro' : 'enviado']);
+  if (falha) expect(aoEnviar).not.toHaveBeenCalled();
+  else expect(aoEnviar).toHaveBeenCalledExactlyOnceWith('5511999990000', baloes);
+  expect(await new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn()).boasVindas({
+    medicoId: 'm', nomeMedico: 'Outro Nome', ultimaNota: null, aoEnviar
+  })).toBe('repetido');
+  expect(enviarTexto).toHaveBeenCalledTimes(falha ? 2 : 4);
+  expect(aoEnviar).toHaveBeenCalledTimes(falha ? 0 : 1);
 });

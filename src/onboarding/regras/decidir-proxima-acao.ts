@@ -92,22 +92,23 @@ function decidirRepergunta(
 export function montarBoasVindas(
   nomeMedico: string,
   ultimaNota: UltimaNotaConhecida | null
-): [string, string, string] | [string, string, string, string] {
+): [string, string, string, string] {
+  const primeiroNome = nomeMedico.trim().split(/\s+/)[0].toLocaleLowerCase('pt-BR').slice(0, 400);
+  const nomeSaudacao = primeiroNome.charAt(0).toLocaleUpperCase('pt-BR') + primeiroNome.slice(1);
   const baloes: [string, string, string] = [
-    `Olá, Dr(a). ${nomeMedico}! Sou o Noto, seu assistente de notas fiscais.`,
-    'Eu emito suas notas a partir dos comprovantes de pagamento dos pacientes e envio a nota fiscal direto na conversa do paciente, do seu próprio WhatsApp, como se fosse você.',
+    `Olá, Dr(a). ${nomeSaudacao}! Sou o Noto, seu assistente de notas fiscais.`,
+    'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
     'Se você pedir, também entrego uma nota nova ou antiga por aqui.'
   ];
-  if (!ultimaNota?.paciente) return baloes;
+  if (!ultimaNota?.paciente) return [...baloes, 'Tem alguma nota de hoje que você quer organizar comigo?'];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
-  return [
-    ...baloes,
-    `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`
-  ];
+  const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
+  const pergunta = 'Quer que eu te mande ela por aqui?';
+  return [...baloes, `${resumo.slice(0, 499 - pergunta.length)} ${pergunta}`];
 }
 
 /** Reconhece somente respostas inequívocas; a data civil vem do chamador. */

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { criarAppExpress } from '../src/server.js';
 import { RASCUNHO_FALLBACK_CONVERSA } from '../src/onboarding/conversador-medico.js';
@@ -6,7 +8,7 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), emitir: vi.fn() }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
@@ -15,13 +17,14 @@ vi.mock('../src/cofre/router.js', async () => {
   return { criarCofreContas: () => ({ app: express.default(), statusAgenda: async () => null, encerrar: async () => {} }) };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
-  estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: null, conectada: false }, ultimaNota: null }
+  nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: null, conectada: false }, ultimaNota: null }
 }) }));
 const anterior = { ...config }; let banco: BancoConversaFalso;
 let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number;
 let reservas: Set<string>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
+  fronteiras.nomeMedico = undefined;
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks(); banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
@@ -130,4 +133,37 @@ it.each(['erro', 'quatro baloes', 'tres baloes'])('entrega %s com limite de trê
     contatoTelefone: '+5551993527271', texto })));
   await receber(criarAppExpress(), 'fora');
   expect(reservas.size).toBe(1); expect(config.envioPacienteRealAtivo).toBe(false);
+});
+
+it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no histórico de %s para a resposta quero, inclusive em nova instância', async numeroJid => {
+  jid = numeroJid; fronteiras.nomeMedico = 'ALICE CASTRO MENEZES XAVIER';
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 5;
+  const baloes = montarBoasVindas(fronteiras.nomeMedico, null);
+  await receber(criarAppExpress(), 'inicio');
+  expect(enviar.mock.calls.map((args: unknown[]) => args[0])).toEqual(baloes.map(texto => ({
+    instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+  })));
+  const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, jid])).digest('hex');
+  const registro = banco.mensagens.find(m => m.conversa === chave && m.mensagemId === 'noto:boas_vindas:unica');
+  expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
+  expect(baloes[3]).toBe('Tem alguma nota de hoje que você quer organizar comigo?');
+  await receber(criarAppExpress(), 'resposta', 'quero');
+  expect(fronteiras.openai).toHaveBeenCalledTimes(1);
+  const dados = JSON.parse(fronteiras.openai.mock.calls[0][2][1].content);
+  expect(dados.texto).toBe('quero'); expect(dados.mensagens).toContain(baloes.join('\n'));
+  expect(enviar.mock.calls.slice(4).map((args: unknown[]) => args[0])).toEqual([{
+    instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto: 'Posso explicar o que o Noto faz hoje.'
+  }]);
+  expect(banco.mensagens.filter(m => m.conversa === chave && m.mensagemId === 'noto:boas_vindas:unica')).toHaveLength(1);
+});
+it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas não entram na memória em %s', async caso => {
+  fronteiras.nomeMedico = 'ALICE CASTRO';
+  if (caso !== 'simulado') config.envioRealAllowlist = ['+5551993527271'];
+  if (caso === 'falha no segundo') {
+    enviar.mockResolvedValueOnce({ sucesso: true }).mockResolvedValueOnce({ sucesso: false }); enviosEsperados = 2;
+  }
+  if (caso === 'livre off') { config.conversaLivreAtiva = false; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 4; }
+  await receber(criarAppExpress(), 'inicio');
+  expect(banco.mensagens.filter(m => m.mensagemId === 'noto:boas_vindas:unica')).toEqual([]);
+  expect(banco.consultas.filter(c => c.sql.startsWith('insert into conversa_mensagens') && c.parametros[2] === 'noto:boas_vindas:unica')).toEqual([]);
 });

@@ -1,3 +1,4 @@
+import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
 import { createHmac } from 'node:crypto';
 import type pg from 'pg';
 import type { AppConfig } from '../config.js';
@@ -82,6 +83,30 @@ export class ComunicacaoHomologacao {
       return await this.enviarUnico(medicoId, acao, chave, async () => (await this.transporte.enviarTexto({
         instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto
       })).sucesso);
+    } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
+  async boasVindas(entrada: { medicoId: string; nomeMedico?: string; ultimaNota: Parameters<typeof montarBoasVindas>[1];
+    aoEnviar?: (telefone: string, baloes: string[]) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    const { medicoId, nomeMedico, ultimaNota } = entrada;
+    if (!nomeMedico?.trim()) return 'erro';
+    if (!this.config.envioMedicoRealAtivo) return this.simular('boas_vindas');
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
+      const baloes = montarBoasVindas(nomeMedico, ultimaNota);
+      const resultado = await this.enviarUnico(medicoId, 'boas_vindas', 'unica', async () => {
+        for (const texto of baloes) {
+          const envio = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
+            contatoTelefone: destino.telefone, texto });
+          if (!envio.sucesso) return false;
+        }
+        return true;
+      });
+      if (resultado === 'enviado') await entrada.aoEnviar?.(destino.telefone, baloes);
+      return resultado;
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 

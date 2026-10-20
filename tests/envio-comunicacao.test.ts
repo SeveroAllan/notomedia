@@ -69,7 +69,7 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
     expect((await historico.ler(entrada.medicoId, 'simulado')).registros).toEqual([]);
   });
 
-  it('envia somente os três balões aprovados quando não há última nota', async () => {
+  it('envia quatro balões com pergunta final quando não há última nota', async () => {
     const { entrada, dependencias, transporte } = cenario();
     await orquestrarComunicacao({ ...entrada, estado: { ...entrada.estado, ultimaNota: null } }, dependencias);
     expect(transporte.confirmadas.map(params => params.texto)).toEqual(montarBoasVindas('Ana Exemplo', null));

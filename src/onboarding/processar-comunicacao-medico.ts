@@ -22,7 +22,7 @@ export async function processarComunicacaoMedico(
     memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
-    aoDecidir?: (acao: ProximaAcaoNoto, chave: string) => Promise<void>;
+    aoDecidir?: (acao: ProximaAcaoNoto, chave: string, contexto?: { nomeMedico?: string }) => Promise<void>;
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
@@ -44,10 +44,12 @@ export async function processarComunicacaoMedico(
         historico: deps.historico, log: deps.log, extratorResposta: deps.extratorResposta,
         aoSemDecisao: deps.conversaLivreAtiva === true ? () => { semDecisao = true; } : undefined
       });
-      await deps.aoDecidir?.(acao, entrada.chaveProcessamento);
+      await deps.aoDecidir?.(acao, entrada.chaveProcessamento, { nomeMedico: estado.nomeMedico });
       if (deps.conversaLivreAtiva === true && acao.tipo === 'nenhuma' && !semDecisao) return acao;
       let fala: string[] | undefined;
-      if (deps.conversaLivreAtiva === true && respostaMedico && acao.tipo === 'nenhuma' && deps.conversador) {
+      const responderBoasVindas = deps.conversaLivreAtiva === true && respostaMedico && conversa &&
+        acao.tipo === 'perguntar_nota_pendente' && await deps.memoriaPersistida?.temBoasVindas(entrada.medicoId, conversa);
+      if (deps.conversaLivreAtiva === true && respostaMedico && (acao.tipo === 'nenhuma' || responderBoasVindas) && deps.conversador) {
         const resumo = conversa ? await deps.memoriaPersistida?.lerResumo(entrada.medicoId, conversa) : null;
         fala = await deps.conversador.responder({ texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora });
