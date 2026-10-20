@@ -55,3 +55,47 @@ it('normalização não confunde DDD 55 com o código do país', async () => {
   expect(gerarVariantesTelefoneBrasileiro('55999990000')).toContain('5555999990000');
   expect(gerarVariantesTelefoneBrasileiro('5555999990000')).toContain('55999990000');
 });
+
+it.each([{ fala: [] }, { fala: ['1', '2', '3', '4'] }, { fala: [''] }, { fala: ['x'.repeat(501)] }])('conversa recusa lote inválido %j antes de banco ou transporte', async ({ fala }) => {
+  const query = vi.fn(), enviarTexto = vi.fn();
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, carregarConfig({}), { enviarTexto }, vi.fn());
+  expect(await c.conversa({ medicoId: 'm', chave: 'msg', fala })).toBe('erro');
+  expect(query).not.toHaveBeenCalled(); expect(enviarTexto).not.toHaveBeenCalled();
+});
+
+it.each(['sucesso', 'falha', 'excecao', 'confirmacao falha'])('conversa reserva o lote de até três balões, sem repetição após %s', async caso => {
+  const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente: 'homologacao' }] };
+    if (sql.includes('insert into public.noto_envios_homologacao')) {
+      const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] };
+      reservas.add(chave); return { rows: [{ id: 'reserva' }] };
+    }
+    if (sql.startsWith('update public.noto_envios_homologacao')) {
+      if (caso === 'confirmacao falha') throw Error('CONFIRMACAO_INDISPONIVEL');
+      return { rows: [] };
+    }
+    throw Error('SQL_NAO_MODELADO');
+  });
+  const enviarTexto = vi.fn(async (_p: EnviarMensagemPacienteParams) => {
+    if (caso === 'excecao') throw Error('ENTREGA_INCERTA');
+    return { sucesso: caso !== 'falha' };
+  });
+  const config = { ...carregarConfig({}), envioMedicoRealAtivo: true, envioPacienteRealAtivo: false, envioRealAllowlist: ['+5551993527271'] };
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn());
+  const entrada = { medicoId: 'm', chave: 'evento', fala: ['Primeiro.', 'Segundo.', 'Terceiro.'] };
+  const resultados = await Promise.all([c.conversa(entrada), c.conversa(entrada)]);
+  expect(resultados).toEqual([caso === 'sucesso' ? 'enviado' : 'erro', 'repetido']);
+  expect(await new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn()).conversa(entrada)).toBe('repetido');
+  const textos = caso === 'falha' || caso === 'excecao' ? ['Primeiro.'] : entrada.fala;
+  expect(enviarTexto.mock.calls.map(([p]) => p)).toEqual(textos.map(texto => ({
+    instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: '+5551993527271', texto
+  })));
+  expect(reservas.size).toBe(1);
+  const inserts = query.mock.calls.filter(([sql]) => sql.includes('insert into'));
+  expect(inserts).toHaveLength(3);
+  expect(inserts[0][1]).toEqual(['m', 'conversa_livre', expect.stringMatching(/^[a-f0-9]{64}$/)]);
+  const banco = JSON.stringify(query.mock.calls);
+  for (const texto of entrada.fala) expect(banco).not.toContain(texto);
+  expect(banco).not.toContain('+5551993527271');
+});

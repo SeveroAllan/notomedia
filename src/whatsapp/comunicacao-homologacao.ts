@@ -85,6 +85,26 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[] }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    const { medicoId, chave, fala } = entrada;
+    if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
+    if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
+      return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
+        for (const texto of fala) {
+          const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
+            contatoTelefone: destino.telefone, texto });
+          if (!resultado.sucesso) return false;
+        }
+        return true;
+      });
+    } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
   async cofre(medicoId: string, texto: string): Promise<'simulado' | 'enviado' | 'erro'> {
     if (!this.config.envioMedicoRealAtivo) return this.simular('cofre');
     try {

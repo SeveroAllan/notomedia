@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
-// RASCUNHO: texto a aprovar pelo dono antes de qualquer envio real
+// Fallback da conversa livre, também utilizado no teste de homologação.
 export const RASCUNHO_FALLBACK_CONVERSA = 'Não consegui entender direito. Posso te ajudar com as notas fiscais. O que você precisa?';
 
 const falaSchema = z.object({ fala: z.array(z.string().trim().min(1).max(500)).min(1).max(3) }).strict();

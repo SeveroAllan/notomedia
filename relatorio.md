@@ -1,3 +1,11 @@
+# Entrega atual — feat/conversa-etapa1
+
+Três passos: OpenAI como único provedor; FK/RLS nas tabelas de conversa; fala livre no homolog pelas travas existentes e reserva idempotente. Validação final: **typecheck limpo, 781 aprovados, 3 ignorados, 59 arquivos**. Não houve alteração de timeout, execução de migration, envio real, mudança no env do servidor, merge ou deploy.
+
+O relatório original abaixo foi preservado como histórico da etapa 1. As evidências desta execução, alterações de escopo e justificativas dos testes estão depois do separador, em “Relatório — feat/conversa-etapa1”.
+
+## Histórico preservado — etapa 1
+
 # Conversa — etapa 1
 
 Base: `main`, `b5e1d2fe8b0e8a5633ca7e065667ca323d1b6dca` (conferida no origin). Branch: `feat/conversa-etapa1`.
@@ -102,7 +110,6 @@ Detalhes de implementação não definidos no prompt:
 - **decisão do Codex, não do dono**: atualizar o resumo depois de persistir a troca e entregar a fala simulada, preservando a resposta caso o resumo falhe. Sanitizar também a saída do modelo antes de persistir/logar.
 
 Não há dúvida funcional pendente anotada como resolvida por suposição. Fala real continua para etapa posterior; esta entrega não a habilita.
-
 
 ---
 
@@ -210,3 +217,85 @@ Commit 1: `b2987fb114b879b0511516d44e42962d690da461`.
 A migration existente recebeu exatamente duas FKs `references public.medicos(id) on delete cascade` e os três comandos de RLS/revoke especificados no complemento. O restante do SQL foi preservado. Não há migration nova ou política pública; nenhum comando SQL foi executado. A suíte verde imediatamente anterior está registrada acima; a validação final após os três commits abrangerá também este arquivo.
 
 Verificado por comparação textual: duas substituições e três comandos acrescentados; `git diff --check` limpo. Não verificado: aplicação e privilégios efetivos no Supabase, tratados fora do Codex pelo usuário.
+
+## Commit 3 — prova antes da implementação
+
+Commit 2: `079a405f4319c1916dec2d1d139cadec190a0669`.
+
+Os testes do novo comportamento foram executados antes de implementá-lo: `npx vitest run tests/servidor-conversa-livre.test.ts tests/passo12-envio-medico.test.ts`, exit 1. O método de conversa ainda não existia e o servidor ainda só logava a fala.
+```text
+Test Files  2 failed (2)
+     Tests  14 failed | 21 passed (35)
+  Start at  14:14:47 UTC
+  Duration  29.96s (transform 14.92s, setup 406ms, import 24.69s, tests 2.79s, environment 1ms)
+```
+
+Implementação: método específico `ComunicacaoHomologacao.conversa`, com validação de 1–3 balões de até 500 caracteres, as mesmas `permitido` e `enviarUnico`, e conexão do callback já existente em `src/server.ts`. A reserva cobre todo o lote; transporte falso/erro interrompe os balões restantes e a reserva não é liberada. O texto não entra na tabela de envios. Nenhuma decisão fiscal ou outro callback foi alterado. Apenas o comentário do fallback foi atualizado; nome e texto da constante foram preservados.
+
+## Commit 3 — testes alterados e validação focada
+
+- `tests/servidor-conversa-livre.test.ts`: conserva memória, sanitização, ausência de emissão fiscal, PDF, rede externa e erros. A antiga expectativa de sempre simular foi atualizada para simular quando a allowlist estiver vazia; o assert global de zero envios passa a uma contagem exata por cenário (zero nos bloqueios, um ou três nos envios intencionais). O transporte continua substituído por spy, e toda rede externa continua proibida. O fake SQL só ganhou a leitura de destino e a reserva/atualização existentes, recusando SQL desconhecido. A busca de médico agora só encontra a linha se as variantes reais do telefone contiverem o telefone cadastrado. Acrescenta envio para `+5551993527271`, JID sem nono dígito, outro telefone bloqueado, flags de envio/conversa/comunicação desligadas, produção, ambiente ausente, allowlist vazia, erro de IA e quatro balões convertidos em fallback literal, três balões em ordem e reentrega em nova instância sem duplicação. `ENVIO_PACIENTE_REAL_ATIVO` é false e assertado nos novos cenários.
+- `tests/passo12-envio-medico.test.ts`: todos os testes existentes permanecem. Acrescenta rejeição de lote vazio, quatro balões, texto vazio ou longo; concorrência e reentrega em nova instância; transporte com sucesso, false, exceção e falha de confirmação no banco. Verifica reserva única, hash, ação `conversa_livre`, interrupção em falha e ausência de telefone/texto nas gravações.
+- Nenhum outro teste foi alterado no commit 3; `tests/processar-conversa-medico.test.ts` mantém a prova existente de que só `nenhuma` elegível conversa e de que ações determinísticas, cofre, segredos e erros não geram fala.
+
+Validação focada após implementar, `npx vitest run tests/servidor-conversa-livre.test.ts tests/passo12-envio-medico.test.ts`, exit 0:
+```text
+RUN  v4.1.12 /workspace/notomedia
+
+
+ Test Files  2 passed (2)
+      Tests  35 passed (35)
+   Start at  14:15:49
+   Duration  26.08s (transform 11.82s, setup 1.68s, import 18.08s, tests 6.71s, environment 1ms)
+```
+Após essa validação, acrescentei mais uma combinação: o telefone cadastrado também sem nono dígito, além do JID sem nono dígito, deve casar com a allowlist única no formato completo. A suíte final abaixo valida essa combinação adicional.
+
+O cenário de flag livre off também verifica a ausência do log atual `enviaria conversa_livre`, substituindo o nome antigo `conversa simulada`; assim a expectativa não fica vacuamente verdadeira após a troca do callback.
+
+Na validação final, o typecheck de produção passou. A compilação dos testes identificou `TS7031` na variável desestruturada do spy de envio em `tests/servidor-conversa-livre.test.ts`. Corrigida somente a anotação do callback para `unknown[]`; nenhum assert ou comportamento foi alterado. `npm test` será reexecutado integralmente.
+
+## Validação final — após OpenAI, FK/RLS e envio de conversa
+
+`npm run typecheck` — exit 0, sem diagnósticos:
+```text
+> notomed-whats@0.1.0 typecheck
+> tsc --noEmit
+```
+
+A primeira tentativa de `npm test` retornou exit 2 por TS7031, corrigido como descrito acima. Reexecução integral de `npm test` — exit 0, incluindo compilação de todos os testes:
+```text
+> notomed-whats@0.1.0 test
+> tsc --noEmit -p tsconfig.test.json && vitest run
+
+
+ RUN  v4.1.12 /workspace/notomedia
+
+
+ Test Files  59 passed (59)
+      Tests  781 passed | 3 skipped (784)
+   Start at  14:19:42
+   Duration  225.17s (transform 43.36s, setup 12.43s, import 250.83s, tests 63.11s, environment 60ms)
+```
+
+O total mudou de 759 para 781 aprovados: menos um cenário NVIDIA removido, mais dois casos de CRM, mais 21 casos de envio seguro. Os três testes ignorados foram preservados. Não houve alteração de timeout.
+
+## Verificado versus hipótese / não exercitado
+
+| Estado | Evidência ou limite |
+| --- | --- |
+| Verificado | Typecheck de produção e de testes limpos; 59 arquivos e 781 testes aprovados, 3 ignorados. |
+| Verificado | `grep -ri "llama\|integrate.api.nvidia" src .env.example`: nenhuma correspondência; exit 1 esperado. |
+| Verificado | Cliente OpenAI sem chave rejeita com `IA_NAO_CONFIGURADA` antes do fetch; pesquisa CRM sem chave permanece desligada. |
+| Verificado com transporte e banco falsos | Allowlist única `+5551993527271` recebe; JID `555193527271` encontra o cadastro completo e também casa quando o cadastro está sem nono dígito. Outro telefone, flags off, produção, ambiente ausente e allowlist vazia não enviam nem reservam envio. |
+| Verificado com transporte e banco falsos | Máximo de três balões em ordem; erro de IA ou quatro balões usa o fallback literal informado; reentrega, concorrência, false/exceção no transporte e falha de confirmação não autorizam repetição do lote reservado. |
+| Verificado nos testes | `ENVIO_PACIENTE_REAL_ATIVO=false`; nenhum envio PDF, chamada fiscal ou rede externa nos cenários de conversa. |
+| Verificado por comparação integral do arquivo | Migration difere da base somente nas duas FKs e nos três comandos de RLS/revoke pedidos. Nenhuma migration nova e nenhuma política pública. |
+| Verificado | `git diff --check` limpo; trabalho na mesma `feat/conversa-etapa1`; sem merge, deploy, execução de SQL, mudança no env do servidor ou envio real. |
+| Informado pelo usuário, sem execução por este agente | Clone independente de ab233d7: 759 aprovados e 3 ignorados em 19,85s; aplicação de tabelas/RLS no Supabase conduzida separadamente. |
+| Não exercitado | Chave OpenAI real, qualidade de respostas reais, configuração efetiva da allowlist no servidor, entrega pelo WhatsApp e privilégios/FKs efetivos no Supabase. As provas de envio acima são de código com fronteiras falsas. |
+
+O SQL de `CREATE TABLE IF NOT EXISTS` define as FKs para tabelas criadas por ele; não acrescenta FK retroativamente a uma tabela já existente. A aplicação separada no Supabase não foi inspecionada ou alterada no Codex.
+
+## Publicação
+
+Destino único: `origin feat/conversa-etapa1`. Comando: `git push origin feat/conversa-etapa1`, sem force, seguido da comparação de `git rev-parse HEAD` com o ref remoto. O hash final é informado junto à entrega do relatório; os commits anteriores são `b2987fb114b879b0511516d44e42962d690da461` e `079a405f4319c1916dec2d1d139cadec190a0669`. Nenhuma mensagem foi enviada a terceiros.
