@@ -50,8 +50,8 @@ it('resumo recebe e devolve somente texto sanitizado e falha sem propagar erro',
 
 it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos sem ignorar o pedido legítimo', async () => {
   const completar = vi.fn(async () => '{"fala":["Posso organizar o que você me contar."]}');
-  const contexto = { texto: 'E o recibo dele?', mensagens: ['Meu paciente precisa de reembolso.'],
-    resumo: 'O médico perguntou sobre o recibo do paciente.', estado: {} };
+  const contexto = { texto: 'E o recibo dele?', mensagens: ['João precisa de reembolso.'],
+    resumo: 'O médico informou que João precisa de reembolso.', estado: {} };
   await new ConversadorMedico('chave', 'modelo', completar).responder(contexto);
   const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ role: string; content: string }>];
   const [sistema, dados] = chamada[2];
@@ -71,6 +71,21 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('uma alternativa realmente possível, com no máximo uma pergunta útil');
   expect(sistema.content).toContain('Não peça CPF, credenciais ou dados sensíveis sem ferramenta e necessidade');
   expect(sistema.content).toContain('Sem enumerar limitações a cada oi');
+  expect(sistema.content).toContain('Sua função no produto é emitir NFS-e e entregar ao paciente pelo WhatsApp do médico');
+  expect(sistema.content).toContain('emitir, buscar e enviar por esta conversa ainda está sendo ligada, sem data prometida');
+  expect(sistema.content).toContain('Nunca mande o médico emitir por conta própria');
+  expect(sistema.content).toContain('não suponha que o paciente possui uma nota');
+  expect(sistema.content).toContain('juntar aqui paciente, valor e data que o médico informar');
+  expect(sistema.content).toContain('Só diga que algo ficou anotado se estiver presente na conversa');
+  expect(sistema.content).toContain('sem insinuar agendamento ou emissão futura automática');
+  expect(sistema.content).toContain('Resolva "ele" pelo histórico');
+  expect(sistema.content).toContain('não repita informação ou pergunta já respondida');
+  expect(sistema.content).toContain('recibo comprova pagamento e não é a própria NFS-e');
+  expect(sistema.content).toContain('não afirme que um substitui o outro ou que o convênio aceitará');
+  expect(sistema.content).toContain('Não mande olhar a nota para responder sobre recibo');
+  expect(sistema.content).toContain('Use 1–2 frases por padrão');
+  expect(sistema.content).toContain('"questões fiscais", "diretrizes", "atualmente", "estou à disposição", "se precisar é só me contar"');
+  expect(sistema.content).toContain('Não invente ter visto jogo ou ter sentimentos');
   expect(dados.role).toBe('user');
   expect(JSON.parse(dados.content)).toEqual(contexto);
 });
