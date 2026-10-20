@@ -133,3 +133,33 @@ it('migração e fixtures não contêm segredos nem dados pessoais na tabela nor
   expect(sql).toContain('from public'); expect(sql).toContain('from anon'); expect(sql).toContain('from authenticated');
   expect(sql).not.toMatch(/\b(senha|password|token|cookie|cpf|nome)\b/);
 });
+
+it.each([
+  [{ nome: 'tribemd', conectada: false }, 'SEM_AGENDA_CONECTADA'],
+  [{ nome: 'outra', conectada: true }, 'AGENDA_NAO_SUPORTADA'],
+  [{ nome: null, conectada: true }, 'AGENDA_NAO_SUPORTADA']
+])('consulta de pendências recusa agenda %j sem SQL', async (agenda, motivo) => {
+  const query = vi.fn(), faturada = vi.fn();
+  expect(await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, agenda as any, new Date('2026-10-20T15:00Z'), faturada))
+    .toEqual({ ok: false, motivo });
+  expect(query).not.toHaveBeenCalled(); expect(faturada).not.toHaveBeenCalled();
+});
+it.each(['sem sincronizadas', 'sem pendências', 'erro'])('consulta de pendências trata %s', async caso => {
+  const query = vi.fn(async () => ({ rows: caso === 'sem sincronizadas' ? [] : [{}] }));
+  if (caso === 'erro') query.mockRejectedValueOnce(Error('banco indisponível'));
+  if (caso === 'sem pendências') query.mockResolvedValueOnce({ rows: [{}] }).mockResolvedValueOnce({ rows: [] });
+  expect(await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), vi.fn()))
+    .toEqual(caso === 'sem pendências' ? { ok: true, total: 0, consultas: [], janelaDias: 90 } : { ok: false, motivo: caso === 'erro' ? 'AGENDA_INDISPONIVEL' : 'SEM_CONSULTAS_SINCRONIZADAS' });
+});
+it('pendências usam o mesmo verificador de faturamento, janela de 90 dias, total e no máximo 20 sem identificadores sensíveis', async () => {
+  const rows = Array.from({ length: 25 }, (_, i) => ({ id_externo: String(i), paciente: `Paciente ${i}`, data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 }));
+  const query = vi.fn(async (_sql: string, _p: unknown[]) => ({ rows })).mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows });
+  const faturada = vi.fn(async (_fonte: string, id: string) => id === '0');
+  const resultado = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), faturada);
+  expect(resultado).toEqual({ ok: true, total: 24, janelaDias: 90, consultas: rows.slice(1, 21).map(c => ({ paciente: c.paciente, dataHora: c.data_hora, valorCentavos: c.valor_consulta_centavos })) });
+  expect(faturada).toHaveBeenCalledTimes(25); expect(faturada).toHaveBeenCalledWith('tribemd', '0');
+  expect(query.mock.calls[1][1]).toEqual([medico, 'tribemd', '2026-10-20T15:00:00.000Z']);
+  const sql = query.mock.calls[1][0];
+  expect(sql).toContain("c.status='realizada'"); expect(sql).toContain("interval '90 days'"); expect(sql).toContain('c.data_hora <= $3');
+  expect(sql).toContain('p.medico_id=c.medico_id'); expect(sql).not.toMatch(/cpf|telefone/);
+});

@@ -1,3 +1,4 @@
+import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { chaveComprovante } from './atendimento/comprovante.js';
@@ -163,6 +164,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoConversar: async (fala, chave) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
+      listarConsultasSemNota: (id, agenda, instante) => new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
+        (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId)),
+      enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {

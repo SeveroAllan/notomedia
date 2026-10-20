@@ -1,3 +1,4 @@
+import { chaveConsulta } from '../src/atendimento/comprovante.js';
 import { createHash } from 'node:crypto';
 import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -8,7 +9,7 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
@@ -17,14 +18,14 @@ vi.mock('../src/cofre/router.js', async () => {
   return { criarCofreContas: () => ({ app: express.default(), statusAgenda: async () => null, encerrar: async () => {} }) };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
-  nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: null, conectada: false }, ultimaNota: null }
+  nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
 }) }));
 const anterior = { ...config }; let banco: BancoConversaFalso;
 let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number;
 let reservas: Set<string>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
-  fronteiras.nomeMedico = undefined;
+  fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks(); banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
@@ -166,4 +167,38 @@ it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas não entram 
   await receber(criarAppExpress(), 'inicio');
   expect(banco.mensagens.filter(m => m.mensagemId === 'noto:boas_vindas:unica')).toEqual([]);
   expect(banco.consultas.filter(c => c.sql.startsWith('insert into conversa_mensagens') && c.parametros[2] === 'noto:boas_vindas:unica')).toEqual([]);
+});
+
+it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo critério do comprovante e entrega pela conversa protegida', async () => {
+  const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
+  fronteiras.agenda = { nome: 'tribemd', conectada: true };
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 1;
+  const queryAnterior = fronteiras.query.getMockImplementation()!;
+  fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
+    if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) return { rows: [{ existe: 1 }] };
+    if (sql.includes('select c.id_externo, p.nome')) return { rows: [
+      { id_externo: 'autorizada', paciente: 'Paciente faturado', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
+      { id_externo: 'pendente', paciente: 'Paciente exemplo', data_hora: '2026-10-19T14:00Z', valor_consulta_centavos: 40000 }
+    ] };
+    if (sql.includes('from public.noto_emissoes_comprovantes')) {
+      expect(sql).toContain("estado = 'nota_gerada'"); expect(parametros[0]).toBe('medico');
+      return { rows: parametros[1] === chaveConsulta(config.appPepper, 'medico', 'tribemd', 'autorizada') ? [{ existe: 1 }] : [] };
+    }
+    return queryAnterior(sql, parametros);
+  });
+  const openaiAnterior = fronteiras.openai.getMockImplementation()!;
+  fronteiras.openai.mockImplementation(async (...args: any[]) => {
+    const dados = JSON.parse(args[2][1].content);
+    if (args[2][0].content.startsWith('Extraia')) return openaiAnterior(...args);
+    if (!dados.resultadoFerramenta) return '{"fala":["Consultar"],"acao":"listar_consultas_sem_notas"}';
+    expect(dados.resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: {
+      ok: true, total: 1, janelaDias: 90, consultas: [{ paciente: 'Paciente exemplo', dataHora: '2026-10-19T14:00Z', valorCentavos: 40000 }]
+    } });
+    return '{"fala":["Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400."],"acao":null}';
+  });
+  await receber(app, 'listar', 'Verifique as notas pendentes');
+  await receber(criarAppExpress(), 'listar', 'Verifique as notas pendentes');
+  expect(enviar).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone,
+    texto: 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.' });
+  expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
 });

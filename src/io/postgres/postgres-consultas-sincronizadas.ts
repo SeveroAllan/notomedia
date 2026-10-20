@@ -4,6 +4,30 @@ import type { ConsultaSincronizada, RepositorioConsultasSincronizadas } from '..
 export class PostgresConsultasSincronizadas implements RepositorioConsultasSincronizadas {
   constructor(private readonly pool: Pick<pg.Pool, 'query'>) {}
 
+  async listarConsultasSemNota(medicoId: string, agenda: { nome: string | null; conectada: boolean }, agora: Date,
+    consultaJaFaturada: (fonte: string, id: string) => Promise<boolean>) {
+    if (!agenda.conectada) return { ok: false as const, motivo: 'SEM_AGENDA_CONECTADA' };
+    if (agenda.nome?.trim().toLowerCase() !== 'tribemd') return { ok: false as const, motivo: 'AGENDA_NAO_SUPORTADA' };
+    try {
+      const sincronizadas = await this.pool.query('select 1 from public.noto_consultas_sincronizadas where medico_id=$1 and fonte=$2 limit 1', [medicoId, 'tribemd']);
+      if (!sincronizadas.rows.length) return { ok: false as const, motivo: 'SEM_CONSULTAS_SINCRONIZADAS' };
+      const { rows } = await this.pool.query<{ id_externo: string; paciente: string; data_hora: string; valor_consulta_centavos: number | null }>(
+        `select c.id_externo, p.nome as paciente, c.data_hora, c.valor_consulta_centavos
+        from public.noto_consultas_sincronizadas c join public.pacientes p on p.id=c.paciente_id and p.medico_id=c.medico_id
+        where c.medico_id=$1 and c.fonte=$2 and c.status='realizada'
+          and c.data_hora >= $3::timestamptz - interval '90 days' and c.data_hora <= $3::timestamptz
+        order by c.data_hora desc, c.id_externo`, [medicoId, 'tribemd', agora.toISOString()]);
+      const consultas: Array<{ paciente: string; dataHora: string; valorCentavos: number | null }> = [];
+      let total = 0;
+      for (const consulta of rows) {
+        if (await consultaJaFaturada('tribemd', consulta.id_externo)) continue;
+        total++;
+        if (consultas.length < 20) consultas.push({ paciente: consulta.paciente, dataHora: consulta.data_hora, valorCentavos: consulta.valor_consulta_centavos });
+      }
+      return { ok: true as const, total, consultas, janelaDias: 90 };
+    } catch { return { ok: false as const, motivo: 'AGENDA_INDISPONIVEL' }; }
+  }
+
   async salvar(medicoId: string, fonte: string, consultas: ConsultaSincronizada[]): Promise<void> {
     if (!consultas.length) return;
     const registros = consultas.map(consulta => ({ paciente_id: consulta.pacienteId, id_externo: consulta.idExterno,
