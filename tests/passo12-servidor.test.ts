@@ -48,5 +48,5 @@ it('handler montado usa agenda falsa após extração, passa consulta transitór
   expect(banco.comprovantes).toHaveLength(1);
   for (const proibido of ['Ana Ficticia', 'Medica Ficticia', '52998224725', '11999990000', 'consulta-ficticia']) expect(JSON.stringify(banco.comprovantes)).not.toContain(proibido);
   expect(texto).not.toHaveBeenCalled(); expect(pdf).not.toHaveBeenCalled();
-  expect(log).toHaveBeenCalledWith('Solicitação enfileirada por comprovante.');
+  expect(log).toHaveBeenCalledWith('Solicitação de comprovante aguardando confirmação do médico.');
 });

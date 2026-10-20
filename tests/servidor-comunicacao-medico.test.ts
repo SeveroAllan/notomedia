@@ -58,7 +58,10 @@ it('assistente liga banco real do estado e histórico Postgres em ciclo seco com
   await receber(mensagem('m3', 'não'), app);
   expect(intencoes()).toEqual([['enviaria boas_vindas'], ['enviaria perguntar_nota_pendente: Tem alguma nota para emitir? Desde que dia?'], ['enviaria aguardar_comprovante']]);
   expect(banco.historicos.get(JSON.stringify([medico, 'simulado']))!.resposta_nota).toEqual({ temNota: false, desde: null });
-  expect([...banco.historicos.values()].every(h => h.modo === 'simulado')).toBe(true);
+  expect([...banco.historicos.values()].map(h => h.modo).sort()).toEqual(['real', 'simulado']);
+  expect(banco.historicos.get(JSON.stringify([medico, 'real']))).toMatchObject({ boas_vindas_em: null, pergunta_nota_em: null, resposta_nota: null });
+  expect([...banco.tentativas.values()].every(t => t.modo === 'simulado')).toBe(true);
+  expect(banco.envios.size).toBe(0);
   await receber(mensagem('m3', 'não'), app); expect(intencoes()).toHaveLength(3); expect(erros).not.toHaveBeenCalled();
 });
 it('conexão autenticada do consultório aciona boas-vindas uma vez após onboarding', async () => {

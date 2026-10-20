@@ -69,19 +69,21 @@ describe('histórico por médico e modo', () => {
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'nenhuma' });
   });
 
-  it('não mistura médicos nem histórico simulado com real e retorna cópias', async () => {
+  it('isola históricos e médicos, mas respeita boas-vindas reais em modo simulado', async () => {
     const { entrada, dependencias, historico } = cenario();
     await historico.reservar(entrada.medicoId, 'real', 'fixture-real');
     await historico.gravarAcao(entrada.medicoId, 'real', 'fixture-real', { tipo: 'boas_vindas', ultimaNota: null }, instante);
     await historico.liberar(entrada.medicoId, 'real', 'fixture-real');
-    expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'boas_vindas', ultimaNota: null });
+    expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'perguntar_nota_pendente' });
     const simulado = await historico.ler(entrada.medicoId, 'simulado');
-    expect(simulado.registros).toEqual([{ modo: 'simulado', chaveProcessamento: 'interacao-1', tipo: 'boas_vindas', quando: instante }]);
+    expect(simulado.registros).toEqual([{ modo: 'simulado', chaveProcessamento: 'interacao-1', tipo: 'perguntar_nota_pendente', quando: instante }]);
     expect((await historico.ler(entrada.medicoId, 'real')).registros[0].modo).toBe('real');
     expect((await historico.ler('medico-ficticio-b', 'simulado')).boasVindasEm).toBeNull();
-    simulado.registros.length = 0; simulado.boasVindasComunicadas = false;
+    simulado.registros.length = 0; simulado.boasVindasComunicadas = true;
     expect((await historico.ler(entrada.medicoId, 'simulado')).registros).toHaveLength(1);
-    expect((await historico.ler(entrada.medicoId, 'simulado')).boasVindasComunicadas).toBe(true);
+    expect((await historico.ler(entrada.medicoId, 'simulado')).boasVindasComunicadas).toBe(false);
+    expect((await historico.ler(entrada.medicoId, 'real')).registros).toHaveLength(1);
+    expect((await historico.ler(entrada.medicoId, 'real')).boasVindasEm).toBe(instante);
   });
 
   it('registra pedido de agenda e listagem sem voltar a perguntar ou listar', async () => {
