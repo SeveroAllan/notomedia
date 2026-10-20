@@ -224,3 +224,26 @@ it('Evolution envia readMessages com a chave original, uma vez por evento', asyn
     expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://evolution.invalid/chat/markMessageAsRead/notomed_assistente', expect.objectContaining({ method: 'POST', body: JSON.stringify({ readMessages: [{ id: 'original', remoteJid: '123456789@lid', fromMe: false }] }) }));
   } finally { fetcher.mockRestore(); }
 });
+
+it.each(['conversa off', 'envio off', 'produção', 'fora da lista', 'emoji inválido'])('reação respeita bloqueio %s', async caso => {
+  const enviarReacao = vi.fn(); const query = vi.fn(async (_sql: string) => ({ rows: [{ telefone: '+5551993527271', ambiente: caso === 'produção' ? 'producao' : 'homologacao' }] }));
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), conversaLivreAtiva: caso !== 'conversa off', envioMedicoRealAtivo: caso !== 'envio off', envioRealAllowlist: caso === 'fora da lista' ? [] : ['+5551993527271'] }, { enviarTexto: vi.fn(), enviarReacao }, vi.fn());
+  expect(await c.reagir('m', { id: 'msg', remoteJid: '555193527271@s.whatsapp.net', fromMe: false }, caso === 'emoji inválido' ? '💣' : '👍')).toBe('simulado');
+  expect(enviarReacao).not.toHaveBeenCalled();
+});
+it('Evolution envia reação pela key recebida e audita sem reenviar', async () => {
+  const { EvolutionApiClient } = await import('../src/io/evolution/evolution-api-client.js');
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true })); const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente: 'homologacao' }] };
+    if (sql.includes('insert into')) { const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] }; reservas.add(chave); return { rows: [{ id: 'r' }] }; }
+    return { rows: [] };
+  });
+  try {
+    const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), conversaLivreAtiva: true, envioMedicoRealAtivo: true, envioRealAllowlist: ['+5551993527271'] }, new EvolutionApiClient('https://evolution.invalid', 'ficticia', 'assistente', 'oficial'), vi.fn());
+    const chave = { id: 'original', remoteJid: '555193527271@s.whatsapp.net', fromMe: false };
+    expect(await c.reagir('m', chave, '👀')).toBe('enviado'); expect(await c.reagir('m', chave, '👀')).toBe('repetido');
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://evolution.invalid/message/sendReaction/notomed_assistente', expect.objectContaining({ method: 'POST', body: JSON.stringify({ key: chave, reaction: '👀' }) }));
+    expect(query).toHaveBeenCalledWith('update public.noto_envios_homologacao set estado = $2 where id = $1', ['r', 'enviado']);
+  } finally { fetcher.mockRestore(); }
+});

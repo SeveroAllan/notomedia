@@ -275,3 +275,12 @@ it('não expõe jargão interno, mesmo quando o modelo o usa na fala', async () 
   expect(prompt).toContain('Eu não recebo senha pela conversa, só por esse link seguro');
   expect(prompt).toContain('Nunca use "cofre"');
 });
+
+it.each(['👀', '🤔', '✅', '👍', '😊', '🙏', '🎉'])('protocolo aceita reação restrita %s sem criar ação', async reacao => {
+  const c = new ConversadorMedico('chave', 'modelo', async () => JSON.stringify({ fala: ['Certo.'], reacao }));
+  expect(await c.responder(entrada)).toEqual({ fala: ['Certo.'], acao: null, reacao });
+});
+it.each(['💣', 'enviar_nota', null, 42])('reação fora da lista %j é descartada, preservando a fala', async reacao => {
+  const c = new ConversadorMedico('chave', 'modelo', async () => JSON.stringify({ fala: ['Certo.'], reacao }));
+  expect(await c.responder(entrada)).toEqual({ fala: ['Certo.'], acao: null });
+});

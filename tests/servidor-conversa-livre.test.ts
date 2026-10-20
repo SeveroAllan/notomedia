@@ -23,7 +23,7 @@ vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEst
 const anterior = { ...config }; let banco: BancoConversaFalso;
 let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number; let errosEsperados = 0;
 let reservas: Set<string>;
-let ler: ReturnType<typeof vi.spyOn>;
+let ler: ReturnType<typeof vi.spyOn>; let reagir: ReturnType<typeof vi.spyOn>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   errosEsperados = 0; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
@@ -47,6 +47,7 @@ beforeEach(() => {
   const completar = async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Extraia')
     ? '{"temNota":"fora_do_assunto","desde":null,"confianca":0.95}' : '{"fala":["Posso explicar o que o Noto faz hoje."]}';
   fronteiras.openai.mockImplementation(completar);
+  reagir = vi.spyOn(EvolutionApiClient.prototype, 'enviarReacao').mockResolvedValue({ sucesso: true });
   ler = vi.spyOn(EvolutionApiClient.prototype, 'marcarLida').mockResolvedValue({ sucesso: true });
   enviar = vi.spyOn(EvolutionApiClient.prototype, 'enviarTexto').mockRejectedValue(Error('ENVIO_PROIBIDO'));
   pdf = vi.spyOn(EvolutionApiClient.prototype, 'enviarPdf').mockRejectedValue(Error('PDF_PROIBIDO'));
@@ -220,4 +221,14 @@ it('webhook do médico marca a mensagem original como lida e falha de leitura n�
     chaveMensagem: { id: 'inicio', remoteJid: `${jid}@s.whatsapp.net`, fromMe: false } });
   expect(enviar).toHaveBeenCalledOnce();
   expect(logs.mock.calls.some(([texto]: unknown[]) => String(texto).includes('LEITURA_MENSAGEM_FALHOU'))).toBe(true);
+});
+
+it.each(['👍', '💣', undefined])('webhook só envia reação permitida %s com a chave do médico', async reacao => {
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 3;
+  const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
+  fronteiras.openai.mockImplementation(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Extraia') ? '{"temNota":"fora_do_assunto","desde":null,"confianca":0.95}' : JSON.stringify({ fala: ['Certo.'], ...(reacao ? { reacao } : {}) }));
+  await receber(app, 'reacao', 'ok'); await receber(criarAppExpress(), 'reacao', 'ok');
+  if (reacao === '👍') expect(reagir).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName,
+    chave: { id: 'reacao', remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, reacao });
+  else expect(reagir).not.toHaveBeenCalled();
 });

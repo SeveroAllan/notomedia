@@ -1,3 +1,4 @@
+import type { TransporteReacao } from '../../whatsapp/reagir-mensagem.js';
 import type { LeitorMensagemWhatsApp, ParamsLeitura } from '../../whatsapp/marcar-mensagem-lida.js';
 /**
  * Cliente HTTP para a Evolution API na VPS Hostinger (Easypanel).
@@ -46,6 +47,20 @@ export class EvolutionApiClient
       await resp.body?.cancel().catch(() => {});
       return resp.ok ? { sucesso: true } : { sucesso: false, erro: `EVOLUTION_HTTP_${resp.status}` };
     } catch { return { sucesso: false, erro: 'EVOLUTION_LEITURA_INDISPONIVEL' }; }
+  }
+
+  async enviarReacao(params: Parameters<TransporteReacao['enviarReacao']>[0]): Promise<{ sucesso: boolean }> {
+    const { chave, instanciaNome, reacao } = params;
+    if (instanciaNome === (this.instanciaSomenteOtp || this.instanciaOficialNome) || !instanciaNome || !chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return { sucesso: false };
+    try {
+      const r = await fetch(`${this.baseUrl.replace(/\/$/, '')}/message/sendReaction/${encodeURIComponent(instanciaNome)}`, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ key: { id: chave.id, remoteJid: chave.remoteJid, fromMe: false }, reaction: reacao })
+      });
+      await r.body?.cancel().catch(() => {});
+      return { sucesso: r.ok };
+    } catch { return { sucesso: false }; }
   }
 
   async obterBase64MensagemMidia(

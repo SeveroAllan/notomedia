@@ -20,6 +20,7 @@ export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string },
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
+    aoReagir?: (reacao: import('../whatsapp/reagir-mensagem.js').ReacaoMedico) => Promise<void>;
     aoConversar?: (fala: string[], chave: string) => Promise<void>;
     memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
@@ -101,6 +102,10 @@ export async function processarComunicacaoMedico(
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
           ? linkCofreJaSolicitado || estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
+        if (resposta.reacao) {
+          try { await deps.aoReagir?.(resposta.reacao); }
+          catch { deps.log('erro', registroErroNoto('REACAO_FALHOU', 'tecnico', { etapa: 'reacao' })); }
+        }
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
           if (estado.estado.agenda.conectada) {
             const aviso = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
@@ -125,6 +130,10 @@ export async function processarComunicacaoMedico(
           catch { resultado = { ok: false, motivo: 'COFRE_INDISPONIVEL' }; }
           resposta = await deps.conversador.responder({ ...contexto,
             resultadoFerramenta: { ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: resultado }, acoesPermitidas: [] });
+        }
+        if (resposta.reacao && resposta.acao === null && consultaAnunciada) {
+          try { await deps.aoReagir?.(resposta.reacao); }
+          catch { deps.log('erro', registroErroNoto('REACAO_FALHOU', 'tecnico', { etapa: 'reacao' })); }
         }
         fala = resposta.fala;
         // O aviso ocupa um dos três balões da interação; compacta só a fala final.
