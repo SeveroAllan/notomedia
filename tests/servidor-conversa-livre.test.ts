@@ -178,7 +178,11 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
   config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
   const queryAnterior = fronteiras.query.getMockImplementation()!;
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
-    if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) return { rows: [{ existe: 1 }] };
+    if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) {
+      expect(enviar).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone,
+        texto: 'Sua agenda já está conectada, deixa eu ver um minutinho.' });
+      return { rows: [{ existe: 1 }] };
+    }
     if (sql.includes('select c.id_externo, p.nome')) return { rows: [
       { id_externo: 'autorizada', paciente: 'Paciente faturado', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
       { id_externo: 'pendente', paciente: 'Paciente exemplo', data_hora: '2026-10-19T14:00Z', valor_consulta_centavos: 40000 }
@@ -200,7 +204,10 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
     return '{"fala":["Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400."],"acao":null}';
   });
   await receber(app, 'listar', 'Verifique as notas pendentes');
+  expect(enviar).toHaveBeenCalledTimes(2);
+  const enviosAntesDaReentrega = enviar.mock.calls.slice();
   await receber(criarAppExpress(), 'listar', 'Verifique as notas pendentes');
+  expect(enviar.mock.calls).toEqual(enviosAntesDaReentrega);
   expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Sua agenda já está conectada, deixa eu ver um minutinho.', 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
 });
