@@ -18,6 +18,7 @@ interface DependenciasComunicacao {
   envioRealAtivo?: boolean;
   transporte?: EnviarMensagemPaciente;
   extratorResposta?: ExtratorRespostaMedico;
+  aoSemDecisao?: () => void;
 }
 
 export async function orquestrarComunicacao(
@@ -28,10 +29,12 @@ export async function orquestrarComunicacao(
   const modo = envioRealAtivo ? 'real' : 'simulado';
   const { medicoId, chaveProcessamento, estado } = entrada;
   let reservado = false;
+  let semDecisao = false;
   try {
     reservado = await historico.reservar(medicoId, modo, chaveProcessamento);
     if (!reservado) return { tipo: 'nenhuma' };
     let salvo = await historico.ler(medicoId, modo);
+    let falhaExtracao = false;
     let acao = decidirProximaAcao({ ...estado, historico: salvo });
     const fiscalOk = estado.fiscal.certificado === 'ok' && estado.fiscal.dadosFiscais === 'ok';
     if (fiscalOk && entrada.respostaMedico && salvo.perguntaNota.feitaEm && !salvo.perguntaNota.resposta) {
@@ -47,10 +50,13 @@ export async function orquestrarComunicacao(
       let extraido: unknown = null;
       if (dataMensagem && dependencias.extratorResposta) {
         try { extraido = await dependencias.extratorResposta.extrair(texto, dataMensagem, contexto); }
-        catch { /* Erro do provedor fica incerto; nunca registrar seu corpo ou o texto do médico. */ }
+        catch { falhaExtracao = true; /* Erro do provedor fica incerto; nunca registrar seu corpo ou o texto do médico. */ }
       }
       const campos = respostaNotaExtraidaSchema.safeParse(extraido);
-      if (contexto.acaoPendente !== 'perguntar_nota_pendente' || campos.success && campos.data.temNota === 'fora_do_assunto' && campos.data.confianca >= CONFIANCA_MINIMA_COMPROVANTE) return { tipo: 'nenhuma' };
+      if (contexto.acaoPendente !== 'perguntar_nota_pendente' || campos.success && campos.data.temNota === 'fora_do_assunto' && campos.data.confianca >= CONFIANCA_MINIMA_COMPROVANTE) {
+        semDecisao = !falhaExtracao;
+        return { tipo: 'nenhuma' };
+      }
       const resposta = validarRespostaNotaExtraida(extraido, texto, dataMensagem);
       if (resposta) {
         await historico.gravarResposta(medicoId, modo, resposta, estado.agora.toISOString());
@@ -58,7 +64,10 @@ export async function orquestrarComunicacao(
         acao = decidirProximaAcao({ ...estado, historico: salvo });
       } else acao = salvo.perguntaNota.repeticoes === 0 ? { tipo: 'reperguntar', pergunta: 'nota_pendente' } : { tipo: 'nenhuma' };
     }
-    if (acao.tipo === 'nenhuma') return acao;
+    if (acao.tipo === 'nenhuma') {
+      semDecisao = !falhaExtracao;
+      return acao;
+    }
     if (envioRealAtivo) return await enviarAcao(entrada, dependencias, acao);
     await historico.gravarAcao(medicoId, 'simulado', chaveProcessamento, acao, estado.agora.toISOString());
     const texto = montarPerguntaComunicacao(acao);
@@ -69,7 +78,8 @@ export async function orquestrarComunicacao(
     return { tipo: 'nenhuma' };
   } finally {
     if (reservado) await historico.liberar(medicoId, modo, chaveProcessamento)
-      .catch(() => log('erro', 'HISTORICO_LIBERACAO_FALHOU'));
+      .catch(() => { semDecisao = false; log('erro', 'HISTORICO_LIBERACAO_FALHOU'); });
+    if (semDecisao) dependencias.aoSemDecisao?.();
   }
 }
 

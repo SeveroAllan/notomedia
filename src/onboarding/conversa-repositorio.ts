@@ -33,7 +33,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string }>> {
     const { rows } = await this.pool.query<{ id: string; texto: string }>(
       `select id::text, texto from (select id, texto from conversa_mensagens where medico_id=$1 and conversa=$2
-        order by id desc offset $4) antigas where id > $3::bigint order by id asc`,
+        order by id desc offset $4) antigas where id > $3::bigint order by antigas.id asc`,
       [medicoId, conversa, ateId, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
     return rows.map(mensagem => ({ ...mensagem, texto: sanitizarTextoMedico(mensagem.texto) }));
   }

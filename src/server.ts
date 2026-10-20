@@ -33,6 +33,8 @@ import { SupabaseAuthAdminService } from './io/supabase/supabase-auth-admin-serv
 import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
+import { PostgresMemoriaConversaMedico } from './onboarding/conversa-repositorio.js';
+import { ConversadorMedico } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -79,6 +81,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const atendimentoRepo = new PostgresAtendimentoRepositorio(pool, config.encryptionKey);
   const historicoComunicacao = new PostgresHistoricoComunicacao(pool, config.appPepper);
   const memoriaConversa = new MemoriaConversaMedico();
+  const memoriaPersistida = config.conversaLivreAtiva ? new PostgresMemoriaConversaMedico(pool) : undefined;
   const evolutionClient = new EvolutionApiClient(
     config.evolutionApiUrl,
     config.evolutionGlobalApiKey,
@@ -121,6 +124,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  const conversador = config.conversaLivreAtiva ? new ConversadorMedico(iaApiKey, iaModeloTexto, completarIa) : undefined;
   const iaModeloVisao=(iaOpenAiAtiva?config.openaiVisaoModel:config.nvidiaRegistroModel) ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
@@ -156,7 +160,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
+    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
+      aoConversar: async (fala, chave) => { console.info('conversa simulada', { fala, chave }); },
+      extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {

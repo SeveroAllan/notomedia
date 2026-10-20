@@ -36,6 +36,7 @@ export interface AppConfig {
   agenteFiscalAtivo?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
+  conversaLivreAtiva?: boolean;
   emissaoComprovanteHomologacaoAtiva?: boolean;
   envioMedicoRealAtivo?: boolean;
   envioPacienteRealAtivo?: boolean;
@@ -78,6 +79,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
+    conversaLivreAtiva: env['CONVERSA_LIVRE_ATIVA'] === 'true',
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',
