@@ -1,3 +1,4 @@
+import { registroErroNoto } from '../observabilidade/erros.js';
 import { RASCUNHO_FALLBACK_CONVERSA } from './conversador-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
@@ -33,7 +34,7 @@ export async function processarComunicacaoMedico(
   const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
     if (!deps.conversaLivreAtiva || !entrada.respostaMedico) return;
     const detalhe = erro instanceof Error ? erro.message : erro === undefined ? '' : String(erro);
-    deps.log('erro', `${motivo}${detalhe ? ': ' + sanitizarTextoMedico(detalhe).slice(0, 500) : ''}`);
+    deps.log('erro', registroErroNoto(motivo, 'tecnico', { etapa: 'comunicacao', detalhe }));
     if (entrada.chaveConversa && deps.memoriaPersistida) {
       try { if (verificarDuplicata && await deps.memoriaPersistida.temResposta(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento)) return; }
       catch { /* A indisponibilidade da memória não impede a tentativa de resposta. */ }
@@ -102,7 +103,7 @@ export async function processarComunicacaoMedico(
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
-          catch { resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }
+          catch (e) { deps.log('erro', registroErroNoto('AGENDA_INDISPONIVEL', 'tecnico', { etapa: 'listar', detalhe: e instanceof Error ? e.message : String(e) })); resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }
           const conectar = !resultado.ok && ['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '') &&
             (resultado.motivo !== 'SEM_CONSULTAS_SINCRONIZADAS' || !estado.estado.agenda.conectada);
           resposta = await deps.conversador.responder({ ...contexto,

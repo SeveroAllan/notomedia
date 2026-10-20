@@ -1,3 +1,4 @@
+import { MENSAGEM_INSTABILIDADE } from '../observabilidade/erros.js';
 /**
  * Portas de notificação para falhas de emissão e incidentes operacionais.
  * 1. Avisa o médico pela instância assistente, com flag, homologação e allowlist.
@@ -53,6 +54,11 @@ const mensagensFalha: Record<string, string> = {
 
 /** Nunca usa mensagens técnicas ou texto livre para construir a fala ao médico. */
 export function traduzirFalhaEmissao(codigo: unknown): string {
+  if (typeof codigo === 'string' && ['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT'].includes(codigo)) return `${MENSAGEM_INSTABILIDADE} Não vou tentar emitir novamente sozinho.`;
   if (typeof codigo === 'string' && Object.hasOwn(mensagensFalha, codigo)) return `${mensagensFalha[codigo]} Não vou tentar emitir novamente sozinho.`;
-  return 'Não consegui concluir a emissão da nota; vou avisar o suporte e te retorno, sem tentar emitir novamente sozinho.';
+  return `${MENSAGEM_INSTABILIDADE} Não vou tentar emitir novamente sozinho.`;
+}
+
+export function categoriaFalhaEmissao(codigo: unknown): 'tecnico' | 'acionavel' {
+  return typeof codigo === 'string' && Object.hasOwn(mensagensFalha, codigo) && !['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT', 'PERSISTENCIA_COMPROVANTE_PENDENTE', 'E0014'].includes(codigo) ? 'acionavel' : 'tecnico';
 }

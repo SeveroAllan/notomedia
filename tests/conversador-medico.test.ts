@@ -229,7 +229,7 @@ it.each([
   [true, 'simulado', 'O envio do link foi simulado; nenhum link foi enviado.'],
   [true, 'repetido', 'O link já foi solicitado. Aguardo a conexão da agenda.'],
   [false, 'LIMITE_PEDIDOS', 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.'],
-  [false, 'erro', 'Não consegui enviar o link do cofre. A conexão da agenda ainda está pendente.']
+  [false, 'erro', 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.']
 ])('confirmação temporal do link ok=%s motivo=%s é determinística', async (ok, motivo, texto) => {
   const completar = vi.fn(async () => '{"fala":["Enviei o link"],"acao":null}');
   expect(await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
@@ -243,4 +243,18 @@ it('lista de vinte itens tem limite duro, resumo explícito e nunca fallback por
     resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total: 20, consultas: [] } } });
   expect(r.fala).toHaveLength(3); expect(r.fala.every(t => t.length <= 500)).toBe(true);
   expect(r.fala[2]).toContain('Resumo de 20 consultas; lista abreviada.'); expect(r.fala).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
+});
+it('falha técnica da ferramenta e código produzido pela IA não aparecem na fala', async () => {
+  const completar = vi.fn(async () => '{"fala":["Falha BANCO_INDISPONIVEL no servidor"],"acao":null}');
+  const c = new ConversadorMedico('chave', 'modelo', completar);
+  expect(await c.responder({ ...entrada, resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: false, motivo: 'BANCO_INDISPONIVEL', detalhe: 'privado' } } })).toEqual({ fala: ['Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'], acao: null });
+  expect(completar).not.toHaveBeenCalled();
+  expect(await c.responder(entrada)).toEqual({ fala: ['Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'], acao: null });
+});
+it('falha de acesso acionável orienta o médico sem mostrar código', async () => {
+  const completar = vi.fn();
+  expect(await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
+    resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: false, motivo: 'ACESSO_EXPIRADO' } } }))
+    .toEqual({ fala: ['O acesso à sua agenda expirou. Conecte-a novamente pelo link seguro para eu conseguir consultar.'], acao: null });
+  expect(completar).not.toHaveBeenCalled();
 });

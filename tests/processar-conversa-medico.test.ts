@@ -215,7 +215,7 @@ it.each(['LIMITE_PEDIDOS', 'erro', 'simulado', 'COFRE_INDISPONIVEL'])('resultado
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
   expect(c.completar).toHaveBeenCalledOnce();
-  const texto = motivo === 'LIMITE_PEDIDOS' ? 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.' : motivo === 'simulado' ? 'O envio do link foi simulado; nenhum link foi enviado.' : 'Não consegui enviar o link do cofre. A conexão da agenda ainda está pendente.';
+  const texto = motivo === 'LIMITE_PEDIDOS' ? 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.' : motivo === 'simulado' ? 'O envio do link foi simulado; nenhum link foi enviado.' : 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.';
   expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([texto], 'mensagem');
   await processarComunicacaoMedico(entrada, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
@@ -249,9 +249,9 @@ it('erro de leitura vira resultado de ferramenta sem abrir cofre nem presumir ag
   await processarComunicacaoMedico(entrada, { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda });
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
   const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
-  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: false, motivo: 'AGENDA_INDISPONIVEL' } });
+  expect(c.completar).toHaveBeenCalledOnce();
   expect(JSON.stringify(chamadas)).not.toContain('detalhe privado');
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não consegui consultar a agenda agora.'], 'mensagem');
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'], 'mensagem');
 });
 it('flag livre off não disponibiliza nem executa ferramentas de agenda', async () => {
   const c = await cenario(false); const listarConsultasSemNota = vi.fn(), enviarLinkCofreAgenda = vi.fn();

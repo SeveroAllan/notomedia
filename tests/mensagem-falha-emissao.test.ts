@@ -22,9 +22,16 @@ const casos: Array<[string[], string]> = [
   [['PERSISTENCIA_COMPROVANTE_PENDENTE'], 'A emissão foi autorizada, mas o registro precisa de conferência; aguarde o suporte e não peça outra emissão para a mesma consulta.']
 ];
 for (const [codigos, texto] of casos) it.each(codigos)('traduz %s sem código ou detalhe técnico', codigo => {
-  expect(traduzirFalhaEmissao(codigo)).toBe(`${texto} Não vou tentar emitir novamente sozinho.`);
+  const interno = ['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT'].includes(codigo);
+  expect(traduzirFalhaEmissao(codigo)).toBe(interno ? 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno. Não vou tentar emitir novamente sozinho.' : `${texto} Não vou tentar emitir novamente sozinho.`);
   expect(traduzirFalhaEmissao(codigo)).not.toContain(codigo);
 });
 it.each([undefined, '__proto__', 'E9999 senha=privado CPF 52998224725', { erro: 'privado' }])('desconhecido %j usa frase fixa segura', codigo => {
-  expect(traduzirFalhaEmissao(codigo)).toBe('Não consegui concluir a emissão da nota; vou avisar o suporte e te retorno, sem tentar emitir novamente sozinho.');
+  expect(traduzirFalhaEmissao(codigo)).toBe('Estamos com uma instabilidade no sistema; já vou verificar e te retorno. Não vou tentar emitir novamente sozinho.');
+});
+it('registro de erro é estruturado, marcado e sanitizado para consumo futuro', async () => {
+  const { registroErroNoto } = await import('../src/observabilidade/erros.js');
+  const texto = registroErroNoto('BANCO_INDISPONIVEL', 'tecnico', { medicoId: 'medico', etapa: 'agenda', detalhe: 'CPF 529.982.247-25 senha=privado' });
+  expect(texto).toMatch(/^NOTO_ERRO /); expect(texto).not.toContain('529.982.247-25'); expect(texto).not.toContain('privado');
+  expect(JSON.parse(texto.slice('NOTO_ERRO '.length))).toMatchObject({ codigo: 'BANCO_INDISPONIVEL', categoria: 'tecnico', contexto: { medicoId: 'medico', etapa: 'agenda' } });
 });
