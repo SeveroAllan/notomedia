@@ -50,7 +50,7 @@ export async function processarComunicacaoMedico(
       if (deps.conversaLivreAtiva === true && respostaMedico && acao.tipo === 'nenhuma' && deps.conversador) {
         const resumo = conversa ? await deps.memoriaPersistida?.lerResumo(entrada.medicoId, conversa) : null;
         fala = await deps.conversador.responder({ texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
-          resumo: resumo?.resumo ?? null, estado: estado.estado });
+          resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora });
       }
       if (memoriaConversa && conversa) {
         if (respostaMedico) await memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
