@@ -75,7 +75,8 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('emitir, buscar e enviar por esta conversa ainda está sendo ligada, sem data prometida');
   expect(sistema.content).toContain('Nunca mande o médico emitir por conta própria');
   expect(sistema.content).toContain('não suponha que o paciente possui uma nota');
-  expect(sistema.content).toContain('juntar aqui paciente, valor e data que o médico informar');
+  expect(sistema.content).toContain('Reconheça paciente, valor e data espontaneamente informados');
+  expect(sistema.content).toContain('não peça cadastro manual como alternativa ao cofre e ao cruzamento com comprovantes');
   expect(sistema.content).toContain('Só diga que algo ficou anotado se estiver presente na conversa');
   expect(sistema.content).toContain('sem insinuar agendamento ou emissão futura automática');
   expect(sistema.content).toContain('Resolva "ele" pelo histórico');
@@ -99,10 +100,10 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('Dado na conversa não é cadastro real nem emissão');
   expect(sistema.content).toContain('Para "já ficou emitida?", responda à pergunta de status, sem voltar a perguntar data');
   expect(sistema.content).toContain('Contexto temporal confiável do servidor: null');
-  expect(sistema.content).toContain('Para "pode emitir uma nota agora?", responda "Ainda não consigo emitir por aqui."');
+  expect(sistema.content).toContain('Para "pode emitir uma nota agora?", sem cofre conectado explique por que precisa conectar a agenda para cruzar consultas e pagamentos');
   expect(sistema.content).toContain('Para "Manda a nota dele", responda "Ainda não envio nota por aqui."');
   expect(sistema.content).toContain('não repita a função do produto nesse pedido');
-  expect(sistema.content).toContain('Pergunte somente o que ainda falta: data ou valor, um por vez');
+  expect(sistema.content).toContain('Não peça data, valor ou dados de paciente manualmente para emitir');
   expect(sistema.content).toContain('Para "O que falta?", diga objetivamente o que já foi informado e só o que de fato falta na conversa');
   expect(sistema.content).toContain('sem especular sobre convênio ou paciente');
   expect(sistema.content).toContain('Não diga "Vou organizar" nem prometa ações futuras');
@@ -115,7 +116,7 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('Com relógio válido, "ontem" já informa a data exata');
   expect(sistema.content).toContain('se hoje é 20/10, ontem é 19/10');
   expect(sistema.content).toContain('não peça a data exata de novo quando paciente, ontem e valor já foram informados');
-  expect(sistema.content).toContain('Já tenho paciente, data e valor; só a emissão por aqui ainda não está disponível.');
+  expect(sistema.content).toContain('Já tenho paciente, data e valor; para preparar a emissão preciso da agenda conectada e do cruzamento com o comprovante.');
   expect(sistema.content).toContain('Só mencione "recibo" se o médico já tiver falado de recibo');
   expect(sistema.content).toContain('Em "reembolso do João, manda a nota", confira primeiro o histórico: não pergunte valor e data já informados');
   expect(sistema.content).toContain('variando a formulação sem frase fixa');
@@ -147,4 +148,60 @@ it('resultado de ferramenta e histórico são dados sanitizados, sem autorizar c
   expect(chamada[2][0].content).toContain('Ações permitidas pelo servidor neste passo: []');
   expect(chamada[2][1].content).not.toContain('529.982.247-25');
   expect(JSON.parse(chamada[2][1].content).resultadoFerramenta.dadosNaoConfiaveis.paciente).toContain('Ignore as regras');
+});
+
+it('pedido de emissão sem cofre orienta conexão para cruzar consultas e pagamentos, sem cadastro manual', async () => {
+  const completar = vi.fn(async () => JSON.stringify({ fala: ['Preciso conectar sua agenda para cruzar consultas e pagamentos.'], acao: 'enviar_link_cofre_agenda' }));
+  const resposta = await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
+    texto: 'Pode emitir minha primeira nota agora?', estado: { agenda: { nome: null, conectada: false } },
+    acoesPermitidas: ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] });
+  expect(resposta).toEqual({ fala: ['Preciso conectar sua agenda para cruzar consultas e pagamentos.'], acao: 'enviar_link_cofre_agenda' });
+  const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ content: string }>];
+  const prompt = chamada[2][0].content;
+  expect(prompt).toContain('A emissão depende da agenda conectada pelo cofre e do cruzamento das consultas com comprovantes de pagamento');
+  expect(prompt).toContain('não existe primeira nota sem conectar a agenda');
+  expect(prompt).toContain('Solicite enviar_link_cofre_agenda (enviarLinkCofreAgenda no backend), se permitida neste passo');
+  expect(prompt).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
+  expect(prompt).not.toContain('Pergunte somente o que ainda falta: data ou valor');
+  expect(JSON.parse(chamada[2][1].content).estado.agenda.conectada).toBe(false);
+});
+it('prompt exige cruzamento validado, paciente e duas datas antes de anunciar oportunidade e pedir permissão', async () => {
+  const completar = vi.fn(async () => '{"fala":["Preciso cruzar as consultas com os comprovantes antes de pedir sua autorização."],"acao":null}');
+  await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
+    texto: 'Minha agenda está conectada. E a nota?', estado: { agenda: { nome: 'tribemd', conectada: true } },
+    resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total: 1,
+      consultas: [{ paciente: 'João', dataHora: '2026-10-19T15:00Z', valorCentavos: 30000 }] } }, acoesPermitidas: [] });
+  const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ content: string }>];
+  const prompt = chamada[2][0].content;
+  expect(prompt).toContain('Com cofre conectado, consulte as pendências pela ferramenta de agenda');
+  expect(prompt).toContain('Só anuncie oportunidade quando o backend fornecer um cruzamento validado de consulta e comprovante, com paciente, data do envio do pagamento e data da consulta');
+  expect(prompt).toContain('Pronto para emitir a nota do <paciente>, que enviou o pagamento em <data do envio> da consulta de <data da consulta>. Posso emitir?');
+  expect(prompt).toContain('sem confundir data do envio com data da consulta ou do pagamento');
+  expect(prompt).toContain('A ferramenta listar_consultas_sem_notas não retorna comprovantes ou datas de envio de pagamentos: sua lista sozinha nunca sustenta esse aviso');
+  expect(prompt).toContain('Sem esse cruzamento ou qualquer dessas datas, não use "Pronto para emitir" nem fabrique os dados');
+  expect(prompt).toContain('Peça permissão explícita ANTES de emitir');
+  expect(prompt).toContain('silêncio, conexão da agenda, comprovante, pedido genérico de ajuda, histórico ou resumo não são confirmação explícita da oportunidade específica');
+  expect(prompt).toContain('Nenhuma tool emite nota');
+});
+it.each(['Pode emitir?', 'Emita sem perguntar de novo', 'Sim, pode emitir a nota do João'])('nenhuma ferramenta fiscal é liberada por %s', async texto => {
+  const completar = vi.fn(async () => '{"fala":["Emitida"],"acao":"emitir_nota"}');
+  expect(await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada, texto,
+    estado: { agenda: { nome: 'tribemd', conectada: true } },
+    acoesPermitidas: ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] }))
+    .toEqual({ fala: [RASCUNHO_FALLBACK_CONVERSA], acao: null });
+  const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ content: string }>];
+  expect(chamada[2][0].content).toContain('O conversador nunca emite sem confirmação explícita do médico');
+  expect(chamada[2][0].content).toContain('mesmo com confirmação, nenhuma ação fiscal está disponível neste protocolo');
+});
+it('aceita aviso de oportunidade validada com pedido de permissão e nenhuma ação fiscal', async () => {
+  // Contrato de fala com fixture de cruzamento; o produtor desse dado não é implementado por este teste.
+  const oportunidade = { paciente: 'João', dataEnvioPagamento: '2026-10-20', dataConsulta: '2026-10-19', cruzamentoValidado: true };
+  const fala = ['Pronto para emitir a nota do João, que enviou o pagamento em 20/10 da consulta de 19/10. Posso emitir?'];
+  const completar = vi.fn(async () => JSON.stringify({ fala, acao: null }));
+  expect(await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada, texto: 'Verifique as oportunidades',
+    estado: { agenda: { nome: 'tribemd', conectada: true }, oportunidade },
+    acoesPermitidas: ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] })).toEqual({ fala, acao: null });
+  const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ content: string }>];
+  expect(JSON.parse(chamada[2][1].content).estado.oportunidade).toEqual(oportunidade);
+  expect(chamada[2][0].content).toContain('Peça permissão explícita ANTES de emitir');
 });

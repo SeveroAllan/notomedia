@@ -268,3 +268,20 @@ it('pedido de verificar pendências não fica preso à extração de sim/não da
   expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não encontrei pendências nessa janela.'], 'mensagem');
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
 });
+
+it('emissão pedida sem cofre passa pela ferramenta de link e só confirma o envio depois do resultado', async () => {
+  const c = await cenario();
+  const listarConsultasSemNota = vi.fn(); const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
+  c.completar.mockResolvedValueOnce('{"fala":["Preciso conectar sua agenda para cruzar consultas e pagamentos."],"acao":"enviar_link_cofre_agenda"}')
+    .mockResolvedValueOnce('{"fala":["Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link do cofre para conectar."],"acao":null}');
+  const pedido = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Pode emitir minha primeira nota agora?' } };
+  const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
+  await processarComunicacaoMedico(pedido, deps);
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link do cofre para conectar.'], 'mensagem');
+  const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
+  expect(chamadas[0][2][0].content).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
+  expect(JSON.parse(chamadas[0][2][1].content).estado.agenda.conectada).toBe(false);
+  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta.dadosNaoConfiaveis).toEqual({ ok: true, motivo: 'enviado' });
+  await processarComunicacaoMedico(pedido, deps); expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce();
+});
