@@ -5,6 +5,7 @@ export class ErroCofre extends Error {
     constructor(public codigo: string) { super(codigo); }
 }
 interface Trabalho {
+    janela?: { janelaDias: number; agora: Date };
     controller: AbortController;
     finalizada: Promise<void>;
     concluir: () => void;
@@ -47,7 +48,7 @@ export class CofreTribemd {
     async iniciar(id: string, credencial?: {
         email: string;
         senha: string;
-    }, exigirAtivo = false) {
+    }, exigirAtivo = false, janela?: { janelaDias: number; agora: Date }) {
         if (this.parando)
             throw new ErroCofre('COFRE_ENCERRANDO');
         if (this.trabalhos.has(id) || this.alterando.has(id))
@@ -55,7 +56,7 @@ export class CofreTribemd {
         if (this.trabalhos.size >= (this.opcoes.simultaneos ?? 2))
             throw new ErroCofre('NAVEGADORES_OCUPADOS');
         let concluir!: () => void;
-        const trabalho: Trabalho = { controller: new AbortController(), finalizada: new Promise<void>(r => { concluir = r; }), concluir: () => concluir() };
+        const trabalho: Trabalho = { janela, controller: new AbortController(), finalizada: new Promise<void>(r => { concluir = r; }), concluir: () => concluir() };
         this.trabalhos.set(id, trabalho);
         let liberar: (() => Promise<void>) | undefined, p: PerfilTribemd = {};
         try {
@@ -107,7 +108,7 @@ export class CofreTribemd {
             let resultado: ResultadoLeituraTribemd;
             try {
                 await autenticar(true);
-                resultado = await navegador!.ler('agenda', true);
+                resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
             }
             catch (e) {
                 const expirou = e instanceof ErroTribemd && (e.codigo === 'SESSAO_EXPIRADA' || !entrouComSenha && e.diagnostico?.rede?.chamadas.some(c => c.statusHttp === 401 && c.rota !== '/api/usuarios/login'));
@@ -115,7 +116,7 @@ export class CofreTribemd {
                     throw e;
                 await navegador?.encerrar();
                 await autenticar(false);
-                resultado = await navegador!.ler('agenda', true);
+                resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
             }
             t.controller.signal.throwIfAborted();
             p.estado = await navegador!.perfil();
@@ -180,18 +181,19 @@ export class CofreTribemd {
     }
     async desconectar(id: string) { await this.alterar(id, false); }
     async excluir(id: string) { await this.alterar(id, true); }
-    async consultar(id: string) { return this.iniciar(id, undefined, true); }
-    readonly fonteAgenda: FonteAgenda = { consultar: async ({ medicoId }): Promise<ResultadoFonteAgenda> => {
+    async consultar(id: string, janelaDias = 90, agora = new Date()) { return this.iniciar(id, undefined, true, { janelaDias, agora }); }
+    readonly fonteAgenda: FonteAgenda = { consultar: async ({ medicoId, janelaDias = 90, agora = new Date() }): Promise<ResultadoFonteAgenda> => {
         try {
             const status = await this.status(medicoId);
             if (!status.salvo || !status.ativo) return { tipo: 'erro', codigo: 'SEM_AGENDA_CONECTADA' };
-            await this.consultar(medicoId);
+            await this.consultar(medicoId, janelaDias, agora);
             await this.trabalhos.get(medicoId)?.finalizada;
             const resultado = this.resultado(medicoId);
             if (!resultado) return { tipo: 'erro', codigo: (await this.status(medicoId)).codigo === 'ACESSO_PRECISA_VERIFICACAO' ? 'ACESSO_EXPIRADO' : 'FONTE_INDISPONIVEL' };
-            const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
+            const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(agora);
+            const inicio = new Date(hoje + 'T12:00:00Z'); inicio.setUTCDate(inicio.getUTCDate() - janelaDias);
             if (resultado.cobertura !== 'intervalo_carregado_pelo_portal' || !resultado.agenda?.intervalo.fim ||
-                resultado.agenda.intervalo.fim < hoje || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
+                resultado.agenda.intervalo.fim < hoje || !resultado.agenda.intervalo.inicio || resultado.agenda.intervalo.inicio > inicio.toISOString().slice(0, 10) || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
                 return { tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' };
             }
             return { tipo: 'consultas', fonte: 'tribemd', consultas: resultado.consultas.map(c => {

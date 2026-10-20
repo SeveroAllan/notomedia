@@ -10,7 +10,7 @@ const resultadoSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('consultas'), fonte: z.string().min(1), consultas: z.array(consultaSchema) }).strict(),
   z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA']) }).strict()
 ]);
-export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string }
+export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string; janelaDias?: number; agora?: Date }
 export type ResultadoFonteAgenda = z.infer<typeof resultadoSchema>;
 export type ConsultaSincronizada = Omit<z.infer<typeof consultaSchema>, 'valorConsultaCentavos'> & { valorConsultaCentavos: number | null };
 export interface FonteAgenda { consultar(entrada: EntradaFonteAgenda): Promise<ResultadoFonteAgenda> }

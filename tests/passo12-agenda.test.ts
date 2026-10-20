@@ -45,11 +45,13 @@ describe('agenda transitória para comprovante', () => {
   });
 });
 
-it('porta da agenda no servidor é explícita e não chama sincronizarAgenda', async () => {
+it('porta da agenda sincroniza sob demanda em homologação e preserva revalidação fiscal', async () => {
   const { readFileSync } = await import('node:fs');
   const servidor = readFileSync('src/server.ts', 'utf8');
   expect(servidor).toContain('fonteAgenda:');
-  expect(servidor).not.toContain('sincronizarAgenda(');
+  expect(servidor).toContain('sincronizarAgenda(');
+  expect(servidor).toContain("rows[0]?.ambiente !== 'homologacao'");
+  expect(servidor).toContain('app.locals.sincronizarAgendaHomologacao');
   expect(readFileSync('src/io/postgres/postgres-emissao-comprovante.ts', 'utf8')).not.toContain('noto_consultas_sincronizadas');
 });
 

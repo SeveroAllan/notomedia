@@ -9,13 +9,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: () => ({ app: express.default(), statusAgenda: async () => null, encerrar: async () => {} }) };
+  return { criarCofreContas: () => ({ app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, encerrar: async () => {} }) };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -29,11 +29,16 @@ beforeEach(() => {
   errosEsperados = 0; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
-  vi.clearAllMocks(); banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
+  vi.clearAllMocks();
+  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
+  banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
   config.comunicacaoMedicoAtiva = true; config.conversaLivreAtiva = true; config.envioMedicoRealAtivo = true;
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
   fronteiras.connect.mockImplementation(() => historico.connect());
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
+    if (sql.startsWith('select ambiente from medico_perfil_fiscal')) return { rows: [{ ambiente }] };
+    if (sql.startsWith('select id from pacientes')) return { rows: [{ id: '00000000-0000-4000-8000-000000000002' }] };
+    if (sql.startsWith('insert into public.noto_consultas_sincronizadas')) return { rows: [] };
     if (sql.includes('regexp_replace(u.telefone')) return { rows: (parametros[0] as string[]).includes(telefone.replace(/\D/g, ''))
       ? [{ id: 'medico', nome_completo: 'Medica Ficticia', telefone }] : [] };
     if (sql.includes('select u.telefone, pf.ambiente from medicos m')) return { rows: [{ telefone, ambiente }] };
@@ -211,6 +216,9 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
   expect(enviar.mock.calls).toEqual(enviosAntesDaReentrega);
   expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Sua agenda já está conectada, deixa eu ver um minutinho.', 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
+  expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicoId: 'medico', janelaDias: 90, agora: expect.any(Date) }));
+  const escrita = fronteiras.query.mock.calls.find(([sql]) => sql.startsWith('insert into public.noto_consultas_sincronizadas'))!;
+  expect(JSON.parse(escrita[1][2])).toEqual([{ paciente_id: '00000000-0000-4000-8000-000000000002', id_externo: 'pendente', data_hora: '2026-10-19T14:00:00Z', status: 'realizada', valor_consulta_centavos: 40000 }]);
 });
 
 it('webhook do médico marca a mensagem original como lida e falha de leitura não silencia a resposta', async () => {
@@ -231,4 +239,16 @@ it.each(['👍', '💣', undefined])('webhook só envia reação permitida %s co
   if (reacao === '👍') expect(reagir).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName,
     chave: { id: 'reacao', remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, reacao });
   else expect(reagir).not.toHaveBeenCalled();
+});
+
+it('sincronização interna recusa produção antes do portal e falha do portal fica estruturada', async () => {
+  const app = criarAppExpress(); ambiente = 'producao'; const agora = new Date('2026-10-20T15:00:00Z');
+  expect(await app.locals.sincronizarAgendaHomologacao('medico', agora)).toEqual({ tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' });
+  expect(fronteiras.fonte).not.toHaveBeenCalled();
+  ambiente = 'homologacao'; fronteiras.fonte.mockRejectedValueOnce(Error('senha=privado'));
+  const aviso = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  expect(await app.locals.sincronizarAgendaHomologacao('medico', agora)).toEqual({ tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' });
+  expect(aviso).toHaveBeenCalledOnce(); const registro = String(aviso.mock.calls[0][0]);
+  expect(registro).toContain('NOTO_ERRO'); expect(registro).toContain('SINCRONIZACAO_AGENDA_FALHOU'); expect(registro).not.toContain('privado');
+  expect(enviar).not.toHaveBeenCalled();
 });

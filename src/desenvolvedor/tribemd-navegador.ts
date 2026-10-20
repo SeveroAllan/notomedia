@@ -105,7 +105,7 @@ export class NavegadorTribemd {
   else if(c.tecla!=='Enter')await p.keyboard.press(c.tecla);
  }
  estaAutenticado(){return this.autenticado&&!this.fechado&&this.browser.isConnected();}
- async ler(pagina:'agenda'|'pacientes',detalhar=false):Promise<ResultadoLeituraTribemd> {
+ async ler(pagina:'agenda'|'pacientes',detalhar=false,janela?:{janelaDias:number;agora:Date}):Promise<ResultadoLeituraTribemd> {
   if(!this.autenticado||!this.page)throw new ErroTribemd('LOGIN_NAO_CONFIRMADO');
   const p=this.page;this.etapa='leitura_'+pagina;
   await this.observador?.concluir();this.diagnostico=undefined;
@@ -117,17 +117,23 @@ export class NavegadorTribemd {
     this.statusHttp=r?.status();if(this.statusHttp&&this.statusHttp>=400)throw new ErroTribemd('LEITURA_HTTP_ERRO');
    }
    if(new URL(p.url()).pathname==='/login'){this.autenticado=false;throw new ErroTribemd('SESSAO_EXPIRADA');}
-   const hoje=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+   const hoje=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).format(janela?.agora??new Date());
    if(pagina==='agenda'&&(this.agenda?.temRequisicao()||!await p.locator('table:visible,[role=table]:visible').count())){
     this.agenda?.observarExistente(this.observador);
-    const recorte=await this.agenda!.ler(hoje);
-    let {consultas,...agenda}=recorte;
     let detalhes:ResumoDetalhesTribemd|undefined;
-    if(detalhar){
+    const processar=async(recorte:RecorteAgendaTribemd)=>{
+     if(!detalhar)return recorte.consultas;
      const headers=await this.agenda!.cabecalhosLeitura(recorte);
-     try{const leitura=await detalharConsultasTribemd(p,consultas,headers,true);consultas=leitura.consultas;detalhes=leitura.resumo;}
-     finally{for(const nome of Object.keys(headers))delete headers[nome];}
-    }
+     try{
+      const leitura=await detalharConsultasTribemd(p,recorte.consultas,headers,true);
+      if(!detalhes)detalhes=leitura.resumo;
+      else for(const campo of ['selecionadas','processadas','pendentes','comPendencias'] as const)detalhes[campo]+=leitura.resumo[campo];
+      return leitura.consultas;
+     }finally{for(const nome of Object.keys(headers))delete headers[nome];}
+    };
+    const recorte=janela?await this.agenda!.lerJanela(hoje,janela.janelaDias,processar):await this.agenda!.ler(hoje);
+    const consultas=janela?recorte.consultas:await processar(recorte);
+    const {consultas:_consultas,...agenda}=recorte;
     this.leituraFalhou=false;this.diagnostico=await this.observador.concluir();await this.observarTela();
     return {consultas,agenda,detalhes,cobertura:'intervalo_carregado_pelo_portal',pagina,historicoCompleto:false,
      detalhe:detalhes?`Consultas atendidas e finalizadas: ${detalhes.processadas} de ${detalhes.selecionadas} processadas; ${detalhes.comPendencias} com pendências. Valores não comprovam pagamento. Leitura restrita ao intervalo da agenda.`:`Calendário carregado: ${agenda.totalAtendimentos} atendimentos no intervalo consultado pelo portal. ${consultas.length} consultas concluídas com nome e data reconhecidos no recorte. Não comprova a última consulta do histórico.`};

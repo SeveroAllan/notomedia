@@ -366,3 +366,22 @@ sintaxe do JavaScript do painel/leitor. Não foram adicionados ou executados tes
 neste turno. Os 41 testes descritos acima correspondem à versão anterior.
 A forma efetiva das respostas dos detalhes na clínica e a completude dos campos
 precisam ser confirmadas pelo operador após reimplantar o branch.
+
+### Sincronização sob demanda em homologação
+
+`app.locals.sincronizarAgendaHomologacao(medicoId, agora?, janelaDias=90)`
+verifica `medico_perfil_fiscal.ambiente=homologacao` antes de abrir o portal.
+É a mesma função usada pela consulta de pendências da conversa e, para TribeMD,
+antes da seleção de consulta pelo comprovante. Não há cron nem rota pública nova.
+A janela aceita de 1 a 365 dias; o padrão é 90. O navegador retrocede pelo botão
+reconhecido da agenda e observa apenas os GETs disparados pelo portal. Intervalo
+incompleto, paginação sem avanço, lacuna ou recorte truncado produzem erro; nunca
+são apresentados como zero pendências.
+
+Na escrita, o telefone e suas variantes brasileiras resolvem `pacientes.id`.
+Quando não existe cadastro, cria-se paciente mínimo com nome nulo e origem
+`agenda_tribemd_sync`; nome, CPF e credenciais do portal não entram nesse cadastro.
+O upsert mantém a chave `(medico_id, fonte, id_externo)`. O resultado transitório
+original continua indo ao critério determinístico do comprovante, sem mudar suas
+regras de vínculo, ambiguidade, confirmação ou emissão. Falhas ficam em registros
+marcados `NOTO_ERRO`, com contexto sanitizado; a conversa recebe texto humano.

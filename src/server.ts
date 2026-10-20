@@ -1,3 +1,5 @@
+import { sincronizarAgenda } from './agenda/sincronizar-agenda.js';
+import { registroErroNoto } from './observabilidade/erros.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
@@ -158,6 +160,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       pepper: config.appPepper
     });
 
+  // Função interna sob demanda; nenhuma tarefa periódica ou sincronização em produção.
+  const sincronizarAgendaHomologacao = async (medicoId: string, agora = new Date(), janelaDias = 90) => {
+    try {
+      const { rows } = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1', [medicoId]);
+      if (rows[0]?.ambiente !== 'homologacao') return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
+      if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 365) throw Error('JANELA_AGENDA_INVALIDA');
+      const repo = new PostgresConsultasSincronizadas(pool);
+      const resultado = await sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
+        (id, consulta) => repo.resolverPaciente(id, consulta));
+      if (resultado.tipo === 'erro') console.warn(registroErroNoto(resultado.codigo, 'tecnico', { medicoId, etapa: 'sincronizacao' }));
+      return resultado;
+    } catch (e) {
+      console.warn(registroErroNoto('SINCRONIZACAO_AGENDA_FALHOU', 'tecnico', { medicoId, etapa: 'sincronizacao', detalhe: e instanceof Error ? e.message : String(e) }));
+      return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
+    }
+  };
+  app.locals.sincronizarAgendaHomologacao = sincronizarAgendaHomologacao;
+
   const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura) => {
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
@@ -166,8 +186,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
-      listarConsultasSemNota: (id, agenda, instante) => new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
-        (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId)),
+      listarConsultasSemNota: async (id, agenda, instante) => {
+        if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
+          const sincronizada = await sincronizarAgendaHomologacao(id, instante);
+          if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
+          if (!sincronizada.consultas.length) return { ok: true, total: 0, consultas: [], janelaDias: 90 };
+        }
+        return new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
+          (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId));
+      },
       enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
@@ -748,7 +775,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         },
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
           historico: historicoComunicacao,
-          fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
+          fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? { consultar: async entrada =>
+            (await cofres.statusAgenda(entrada.medicoId)).nome?.toLowerCase() === 'tribemd'
+              ? sincronizarAgendaHomologacao(entrada.medicoId, entrada.agora, entrada.janelaDias)
+              : cofres.fonteAgenda.consultar(entrada) } : undefined,
           consultaJaFaturada: emissaoComprovante ? (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id) : undefined,
           medicoEmFaseInicial: async medicoId => {
             const { rows } = await pool.query('select 1 from notas_fiscais where medico_id = $1 limit 1', [medicoId]);

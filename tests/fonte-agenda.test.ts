@@ -163,3 +163,34 @@ it('pendências usam o mesmo verificador de faturamento, janela de 90 dias, tota
   expect(sql).toContain("c.status='realizada'"); expect(sql).toContain("interval '90 days'"); expect(sql).toContain('c.data_hora <= $3');
   expect(sql).toContain('p.medico_id=c.medico_id'); expect(sql).not.toMatch(/cpf|telefone/);
 });
+
+it('sync mapeia o ID numérico do portal só na persistência, preservando critério transitório do comprovante', async () => {
+  const fonte = new FonteFalsa({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ ...agenda().consultas[0], pacienteId: '456' }] });
+  const salvar = vi.fn(async () => {}), resolver = vi.fn(async () => paciente);
+  const resultado = await sincronizarAgenda({ ...entrada, janelaDias: 90, agora: new Date('2026-10-20T15:00:00Z') }, fonte, { salvar }, resolver);
+  expect(resultado).toMatchObject({ consultas: [{ pacienteId: '456' }] });
+  expect(salvar).toHaveBeenCalledExactlyOnceWith(medico, 'tribemd', [expect.objectContaining({ pacienteId: paciente })]);
+  expect(resolver).toHaveBeenCalledExactlyOnceWith(medico, expect.objectContaining({ pacienteId: '456' }));
+  expect(fonte.recebidas[0]).toMatchObject({ janelaDias: 90, agora: new Date('2026-10-20T15:00:00Z') });
+});
+it.each([false, true])('telefone do portal resolve paciente local existente=%s sem gravar nome', async existe => {
+  const query = vi.fn(async (sql: string, p: any[]) => {
+    if (sql.startsWith('select id from pacientes')) { expect(p[1]).toContain('555193527271'); expect(p[1]).toContain('5551993527271'); return { rows: existe ? [{ id: paciente }] : [] }; }
+    if (sql.includes('insert into pacientes')) {
+      expect(p).toEqual([medico, '5551993527271', null, undefined, undefined, 'agenda_tribemd_sync', null, '']);
+      return { rows: [{ id: paciente, medico_id: medico, telefone: p[1], nome: null }] };
+    }
+    throw Error('SQL não modelado');
+  });
+  const repo = new PostgresConsultasSincronizadas({ query } as unknown as pg.Pool);
+  expect(await repo.resolverPaciente(medico, { ...agenda().consultas[0], pacienteId: '456', telefonePaciente: '555193527271', valorConsultaCentavos: 35000 })).toBe(paciente);
+  expect(query.mock.calls.filter(([s]) => s.includes('insert into pacientes'))).toHaveLength(existe ? 0 : 1);
+  expect(JSON.stringify(query.mock.calls)).not.toContain('Nome do portal');
+});
+it('mapeamento recusa telefone ausente ou múltiplos cadastros e nunca salva ID numérico', async () => {
+  const query = vi.fn(async () => ({ rows: [{ id: paciente }, { id: 'outro' }] }));
+  const repo = new PostgresConsultasSincronizadas({ query } as unknown as pg.Pool);
+  await expect(repo.resolverPaciente(medico, { ...agenda().consultas[0], telefonePaciente: undefined, valorConsultaCentavos: 35000 })).rejects.toThrow('TELEFONE_AGENDA_INVALIDO');
+  expect(query).not.toHaveBeenCalled();
+  await expect(repo.resolverPaciente(medico, agenda().consultas[0] as any)).rejects.toThrow('VINCULO_PACIENTE_AMBIGUO');
+});

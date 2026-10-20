@@ -98,5 +98,29 @@ export class LeitorAgendaTribemd {
   }
   throw new ErroAgendaTribemd('SESSAO_ENCERRADA');
  }
+ /** Retrocede pela UI; somente o GET disparado pelo próprio portal é lido. */
+ async lerJanela(hoje:string,janelaDias=90,processar?:(recorte:RecorteAgendaTribemd)=>Promise<ConsultaTribemd[]>):Promise<RecorteAgendaTribemd>{
+  if(!dataISOTribemd(hoje)||!Number.isInteger(janelaDias)||janelaDias<1||janelaDias>365)throw new ErroAgendaTribemd('JANELA_AGENDA_INVALIDA');
+  const inicio=new Date(hoje+'T12:00:00Z');inicio.setUTCDate(inicio.getUTCDate()-janelaDias);
+  const desde=inicio.toISOString().slice(0,10),consultas=new Map<string,ConsultaTribemd>();
+  let recorte=await this.ler(hoje),fim=recorte.intervalo.fim,totalAtendimentos=0;
+  if(!fim||fim<hoje||!recorte.intervalo.inicio||recorte.intervalo.inicio>hoje)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+  for(let pagina=0;pagina<55;pagina++){
+   if(recorte.limitado)throw new ErroAgendaTribemd('LEITURA_AGENDA_LIMITE_EXCEDIDO');
+   const inicioRecorte=recorte.intervalo.inicio;
+   if(!inicioRecorte)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+   totalAtendimentos+=recorte.totalAtendimentos;
+   const lidas=processar?await processar(recorte):recorte.consultas;
+   for(const c of lidas)if(c.atendimentoId&&c.dataConsultaObservada&&c.dataConsultaObservada>=desde&&c.dataConsultaObservada<=hoje)consultas.set(c.atendimentoId,c);
+   if(inicioRecorte<=desde)return {consultas:[...consultas.values()],totalAtendimentos,limitado:false,intervalo:{inicio:inicioRecorte,fim}};
+   const botao=this.page.getByRole('button',{name:/^(semana anterior|anterior|previous(?: week)?)$/i}).or(this.page.locator('button.fc-prev-button'));
+   if(await botao.count()!==1||!await botao.isVisible()||!await botao.isEnabled())throw new ErroAgendaTribemd('PAGINACAO_AGENDA_NAO_RECONHECIDA');
+   await Promise.all([this.page.waitForRequest(r=>r.method()==='GET'&&new URL(r.url()).origin==='https://app.tribemd.com'&&new URL(r.url()).pathname==='/api/atendimentos/agenda',{timeout:10000}),botao.click()]);
+   const proximo=await this.ler(hoje),anterior=new Date(inicioRecorte+'T12:00:00Z');anterior.setUTCDate(anterior.getUTCDate()-1);
+   if(!proximo.intervalo.inicio||!proximo.intervalo.fim||proximo.intervalo.inicio>=inicioRecorte||proximo.intervalo.fim<anterior.toISOString().slice(0,10))throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+   recorte=proximo;
+  }
+  throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+ }
  encerrar(){this.fechado=true;this.page.off('request',this.requisicao);this.page.off('response',this.resposta);this.page.off('requestfailed',this.falha);this.atual=undefined;this.avisar();}
 }

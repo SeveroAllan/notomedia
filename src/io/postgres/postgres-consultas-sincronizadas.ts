@@ -1,3 +1,5 @@
+import { PostgresAtendimentoRepositorio } from './postgres-atendimento-repositorio.js';
+import { gerarVariantesTelefoneBrasileiro } from '../../whatsapp/variantes-telefone-brasileiro.js';
 import type pg from 'pg';
 import type { ConsultaSincronizada, RepositorioConsultasSincronizadas } from '../../agenda/fonte-agenda.js';
 
@@ -26,6 +28,21 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
       }
       return { ok: true as const, total, consultas, janelaDias: 90 };
     } catch { return { ok: false as const, motivo: 'AGENDA_INDISPONIVEL' }; }
+  }
+
+  async resolverPaciente(medicoId: string, consulta: ConsultaSincronizada): Promise<string> {
+    const telefone = consulta.telefonePaciente?.replace(/\D/g, '') ?? '';
+    if (!/^\d{10,13}$/.test(telefone)) throw Error('TELEFONE_AGENDA_INVALIDO');
+    const variantes = gerarVariantesTelefoneBrasileiro(telefone);
+    const { rows } = await this.pool.query(`select id from pacientes where medico_id=$1 and regexp_replace(telefone, '\\D', '', 'g') = any($2::text[]) order by id limit 2`, [medicoId, variantes]);
+    if (rows.length > 1) throw Error('VINCULO_PACIENTE_AMBIGUO');
+    if (rows[0]) return rows[0].id;
+    // Canonicalização também converge chamadas concorrentes no UNIQUE médico/telefone.
+    const canonico = [...variantes].sort((a, b) => b.length - a.length || a.localeCompare(b))[0];
+    const paciente = await new PostgresAtendimentoRepositorio(this.pool as pg.Pool, '').criarPacienteMinimo({
+      medicoId, telefone: canonico, nome: null, origemCadastro: 'agenda_tribemd_sync'
+    });
+    return paciente.id;
   }
 
   async salvar(medicoId: string, fonte: string, consultas: ConsultaSincronizada[]): Promise<void> {

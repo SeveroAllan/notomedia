@@ -18,7 +18,7 @@ it('cofre consulta portal falso sob demanda e descarta resultado, sem guardar co
     expect(await cofre.fonteAgenda.consultar({ medicoId: 'm', referenciaCofre: 'm' })).toEqual({ tipo: 'erro', codigo: 'SEM_AGENDA_CONECTADA' });
     await perfis.salvar('m', { email: 'ficticio@example.invalid', senha: 'falsa', cofre: { ativo: true, estado: 'conectado', consentimentoEm: '2026-10-18', consentimentoVersao: consentimentoCofre, atualizadoEm: '2026-10-18' } });
     expect(await cofre.fonteAgenda.consultar({ medicoId: 'm', referenciaCofre: 'm' })).toEqual({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', idExterno: '123', telefonePaciente: '11999990000', dataHora: '2026-10-18', status: 'realizada', valorConsultaCentavos: 20000 }] });
-    expect(ler).toHaveBeenCalledWith('agenda', true);
+    expect(ler).toHaveBeenCalledWith('agenda', true, expect.objectContaining({ janelaDias: 90, agora: expect.any(Date) }));
     expect(cofre.resultado('m')).toBeNull();
     ler.mockResolvedValueOnce({ consultas: [] });
     expect(await cofre.fonteAgenda.consultar({ medicoId: 'm', referenciaCofre: 'm' })).toEqual({ tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' });
