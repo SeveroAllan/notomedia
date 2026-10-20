@@ -202,3 +202,11 @@ RUN  v4.1.12 /workspace/notomedia
 ```
 
 Verificado: grep case insensitive por `llama|integrate.api.nvidia` em `src` e `.env.example` sem resultados (exit 1 por ausência de correspondências); `git diff --check` limpo. Hipótese/não exercitado: credencial OpenAI real, qualidade das respostas e deploy. Nenhum banco real ou envio real foi utilizado.
+
+## Commit 2 — FK e RLS
+
+Commit 1: `b2987fb114b879b0511516d44e42962d690da461`.
+
+A migration existente recebeu exatamente duas FKs `references public.medicos(id) on delete cascade` e os três comandos de RLS/revoke especificados no complemento. O restante do SQL foi preservado. Não há migration nova ou política pública; nenhum comando SQL foi executado. A suíte verde imediatamente anterior está registrada acima; a validação final após os três commits abrangerá também este arquivo.
+
+Verificado por comparação textual: duas substituições e três comandos acrescentados; `git diff --check` limpo. Não verificado: aplicação e privilégios efetivos no Supabase, tratados fora do Codex pelo usuário.
