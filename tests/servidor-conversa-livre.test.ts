@@ -9,13 +9,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: () => ({ app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, encerrar: async () => {} }) };
+  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -36,6 +36,7 @@ beforeEach(() => {
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
   fronteiras.connect.mockImplementation(() => historico.connect());
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
+    if (sql.startsWith('select u.telefone from medicos m')) return { rows: [{ telefone }] };
     if (sql.startsWith('select ambiente from medico_perfil_fiscal')) return { rows: [{ ambiente }] };
     if (sql.startsWith('select id from pacientes')) return { rows: [{ id: '00000000-0000-4000-8000-000000000002' }] };
     if (sql.startsWith('insert into public.noto_consultas_sincronizadas')) return { rows: [] };
@@ -251,4 +252,30 @@ it('sincronização interna recusa produção antes do portal e falha do portal 
   expect(aviso).toHaveBeenCalledOnce(); const registro = String(aviso.mock.calls[0][0]);
   expect(registro).toContain('NOTO_ERRO'); expect(registro).toContain('SINCRONIZACAO_AGENDA_FALHOU'); expect(registro).not.toContain('privado');
   expect(enviar).not.toHaveBeenCalled();
+});
+
+it('evento de conexão continua sozinho, verifica agenda e grava contexto nas variantes do telefone', async () => {
+  fronteiras.agenda = { nome: 'tribemd', conectada: true }; config.envioRealAllowlist = ['+5551993527271'];
+  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [] });
+  enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
+  criarAppExpress(); const evento = { agenda: 'tribemd' as const, conectado: true, chave: 'link-salvo' };
+  await fronteiras.concluirAgenda!('medico', evento); await fronteiras.concluirAgenda!('medico', evento);
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência nos últimos 90 dias. Quer que eu verifique períodos anteriores?'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
+  expect(banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
+  for (const numero of ['5551993527271', '555193527271']) {
+    const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, numero])).digest('hex');
+    expect(banco.mensagens.filter(m => m.conversa === conversa).map(m => m.texto).join(' ')).toContain('Já recebi o seu acesso ao TribeMD');
+  }
+  expect(JSON.stringify(enviar.mock.calls)).not.toMatch(/cofre|iClinic|FONTE_/i);
+});
+it.each(['livre off', 'envio off', 'comunicação off', 'produção', 'fora da lista'])('conclusão do acesso respeita %s', async caso => {
+  config.envioRealAllowlist = ['+5551993527271'];
+  if (caso === 'livre off') config.conversaLivreAtiva = false;
+  if (caso === 'envio off') config.envioMedicoRealAtivo = false;
+  if (caso === 'comunicação off') config.comunicacaoMedicoAtiva = false;
+  if (caso === 'produção') ambiente = 'producao';
+  if (caso === 'fora da lista') config.envioRealAllowlist = [];
+  criarAppExpress(); await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'link-salvo' });
+  expect(enviar).not.toHaveBeenCalled(); expect(fronteiras.fonte).not.toHaveBeenCalled(); expect(banco.mensagens).toEqual([]);
 });

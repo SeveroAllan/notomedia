@@ -385,3 +385,24 @@ O upsert mantém a chave `(medico_id, fonte, id_externo)`. O resultado transitó
 original continua indo ao critério determinístico do comprovante, sem mudar suas
 regras de vínculo, ambiguidade, confirmação ou emissão. Falhas ficam em registros
 marcados `NOTO_ERRO`, com contexto sanitizado; a conversa recebe texto humano.
+
+### Retorno ao WhatsApp após salvar o acesso
+
+O POST de envio do link seguro retorna HTML 202 com **Acesso salvo** e o botão
+preto **Voltar para o WhatsApp**, usando os tokens de `src/ui/index.html` e Geist.
+O número do deep link é lido da identidade da instância assistente na Evolution;
+nunca usa o telefone do médico ou outra instância. Se essa leitura falhar, o botão
+apenas abre o WhatsApp; a continuação automática não depende dele.
+
+A conclusão real do navegador chama `LinksCofre.concluir`. O evento usa o ID e a
+agenda da linha consumida do link, e passa pelo pipeline da conversa. Com acesso
+validado, o Noto confirma o recebimento, verifica a agenda e informa o resultado.
+Uma falha identificada de acesso orienta revisar login/permissão na área segura da conta;
+falha técnica usa mensagem de instabilidade, sem código ao médico. O evento tem
+reserva idempotente, memória com autor Noto e até três balões; não cria fala fictícia
+do médico nem libera emissão fiscal. Flags, homologação e allowlist são verificadas
+antes da continuação e novamente no transporte. Sem mensagens ao paciente.
+
+Captura local renderizada com Chromium em viewport móvel 390×844, Geist carregada,
+sem credenciais e com telefone fictício no destino do botão:
+[acesso-salvo.png](evidencias/acesso-salvo.png).

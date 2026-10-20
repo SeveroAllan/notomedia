@@ -342,3 +342,38 @@ it('consulta conectada preserva três balões totais, registra o aviso e retorna
   expect(c.aoConversar.mock.calls).toEqual([[['Sua agenda já está conectada, deixa eu ver um minutinho.'], 'mensagem:consulta'], [['Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'], 'mensagem']]);
   expect(await c.memoriaPersistida.ler('medico', 'conversa')).toContain('Sua agenda já está conectada, deixa eu ver um minutinho.');
 });
+
+it.each([true, false])('evento do acesso conectado=%s continua sem mensagem do médico e não registra médico fictício', async conectado => {
+  const c = await cenario(); const listarConsultasSemNota = vi.fn(async () => ({ ok: true, total: 0, consultas: [], janelaDias: 90 }));
+  const responder = vi.spyOn(c.deps.conversador, 'responder'); const evento = { ...entrada, respostaMedico: undefined, eventoAgenda: { agenda: 'tribemd' as const, conectado } };
+  const deps = { ...c.deps, listarConsultasSemNota, lerEstado: async () => ({ ...await c.deps.lerEstado(), estado: { ...(await c.deps.lerEstado()).estado, agenda: { nome: 'tribemd', conectada: conectado } } }) };
+  await processarComunicacaoMedico(evento, deps); await processarComunicacaoMedico(evento, deps);
+  expect(c.extrair).not.toHaveBeenCalled(); expect(listarConsultasSemNota).toHaveBeenCalledTimes(conectado ? 1 : 0);
+  expect(responder).toHaveBeenCalledOnce(); expect(c.aoConversar).toHaveBeenCalledTimes(conectado ? 2 : 1);
+  const falas = (c.aoConversar.mock.calls as unknown as Array<[string[], string]>).flatMap(c => c[0]).join(' ');
+  expect(falas).toContain(conectado ? 'Já recebi o seu acesso ao TribeMD.' : 'Não consegui conectar sua agenda');
+  if (conectado) expect(falas).toContain('Não há nenhuma pendência nos últimos 90 dias');
+  expect(falas).not.toMatch(/cofre|iClinic|ACESSO_/i);
+  expect(c.banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
+  if (conectado) {
+    await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'resposta-pos-conexao', respostaMedico: { texto: 'quero', dataMensagem: null } }, deps);
+    expect(responder.mock.calls.at(-1)![0].mensagens.join(' ')).toContain('Já recebi o seu acesso ao TribeMD');
+  }
+});
+it('evento com estado ausente usa nunca-mudo sem consultar agenda nem inventar sucesso fiscal', async () => {
+  const c = await cenario(); const listarConsultasSemNota = vi.fn();
+  c.deps.lerEstado.mockResolvedValueOnce(null as any);
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: undefined, eventoAgenda: { agenda: 'tribemd', conectado: true } }, { ...c.deps, listarConsultasSemNota });
+  expect(listarConsultasSemNota).not.toHaveBeenCalled(); expect(c.aoConversar.mock.calls.at(-1)).toEqual([[RASCUNHO_FALLBACK_CONVERSA], 'mensagem']);
+});
+
+it('continuação automática mantém três balões totais e informa o total quando abrevia a lista', async () => {
+  const c = await cenario();
+  c.completar.mockResolvedValueOnce(JSON.stringify({ fala: ['Encontrei consultas.', 'B'.repeat(450), 'C'.repeat(450)] }));
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: undefined, eventoAgenda: { agenda: 'tribemd', conectado: true } }, { ...c.deps,
+    lerEstado: async () => ({ ...await c.deps.lerEstado(), estado: { ...(await c.deps.lerEstado()).estado, agenda: { nome: 'tribemd', conectada: true } } }),
+    listarConsultasSemNota: async () => ({ ok: true, total: 3, consultas: [{ paciente: 'Ana', dataHora: '2026-10-19', valorCentavos: 30000 }] }) });
+  const baloes = (c.aoConversar.mock.calls as unknown as Array<[string[], string]>).flatMap(c => c[0]);
+  expect(baloes).toHaveLength(3); expect(baloes.every(t => t.length <= 500)).toBe(true);
+  expect(baloes[2]).toContain('Resumo de 3 consultas; lista abreviada.'); expect(baloes).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
+});

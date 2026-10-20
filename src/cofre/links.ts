@@ -2,12 +2,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import type { CofreTribemd } from './tribemd-cofre.js';
 
+export interface ConclusaoAgenda { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean; chave: string }
+
 export class LinksCofre {
-    private aguardando = new Set<string>();
+    private aguardando = new Map<string, { id: string; agenda: string }>();
     constructor(private deps: {
         pool: pg.Pool;
         origem: string;
         cofre: Pick<CofreTribemd, 'status' | 'iniciar'>;
+        aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
         enviar: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
 
@@ -68,16 +71,20 @@ export class LinksCofre {
     async enviarCredencial(token: string, dados: { email: string; senha: string; consentimento: string }) {
         if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
         const link = (await this.deps.pool.query(`update cofre_links set usado_em=now()
-            where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id`, [this.hash(token)])).rows[0];
+            where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id, id, agenda`, [this.hash(token)])).rows[0];
         if (!link) { await this.validar(token); return false; }
-        this.aguardando.add(link.medico_id);
+        this.aguardando.set(link.medico_id, { id: link.id, agenda: link.agenda });
         try { await this.deps.cofre.iniciar(link.medico_id, dados); }
         catch { await this.concluir(link.medico_id, false); throw Error('COFRE_INDISPONIVEL'); }
         return true;
     }
     async concluir(medicoId: string, conectado: boolean) {
-        if (!this.aguardando.delete(medicoId)) return;
-        await this.deps.enviar(medicoId, conectado ? 'TribeMD conectado' : 'Não consegui conectar. Peça um novo link ao Noto.');
+        const link = this.aguardando.get(medicoId);
+        if (!link || link.agenda !== 'tribemd') return;
+        this.aguardando.delete(medicoId);
+        const falhaAcesso = !conectado && (await this.deps.cofre.status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
+        if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
+        await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
         const credencial = /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(texto) || /\/c\/[A-Za-z0-9_-]{43}/.test(texto);

@@ -59,7 +59,7 @@ async function query(sql: string, valores: any[] = []): Promise<{ rows: any[] }>
     if (sql.includes('insert into cofre_links_auditoria')) { auditoria.push({ link_id: valores[0], evento: valores[1] }); return { rows: [] }; }
     if (sql.includes('update cofre_links set usado_em')) {
         const l = registros.find(l => l.token_hash === valores[0] && !l.usado_em && l.expira_em.getTime() > Date.now());
-        if (!l) return { rows: [] }; l.usado_em = new Date(); return { rows: [{ medico_id: l.medico_id }] };
+        if (!l) return { rows: [] }; l.usado_em = new Date(); return { rows: [{ medico_id: l.medico_id, id: l.id, agenda: l.agenda }] };
     }
     if (sql.includes('where token_hash')) return { rows: registros.filter(l => l.token_hash === valores[0]).map(l => ({ ...l, expirado: l.expira_em.getTime() <= Date.now() })) };
     if (sql.includes('where medico_id')) return { rows: registros.filter(l => l.medico_id === valores[0] && !l.usado_em && l.expira_em.getTime() > Date.now()) };
@@ -80,7 +80,7 @@ beforeAll(async () => {
     }
     servidor = createServer(); await new Promise<void>(r => servidor.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
-    const app = express(); app.use('/c', (req, res, next) => criarRouterLinksCofre(links, base)(req, res, next));
+    const app = express(); app.use('/c', (req, res, next) => criarRouterLinksCofre(links, base, async () => '5511999990000')(req, res, next));
     servidor.on('request', app);
 });
 beforeEach(async () => {
@@ -185,10 +185,10 @@ describe('HTTP e segredos', () => {
         else registros[0].expira_em = new Date(Date.now() - 1);
         expect((await fetch(`${base}/c/${token}`)).status).toBe(410); expect((await post(token)).status).toBe(410); expect(iniciar).not.toHaveBeenCalled();
     });
-    it('falha do cofre mantém token consumido e oferece novo link sem vazar erro', async () => {
+    it('falha técnica mantém token consumido e informa instabilidade sem vazar erro', async () => {
         const { token } = await pedir(); iniciar.mockRejectedValueOnce(Error(dados.senha));
-        const res = await post(token); expect(res.status).toBe(503); expect(await res.text()).toContain('novo link');
-        expect((await post(token)).status).toBe(410); expect(textos.at(-1)).toContain('novo link'); expect(JSON.stringify(logs)).not.toContain(dados.senha);
+        const res = await post(token); expect(res.status).toBe(503); expect(await res.text()).toBe('Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');
+        expect((await post(token)).status).toBe(410); expect(textos.at(-1)).toBe('Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'); expect(JSON.stringify(logs)).not.toContain(dados.senha);
     });
 });
 
@@ -206,7 +206,7 @@ it('ponta a ponta: WhatsApp fake → link → GET → POST → confirmação só
     const token = textos[0].match(/\/c\/([\w-]{43})/)![1];
     expect((await fetch(`${base}/c/${token}`)).status).toBe(200); expect((await post(token)).status).toBe(202);
     expect(textos).toHaveLength(1); await links.concluir(medicoId, true); await links.concluir(medicoId, true);
-    expect(textos.at(-1)).toBe('TribeMD conectado'); expect(textos).toHaveLength(2);
+    expect(textos.at(-1)).toBe('Já recebi o seu acesso ao TribeMD.'); expect(textos).toHaveLength(2);
     await webhook(`minha senha é ${dados.senha}`, 'senha');
     await webhook('credencial-sem-rotulo', 'senha-sem-rotulo');
     expect(classificar).toHaveBeenCalledTimes(1); expect(extrair).not.toHaveBeenCalled(); expect(lerEstado).not.toHaveBeenCalled();
@@ -297,4 +297,25 @@ it('mensagem de conexão explica necessidade, login na página segura e nunca us
     expect(texto).toContain('Eu não recebo senha pela conversa, só por esse link seguro');
     expect(texto).toContain(`/c/${token}`); expect(texto).not.toMatch(/cofre/i);
     expect(texto.length).toBeLessThanOrEqual(500);
+});
+
+it.each([true, false])('POST e conclusão conectado=%s entregam o evento uma vez com o provedor real', async conectado => {
+    const concluir = vi.fn(async () => {});
+    const status = async () => ({ salvo: false, estado: 'vazio' as const, ativo: false, verificadoEm: null, codigo: null, consultasDisponiveis: null });
+    links = new LinksCofre({ pool, origem: base, cofre: { status, iniciar }, enviar: async (_id, texto) => { textos.push(texto); return 'enviado'; }, aoConcluir: concluir });
+    const { token } = await pedir(); const resposta = await post(token); expect(resposta.status).toBe(202);
+    const html = await resposta.text(); expect(html).toContain('Acesso salvo'); expect(html).toContain('Voltar para o WhatsApp'); expect(html).toContain('https://wa.me/5511999990000');
+    expect(html).not.toMatch(/<form|type="password"|cofre|iClinic/i); expect(html).not.toContain(token); expect(html).not.toContain(dados.senha);
+    await links.concluir(medicoId, conectado); await links.concluir(medicoId, conectado);
+    expect(concluir).toHaveBeenCalledExactlyOnceWith(medicoId, { agenda: 'tribemd', conectado, chave: (await salvos())[0].id, ...(!conectado ? { falhaAcesso: false } : {}) });
+    expect(textos).toHaveLength(1);
+});
+
+it('falha de acesso é identificada pelo status real depois da verificação', async () => {
+    let falhou = false; const concluir = vi.fn(async () => {});
+    const status = async () => ({ salvo: falhou, estado: falhou ? 'atencao' as const : 'vazio' as const, ativo: falhou, verificadoEm: null, codigo: falhou ? 'ACESSO_PRECISA_VERIFICACAO' : null, consultasDisponiveis: null });
+    links = new LinksCofre({ pool, origem: base, cofre: { status, iniciar }, enviar: async (_id, texto) => { textos.push(texto); return 'enviado'; }, aoConcluir: concluir });
+    const { token } = await pedir(); expect((await post(token)).status).toBe(202); falhou = true;
+    await links.concluir(medicoId, false);
+    expect(concluir).toHaveBeenCalledExactlyOnceWith(medicoId, { agenda: 'tribemd', conectado: false, falhaAcesso: true, chave: (await salvos())[0].id });
 });

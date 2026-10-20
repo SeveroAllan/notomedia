@@ -63,6 +63,25 @@ export class EvolutionApiClient
     } catch { return { sucesso: false }; }
   }
 
+  /** Consulta somente a identidade da própria instância assistente para o botão de retorno. */
+  async obterTelefoneInstancia(): Promise<string | null> {
+    try {
+      const r = await fetch(`${this.baseUrl.replace(/\/$/, '')}/instance/fetchInstances?instanceName=${encodeURIComponent(this.instanciaOficialNome)}`, {
+        headers: { apikey: this.apiKey }, redirect: 'error', signal: AbortSignal.timeout(3000)
+      });
+      if (!r.ok) { await r.body?.cancel().catch(() => {}); return null; }
+      const dados = await r.json() as unknown;
+      if (!Array.isArray(dados)) return null;
+      for (const item of dados) {
+        const i = item?.instance ?? item;
+        if ((i?.name ?? i?.instanceName) !== this.instanciaOficialNome) continue;
+        const jid = i?.ownerJid;
+        if (typeof jid === 'string' && /^\d{10,15}@s\.whatsapp\.net$/.test(jid)) return jid.split('@')[0];
+      }
+      return null;
+    } catch { return null; }
+  }
+
   async obterBase64MensagemMidia(
     instancia: string,
     mensagemId: string

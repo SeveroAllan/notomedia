@@ -92,8 +92,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.evolutionGlobalApiKey,
     config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
   );
-  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, new EvolutionApiClient(
-    config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName));
+  const evolutionAssistantClient = new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName);
+  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient);
   const dadosProfissionais = new PostgresDadosProfissionaisService(pool);
   const authAdminService = new SupabaseAuthAdminService(
     config.supabaseUrl,
@@ -102,6 +103,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   );
   const cofres = criarCofreContas({
     pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
+    obterWhatsappAssistente: () => evolutionAssistantClient.obterTelefoneInstancia(),
+    aoConcluirAgenda: async (medicoId, evento) => {
+      try {
+        if (!config.comunicacaoMedicoAtiva || !config.conversaLivreAtiva || !await comunicacaoHomologacao.medicoPermitido(medicoId)) return;
+        const { rows } = await pool.query(`select u.telefone from medicos m join usuarios u on u.id=m.usuario_id where m.id=$1 and u.ativo=true`, [medicoId]);
+        const telefone = rows[0]?.telefone;
+        if (typeof telefone !== 'string') return;
+        const chavesConversa = gerarVariantesTelefoneBrasileiro(telefone).map(t => createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, t])).digest('hex'));
+        await comunicarMedico(medicoId, `agenda:${evento.chave}`, undefined, undefined, chavesConversa[0], undefined, { ...evento, chavesConversa });
+      } catch (e) { console.warn(registroErroNoto('CONCLUSAO_AGENDA_FALHOU', 'tecnico', { medicoId, etapa: 'conclusao', detalhe: e instanceof Error ? e.message : String(e) })); }
+    },
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
       return error ? null : data.user?.id ?? null;
@@ -178,13 +190,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   };
   app.locals.sincronizarAgendaHomologacao = sincronizarAgendaHomologacao;
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura) => {
+  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }) => {
     const agora = new Date();
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
+    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
-      aoConversar: async (fala, chave) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave }); },
+      aoConversar: async (fala, chave) => {
+        const resultado = await comunicacaoHomologacao.conversa({ medicoId, fala, chave });
+        if (resultado === 'enviado' && eventoAgenda && memoriaPersistida) for (const conversa of eventoAgenda.chavesConversa) {
+          await memoriaPersistida.registrar(medicoId, conversa, `noto:${chave}`, fala.join('\n'), 'noto');
+        }
+      },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       listarConsultasSemNota: async (id, agenda, instante) => {
         if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {

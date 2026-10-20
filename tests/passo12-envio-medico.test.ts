@@ -247,3 +247,17 @@ it('Evolution envia reação pela key recebida e audita sem reenviar', async () 
     expect(query).toHaveBeenCalledWith('update public.noto_envios_homologacao set estado = $2 where id = $1', ['r', 'enviado']);
   } finally { fetcher.mockRestore(); }
 });
+
+it.each([
+  [[{ name: 'notomed_assistente', ownerJid: '5511999990000@s.whatsapp.net' }], '5511999990000'],
+  [[{ name: 'notomed_oficial', ownerJid: '5511999990000@s.whatsapp.net' }], null],
+  [[{ name: 'notomed_assistente', ownerJid: 'grupo@g.us' }], null],
+  [{ erro: 'privado' }, null]
+])('link de retorno usa só a identidade da instância assistente %j', async (resposta, esperado) => {
+  const { EvolutionApiClient } = await import('../src/io/evolution/evolution-api-client.js');
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json(resposta));
+  try {
+    expect(await new EvolutionApiClient('https://evolution.invalid', 'ficticia', 'notomed_assistente', 'notomed_oficial').obterTelefoneInstancia()).toBe(esperado);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://evolution.invalid/instance/fetchInstances?instanceName=notomed_assistente', expect.objectContaining({ redirect: 'error' }));
+  } finally { fetcher.mockRestore(); }
+});

@@ -17,7 +17,7 @@ const processamentos = new Map<string, Promise<ProximaAcaoNoto>>();
 
 /** Ações fiscais seguem determinísticas; a IA só solicita as duas ferramentas restritas de agenda. */
 export async function processarComunicacaoMedico(
-  entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string },
+  entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string; eventoAgenda?: { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean } },
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
     aoReagir?: (reacao: import('../whatsapp/reagir-mensagem.js').ReacaoMedico) => Promise<void>;
@@ -33,14 +33,15 @@ export async function processarComunicacaoMedico(
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
   const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
-    if (!deps.conversaLivreAtiva || !entrada.respostaMedico) return;
+    if (!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) return;
     const detalhe = erro instanceof Error ? erro.message : erro === undefined ? '' : String(erro);
     deps.log('erro', registroErroNoto(motivo, 'tecnico', { etapa: 'comunicacao', detalhe }));
     if (entrada.chaveConversa && deps.memoriaPersistida) {
       try { if (verificarDuplicata && await deps.memoriaPersistida.temResposta(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento)) return; }
       catch { /* A indisponibilidade da memória não impede a tentativa de resposta. */ }
-      for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto), 'medico'],
+      for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico?.texto ?? ''), 'medico'],
         [`noto:${entrada.chaveProcessamento}`, RASCUNHO_FALLBACK_CONVERSA, 'noto']] as const) {
+        if (papel === 'medico' && !entrada.respostaMedico) continue;
         try { await deps.memoriaPersistida.registrar(entrada.medicoId, entrada.chaveConversa, id, texto, papel); }
         catch (e) { deps.log('erro', `COMUNICACAO_MEMORIA_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
       }
@@ -51,6 +52,37 @@ export async function processarComunicacaoMedico(
   const anterior = processamentos.get(entrada.medicoId);
   const processamento = (anterior ? anterior.catch(() => {}) : Promise.resolve()).then(async (): Promise<ProximaAcaoNoto> => {
     try {
+      if (entrada.eventoAgenda) {
+        if (!deps.conversaLivreAtiva) return { tipo: 'nenhuma' };
+        if (entrada.eventoAgenda.agenda !== 'tribemd') { await fallback('PROVEDOR_AGENDA_INVALIDO'); return { tipo: 'nenhuma' }; }
+        const chave = `agenda:conclusao:${entrada.chaveProcessamento}`;
+        if (!await deps.historico.reservar(entrada.medicoId, 'simulado', chave)) return { tipo: 'nenhuma' };
+        await deps.historico.liberar(entrada.medicoId, 'simulado', chave);
+        const memoria = deps.memoriaPersistida, conversa = entrada.chaveConversa;
+        let estado: EstadoComunicacaoMedico | null = null;
+        if (entrada.eventoAgenda.conectado) {
+          const aviso = 'Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.';
+          await deps.aoConversar?.([aviso], `${entrada.chaveProcessamento}:acesso`);
+          if (memoria && conversa) await memoria.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:acesso`, aviso, 'noto');
+          estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
+          if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
+        }
+        let resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number } = { ok: false, motivo: 'ACESSO_NAO_CONFIRMADO' };
+        if (entrada.eventoAgenda.conectado) {
+          if (!estado?.estado.agenda.conectada || estado.estado.agenda.nome?.toLowerCase() !== 'tribemd' || !deps.listarConsultasSemNota) resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' };
+          else resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora);
+        }
+        const resposta = await deps.conversador?.responder({ texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
+          resumo: memoria && conversa ? (await memoria.lerResumo(entrada.medicoId, conversa))?.resumo ?? null : null,
+          estado: estado?.estado ?? {}, agora: entrada.agora, eventoAgenda: entrada.eventoAgenda, acoesPermitidas: [],
+          resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: resultado } });
+        if (!resposta) { await fallback('COMUNICACAO_SEM_FALA'); return { tipo: 'nenhuma' }; }
+        const restante = resposta.fala.slice(1).join('\n');
+        const fala = resposta.fala.length > 2 ? [resposta.fala[0], restante.length <= 500 ? restante : `${restante.slice(0, 400)}\nResumo de ${resultado.total ?? 'várias'} consultas; lista abreviada.`] : resposta.fala;
+        if (memoria && conversa) await memoria.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, fala.join('\n'), 'noto');
+        await deps.aoConversar?.(fala, entrada.chaveProcessamento);
+        return { tipo: 'nenhuma' };
+      }
       if (deps.conversaLivreAtiva && deps.enviarLinkCofreAgenda && entrada.respostaMedico) {
         // Consome o evento antes de qualquer efeito do cofre, inclusive entre réplicas.
         const chave = `conversa:agenda:${entrada.chaveProcessamento}`;
@@ -153,7 +185,7 @@ export async function processarComunicacaoMedico(
       }
       return acao;
     } catch (erro) {
-      if (deps.conversaLivreAtiva && entrada.respostaMedico) await fallback('COMUNICACAO_ESTADO_FALHOU', erro, false);
+      if (deps.conversaLivreAtiva && (entrada.respostaMedico || entrada.eventoAgenda)) await fallback('COMUNICACAO_ESTADO_FALHOU', erro, false);
       else deps.log('erro', 'COMUNICACAO_ESTADO_FALHOU');
       return { tipo: 'nenhuma' };
     }

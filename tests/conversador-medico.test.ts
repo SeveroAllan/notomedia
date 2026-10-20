@@ -284,3 +284,10 @@ it.each(['💣', 'enviar_nota', null, 42])('reação fora da lista %j é descart
   const c = new ConversadorMedico('chave', 'modelo', async () => JSON.stringify({ fala: ['Certo.'], reacao }));
   expect(await c.responder(entrada)).toEqual({ fala: ['Certo.'], acao: null });
 });
+
+it.each([true, false])('falha de conexão acionável=%s tem orientação ou instabilidade, sem código', async falhaAcesso => {
+  const c = new ConversadorMedico('chave', 'modelo', vi.fn());
+  const resposta = await c.responder({ ...entrada, eventoAgenda: { agenda: 'tribemd', conectado: false, falhaAcesso } });
+  expect(resposta.fala.join(' ')).toContain(falhaAcesso ? 'Confira seu login, senha e permissão de acesso na área segura' : 'Estamos com uma instabilidade no sistema');
+  expect(resposta.fala.join(' ')).not.toMatch(/cofre|iClinic|ACESSO_/i); expect(resposta.acao).toBeNull();
+});
