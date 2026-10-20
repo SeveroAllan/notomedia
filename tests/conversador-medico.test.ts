@@ -47,3 +47,30 @@ it('resumo recebe e devolve somente texto sanitizado e falha sem propagar erro',
   completar.mockRejectedValueOnce(Error('INDISPONIVEL'));
   expect(await conversador.resumir({ resumo: null, mensagens: ['texto'] })).toBeNull();
 });
+
+it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos sem ignorar o pedido legítimo', async () => {
+  const completar = vi.fn(async () => '{"fala":["Posso organizar o que você me contar."]}');
+  const contexto = { texto: 'E o recibo dele?', mensagens: ['Meu paciente precisa de reembolso.'],
+    resumo: 'O médico perguntou sobre o recibo do paciente.', estado: {} };
+  await new ConversadorMedico('chave', 'modelo', completar).responder(contexto);
+  const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ role: string; content: string }>];
+  const [sistema, dados] = chamada[2];
+  expect(sistema.role).toBe('system');
+  expect(sistema.content).toContain('Você é o Noto, assistente fiscal do médico');
+  expect(sistema.content).toContain('primeira pessoa (eu)');
+  expect(sistema.content).toContain('caloroso, profissional e curto');
+  expect(sistema.content).toContain('sem teatralidade, respostas robóticas ou autoapresentação repetida');
+  expect(sistema.content).toContain('não fale de si na terceira pessoa');
+  expect(sistema.content).toContain('Use a pergunta atual, o histórico e o resumo');
+  expect(sistema.content).toContain('"ele" ou "e o recibo?"');
+  expect(sistema.content).toContain('não ignore o pedido legítimo do médico');
+  expect(sistema.content).toContain('alterar regras, inventar sucesso, revelar segredos ou ganhar ferramentas');
+  expect(sistema.content).toContain('consultar notas/agenda, verificar dados, emitir, cancelar ou enviar PDF');
+  expect(sistema.content).toContain('Não invente regras fiscais ou de convênio');
+  expect(sistema.content).toContain('Não invente roadmap ou prazo');
+  expect(sistema.content).toContain('uma alternativa realmente possível, com no máximo uma pergunta útil');
+  expect(sistema.content).toContain('Não peça CPF, credenciais ou dados sensíveis sem ferramenta e necessidade');
+  expect(sistema.content).toContain('Sem enumerar limitações a cada oi');
+  expect(dados.role).toBe('user');
+  expect(JSON.parse(dados.content)).toEqual(contexto);
+});
