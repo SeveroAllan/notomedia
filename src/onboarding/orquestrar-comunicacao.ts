@@ -34,6 +34,11 @@ export async function orquestrarComunicacao(
     reservado = await historico.reservar(medicoId, modo, chaveProcessamento);
     if (!reservado) return { tipo: 'nenhuma' };
     let salvo = await historico.ler(medicoId, modo);
+    // Envio confirmado no histórico real vale também para a conversa que decide em modo simulado.
+    if (modo === 'simulado' && !salvo.boasVindasComunicadas) {
+      const real = await historico.ler(medicoId, 'real');
+      if (real.boasVindasComunicadas) salvo = { ...salvo, boasVindasComunicadas: true };
+    }
     let falhaExtracao = false;
     let acao = decidirProximaAcao({ ...estado, historico: salvo });
     const fiscalOk = estado.fiscal.certificado === 'ok' && estado.fiscal.dadosFiscais === 'ok';

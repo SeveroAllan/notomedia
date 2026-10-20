@@ -175,3 +175,25 @@ describe('flag desligada preserva modo seco independentemente do transporte conf
     expect((await historico.ler(entrada.medicoId, 'real')).registros).toEqual([]);
   });
 });
+
+it.each(['orquestrador real', 'outro caminho real'])('boas-vindas recebidas via %s não são reenviadas pelo modo simulado', async caminho => {
+  const c = cenario();
+  if (caminho === 'orquestrador real') await orquestrarComunicacao(c.entrada, c.dependencias);
+  else {
+    await c.historico.reservar(c.entrada.medicoId, 'real', 'externo');
+    await c.historico.gravarAcao(c.entrada.medicoId, 'real', 'externo', { tipo: 'boas_vindas', ultimaNota: nota }, instante);
+    await c.historico.liberar(c.entrada.medicoId, 'real', 'externo');
+  }
+  const antes = c.transporte.confirmadas.length;
+  expect((await c.historico.ler(c.entrada.medicoId, 'simulado')).boasVindasComunicadas).toBe(false);
+  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'conversa-livre' }, { ...c.dependencias, envioRealAtivo: false }))
+    .toEqual({ tipo: 'perguntar_nota_pendente' });
+  expect(c.transporte.confirmadas).toHaveLength(antes);
+  expect((await c.historico.ler(c.entrada.medicoId, 'simulado')).registros.map(r => r.tipo)).toEqual(['perguntar_nota_pendente']);
+});
+it('boas-vindas apenas simuladas não suprimem o primeiro envio real', async () => {
+  const c = cenario();
+  await orquestrarComunicacao(c.entrada, { ...c.dependencias, envioRealAtivo: false });
+  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'real' }, c.dependencias)).toEqual({ tipo: 'boas_vindas', ultimaNota: nota });
+  expect(c.transporte.confirmadas).toHaveLength(5);
+});
