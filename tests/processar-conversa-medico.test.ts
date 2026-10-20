@@ -238,7 +238,8 @@ it('decisão listar_consultas_sem_nota entra no conversador com as ferramentas, 
     .toEqual({ tipo: 'listar_consultas_sem_nota', agenda: 'tribemd', desde: null });
   expect(listarConsultasSemNota).toHaveBeenCalledExactlyOnceWith('medico', { nome: 'tribemd', conectada: true }, agora);
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(c.deps.aoDecidir).not.toHaveBeenCalled();
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não há consultas realizadas sem nota nessa janela.'], 'mensagem');
+  expect(c.aoConversar.mock.calls).toEqual([[["Sua agenda já está conectada, deixa eu ver um minutinho."], 'mensagem:consulta'], [['Não há nenhuma pendência no período verificado. Quer que eu verifique períodos anteriores?'], 'mensagem']]);
+  expect(c.aoConversar.mock.invocationCallOrder[0]).toBeLessThan(listarConsultasSemNota.mock.invocationCallOrder[0]);
 });
 
 it('erro de leitura vira resultado de ferramenta sem abrir cofre nem presumir agenda vazia', async () => {
@@ -267,7 +268,7 @@ it('pedido de verificar pendências não fica preso à extração de sim/não da
     ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda,
     extratorResposta: { extrair: async () => ({ temNota: 'incerto', desde: null, confianca: 0.5 }) }
   })).toEqual({ tipo: 'reperguntar', pergunta: 'nota_pendente' });
-  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não encontrei pendências nessa janela.'], 'mensagem');
+  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não há nenhuma pendência no período verificado. Quer que eu verifique períodos anteriores?'], 'mensagem');
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
 });
 
@@ -327,7 +328,17 @@ it('agenda conectada sem consultas sincronizadas explica o estado sem pedir outr
   await processarComunicacaoMedico(entrada, { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda,
     lerEstado: async () => ({ ...await c.deps.lerEstado(), estado: { ...(await c.deps.lerEstado()).estado, agenda: { nome: 'tribemd', conectada: true } } }) });
   expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Sua agenda já está conectada, mas ainda não há consultas sincronizadas. A sincronização acontece quando recebo um comprovante.'], 'mensagem');
+  expect(c.aoConversar.mock.calls).toEqual([[["Sua agenda já está conectada, deixa eu ver um minutinho."], 'mensagem:consulta'], [['Sua agenda já está conectada, mas ainda não há consultas sincronizadas. A sincronização acontece quando recebo um comprovante.'], 'mensagem']]);
   expect(responder.mock.calls[1][0].acoesPermitidas).toEqual([]);
   expect(c.completar).toHaveBeenCalledOnce();
+});
+
+it('consulta conectada preserva três balões totais, registra o aviso e retorna o erro real sem pedir link', async () => {
+  const c = await cenario(); const listarConsultasSemNota = vi.fn(async () => ({ ok: false, motivo: 'AGENDA_INDISPONIVEL' })); const enviarLinkCofreAgenda = vi.fn();
+  c.completar.mockResolvedValueOnce('{"fala":["Consultar"],"acao":"listar_consultas_sem_notas"}');
+  await processarComunicacaoMedico(entrada, { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda,
+    lerEstado: async () => ({ ...await c.deps.lerEstado(), estado: { ...(await c.deps.lerEstado()).estado, agenda: { nome: 'tribemd', conectada: true } } }) });
+  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
+  expect(c.aoConversar.mock.calls).toEqual([[['Sua agenda já está conectada, deixa eu ver um minutinho.'], 'mensagem:consulta'], [['Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'], 'mensagem']]);
+  expect(await c.memoriaPersistida.ler('medico', 'conversa')).toContain('Sua agenda já está conectada, deixa eu ver um minutinho.');
 });

@@ -258,3 +258,11 @@ it('falha de acesso acionável orienta o médico sem mostrar código', async () 
     .toEqual({ fala: ['O acesso à sua agenda expirou. Conecte-a novamente pelo link seguro para eu conseguir consultar.'], acao: null });
   expect(completar).not.toHaveBeenCalled();
 });
+
+it('lista vazia afirma zero pendências na janela e oferece verificar períodos anteriores', async () => {
+  const completar = vi.fn();
+  const c = new ConversadorMedico('chave', 'modelo', completar);
+  expect(await c.responder({ ...entrada, estado: { agenda: { conectada: true } }, resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total: 0, janelaDias: 90, consultas: [] } } }))
+    .toEqual({ fala: ['Não há nenhuma pendência nos últimos 90 dias. Quer que eu verifique períodos anteriores?'], acao: null });
+  expect(completar).not.toHaveBeenCalled();
+});

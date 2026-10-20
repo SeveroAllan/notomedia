@@ -91,6 +91,7 @@ export async function processarComunicacaoMedico(
       if (!agendaViaConversa) await deps.aoDecidir?.(acao, entrada.chaveProcessamento, { nomeMedico: estado.nomeMedico });
       if (deps.conversaLivreAtiva === true && acao.tipo === 'nenhuma' && !semDecisao) { await fallback('COMUNICACAO_SEM_DECISAO_SEGURA'); return acao; }
       let fala: string[] | undefined;
+      let consultaAnunciada = false;
       const responderBoasVindas = deps.conversaLivreAtiva === true && respostaMedico && conversa &&
         acao.tipo === 'perguntar_nota_pendente' && await deps.memoriaPersistida?.temBoasVindas(entrada.medicoId, conversa);
       if (deps.conversaLivreAtiva === true && respostaMedico && (acao.tipo === 'nenhuma' || responderBoasVindas || agendaViaConversa) && deps.conversador) {
@@ -99,8 +100,14 @@ export async function processarComunicacaoMedico(
         const contexto = { linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
-          ? linkCofreJaSolicitado ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
+          ? linkCofreJaSolicitado || estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
+          if (estado.estado.agenda.conectada) {
+            const aviso = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
+            await deps.aoConversar?.([aviso], `${entrada.chaveProcessamento}:consulta`);
+            consultaAnunciada = true;
+            if (conversa && memoriaConversa) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:consulta`, aviso, 'noto');
+          }
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
           catch (e) { deps.log('erro', registroErroNoto('AGENDA_INDISPONIVEL', 'tecnico', { etapa: 'listar', detalhe: e instanceof Error ? e.message : String(e) })); resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }
@@ -110,7 +117,7 @@ export async function processarComunicacaoMedico(
             resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: resultado },
             acoesPermitidas: conectar && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda ? ['enviar_link_cofre_agenda'] : [] });
         }
-        if (resposta.acao === 'enviar_link_cofre_agenda' && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda) {
+        if (resposta.acao === 'enviar_link_cofre_agenda' && !estado.estado.agenda.conectada && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda) {
           if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
             'noto:cofre_agenda:solicitado', 'O link do cofre já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
           let resultado;
@@ -120,6 +127,8 @@ export async function processarComunicacaoMedico(
             resultadoFerramenta: { ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: resultado }, acoesPermitidas: [] });
         }
         fala = resposta.fala;
+        // O aviso ocupa um dos três balões da interação; compacta só a fala final.
+        if (consultaAnunciada && fala.length > 2) fala = [fala[0], `${fala[1]}\n${fala[2]}`.slice(0, 500)];
       }
       if (!fala && deps.conversaLivreAtiva && respostaMedico && !(acao.tipo === 'boas_vindas' && estado.nomeMedico)) {
         deps.log('erro', 'COMUNICACAO_SEM_FALA'); fala = [RASCUNHO_FALLBACK_CONVERSA];
