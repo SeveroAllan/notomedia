@@ -45,7 +45,7 @@ export class LinksCofre {
         }
         try {
             const envio = await this.deps.enviar(medicoId,
-                `${this.deps.origem}/c/${token}\nVale por 15 minutos e só pode ser usado uma vez. Digite a senha na página, nunca aqui no chat.`);
+                `Para conseguir emitir suas notas, preciso que você conecte sua agenda para cruzar consultas e pagamentos. Use este link seguro para colocar seu login e senha da agenda: ${this.deps.origem}/c/${token}\nEu não recebo senha pela conversa, só por esse link seguro. Vale por 15 minutos e só pode ser usado uma vez.`);
             if (envio === 'enviado') await this.auditar(link.id, 'enviado');
             return { ok: envio !== 'erro', motivo: envio };
         } finally { token = ''; }

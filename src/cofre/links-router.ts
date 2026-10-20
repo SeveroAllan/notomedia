@@ -5,7 +5,7 @@ import type { LinksCofre } from './links.js';
 
 const credencial = z.object({ email: z.string().trim().email().max(254), senha: z.string().min(1).max(256), consentimento: z.literal(consentimentoCofre) }).strict();
 const apagar = (req: Request) => { if (Buffer.isBuffer((req as any).rawBody)) (req as any).rawBody.fill(0); delete (req as any).rawBody; req.body = {}; };
-const expirado = '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Cofre Noto</title><p>Link expirado. Peça um novo link ao Noto.</p></html>';
+const expirado = '<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Link seguro Noto</title><p>Link expirado. Peça um novo link ao Noto.</p></html>';
 
 export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: string) {
     const app = express();
@@ -13,7 +13,7 @@ export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: str
     app.set('trust proxy', 1);
     app.use((req, res, next) => {
         res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
-        if (!links || !origem) { res.status(503).send('Cofre indisponível.'); return; }
+        if (!links || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
         const url = new URL(origem);
         if (req.headers.host !== url.host || url.protocol === 'https:' && !req.secure || req.method === 'POST' && req.header('origin') !== origem) {
             res.status(403).send('Origem inválida.'); return;
@@ -31,7 +31,7 @@ export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: str
 <label>Senha <input name="senha" type="password" maxlength="256" required autocomplete="current-password"></label>
 <label><input name="consentimento" type="checkbox" value="tribemd-leitura-v1" required> Autorizo a leitura da minha agenda TribeMD (tribemd-leitura-v1).</label>
 <button>Conectar</button></form></html>`);
-        } catch { res.status(503).send('Cofre indisponível.'); }
+        } catch { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); }
     });
     app.use(express.json({ limit: '4kb' }), express.urlencoded({ limit: '4kb', extended: false }));
     app.post('/:token/enviar', async (req, res) => {

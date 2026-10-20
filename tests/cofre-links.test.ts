@@ -288,3 +288,13 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     expect(completar).toHaveBeenCalledTimes(4); expect(deps.aoConversar).toHaveBeenCalledTimes(4);
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
+
+it('mensagem de conexão explica necessidade, login na página segura e nunca usa jargão', async () => {
+    const { token } = await pedir();
+    const texto = textos.at(-1)!;
+    expect(texto).toContain('preciso que você conecte sua agenda para cruzar consultas e pagamentos');
+    expect(texto).toContain('login e senha da agenda');
+    expect(texto).toContain('Eu não recebo senha pela conversa, só por esse link seguro');
+    expect(texto).toContain(`/c/${token}`); expect(texto).not.toMatch(/cofre/i);
+    expect(texto.length).toBeLessThanOrEqual(500);
+});

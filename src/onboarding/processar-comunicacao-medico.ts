@@ -69,7 +69,7 @@ export async function processarComunicacaoMedico(
       }
       if (!pedidoCofreRegistrado && entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) {
         if (deps.conversaLivreAtiva && entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(
-          entrada.medicoId, entrada.chaveConversa, 'noto:cofre_agenda:solicitado', 'Link do cofre solicitado; aguardo a conexão. Isso não confirma envio.', 'noto');
+          entrada.medicoId, entrada.chaveConversa, 'noto:cofre_agenda:solicitado', 'Link seguro solicitado; aguardo a conexão. Isso não confirma envio.', 'noto');
         return { tipo: 'nenhuma' };
       }
       if (entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) { await fallback('COMUNICACAO_ENTRADA_PROTEGIDA'); return { tipo: 'nenhuma' }; }
@@ -119,7 +119,7 @@ export async function processarComunicacaoMedico(
         }
         if (resposta.acao === 'enviar_link_cofre_agenda' && !estado.estado.agenda.conectada && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda) {
           if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
-            'noto:cofre_agenda:solicitado', 'O link do cofre já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
+            'noto:cofre_agenda:solicitado', 'O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
           let resultado;
           try { resultado = await deps.enviarLinkCofreAgenda(entrada.medicoId); }
           catch { resultado = { ok: false, motivo: 'COFRE_INDISPONIVEL' }; }
