@@ -321,3 +321,13 @@ it.each(['null', 'excecao'])('flag desligada mantém silêncio quando estado %s'
   await processarComunicacaoMedico(entrada, c.deps);
   expect(c.aoConversar).not.toHaveBeenCalled(); expect(c.banco.mensagens).toEqual([]);
 });
+it('agenda conectada sem consultas sincronizadas explica o estado sem pedir outro link', async () => {
+  const c = await cenario(); const responder = vi.spyOn(c.deps.conversador, 'responder'); const listarConsultasSemNota = vi.fn(async () => ({ ok: false, motivo: 'SEM_CONSULTAS_SINCRONIZADAS' })); const enviarLinkCofreAgenda = vi.fn();
+  c.completar.mockResolvedValueOnce('{"fala":["Consultar"],"acao":"listar_consultas_sem_notas"}');
+  await processarComunicacaoMedico(entrada, { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda,
+    lerEstado: async () => ({ ...await c.deps.lerEstado(), estado: { ...(await c.deps.lerEstado()).estado, agenda: { nome: 'tribemd', conectada: true } } }) });
+  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Sua agenda já está conectada, mas ainda não há consultas sincronizadas. A sincronização acontece quando recebo um comprovante.'], 'mensagem');
+  expect(responder.mock.calls[1][0].acoesPermitidas).toEqual([]);
+  expect(c.completar).toHaveBeenCalledOnce();
+});

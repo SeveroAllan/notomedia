@@ -103,7 +103,8 @@ export async function processarComunicacaoMedico(
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
           catch { resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }
-          const conectar = !resultado.ok && ['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '');
+          const conectar = !resultado.ok && ['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '') &&
+            (resultado.motivo !== 'SEM_CONSULTAS_SINCRONIZADAS' || !estado.estado.agenda.conectada);
           resposta = await deps.conversador.responder({ ...contexto,
             resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: resultado },
             acoesPermitidas: conectar && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda ? ['enviar_link_cofre_agenda'] : [] });
