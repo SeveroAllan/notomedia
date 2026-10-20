@@ -192,7 +192,7 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
     if (args[2][0].content.startsWith('Extraia')) return openaiAnterior(...args);
     if (!dados.resultadoFerramenta) return '{"fala":["Consultar"],"acao":"listar_consultas_sem_notas"}';
     expect(dados.resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: {
-      ok: true, total: 1, janelaDias: 90, consultas: [{ paciente: 'Paciente exemplo', dataHora: '2026-10-19T14:00Z', valorCentavos: 40000 }]
+      ok: true, total: 1, janelaDias: 90, consultas: [{ paciente: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00.000Z', valorCentavos: 40000 }]
     } });
     return '{"fala":["Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400."],"acao":null}';
   });

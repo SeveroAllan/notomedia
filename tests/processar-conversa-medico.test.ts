@@ -185,7 +185,7 @@ it('lista pendências como ferramenta e compõe só a fala final, sem executar i
   expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Encontrei 24 consultas; aqui está o resumo.'], 'mensagem');
   expect(c.completar).toHaveBeenCalledTimes(2);
   const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
-  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: await listarConsultasSemNota.mock.results[0].value });
+  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total: 24, consultas: [{ paciente: 'Paciente não identificado', dataHora: '2026-10-19T15:00:00.000Z', valorCentavos: 30000 }] } });
   expect(chamadas[1][2][0].content).toContain('Ações permitidas pelo servidor neste passo: []');
   expect(c.banco.mensagens.at(-1)?.texto).toBe('Encontrei 24 consultas; aqui está o resumo.');
 });
@@ -199,10 +199,10 @@ it.each(['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONI
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
   expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico');
-  expect(c.completar).toHaveBeenCalledTimes(3);
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Não vejo sua agenda; enviei o link para conectar TribeMD.'], 'mensagem');
+  expect(c.completar).toHaveBeenCalledTimes(2);
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link do cofre; aguardo a conexão.'], 'mensagem');
   await processarComunicacaoMedico(entrada, deps);
-  expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(c.completar).toHaveBeenCalledTimes(3);
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(c.completar).toHaveBeenCalledTimes(2);
 });
 it.each(['LIMITE_PEDIDOS', 'erro', 'simulado', 'COFRE_INDISPONIVEL'])('resultado %s do link retorna à IA sem sucesso presumido nem duplicação', async motivo => {
   const c = await cenario();
@@ -212,9 +212,9 @@ it.each(['LIMITE_PEDIDOS', 'erro', 'simulado', 'COFRE_INDISPONIVEL'])('resultado
     .mockResolvedValueOnce('{"fala":["O link não foi enviado."],"acao":null}');
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
-  const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
-  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta).toEqual({ ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: { ok: motivo === 'simulado', motivo } });
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link não foi enviado.'], 'mensagem');
+  expect(c.completar).toHaveBeenCalledOnce();
+  const texto = motivo === 'LIMITE_PEDIDOS' ? 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.' : motivo === 'simulado' ? 'O envio do link foi simulado; nenhum link foi enviado.' : 'Não consegui enviar o link do cofre. A conexão da agenda ainda está pendente.';
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([texto], 'mensagem');
   await processarComunicacaoMedico(entrada, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
 });
@@ -278,10 +278,21 @@ it('emissão pedida sem cofre passa pela ferramenta de link e só confirma o env
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(pedido, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link do cofre para conectar.'], 'mensagem');
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link do cofre; aguardo a conexão.'], 'mensagem');
   const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
   expect(chamadas[0][2][0].content).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
   expect(JSON.parse(chamadas[0][2][1].content).estado.agenda.conectada).toBe(false);
-  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta.dadosNaoConfiaveis).toEqual({ ok: true, motivo: 'enviado' });
+  expect(c.completar).toHaveBeenCalledOnce();
   await processarComunicacaoMedico(pedido, deps); expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce();
+});
+it('dois turnos de cobrança não pedem o link novamente, inclusive com memória recuperada', async () => {
+  const c = await cenario(); const listarConsultasSemNota = vi.fn(); const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
+  c.completar.mockResolvedValue('{"fala":["Envie o link novamente"],"acao":"enviar_link_cofre_agenda"}');
+  const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
+  await processarComunicacaoMedico(entrada, deps);
+  await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'cobranca-2' }, { ...deps,
+    memoriaPersistida: new PostgresMemoriaConversaMedico(c.banco as unknown as pg.Pool) });
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce();
+  expect(c.aoConversar.mock.calls.at(-1)).toEqual([['O link já foi solicitado. Aguardo a conexão da agenda.'], 'cobranca-2']);
+  expect(c.banco.mensagens.filter(m => m.mensagemId === 'noto:cofre_agenda:solicitado')).toHaveLength(1);
 });

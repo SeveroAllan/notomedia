@@ -271,11 +271,11 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     const resultados: unknown[] = [];
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: unknown }>) => {
         const dados = JSON.parse(String(mensagens[1].content));
-        if (dados.resultadoFerramenta) { resultados.push(dados.resultadoFerramenta.dadosNaoConfiaveis); return '{"fala":["Resultado recebido."],"acao":"enviar_link_cofre_agenda"}'; }
+        if (dados.resultadoFerramenta) { return '{"fala":["Resultado recebido."],"acao":"enviar_link_cofre_agenda"}'; }
         return '{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}';
     });
     const deps = { ativo: true, conversaLivreAtiva: true, historico, conversador: new ConversadorMedico('chave', 'modelo', completar),
-        listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda: (id: string) => links.solicitarLinkCofre(id, 'tribemd'),
+        listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda: async (id: string) => { const r = await links.solicitarLinkCofre(id, 'tribemd'); resultados.push(r); return r; },
         lerEstado: async () => ({ estado: { agora: new Date(), fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const }, agenda: { nome: 'tribemd', conectada: false }, ultimaNota: null } }),
         extratorResposta: { extrair: async () => ({ temNota: 'fora_do_assunto' as const, desde: null, confianca: 0.95 }) }, log: vi.fn(), aoConversar: vi.fn() };
     const evento = { medicoId, chaveProcessamento: 'link-0', agora: new Date(), respostaMedico: { texto: 'Envie o link para conectar minha agenda', dataMensagem: '2026-10-20' } };
@@ -285,6 +285,6 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     for (let i = 1; i <= 3; i++) await processarComunicacaoMedico({ ...evento, chaveProcessamento: `link-${i}` }, deps);
     expect(textos).toHaveLength(3); expect(await salvos()).toHaveLength(3);
     expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS' }]);
-    expect(completar).toHaveBeenCalledTimes(8); expect(deps.aoConversar).toHaveBeenCalledTimes(4);
+    expect(completar).toHaveBeenCalledTimes(4); expect(deps.aoConversar).toHaveBeenCalledTimes(4);
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
