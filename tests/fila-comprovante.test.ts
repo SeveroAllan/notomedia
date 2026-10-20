@@ -70,3 +70,10 @@ it('falha ao vincular nota faz rollback em vez de marcar sucesso parcial', async
   await expect(new (PostgresFilaRepositorio as any)(b.pool, false, true).registrarSucesso({ solicitacaoId: 'sol-1', medicoId: 'med-1', chaveAcesso: 'chave', ndps: 1, serie: '1', competencia: '2026-10-01', dataEmissao: new Date(), valorServicosCentavos: 10000, xmlStoragePath: 'xml', pdfStoragePath: 'pdf', emissaoComprovante: true })).rejects.toThrow();
   expect(b.query.mock.calls.at(-1)![0]).toBe('rollback');
 });
+it('mesmo um item obtido antes da suspensão não inicia emissão sem confirmação', async () => {
+  const b = banco();
+  b.query.mockImplementation(async (sql: string): Promise<any> => sql.includes('select ec.estado')
+    ? { rows: [{ estado: 'enfileirada', ambiente: 'homologacao', aguardando_confirmacao_medico: true }] } : { rows: [] });
+  expect(await new PostgresFilaRepositorio(b.pool, false, true).iniciarEmissaoComprovante('sol-1')).toBe('ocupada');
+  expect(b.query.mock.calls.some(([sql]) => sql.includes("set estado = 'emitindo'"))).toBe(false);
+});

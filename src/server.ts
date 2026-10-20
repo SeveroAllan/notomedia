@@ -1,3 +1,4 @@
+import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
@@ -715,7 +716,34 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         instanciaOficialNome: config.evolutionOfficialInstanceName,
         instanciaAssistenteNome: config.evolutionAssistantInstanceName,
         comunicacaoMedicoAtiva: config.comunicacaoMedicoAtiva,
-        aoReceberMensagemMedico: contexto => comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa),
+        aoReceberMensagemMedico: async contexto => {
+          if (emissaoComprovante && config.envioMedicoRealAtivo) {
+            const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
+            if (pendentes.length) {
+              const unica = pendentes.length === 1 ? pendentes[0] : null;
+              const c = unica?.confirmacao;
+              const pergunta = c?.paciente && c?.dataEnvioPagamento && c?.dataConsulta
+                ? `Autoriza emitir a nota de ${c.paciente}, pagamento enviado em ${c.dataEnvioPagamento}, consulta de ${c.dataConsulta}?` : 'Não há uma oportunidade única vinculada a uma pergunta de emissão.';
+              const interpretacao = await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
+              const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, interpretacao, new Date(),
+                await comunicacaoHomologacao.medicoPermitido(contexto.medicoId), c?.perguntaChave ?? '', contexto.chavePergunta);
+              if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
+                const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: unica.id,
+                  chaveDisparo: `${unica.id}:${contexto.chaveMensagem}`, paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
+                await emissaoComprovante.registrarPergunta(contexto.medicoId, unica.id, envio.resultado, envio.chaveMensagem, new Date());
+                return;
+              }
+              const fala = resultado.liberada ? 'Confirmação registrada. A emissão está liberada para processamento.'
+                : resultado.motivo === 'RECUSADA' ? 'Não vou emitir essa nota.'
+                : resultado.motivo === 'EXPIRADA' ? 'A confirmação dessa oportunidade venceu após 48 horas. Não liberei a emissão.'
+                : resultado.motivo === 'MULTIPLAS_PENDENTES' ? 'Há mais de uma nota aguardando confirmação. Preciso que elas sejam conferidas antes de liberar uma emissão.'
+                : 'Não consegui confirmar sua autorização com segurança. Você autoriza a emissão da nota dessa oportunidade?';
+              await comunicacaoHomologacao.conversa({ medicoId: contexto.medicoId, chave: `confirmacao:${contexto.chaveMensagem}`, fala: [fala] });
+              return;
+            }
+          }
+          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa);
+        },
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
           historico: historicoComunicacao,
           fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
@@ -733,10 +761,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             }
           } : undefined,
           aoDecidir: emissaoComprovante ? async (decisao, lido, estado) => {
-            const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta });
+            const bruto = Number(contexto.mensagem.messageTimestamp);
+            const instanteEnvio = new Date(bruto > 1e11 ? bruto : bruto * 1000);
+            const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta,
+              dataEnvioPagamento: bruto > 0 && Number.isFinite(instanteEnvio.getTime()) ? instanteEnvio.toISOString() : null });
             if (resultado.tipo === 'perguntar_medico') await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: 'perguntar_medico', motivo: resultado.motivo,
               chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
-            if (resultado.tipo === 'enfileirada') console.info('Solicitação enfileirada por comprovante.');
+            if (resultado.tipo === 'enfileirada') {
+              const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
+              const c = pendentes.find(p => p.id === resultado.solicitacaoId)?.confirmacao;
+              if (c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
+                const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: resultado.solicitacaoId,
+                  paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
+                await emissaoComprovante.registrarPergunta(contexto.medicoId, resultado.solicitacaoId, envio.resultado, envio.chaveMensagem, new Date());
+              }
+              console.info('Solicitação de comprovante aguardando confirmação do médico.');
+            }
           } : undefined,
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
           extrator: new ExtratorComprovanteNvidia(iaApiKey, iaModeloVisao,

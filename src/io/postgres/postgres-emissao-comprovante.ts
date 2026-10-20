@@ -1,3 +1,4 @@
+import type { InterpretacaoConfirmacao } from '../../onboarding/confirmacao-emissao-medico.js';
 import type pg from 'pg';
 import { chaveComprovante, chaveConsulta, hashPedidoComprovante, decidirPedidoComprovante, type DecisaoPedidoComprovante, type ResultadoExtracaoComprovante, type EstadoPedidoComprovante } from '../../atendimento/comprovante.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
@@ -6,6 +7,7 @@ import { PostgresEmissaoApiRepositorio } from './postgres-emissao-api-repositori
 type Pronto = Extract<DecisaoPedidoComprovante, { tipo: 'pedido_nota_pronto' }>;
 interface EntradaEmissaoComprovante {
   consulta?: EstadoPedidoComprovante['consulta'];
+  dataEnvioPagamento?: string | null;
   medicoId: string; pacienteId: string; lido: ResultadoExtracaoComprovante | null; decisao: DecisaoPedidoComprovante;
 }
 export type ResultadoEmissaoComprovante = { tipo: 'enfileirada'; solicitacaoId: string }
@@ -68,6 +70,63 @@ export class PostgresEmissaoComprovante {
     return this.reservarEEnfileirar(client, entrada, atual, consulta, auditorias[0].id);
   }
 
+  async buscarConfirmacoes(medicoId: string, client: Pick<pg.Pool, 'query'> = this.pool) {
+    const { rows } = await client.query<{ id: string; auditoria_id: string; confirmacao: any; ambiente: string; estado_emissao: string; comprovante_chave: string; consulta_chave: string }>(
+      `select s.id, a.id as auditoria_id, a.estado->'confirmacaoMedico' as confirmacao, pf.ambiente,
+        e.estado as estado_emissao, e.comprovante_chave, e.consulta_chave
+      from solicitacoes_nota s left join public.noto_emissoes_comprovantes e on e.solicitacao_id=s.id and e.medico_id=s.medico_id
+      left join public.noto_auditoria_comprovantes a on a.id=e.auditoria_comprovante_id and a.medico_id=s.medico_id
+      left join medico_perfil_fiscal pf on pf.medico_id=s.medico_id
+      where s.medico_id=$1 and s.aguardando_confirmacao_medico=true
+      order by s.id${client === this.pool ? '' : ' for update of s'}`, [medicoId]);
+    return rows;
+  }
+
+  async registrarPergunta(medicoId: string, solicitacaoId: string, resultado: string, chaveMensagem: string | undefined, agora: Date) {
+    await this.pool.query(`update public.noto_auditoria_comprovantes a set estado = jsonb_set(a.estado, '{confirmacaoMedico}',
+      (a.estado->'confirmacaoMedico') || $3::jsonb || jsonb_build_object('eventos', coalesce(a.estado#>'{confirmacaoMedico,eventos}', '[]'::jsonb) || $4::jsonb))
+      from public.noto_emissoes_comprovantes e where e.auditoria_comprovante_id=a.id and e.medico_id=$1 and e.solicitacao_id=$2`,
+      [medicoId, solicitacaoId, JSON.stringify({ envio: resultado, perguntaChave: resultado === 'enviado' ? chaveMensagem ?? null : null,
+        perguntadaEm: agora.toISOString(), expiraEm: new Date(agora.getTime() + 48 * 60 * 60 * 1000).toISOString() }),
+        JSON.stringify([{ tipo: 'pergunta', resultado, chaveMensagem: chaveMensagem ?? null, em: agora.toISOString() }])]);
+  }
+
+  /** TTL: 48 horas contadas do envio confirmado da pergunta. Silêncio mantém a flag ligada indefinidamente. */
+  async confirmar(medicoId: string, chaveResposta: string, interpretacao: InterpretacaoConfirmacao, agora: Date,
+    permitido: boolean, perguntaEsperada: string, chavePerguntaRespondida?: string): Promise<{ liberada: boolean; motivo: string }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [medicoId]);
+      const pendentes = await this.buscarConfirmacoes(medicoId, client);
+      const p = pendentes[0], c = p?.confirmacao;
+      let motivo = pendentes.length !== 1 ? pendentes.length ? 'MULTIPLAS_PENDENTES' : 'SEM_PENDENTE'
+        : !permitido || p.ambiente !== 'homologacao' ? 'ENVIO_BLOQUEADO'
+        : !c || c.solicitacaoId !== p.id || c.comprovanteChave !== p.comprovante_chave || c.consultaChave !== p.consulta_chave || p.estado_emissao !== 'enfileirada' ? 'VINCULO_INVALIDO'
+        : c.decisao === 'recusada' ? 'RECUSADA'
+        : c.envio !== 'enviado' || !c.perguntaChave || c.perguntaChave !== perguntaEsperada || chavePerguntaRespondida && c.perguntaChave !== chavePerguntaRespondida ? 'PERGUNTA_NAO_CONFIRMADA'
+        : !Number.isFinite(Date.parse(c.expiraEm)) || !Number.isFinite(Date.parse(c.perguntadaEm)) || agora.getTime() >= Math.min(Date.parse(c.expiraEm), Date.parse(c.perguntadaEm) + 48 * 60 * 60 * 1000) || agora.getTime() < Date.parse(c.perguntadaEm) ? 'EXPIRADA'
+        : interpretacao.intencao === 'nao' && interpretacao.confianca >= 0.9 && interpretacao.confianca <= 1 ? 'RECUSADA'
+        : interpretacao.intencao !== 'sim' || !Number.isFinite(interpretacao.confianca) || interpretacao.confianca < 0.9 || interpretacao.confianca > 1 ? 'CONFIRMACAO_INSUFICIENTE' : 'CONFIRMADA';
+      for (const pendente of pendentes) {
+        if (!pendente.confirmacao || !pendente.auditoria_id) continue;
+        const eventos = pendente.confirmacao.eventos ?? [];
+        if (eventos.some((e: any) => e.chaveResposta === chaveResposta)) { motivo = 'REPETIDA'; continue; }
+        const atualizada = { ...pendente.confirmacao, decisao: motivo === 'CONFIRMADA' ? 'confirmada' : motivo === 'RECUSADA' ? 'recusada' : pendente.confirmacao.decisao,
+          eventos: [...eventos, { tipo: 'interpretacao', chaveResposta, ...interpretacao, motivo, em: agora.toISOString() }] };
+        await client.query(`update public.noto_auditoria_comprovantes set estado = jsonb_set(estado, '{confirmacaoMedico}', $2::jsonb) where id = $1`, [pendente.auditoria_id, JSON.stringify(atualizada)]);
+      }
+      if (motivo === 'CONFIRMADA') {
+        const liberada = await client.query(`update solicitacoes_nota set aguardando_confirmacao_medico=false, atualizado_em=now()
+          where id=$1 and medico_id=$2 and aguardando_confirmacao_medico=true returning id`, [p.id, medicoId]);
+        if (liberada.rows.length !== 1) throw Error('CONFIRMACAO_CONCORRENTE');
+      }
+      await client.query('commit');
+      return { liberada: motivo === 'CONFIRMADA', motivo };
+    } catch { await client.query('rollback'); return { liberada: false, motivo: 'CONFIRMACAO_INDISPONIVEL' }; }
+    finally { client.release(); }
+  }
+
   private mesmoPedido(a: Pronto, b: Pronto): boolean {
     return a.pedido.medicoId === b.pedido.medicoId && a.pedido.valorCentavos === b.pedido.valorCentavos &&
       a.pedido.dataPagamento === b.pedido.dataPagamento && a.pedido.paciente.nome === b.pedido.paciente.nome &&
@@ -99,6 +158,12 @@ export class PostgresEmissaoComprovante {
       valorServicoCentavos: pronto.pedido.valorCentavos, xdescServ: montarDescricaoServico(perfil, datas) + observacao,
       ctribNac: perfil.ctribNacPadrao, cnbs: perfil.cnbs, cclassTrib: perfil.cclassTrib, cindOp: perfil.cindOp,
       datasConsultaTexto: datas, origem: 'whatsapp' }, client);
+    // A fila já exclui este campo. Nunca há janela de commit liberada antes da confirmação.
+    await client.query('update solicitacoes_nota set aguardando_confirmacao_medico = true where id = $1', [solicitacao.id]);
+    await client.query(`update public.noto_auditoria_comprovantes set estado = jsonb_set(estado, '{confirmacaoMedico}', $2::jsonb) where id = $1`,
+      [auditoriaId, JSON.stringify({ solicitacaoId: solicitacao.id, paciente: pronto.pedido.paciente.nome,
+        dataConsulta: new Date(dataConsulta).toISOString(), dataEnvioPagamento: entrada.dataEnvioPagamento ?? null,
+        comprovanteChave: chave, consultaChave, decisao: 'aguardando', eventos: [] })]);
     await client.query(`update public.noto_emissoes_comprovantes set solicitacao_id = $2, atualizado_em = now() where id = $1`, [reservas[0].id, solicitacao.id]);
     return { tipo: 'enfileirada', solicitacaoId: solicitacao.id };
   }

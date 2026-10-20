@@ -157,3 +157,26 @@ it.each([false, true])('boas-vindas enviam em ordem, uma única vez por médico,
   expect(enviarTexto).toHaveBeenCalledTimes(falha ? 2 : 5);
   expect(aoEnviar).toHaveBeenCalledTimes(falha ? 0 : 1);
 });
+it.each([
+  [false, 'homologacao', true, 'simulado'], [true, 'producao', true, 'simulado'],
+  [true, 'homologacao', false, 'simulado'], [true, 'homologacao', true, 'enviado']
+] as const)('pergunta de confirmação respeita flag=%s ambiente=%s allowlist=%s', async (ativo, ambiente, permitido, esperado) => {
+  const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente }] };
+    if (sql.includes('insert into public.noto_envios_homologacao')) { const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] }; reservas.add(chave); return { rows: [{ id: 'envio' }] }; }
+    if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] };
+    throw Error('SQL_NAO_MODELADO');
+  });
+  const enviarTexto = vi.fn(async () => ({ sucesso: true, mensagemId: 'pergunta-real-fixture' }));
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), envioMedicoRealAtivo: ativo,
+    envioRealAllowlist: permitido ? ['+5551993527271'] : [] }, { enviarTexto }, vi.fn());
+  const entrada = { medicoId: 'medico', solicitacaoId: 'sol', paciente: 'Ana', dataEnvioPagamento: '2026-10-20T01:00Z', dataConsulta: '2026-10-18T15:00Z' };
+  expect(await c.confirmarEmissao(entrada)).toEqual(esperado === 'enviado' ? { resultado: 'enviado', chaveMensagem: 'pergunta-real-fixture' } : { resultado: 'simulado' });
+  if (esperado === 'enviado') {
+    expect(enviarTexto).toHaveBeenCalledExactlyOnceWith({ instanciaNome: carregarConfig({}).evolutionAssistantInstanceName, contatoTelefone: '+5551993527271',
+      texto: 'Pronto para emitir a nota do Ana, que enviou o pagamento em 19/10/2026 da consulta de 18/10/2026. Posso emitir?' });
+    expect(await c.confirmarEmissao(entrada)).toEqual({ resultado: 'repetido' }); expect(enviarTexto).toHaveBeenCalledOnce();
+  } else expect(enviarTexto).not.toHaveBeenCalled();
+  expect(await c.medicoPermitido('medico')).toBe(esperado === 'enviado');
+});

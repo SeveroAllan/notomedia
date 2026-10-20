@@ -86,6 +86,35 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
+  async medicoPermitido(medicoId: string): Promise<boolean> {
+    if (!this.config.envioMedicoRealAtivo) return false;
+    const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+    return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, rows[0]?.telefone);
+  }
+
+  async confirmarEmissao(entrada: { medicoId: string; solicitacaoId: string; chaveDisparo?: string; paciente: string; dataEnvioPagamento: string; dataConsulta: string }):
+    Promise<{ resultado: 'simulado' | 'enviado' | 'erro' | 'repetido'; chaveMensagem?: string }> {
+    if (!this.config.envioMedicoRealAtivo) return { resultado: this.simular('confirmar_emissao') };
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [entrada.medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return { resultado: this.simular('confirmar_emissao') };
+      const envio = new Date(entrada.dataEnvioPagamento), consulta = new Date(entrada.dataConsulta);
+      if (!Number.isFinite(envio.getTime()) || !Number.isFinite(consulta.getTime()) || !entrada.paciente.trim()) return { resultado: 'erro' };
+      const data = (d: Date) => d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const texto = `Pronto para emitir a nota do ${entrada.paciente.trim().slice(0, 100)}, que enviou o pagamento em ${data(envio)} da consulta de ${data(consulta)}. Posso emitir?`;
+      let chaveMensagem: string | undefined;
+      const resultado = await this.enviarUnico(entrada.medicoId, 'confirmar_emissao', entrada.chaveDisparo ?? entrada.solicitacaoId, async () => {
+        const r = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto });
+        chaveMensagem = r.mensagemId;
+        return r.sucesso && !!chaveMensagem;
+      });
+      return { resultado, ...(resultado === 'enviado' ? { chaveMensagem } : {}) };
+    } catch { this.log('CONFIRMACAO_EMISSAO_ENVIO_FALHOU'); return { resultado: 'erro' }; }
+  }
+
   async boasVindas(entrada: { medicoId: string; nomeMedico?: string; ultimaNota: Parameters<typeof montarBoasVindas>[1];
     aoEnviar?: (telefone: string, baloes: string[]) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, nomeMedico, ultimaNota } = entrada;
