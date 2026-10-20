@@ -15,6 +15,7 @@ export interface OpcoesCofre {
     chromium: string;
     xvfb?: string;
     simultaneos?: number;
+    aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
 }
 export const consentimentoCofre = 'tribemd-leitura-v1';
 /** Credencial e cookies só no envelope; resultados transitórios não entram no banco, log ou IA. */
@@ -145,6 +146,7 @@ export class CofreTribemd {
             if (this.trabalhos.get(id) === t)
                 this.trabalhos.delete(id);
             t.concluir();
+            await this.opcoes.aoConcluir?.(id, p.cofre?.estado === 'conectado').catch(() => {});
         }
     }
     private async interromper(id: string) { const t = this.trabalhos.get(id); if (t) {

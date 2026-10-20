@@ -93,7 +93,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     pool
   );
   const cofres = criarCofreContas({
-    pool,
+    pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
       return error ? null : data.user?.id ?? null;
@@ -101,6 +101,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   });
   // Credenciais do cofre não passam pelo parser geral que conserva rawBody.
   app.use('/api/conta/cofre', cofres.app);
+  if (cofres.appLinks) app.use('/c', cofres.appLinks);
   app.locals.encerrarCofres = cofres.encerrar;
   app.use(
     express.json({
@@ -156,7 +157,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
+      tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
+        textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {
+        if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }
         if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
       } : undefined,
       lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),

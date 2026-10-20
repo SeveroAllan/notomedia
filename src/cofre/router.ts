@@ -1,3 +1,5 @@
+import { LinksCofre } from './links.js';
+import { criarRouterLinksCofre } from './links-router.js';
 import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -17,11 +19,12 @@ export function criarCofreContas(deps: {
     pool: pg.Pool;
     autenticar: (token: string) => Promise<string | null>;
     env?: NodeJS.ProcessEnv;
+    enviarCofre?: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
 }) {
     const env = deps.env ?? process.env, app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
-    let origem = '', cofre: CofreTribemd | undefined;
+    let origem = '', cofre: CofreTribemd | undefined, links: LinksCofre | undefined;
     try {
         const u = new URL(env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '');
         if (u.pathname !== '/' || u.search || u.hash || u.username || u.password || u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))
@@ -31,7 +34,8 @@ export function criarCofreContas(deps: {
         if (!base)
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
-        cofre = new CofreTribemd({ diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH });
+        cofre = new CofreTribemd({ diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
+        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, enviar: deps.enviarCofre });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
     app.use(async (req, res, next) => {
@@ -98,7 +102,7 @@ export function criarCofreContas(deps: {
     app.get('/tribemd/consultas', rota(async (_req, res) => { res.json({ ok: true, cofre: await cofre!.status(res.locals.dono), resultado: cofre!.resultado(res.locals.dono) }); }));
     app.use((_req, res) => res.status(404).json({ ok: false, codigo: 'COFRE_ROTA_INVALIDA' }));
     app.use((_erro: unknown, req: Request, res: Response, _next: unknown) => { apagar(req); res.status(400).json({ ok: false, codigo: 'ENTRADA_INVALIDA' }); });
-    return { app, fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => cofre ? cofre.fonteAgenda.consultar(entrada) : { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const } }, encerrar: async () => { await cofre?.encerrar(); },
+    return { app, links, appLinks: criarRouterLinksCofre(links, origem), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => cofre ? cofre.fonteAgenda.consultar(entrada) : { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const } }, encerrar: async () => { await cofre?.encerrar(); },
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
             const status = await cofre.status(medicoId);

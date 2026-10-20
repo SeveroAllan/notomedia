@@ -15,6 +15,7 @@ export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string },
   deps: { ativo: boolean; memoriaConversa?: MemoriaConversaMedico; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
+    tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
     aoDecidir?: (acao: ProximaAcaoNoto, chave: string) => Promise<void>;
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
@@ -22,6 +23,8 @@ export async function processarComunicacaoMedico(
   const anterior = processamentos.get(entrada.medicoId);
   const processamento = (anterior ? anterior.catch(() => {}) : Promise.resolve()).then(async (): Promise<ProximaAcaoNoto> => {
     try {
+      if (entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      if (entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
       const estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
       if (!estado) return { tipo: 'nenhuma' };
       const { memoriaConversa } = deps;

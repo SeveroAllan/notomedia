@@ -85,6 +85,20 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
+  async cofre(medicoId: string, texto: string): Promise<'simulado' | 'enviado' | 'erro'> {
+    if (!this.config.envioMedicoRealAtivo) return this.simular('cofre');
+    try {
+      const destino = (await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id=m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id=m.id
+        where m.id=$1 and u.ativo=true`, [medicoId])).rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('cofre');
+      // Não gravar o texto: ele pode conter um link de uso único.
+      const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
+        contatoTelefone: destino.telefone, texto });
+      return resultado.sucesso ? 'enviado' : 'erro';
+    } catch { this.log('COFRE_ENVIO_FALHOU'); return 'erro'; }
+  }
+
   async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
     const { medicoId, solicitacaoId } = entrada;
