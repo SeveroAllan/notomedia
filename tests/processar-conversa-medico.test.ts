@@ -90,7 +90,9 @@ it.each(['cofre', 'segredo', 'sem estado', 'estado falha', 'reserva ocupada', 'h
   if (caso === 'sem resposta') { const { respostaMedico: _resposta, ...semResposta } = entrada; evento = semResposta; }
   if (caso === 'ação determinística') c.extrair.mockResolvedValueOnce({ temNota: 'sim', desde: null, confianca: 0.95 });
   await processarComunicacaoMedico(evento, { ...c.deps, tratarCofre });
-  expect(c.aoConversar).not.toHaveBeenCalled(); expect(c.completar).not.toHaveBeenCalled();
+  if (['cofre', 'sem resposta'].includes(caso)) expect(c.aoConversar).not.toHaveBeenCalled();
+  else expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
+  expect(c.completar).not.toHaveBeenCalled();
 });
 it('sem decisão após fluxo concluído também gera fala sem chamar o extrator', async () => {
   const c = await cenario();
@@ -295,4 +297,27 @@ it('dois turnos de cobrança não pedem o link novamente, inclusive com memória
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce();
   expect(c.aoConversar.mock.calls.at(-1)).toEqual([['O link já foi solicitado. Aguardo a conexão da agenda.'], 'cobranca-2']);
   expect(c.banco.mensagens.filter(m => m.mensagemId === 'noto:cofre_agenda:solicitado')).toHaveLength(1);
+});
+it.each(['null', 'excecao'])('estado %s responde fallback, persiste os dois papéis e loga o motivo', async caso => {
+  const c = await cenario();
+  if (caso === 'null') c.deps.lerEstado.mockResolvedValueOnce(null as any);
+  else c.deps.lerEstado.mockRejectedValueOnce(Error('causa técnica senha=privado'));
+  await processarComunicacaoMedico(entrada, c.deps);
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
+  expect(c.banco.mensagens).toEqual([expect.objectContaining({ papel: 'medico', texto: 'Como funciona?' }), expect.objectContaining({ papel: 'noto', texto: RASCUNHO_FALLBACK_CONVERSA })]);
+  expect(c.deps.log.mock.calls[0][1]).toContain(caso === 'null' ? 'COMUNICACAO_ESTADO_AUSENTE' : 'causa técnica');
+  expect(JSON.stringify(c.deps.log.mock.calls)).not.toContain('privado');
+});
+it('falha da memória não impede fallback e falha do envio é best-effort sem rejeitar o processamento', async () => {
+  const c = await cenario(); c.deps.lerEstado.mockRejectedValueOnce(Error('estado indisponível'));
+  vi.spyOn(c.memoriaPersistida, 'registrar').mockRejectedValue(Error('memória indisponível'));
+  c.aoConversar.mockRejectedValueOnce(Error('transporte indisponível'));
+  await expect(processarComunicacaoMedico(entrada, c.deps)).resolves.toEqual({ tipo: 'nenhuma' });
+  expect(c.aoConversar).toHaveBeenCalledOnce(); expect(c.deps.log.mock.calls.some(([_, texto]) => texto.includes('COMUNICACAO_FALLBACK_FALHOU'))).toBe(true);
+});
+it.each(['null', 'excecao'])('flag desligada mantém silêncio quando estado %s', async caso => {
+  const c = await cenario(false);
+  if (caso === 'null') c.deps.lerEstado.mockResolvedValueOnce(null as any); else c.deps.lerEstado.mockRejectedValueOnce(Error('indisponível'));
+  await processarComunicacaoMedico(entrada, c.deps);
+  expect(c.aoConversar).not.toHaveBeenCalled(); expect(c.banco.mensagens).toEqual([]);
 });

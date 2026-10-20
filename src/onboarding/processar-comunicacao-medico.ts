@@ -1,3 +1,4 @@
+import { RASCUNHO_FALLBACK_CONVERSA } from './conversador-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
 import { orquestrarComunicacao } from './orquestrar-comunicacao.js';
@@ -29,6 +30,22 @@ export async function processarComunicacaoMedico(
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
+  const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
+    if (!deps.conversaLivreAtiva || !entrada.respostaMedico) return;
+    const detalhe = erro instanceof Error ? erro.message : erro === undefined ? '' : String(erro);
+    deps.log('erro', `${motivo}${detalhe ? ': ' + sanitizarTextoMedico(detalhe).slice(0, 500) : ''}`);
+    if (entrada.chaveConversa && deps.memoriaPersistida) {
+      try { if (verificarDuplicata && await deps.memoriaPersistida.temResposta(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento)) return; }
+      catch { /* A indisponibilidade da memória não impede a tentativa de resposta. */ }
+      for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto), 'medico'],
+        [`noto:${entrada.chaveProcessamento}`, RASCUNHO_FALLBACK_CONVERSA, 'noto']] as const) {
+        try { await deps.memoriaPersistida.registrar(entrada.medicoId, entrada.chaveConversa, id, texto, papel); }
+        catch (e) { deps.log('erro', `COMUNICACAO_MEMORIA_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
+      }
+    }
+    try { await deps.aoConversar?.([RASCUNHO_FALLBACK_CONVERSA], entrada.chaveProcessamento); }
+    catch (e) { deps.log('erro', `COMUNICACAO_FALLBACK_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
+  };
   const anterior = processamentos.get(entrada.medicoId);
   const processamento = (anterior ? anterior.catch(() => {}) : Promise.resolve()).then(async (): Promise<ProximaAcaoNoto> => {
     try {
@@ -42,7 +59,8 @@ export async function processarComunicacaoMedico(
         await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, entrada.chaveConversa));
       if (pedidoCofreRegistrado && entrada.respostaMedico) {
         const estadoCofre = await deps.lerEstado(entrada.medicoId, entrada.agora);
-        if (!estadoCofre?.estado.agenda.conectada) {
+        if (!estadoCofre) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
+        if (!estadoCofre.estado.agenda.conectada) {
           // Nem credenciais sem rótulo seguem para memória/IA enquanto aguarda conexão.
           await deps.aoConversar?.(['O link já foi solicitado. Aguardo a conexão da agenda.'], entrada.chaveProcessamento);
           return { tipo: 'nenhuma' };
@@ -53,9 +71,9 @@ export async function processarComunicacaoMedico(
           entrada.medicoId, entrada.chaveConversa, 'noto:cofre_agenda:solicitado', 'Link do cofre solicitado; aguardo a conexão. Isso não confirma envio.', 'noto');
         return { tipo: 'nenhuma' };
       }
-      if (entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      if (entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) { await fallback('COMUNICACAO_ENTRADA_PROTEGIDA'); return { tipo: 'nenhuma' }; }
       const estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
-      if (!estado) return { tipo: 'nenhuma' };
+      if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
       const memoriaConversa = deps.conversaLivreAtiva === true ? deps.memoriaPersistida : deps.memoriaConversa;
       const conversa = entrada.chaveConversa;
       const respostaMedico = entrada.respostaMedico ? { ...entrada.respostaMedico,
@@ -70,7 +88,7 @@ export async function processarComunicacaoMedico(
       const agendaViaConversa = deps.conversaLivreAtiva === true && respostaMedico && deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda &&
         (acao.tipo === 'listar_consultas_sem_nota' || acao.tipo === 'pedir_agenda' || acao.tipo === 'reperguntar' && acao.pergunta !== 'problema_fiscal');
       if (!agendaViaConversa) await deps.aoDecidir?.(acao, entrada.chaveProcessamento, { nomeMedico: estado.nomeMedico });
-      if (deps.conversaLivreAtiva === true && acao.tipo === 'nenhuma' && !semDecisao) return acao;
+      if (deps.conversaLivreAtiva === true && acao.tipo === 'nenhuma' && !semDecisao) { await fallback('COMUNICACAO_SEM_DECISAO_SEGURA'); return acao; }
       let fala: string[] | undefined;
       const responderBoasVindas = deps.conversaLivreAtiva === true && respostaMedico && conversa &&
         acao.tipo === 'perguntar_nota_pendente' && await deps.memoriaPersistida?.temBoasVindas(entrada.medicoId, conversa);
@@ -101,6 +119,9 @@ export async function processarComunicacaoMedico(
         }
         fala = resposta.fala;
       }
+      if (!fala && deps.conversaLivreAtiva && respostaMedico && !(acao.tipo === 'boas_vindas' && estado.nomeMedico)) {
+        deps.log('erro', 'COMUNICACAO_SEM_FALA'); fala = [RASCUNHO_FALLBACK_CONVERSA];
+      }
       if (memoriaConversa && conversa) {
         if (respostaMedico) await memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
         const pergunta = fala ? fala.join('\n') : montarPerguntaComunicacao(acao);
@@ -111,8 +132,9 @@ export async function processarComunicacaoMedico(
         await atualizarResumo(deps.memoriaPersistida, deps.conversador, entrada.medicoId, conversa);
       }
       return acao;
-    } catch {
-      deps.log('erro', 'COMUNICACAO_ESTADO_FALHOU');
+    } catch (erro) {
+      if (deps.conversaLivreAtiva && entrada.respostaMedico) await fallback('COMUNICACAO_ESTADO_FALHOU', erro, false);
+      else deps.log('erro', 'COMUNICACAO_ESTADO_FALHOU');
       return { tipo: 'nenhuma' };
     }
   });

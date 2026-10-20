@@ -21,11 +21,11 @@ vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEst
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
 }) }));
 const anterior = { ...config }; let banco: BancoConversaFalso;
-let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number;
+let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number; let errosEsperados = 0;
 let reservas: Set<string>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
-  fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
+  errosEsperados = 0; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks(); banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
@@ -53,10 +53,11 @@ beforeEach(() => {
 });
 afterEach(() => {
   expect(enviar).toHaveBeenCalledTimes(enviosEsperados); expect(pdf).not.toHaveBeenCalled(); expect(rede).not.toHaveBeenCalled();
-  expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros).not.toHaveBeenCalled();
+  expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros.mock.calls).toEqual(Array.from({ length: errosEsperados }, () => ['COMUNICACAO_SEM_FALA']));
   Object.assign(config, anterior); vi.restoreAllMocks();
 });
 async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá') {
+  if (['inicio', 'pergunta'].includes(id) && !fronteiras.nomeMedico && config.conversaLivreAtiva && config.comunicacaoMedicoAtiva) errosEsperados++;
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/webhook/evolution').route.stack[0].handle;
   const body = { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: { messageTimestamp: 1792508400,
     key: { id, remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, message: { conversation: texto } } };
@@ -91,15 +92,15 @@ it.each([
   { numeroJid: '555193527271', destino: '555193527271' }
 ])('homolog permite JID $numeroJid e destino $destino sem duplicar reentrega', async ({ numeroJid, destino }) => {
   telefone = destino; jid = numeroJid; config.envioRealAllowlist = ['+5551993527271'];
-  enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 1;
+  enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 3;
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
   await receber(app, 'fora', 'Como funciona?');
-  expect(enviar).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName,
-    contatoTelefone: destino, texto: 'Posso explicar o que o Noto faz hoje.' });
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual([RASCUNHO_FALLBACK_CONVERSA, RASCUNHO_FALLBACK_CONVERSA, 'Posso explicar o que o Noto faz hoje.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: destino, texto })));
   await receber(criarAppExpress(), 'fora', 'Como funciona?');
-  expect(reservas.size).toBe(1);
+  expect(reservas.size).toBe(3);
   const insercoes = fronteiras.query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao'));
-  expect(insercoes).toHaveLength(1);
+  expect(insercoes).toHaveLength(3);
+  expect(new Set(insercoes.map(([, p]) => JSON.stringify(p))).size).toBe(3);
   expect(insercoes[0][1]).toEqual(['medico', 'conversa_livre', expect.stringMatching(/^[a-f0-9]{64}$/)]);
   expect(config.envioPacienteRealAtivo).toBe(false);
 });
@@ -126,14 +127,14 @@ it.each(['erro', 'quatro baloes', 'tres baloes'])('entrega %s com limite de trê
     if (caso === 'erro') throw Error('IA_INDISPONIVEL');
     return JSON.stringify({ fala: caso === 'quatro baloes' ? ['1', '2', '3', '4'] : ['Primeiro.', 'Segundo.', 'Terceiro.'] });
   });
-  const textos = caso === 'tres baloes' ? ['Primeiro.', 'Segundo.', 'Terceiro.'] : [RASCUNHO_FALLBACK_CONVERSA];
+  const textos = [RASCUNHO_FALLBACK_CONVERSA, RASCUNHO_FALLBACK_CONVERSA, ...(caso === 'tres baloes' ? ['Primeiro.', 'Segundo.', 'Terceiro.'] : [RASCUNHO_FALLBACK_CONVERSA])];
   expect(RASCUNHO_FALLBACK_CONVERSA).toBe('Não consegui entender direito. Posso te ajudar com as notas fiscais. O que você precisa?');
   enviosEsperados = textos.length;
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta'); await receber(app, 'fora');
   expect(enviar.mock.calls.map((args: unknown[]) => args[0])).toEqual(textos.map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName,
     contatoTelefone: '+5551993527271', texto })));
   await receber(criarAppExpress(), 'fora');
-  expect(reservas.size).toBe(1); expect(config.envioPacienteRealAtivo).toBe(false);
+  expect(reservas.size).toBe(3); expect(config.envioPacienteRealAtivo).toBe(false);
 });
 
 it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no histórico de %s para a resposta quero, inclusive em nova instância', async numeroJid => {
