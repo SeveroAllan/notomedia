@@ -1,8 +1,10 @@
-import { MemoriaConversaMedico, sanitizarTextoMedico } from './contexto-conversa-medico.js';
+import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
 import { orquestrarComunicacao } from './orquestrar-comunicacao.js';
 import type { HistoricoComunicacaoRepositorio } from './historico-comunicacao-repositorio.js';
 import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-proxima-acao.js';
+
+import type { MemoriaConversa } from './conversa-repositorio.js';
 
 type Entrada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<Entrada, 'nomeMedico' | 'estado'>;
@@ -13,7 +15,7 @@ const processamentos = new Map<string, Promise<ProximaAcaoNoto>>();
 /** A comunicação externa recebe apenas ações determinísticas já auditadas. */
 export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string },
-  deps: { ativo: boolean; memoriaConversa?: MemoriaConversaMedico; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
+  deps: { ativo: boolean; memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
     aoDecidir?: (acao: ProximaAcaoNoto, chave: string) => Promise<void>;
@@ -31,14 +33,14 @@ export async function processarComunicacaoMedico(
       const conversa = entrada.chaveConversa;
       const respostaMedico = entrada.respostaMedico ? { ...entrada.respostaMedico,
         texto: sanitizarTextoMedico(entrada.respostaMedico.texto),
-        mensagensSeguras: memoriaConversa && conversa ? memoriaConversa.ler(entrada.medicoId, conversa) : entrada.respostaMedico.mensagensSeguras
+        mensagensSeguras: memoriaConversa && conversa ? await memoriaConversa.ler(entrada.medicoId, conversa) : entrada.respostaMedico.mensagensSeguras
       } : undefined;
       const acao = await orquestrarComunicacao({ ...entrada, ...estado, respostaMedico }, { historico: deps.historico, log: deps.log, extratorResposta: deps.extratorResposta });
       await deps.aoDecidir?.(acao, entrada.chaveProcessamento);
       if (memoriaConversa && conversa) {
-        if (respostaMedico) memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
+        if (respostaMedico) await memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
         const pergunta = montarPerguntaComunicacao(acao);
-        if (pergunta) memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, pergunta);
+        if (pergunta) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, pergunta, 'noto');
       }
       return acao;
     } catch {
