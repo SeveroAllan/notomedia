@@ -32,7 +32,7 @@ export interface ProcessarWebhookDeps {
   instanciaOficialNome?: string;
   instanciaAssistenteNome?: string;
   comunicacaoMedicoAtiva?: boolean;
-  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
+  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
 }
@@ -103,7 +103,7 @@ export async function processarMensagemWebhook(
           const chaveConversa = createHash('sha256').update(JSON.stringify([payload.instance, telefone])).digest('hex');
           const referencia = payload.data.message?.extendedTextMessage?.contextInfo;
           const chavePergunta = referencia && typeof referencia === 'object' && 'stanzaId' in referencia && typeof referencia.stanzaId === 'string' ? referencia.stanzaId : undefined;
-          await deps.aoReceberMensagemMedico({ medicoId: medico.id, texto, chaveMensagem: payload.data.key.id, chaveConversa, dataMensagem, ...(chavePergunta ? { chavePergunta } : {}) });
+          await deps.aoReceberMensagemMedico({ medicoId: medico.id, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, ...(chavePergunta ? { chavePergunta } : {}) });
         }
       } catch { console.error('COMUNICACAO_MEDICO_CICLO_FALHOU'); }
     }

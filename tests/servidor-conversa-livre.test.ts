@@ -23,6 +23,7 @@ vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEst
 const anterior = { ...config }; let banco: BancoConversaFalso;
 let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number; let errosEsperados = 0;
 let reservas: Set<string>;
+let ler: ReturnType<typeof vi.spyOn>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   errosEsperados = 0; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
@@ -46,6 +47,7 @@ beforeEach(() => {
   const completar = async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Extraia')
     ? '{"temNota":"fora_do_assunto","desde":null,"confianca":0.95}' : '{"fala":["Posso explicar o que o Noto faz hoje."]}';
   fronteiras.openai.mockImplementation(completar);
+  ler = vi.spyOn(EvolutionApiClient.prototype, 'marcarLida').mockResolvedValue({ sucesso: true });
   enviar = vi.spyOn(EvolutionApiClient.prototype, 'enviarTexto').mockRejectedValue(Error('ENVIO_PROIBIDO'));
   pdf = vi.spyOn(EvolutionApiClient.prototype, 'enviarPdf').mockRejectedValue(Error('PDF_PROIBIDO'));
   rede = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('REDE_PROIBIDA'));
@@ -97,8 +99,8 @@ it.each([
   await receber(app, 'fora', 'Como funciona?');
   expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual([RASCUNHO_FALLBACK_CONVERSA, RASCUNHO_FALLBACK_CONVERSA, 'Posso explicar o que o Noto faz hoje.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: destino, texto })));
   await receber(criarAppExpress(), 'fora', 'Como funciona?');
-  expect(reservas.size).toBe(3);
-  const insercoes = fronteiras.query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao'));
+  expect(reservas.size).toBe(6);
+  const insercoes = fronteiras.query.mock.calls.filter(([sql, p]) => sql.includes('insert into public.noto_envios_homologacao') && p[1] === 'conversa_livre');
   expect(insercoes).toHaveLength(3);
   expect(new Set(insercoes.map(([, p]) => JSON.stringify(p))).size).toBe(3);
   expect(insercoes[0][1]).toEqual(['medico', 'conversa_livre', expect.stringMatching(/^[a-f0-9]{64}$/)]);
@@ -115,7 +117,7 @@ it.each(['outro telefone', 'flag envio off', 'flag conversa off', 'flag comunica
   if (caso === 'sem ambiente') ambiente = null;
   if (caso === 'allowlist vazia') config.envioRealAllowlist = [];
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta'); await receber(app, 'fora');
-  expect(enviar).not.toHaveBeenCalled(); expect(reservas.size).toBe(0);
+  expect(enviar).not.toHaveBeenCalled(); expect(ler).not.toHaveBeenCalled(); expect(reservas.size).toBe(0);
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao'))).toEqual([]);
   expect(config.envioPacienteRealAtivo).toBe(false);
 });
@@ -134,7 +136,7 @@ it.each(['erro', 'quatro baloes', 'tres baloes'])('entrega %s com limite de trê
   expect(enviar.mock.calls.map((args: unknown[]) => args[0])).toEqual(textos.map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName,
     contatoTelefone: '+5551993527271', texto })));
   await receber(criarAppExpress(), 'fora');
-  expect(reservas.size).toBe(3); expect(config.envioPacienteRealAtivo).toBe(false);
+  expect(reservas.size).toBe(6); expect(config.envioPacienteRealAtivo).toBe(false);
 });
 
 it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no histórico de %s para a resposta quero, inclusive em nova instância', async numeroJid => {
@@ -173,7 +175,7 @@ it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas não entram 
 it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo critério do comprovante e entrega pela conversa protegida', async () => {
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
   fronteiras.agenda = { nome: 'tribemd', conectada: true };
-  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 1;
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
   const queryAnterior = fronteiras.query.getMockImplementation()!;
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
     if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) return { rows: [{ existe: 1 }] };
@@ -199,7 +201,16 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
   });
   await receber(app, 'listar', 'Verifique as notas pendentes');
   await receber(criarAppExpress(), 'listar', 'Verifique as notas pendentes');
-  expect(enviar).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone,
-    texto: 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.' });
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Sua agenda já está conectada, deixa eu ver um minutinho.', 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
+});
+
+it('webhook do médico marca a mensagem original como lida e falha de leitura não silencia a resposta', async () => {
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 1;
+  ler.mockResolvedValueOnce({ sucesso: false, erro: 'EVOLUTION_INDISPONIVEL' });
+  await receber(criarAppExpress(), 'inicio');
+  expect(ler).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName, mensagemId: 'inicio', contatoTelefone: jid,
+    chaveMensagem: { id: 'inicio', remoteJid: `${jid}@s.whatsapp.net`, fromMe: false } });
+  expect(enviar).toHaveBeenCalledOnce();
+  expect(logs.mock.calls.some(([texto]: unknown[]) => String(texto).includes('LEITURA_MENSAGEM_FALHOU'))).toBe(true);
 });

@@ -198,3 +198,29 @@ it.each([
     expect(await c.medico(entrada)).toBe('repetido'); expect(enviarTexto).toHaveBeenCalledOnce();
   } else expect(enviarTexto).not.toHaveBeenCalled();
 });
+
+it.each([
+  [false, true, 'homologacao', ['51993527271']], [true, false, 'homologacao', ['51993527271']],
+  [true, true, 'producao', ['51993527271']], [true, true, 'homologacao', []]
+])('leitura bloqueada conversa=%s envio=%s ambiente=%s', async (livre, envio, ambiente, allowlist) => {
+  const marcarLida = vi.fn(); const query = vi.fn(async (_sql: string) => ({ rows: [{ telefone: '5551993527271', ambiente }] }));
+  const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), conversaLivreAtiva: livre, envioMedicoRealAtivo: envio, envioRealAllowlist: allowlist }, { enviarTexto: vi.fn(), marcarLida }, vi.fn());
+  expect(await c.marcarLida('m', { id: 'msg', remoteJid: '555193527271@s.whatsapp.net', fromMe: false })).toBe('simulado');
+  expect(marcarLida).not.toHaveBeenCalled(); expect(query.mock.calls.some(c => String(c[0]).includes('insert into'))).toBe(false);
+});
+it('Evolution envia readMessages com a chave original, uma vez por evento', async () => {
+  const { EvolutionApiClient } = await import('../src/io/evolution/evolution-api-client.js');
+  const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true }));
+  const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente: 'homologacao' }] };
+    if (sql.includes('insert into')) { const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] }; reservas.add(chave); return { rows: [{ id: 'r' }] }; }
+    return { rows: [] };
+  });
+  try {
+    const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, { ...carregarConfig({}), conversaLivreAtiva: true, envioMedicoRealAtivo: true, envioRealAllowlist: ['+5551993527271'] }, new EvolutionApiClient('https://evolution.invalid', 'ficticia', 'assistente', 'oficial'), vi.fn());
+    const chave = { id: 'original', remoteJid: '123456789@lid', remoteJidAlt: '555193527271@s.whatsapp.net', fromMe: false };
+    expect(await c.marcarLida('m', chave)).toBe('enviado'); expect(await c.marcarLida('m', chave)).toBe('repetido');
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://evolution.invalid/chat/markMessageAsRead/notomed_assistente', expect.objectContaining({ method: 'POST', body: JSON.stringify({ readMessages: [{ id: 'original', remoteJid: '123456789@lid', fromMe: false }] }) }));
+  } finally { fetcher.mockRestore(); }
+});

@@ -1,3 +1,5 @@
+import { registroErroNoto } from '../observabilidade/erros.js';
+import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
 import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
 import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
 import { createHmac } from 'node:crypto';
@@ -64,7 +66,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente, private readonly log: (texto: string) => void = console.info) {}
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp>, private readonly log: (texto: string) => void = console.info) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string;
     detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
@@ -92,6 +94,19 @@ export class ComunicacaoHomologacao {
     const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
       join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
     return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, rows[0]?.telefone);
+  }
+
+  async marcarLida(medicoId: string, chave: ChaveMensagemLeitura): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('mensagem_lida');
+    if (!chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return 'erro';
+    try {
+      if (!await this.medicoPermitido(medicoId)) return this.simular('mensagem_lida');
+      const resultado = await this.enviarUnico(medicoId, 'mensagem_lida', JSON.stringify([chave.remoteJid, chave.id]), async () =>
+        (await this.transporte.marcarLida?.({ instanciaNome: this.config.evolutionAssistantInstanceName,
+          mensagemId: chave.id, contatoTelefone: chave.remoteJid.split('@')[0], chaveMensagem: chave }))?.sucesso === true);
+      if (resultado === 'erro') this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' }));
+      return resultado;
+    } catch { this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' })); return 'erro'; }
   }
 
   async confirmarEmissao(entrada: { medicoId: string; solicitacaoId: string; chaveDisparo?: string; paciente: string; dataEnvioPagamento: string; dataConsulta: string }):

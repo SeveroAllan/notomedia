@@ -717,6 +717,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         instanciaAssistenteNome: config.evolutionAssistantInstanceName,
         comunicacaoMedicoAtiva: config.comunicacaoMedicoAtiva,
         aoReceberMensagemMedico: async contexto => {
+          await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp);
           if (emissaoComprovante && config.envioMedicoRealAtivo) {
             const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
             if (pendentes.length) {
