@@ -67,7 +67,7 @@ it('tomador de lote não lê cadastro/cache: ausência ou valor divergente recus
  expect(await emissor.emitir({...item,tomadorAoVivo:{...detalhe,valorCobradoCentavos:40000}})).toMatchObject({sucesso:false,codigoErroSefin:'TOMADOR_AO_VIVO_INVALIDO'});
  expect(query).not.toHaveBeenCalled();
 });
-it('DPS real usa dados ao vivo, SEFIN homologação fake, XML e PDF fiscais sem cadastro/cache',async()=>{
+it.each(['sucesso','rejeicao'])('DPS real usa dados transitórios e protege diagnóstico SEFIN sem alterar a emissão: %s',async caso=>{
  const cert=await import('../src/io/fiscal/carregar-certificado-medico.js');
  const chaves=await import('../src/io/fiscal/extrair-chaves-certificado.js');
  const assinaturaXml=await import('../src/io/fiscal/assinar-xml-dps.js');
@@ -88,7 +88,14 @@ it('DPS real usa dados ao vivo, SEFIN homologação fake, XML e PDF fiscais sem 
  const transmitirDps=vi.fn(async()=>({sucesso:true,chaveAcesso:'42'.repeat(25),dataAutorizacao:new Date('2026-10-20T15:00Z'),xmlAutorizado:xmlFiscal,respostaRaw:{autorizada:true}}));
  const upload=vi.fn(async()=>({error:null}));
  const emissor=new PostgresEmissorDpsService({query} as any,'key',undefined,undefined,{storage:{from:()=>({upload})}} as any,{transmitirDps} as any,true,true);
+ if(caso==='rejeicao') transmitirDps.mockResolvedValue({sucesso:false,codigoErro:'E9999',motivo:'Prestador não habilitado na homologação; CLARA ALMEIDA FICTICIA; Clinica Ficticia; paciente PESSOA FICTICIA; CPF 529.982.247-25; CNPJ 11222333000181; CRM 123/SC; valor 300.00; valor 300,00; <DPS>dados reservados</DPS>'} as any);
  const r=await emissor.emitir({id:'s',medicoId:'medico-fixture',pacienteId:'p',xdescServ:'Consulta',valorServicoCentavos:30000,ctribNac:'040101',emissaoComprovante:true,origemLote:true,tomadorAoVivo:detalhe});
+ if(caso==='rejeicao') {
+  expect(r).toMatchObject({sucesso:false,codigoErroSefin:'E9999',erro:expect.stringContaining('Prestador não habilitado na homologação')});
+  if(r.sucesso) throw Error('Esperava rejeição fiscal');
+  expect(r.erro).not.toMatch(/CLARA|ALMEIDA|FICTICIA|Clinica|PESSOA|529|112223|123\/SC|300[.,]00|DPS|dados reservados/i);
+  expect(transmitirDps).toHaveBeenCalledOnce();expect(upload).not.toHaveBeenCalled();return;
+ }
  if (!r.sucesso) throw Error(JSON.stringify(r));
  expect(r).toMatchObject({sucesso:true,valorServicosCentavos:30000,pdfStoragePath:expect.stringMatching(/^data:application\/pdf;base64,/)});
  expect(transmitirDps).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ambiente:2}));
@@ -133,4 +140,16 @@ it('reentrega do reenvio encontra solicitação existente e não relê agenda ne
  const c=cenario();vi.spyOn(PostgresEmissaoApiRepositorio.prototype,'buscarPorReferencia').mockResolvedValue({id:'anterior'} as any);
  const ler=vi.fn();await c.repo.reenviarSemContato('medico-fixture','evento',[{id:'i',medico_id:'medico-fixture'}],ler,c.entregar);
  expect(ler).not.toHaveBeenCalled();expect(c.entregar).not.toHaveBeenCalled();expect(c.enfileirar).not.toHaveBeenCalled();
+});
+it.each(['E9999','SEFIN_TIMEOUT'])('log mantém agregado, código original %s e motivo truncado sem dados pessoais',async codigo=>{
+ const c=cenario();const log=vi.spyOn(console,'warn').mockImplementation(()=>{});
+ c.emitir.mockResolvedValue({sucesso:false,codigoErroSefin:codigo,erro:'Prestador não habilitado; Pessoa Ficticia CPF 52998224725; email pessoa@example.com; telefone 11999990000; senha=SEGREDO\n'+'Detalhe '.repeat(100)} as any);
+ expect(await c.repo.emitir(entrada,c.executor)).toEqual({estado:'erro'});
+ const registro=JSON.parse(String(log.mock.calls[0][0]).replace(/^NOTO_ERRO /,''));
+ expect(registro.codigo).toBe(codigo==='E9999'?'EMISSAO_LOTE_FALHOU':'SEFIN_TIMEOUT');expect(registro.contexto).toMatchObject({medicoId:'medico-fixture',solicitacaoId:'s',codigoErroOriginal:codigo,etapa:'emissao_lote'});
+ expect(registro.contexto.motivoErro).toContain('Prestador não habilitado');expect(registro.contexto.motivoErro.length).toBeLessThanOrEqual(500);
+ expect(JSON.stringify(registro)).not.toMatch(/Pessoa Ficticia|52998224725|11999990000|pessoa@example.com|SEGREDO/);
+ const updates=c.query.mock.calls.filter(([sql])=>sql.includes("set estado = 'erro'")||sql.includes("set status = 'erro'"));
+ expect(updates).toHaveLength(2);expect(updates.every(([,p])=>p[1]===`EMISSAO_COMPROVANTE_RECUSADA: ${codigo}`)).toBe(true);
+ expect(c.entregar).not.toHaveBeenCalled();expect(c.registrar).not.toHaveBeenCalled();
 });

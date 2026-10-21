@@ -5,6 +5,7 @@
  */
 
 import type pg from 'pg';
+import { sanitizarErroFiscal } from '../../observabilidade/erros.js';
 import { validarCpf } from '../../paciente/validar-cpf.js';
 import { dadosProfissionaisCompletos } from '../../conta/validar-dados-emissao.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
@@ -352,9 +353,14 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
 
       if (!resSefinFinal || !resSefinFinal.sucesso) {
+        const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
+        const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
+          prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
+          profissionais[0].nome_completo, profissionais[0].crm, profissionais[0].rqe,
+          String(item.valorServicoCentavos), (item.valorServicoCentavos / 100).toFixed(2), (item.valorServicoCentavos / 100).toFixed(2).replace('.', ',')];
         return {
           sucesso: false,
-          erro: resSefinFinal?.motivo || 'Erro na transmissão à SEFIN',
+          erro: item.origemLote ? sanitizarErroFiscal(motivo, identificadores) : motivo,
           codigoErroSefin: resSefinFinal?.codigoErro,
           httpStatus: resSefinFinal?.httpStatus,
           xmlDpsOriginal: correcao ? undefined : xmlDpsOriginal,

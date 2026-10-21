@@ -176,8 +176,9 @@ it('recusa SEFIN não marca gerada, registra erro e pergunta ao médico sem retr
   transmitir.mockResolvedValue({ status: 400, corpo: JSON.stringify({ erros: [{ codigo: 'E123', descricao: 'SENHA_PRIVADA' }] }) });
   await receber(); await autorizar(); const deps = worker(), item = await deps.filaRepositorio.buscarETravarProximoItem('worker'); expect(item).not.toBeNull();
   expect(await processarItemFila(item!, deps)).toMatchObject({ ok: false, status: 'necessita_intervencao' }); await processarItemFila(item!, deps);
-  expect(transmitir).toHaveBeenCalledTimes(1); expect(notas).toEqual([]); expect(banco.emissoes[0]).toMatchObject({ estado: 'erro', erro_codigo: 'EMISSAO_COMPROVANTE_RECUSADA' });
-  expect(perguntar).toHaveBeenCalledTimes(1); expect(perguntar.mock.calls[0][0].motivoErro).toContain('?');
+  expect(transmitir).toHaveBeenCalledTimes(1); expect(notas).toEqual([]); expect(banco.emissoes[0]).toMatchObject({ estado: 'erro', erro_codigo: 'EMISSAO_COMPROVANTE_RECUSADA: E123' });
+  expect(perguntar).toHaveBeenCalledTimes(1); expect(perguntar.mock.calls[0][0].motivoErro).toBe('EMISSAO_COMPROVANTE_RECUSADA. Doutor(a), pode revisar os dados fiscais e orientar como prosseguir?');
+  expect(perguntar.mock.calls[0][0].motivoErro).not.toContain('SENHA_PRIVADA');
 });
 it('produção recusa o pedido e registra bloqueio antes de criar solicitação', async () => {
   banco.ambiente = 'producao'; await receber(); expect(banco.solicitacoes).toEqual([]); expect(banco.emissoes[0]).toMatchObject({ estado: 'bloqueada' });

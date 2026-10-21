@@ -4,6 +4,7 @@
  * e notificações de falha ao médico ou desenvolvedor (seção 3.2, itens 5 a 8).
  */
 
+import { sanitizarErroFiscal } from '../observabilidade/erros.js';
 import type { DadosProfissionaisService } from '../conta/dados-profissionais-service.js';
 import {
   excedeuTentativasEmissao,
@@ -142,8 +143,9 @@ async function processarComprovante(item: ItemFilaComTentativas, deps: Processar
     const emissao = await deps.emissorDps.emitir(item);
     if (!emissao.sucesso) {
       const codigo = emissao.codigoErroSefin === 'AMBIENTE_FISCAL_BLOQUEADO' ? 'AMBIENTE_FISCAL_BLOQUEADO' : 'EMISSAO_COMPROVANTE_RECUSADA';
-      await deps.filaRepositorio.registrarFalhaComprovante?.({ solicitacaoId: item.id, erroCodigo: codigo });
-      await avisarFalhaComprovante(item, codigo, deps, emissao.codigoErroSefin ?? (emissao.httpStatus === 504 || emissao.httpStatus === 408 ? 'SEFIN_TIMEOUT' : emissao.httpStatus && emissao.httpStatus >= 500 || emissao.falhaAntesDoEnvio ? 'SEFIN_INDISPONIVEL' : codigo));
+      const original = typeof emissao.codigoErroSefin === 'string' ? sanitizarErroFiscal(emissao.codigoErroSefin, [item.tomadorAoVivo?.nome]).slice(0,80) : '';
+      await deps.filaRepositorio.registrarFalhaComprovante?.({ solicitacaoId: item.id, erroCodigo: original && original !== codigo ? `${codigo}: ${original}` : codigo });
+      await avisarFalhaComprovante(item, codigo, deps, emissao.codigoErroSefin ?? (emissao.httpStatus === 504 || emissao.httpStatus === 408 ? 'SEFIN_TIMEOUT' : emissao.httpStatus && emissao.httpStatus >= 500 || emissao.falhaAntesDoEnvio ? 'SEFIN_INDISPONIVEL' : codigo), item.origemLote ? sanitizarErroFiscal(emissao.erro, [item.tomadorAoVivo?.nome]) : undefined);
       return { ok: false, status: 'necessita_intervencao', motivo: codigo };
     }
     autorizada = true;
@@ -160,10 +162,10 @@ async function processarComprovante(item: ItemFilaComTentativas, deps: Processar
   }
 }
 
-async function avisarFalhaComprovante(item: ItemFilaComTentativas, codigo: string, deps: ProcessarItemFilaDeps, codigoErro = codigo): Promise<void> {
+async function avisarFalhaComprovante(item: ItemFilaComTentativas, codigo: string, deps: ProcessarItemFilaDeps, codigoErro = codigo, motivoInterno?: string): Promise<void> {
   await deps.notificadorAlertas.notificarMedicoWhatsApp({
     telefoneMedico: '', medicoId: item.medicoId, solicitacaoId: item.id,
     nomePaciente: null, valorCentavos: item.valorServicoCentavos,
-    codigoErro, motivoErro: `${codigo}. Doutor(a), pode revisar os dados fiscais e orientar como prosseguir?`
+    codigoErro, motivoErro: item.origemLote && motivoInterno ? motivoInterno : `${codigo}. Doutor(a), pode revisar os dados fiscais e orientar como prosseguir?`
   });
 }

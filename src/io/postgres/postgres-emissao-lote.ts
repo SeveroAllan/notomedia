@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import { createHash } from 'node:crypto';
-import { registroErroNoto } from '../../observabilidade/erros.js';
+import { registroErroNoto, sanitizarErroFiscal } from '../../observabilidade/erros.js';
 import { chaveConsulta } from '../../atendimento/comprovante.js';
 import { resolverContatoConsulta } from '../../agenda/fonte-agenda.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
@@ -45,7 +45,9 @@ export class PostgresEmissaoLote extends PostgresFilaRepositorio {
       enviarPdfDanfse:{enviarPdf:async()=>{throw Error('ENTREGA_FORA_DAS_TRAVAS');}},
       notificadorAlertas:{notificarMedicoWhatsApp:async p=>{
         const codigo=['CERTIFICADO_AUSENTE','CERTIFICADO_INVALIDO','SEFIN_TIMEOUT','SEFIN_INDISPONIVEL','PARAMETROS_FISCAIS_PENDENTES','AMBIENTE_FISCAL_BLOQUEADO','PERSISTENCIA_COMPROVANTE_PENDENTE'].includes(p.codigoErro??'') ? p.codigoErro! : 'EMISSAO_LOTE_FALHOU';
-        console.warn(registroErroNoto(codigo,'tecnico',{medicoId:entrada.medicoId,solicitacaoId:reservado.id,etapa:'emissao_lote'}));
+        console.warn(registroErroNoto(codigo,'tecnico',{medicoId:entrada.medicoId,solicitacaoId:reservado.id,etapa:'emissao_lote',
+          codigoErroOriginal:sanitizarErroFiscal(p.codigoErro??'', [entrada.detalhe.nome]).slice(0,80),
+          motivoErro:sanitizarErroFiscal(p.motivoErro, [entrada.detalhe.nome])}));
       },notificarDesenvolvedorEmail:async()=>{}},
       aoAutorizarComprovante:async()=>{if (!semContato) entrega = await executor.entregar(entrada.medicoId,reservado.id);}
     });
