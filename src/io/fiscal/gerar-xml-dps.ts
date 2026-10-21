@@ -82,6 +82,8 @@ export function gerarXmlDps(
     : '';
   const tribMunXml = `<tribMun><tribISSQN>${input.fiscal?.tribISSQN ?? 1}</tribISSQN><tpRetISSQN>${tpRetMun}</tpRetISSQN>${aliqMunXml}</tribMun>`;
 
+  const nbsXml = input.fiscal && input.cNBS ? `<cNBS>${escaparXml(input.cNBS)}</cNBS>` : '';
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?>` +
     `<DPS xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01">` +
       `<infDPS Id="${dpsId}">` +
@@ -111,8 +113,10 @@ export function gerarXmlDps(
           `<cServ>` +
             `<cTribNac>${input.cTribNac.replace(/\D/g, '')}</cTribNac>` +
             (input.fiscal && input.cTribMun ? `<cTribMun>${escaparXml(input.cTribMun)}</cTribMun>` : '') +
+            // XSD restrita 20261020 antecipa NBS; produção 20260209 mantém a ordem anterior.
+            (cfg.ambiente === 2 ? nbsXml : '') +
             `<xDescServ>${escaparXml(input.xDescServ)}</xDescServ>` +
-            (input.fiscal && input.cNBS ? `<cNBS>${escaparXml(input.cNBS)}</cNBS>` : '') +
+            (cfg.ambiente === 1 ? nbsXml : '') +
           `</cServ>` +
         `</serv>` +
         `<valores>` +
