@@ -9,6 +9,7 @@ const lote = (r: any): LoteRetroativo => ({ id: r.id, medicoId: r.medico_id, con
   totalConsultas: Number(r.total_consultas), totalCentavos: Number(r.total_centavos), semValor: Number(r.sem_valor), estado: r.estado,
   mensagemConfirmacaoId: r.mensagem_confirmacao_id, perguntaEm: r.pergunta_em ? new Date(r.pergunta_em).toISOString() : null });
 export class PostgresLotesEmissao implements RepositorioLotes {
+  private readonly reservas = new Map<string, pg.PoolClient>();
   constructor(private readonly pool: pg.Pool, private readonly pepper: string) {}
   assinatura(medicoId: string, fonte: string, idExterno: string, valor: number) {
     return createHmac('sha256', this.pepper).update(JSON.stringify([medicoId, fonte, idExterno, valor])).digest('hex');
@@ -68,16 +69,48 @@ export class PostgresLotesEmissao implements RepositorioLotes {
   }
   async reservar() {
     const client = await this.pool.connect();
+    let id: string | undefined, reservada = false, mantida = false;
     try {
       await client.query('begin');
       const { rows } = await client.query(`select l.* from public.noto_lotes_emissao l join medico_perfil_fiscal pf on pf.medico_id=l.medico_id
-        where l.estado='confirmado' and pf.ambiente='homologacao' order by l.confirmado_em limit 1 for update of l skip locked`);
+        where (l.estado='confirmado' or (l.estado='processando' and l.confirmado_em < now() - interval '5 minutes'))
+        and pf.ambiente='homologacao' order by (l.estado='confirmado') desc, l.confirmado_em limit 1 for update of l skip locked`);
       if (!rows[0]) { await client.query('commit'); return null; }
-      await client.query(`update public.noto_lotes_emissao set estado='processando' where id=$1 and estado='confirmado'`, [rows[0].id]);
-      const { rows: itens } = await client.query(`select id, fonte, id_externo, consulta_chave, assinatura from public.noto_lotes_itens where lote_id=$1 order by id`, [rows[0].id]);
+      id = rows[0].id;
+      // A sessão conserva a trava durante todo o lote: idade não autoriza roubar um worker vivo.
+      const { rows: trava } = await client.query(`select pg_try_advisory_lock(hashtextextended('lote-retroativo:' || $1, 0)) as reservada`, [id]);
+      reservada = trava[0]?.reservada === true;
+      if (!reservada) { await client.query('commit'); return null; }
+      if (rows[0].estado === 'processando') {
+        await client.query(`update public.noto_lotes_emissao set estado='confirmado' where id=$1 and estado='processando'`, [id]);
+        await client.query(`update public.noto_lotes_itens set estado='pronto' where lote_id=$1 and estado='processando'`, [id]);
+      }
+      await client.query(`update public.noto_lotes_emissao set estado='processando' where id=$1 and estado='confirmado'`, [id]);
+      const { rows: itens } = await client.query(`select i.id, i.fonte, i.id_externo, i.consulta_chave, i.assinatura,
+        case when e.estado='nota_gerada' then 'emitida' else i.estado end as estado,
+        exists (select 1 from public.noto_envios_homologacao v where v.medico_id=i.medico_id
+          and v.acao='nota_paciente' and v.chave=e.nota_fiscal_id::text and v.estado='enviado') as entregue,
+        (e.estado='nota_gerada' and s.contato_paciente_encriptado is null) as sem_contato
+        from public.noto_lotes_itens i left join public.noto_emissoes_comprovantes e on e.lote_item_id=i.id
+        left join public.solicitacoes_nota s on s.id=e.solicitacao_id where i.lote_id=$1 order by i.id`, [id]);
       await client.query('commit');
-      return { ...lote(rows[0]), itens: itens.map(r => ({ id: r.id, fonte: r.fonte, idExterno: r.id_externo, chave: r.consulta_chave, assinatura: r.assinatura })) };
-    } catch (e) { await client.query('rollback'); throw e; } finally { client.release(); }
+      this.reservas.set(id!, client); mantida = true;
+      return { ...lote(rows[0]), itens: itens.map(r => ({ id: r.id, fonte: r.fonte, idExterno: r.id_externo, chave: r.consulta_chave,
+        assinatura: r.assinatura, estado: r.estado, entregue: r.entregue, semContato: r.sem_contato })) };
+    } catch (e) { await client.query('rollback'); throw e; }
+    finally {
+      if (!mantida) {
+        try { if (reservada) await client.query(`select pg_advisory_unlock(hashtextextended('lote-retroativo:' || $1, 0))`, [id]); }
+        finally { client.release(reservada); }
+      }
+    }
+  }
+  async liberarReserva(id: string) {
+    const client = this.reservas.get(id);
+    if (!client) return;
+    this.reservas.delete(id);
+    try { await client.query(`select pg_advisory_unlock(hashtextextended('lote-retroativo:' || $1, 0))`, [id]); }
+    finally { client.release(true); }
   }
   async reservarItem(id: string) {
     try {

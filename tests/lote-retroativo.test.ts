@@ -221,3 +221,36 @@ it('outro pedido de emissão sem período não fica mudo enquanto aguarda data n
  await c.conversa.iniciar('m','c','e2',agora,null);
  expect(c.falas).toHaveLength(2);expect(c.falas[1]).not.toBe(c.falas[0]);expect(c.falas[1]).toContain('dia');expect(c.deps.contar).not.toHaveBeenCalled();
 });
+it('retomada preserva resultados anteriores e libera a sessão mesmo se o gate lançar', async () => {
+  const repo = { reservar:vi.fn(async()=>({id:'l',medicoId:'m',conversa:'c',totalConsultas:2,itens:[
+    {id:'1',fonte:'tribemd',idExterno:'1',chave:'a',assinatura:'s',estado:'emitida',entregue:true},
+    {id:'2',fonte:'tribemd',idExterno:'2',chave:'b',assinatura:'s',estado:'erro'},
+    {id:'3',fonte:'tribemd',idExterno:'3',chave:'c',assinatura:'s',estado:'sem_valor'}
+  ]})),reservarItem:vi.fn(),concluirItem:vi.fn(),finalizar:vi.fn(),liberarReserva:vi.fn() };
+  const deps={permitido:vi.fn(async()=>true),faturada:vi.fn(),lerDetalhe:vi.fn(),assinatura:vi.fn(),emitir:vi.fn(),enviar:vi.fn(async (_m:string,_ch:string,_fala:string[],_c:string)=>{}),log:vi.fn()};
+  await processarLoteRetroativo(repo,deps);
+  expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 1 de 2 notas autorizadas. 1 precisam de conferência antes de continuar.','1 notas entregues.','1 consultas ficaram de fora por falta de valor. Pode conferir os valores na sua agenda?']);
+  expect(repo.reservarItem).not.toHaveBeenCalled(); expect(deps.emitir).not.toHaveBeenCalled(); expect(deps.lerDetalhe).not.toHaveBeenCalled();
+  expect(repo.liberarReserva).toHaveBeenCalledWith('l');
+  deps.permitido.mockRejectedValueOnce(Error('falha de banco'));
+  await expect(processarLoteRetroativo(repo,deps)).rejects.toThrow('falha de banco');
+  expect(repo.liberarReserva).toHaveBeenCalledTimes(2);
+});
+it('lote recuperado continua só os itens prontos e resume também as notas anteriores à queda', async () => {
+  const itens=[{id:'antigo',fonte:'tribemd',idExterno:'1',chave:'a',assinatura:'s',estado:'emitida',entregue:true},
+    {id:'pendente',fonte:'tribemd',idExterno:'2',chave:'b',assinatura:'s',estado:'pronto'}];
+  const repo={reservar:vi.fn(async()=>({id:'l',medicoId:'m',conversa:'c',totalConsultas:2,itens})),reservarItem:vi.fn(async()=>true),
+    concluirItem:vi.fn(),finalizar:vi.fn(),liberarReserva:vi.fn()};
+  const deps={permitido:vi.fn(async()=>true),faturada:vi.fn(async()=>false),
+    lerDetalhe:vi.fn(async()=>({nome:'Pessoa Ficticia',cpf:'52998224725',valorCobradoCentavos:30000})),
+    assinatura:vi.fn(()=> 's'),emitir:vi.fn(async()=>({estado:'emitida' as const,entrega:'nao_enviada',semContato:true})),
+    enviar:vi.fn(async(_m:string,_ch:string,_fala:string[],_c:string)=>{}),log:vi.fn()};
+  await processarLoteRetroativo(repo,deps);
+  expect(repo.reservarItem).toHaveBeenCalledExactlyOnceWith('pendente');
+  expect(deps.lerDetalhe).toHaveBeenCalledExactlyOnceWith('m','2');
+  expect(deps.emitir).toHaveBeenCalledOnce();
+  expect(repo.concluirItem).toHaveBeenCalledWith('antigo','emitida');
+  expect(repo.concluirItem).toHaveBeenCalledWith('pendente','emitida');
+  expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 2 de 2 notas autorizadas.','1 notas entregues. 1 sem contato válido; corrija o contato na agenda e me peça o reenvio.']);
+  expect(repo.liberarReserva).toHaveBeenCalledOnce();
+});

@@ -79,3 +79,69 @@ it('ausência de cobrado ao vivo exclui; consulta fora da leitura ao vivo não e
   expect(await repo.contarConsultasPeriodo('m','2026-10-01','2026-10-20T15:00Z',new Map([['1',null]])))
     .toMatchObject({ totalConsultas: 0, totalCentavos: 0, semValor: 1, consultas: [{ idExterno:'1',assinatura:null }] });
 });
+it.each([true, false])('retoma lote órfão somente com trava de sessão exclusiva (disponível=%s)', async livre => {
+  const release = vi.fn();
+  const query = vi.fn(async (sql: string) => {
+    if (sql.includes('select l.*')) {
+      expect(sql).toContain("interval '5 minutes'");
+      expect(sql).toContain("pf.ambiente='homologacao'");
+      expect(sql).toContain('skip locked');
+      return { rows: [{ id:'l',medico_id:'m',estado:'processando',ate:'2026-10-20T15:00Z' }] };
+    }
+    if (sql.includes('pg_try_advisory_lock')) return { rows:[{ reservada:livre }] };
+    if (sql.includes('select i.id')) return { rows:[{ id:'i',estado:'emitida',entregue:true,sem_contato:false }] };
+    return { rows:[] };
+  });
+  const repo = new PostgresLotesEmissao({ connect:async()=>({ query,release }) } as any,'pepper');
+  const r = await repo.reservar();
+  if (!livre) { expect(r).toBeNull(); expect(query.mock.calls.some(([sql])=>sql.startsWith('update'))).toBe(false); expect(release).toHaveBeenCalledOnce(); return; }
+  expect(r?.itens[0]).toMatchObject({ estado:'emitida',entregue:true });
+  const reset = query.mock.calls.find(([sql])=>sql.startsWith('update public.noto_lotes_itens'))![0];
+  expect(reset).toContain("estado='processando'"); expect(reset).toContain("set estado='pronto'");
+  expect(query.mock.calls.some(([sql])=>sql.includes("set estado='confirmado'"))).toBe(true);
+  expect(release).not.toHaveBeenCalled();
+  await repo.liberarReserva('l');
+  expect(query.mock.calls.some(([sql])=>sql.includes('pg_advisory_unlock'))).toBe(true);
+  expect(release).toHaveBeenCalledOnce();
+});
+it('chamadas concorrentes reservam um único worker e só retomam após a sessão anterior liberar', async () => {
+  let travada = false, estado = 'processando';
+  const pool = { connect: async () => {
+    let dona = false;
+    return { release:vi.fn(), query:async (sql:string) => {
+      if (sql.includes('select l.*')) return { rows:[{id:'l',medico_id:'m',estado,ate:'2026-10-20T15:00Z'}] };
+      if (sql.includes('pg_try_advisory_lock')) { dona = !travada; if(dona) travada=true; return {rows:[{reservada:dona}]}; }
+      if (sql.includes('pg_advisory_unlock')) { if(dona) travada=false; return {rows:[]}; }
+      if (sql.includes("set estado='processando'")) estado='processando';
+      return { rows:[] };
+    } };
+  } };
+  const repos = Array.from({length:12},()=>new PostgresLotesEmissao(pool as any,'pepper'));
+  const resultados = await Promise.all(repos.map(r=>r.reservar()));
+  expect(resultados.filter(Boolean)).toHaveLength(1);
+  expect(await repos[1].reservar()).toBeNull();
+  await repos[resultados.findIndex(Boolean)].liberarReserva('l');
+  expect(await repos[1].reservar()).not.toBeNull();
+  await repos[1].liberarReserva('l');
+});
+it('erro durante recuperação faz rollback e solta a trava sem devolver sessão travada ao pool', async () => {
+  const release=vi.fn();
+  const query=vi.fn(async(sql:string)=>{
+    if(sql.includes('select l.*')) return {rows:[{id:'l',estado:'processando'}]};
+    if(sql.includes('pg_try_advisory_lock')) return {rows:[{reservada:true}]};
+    if(sql.startsWith('update')) throw Error('banco indisponível');
+    return {rows:[]};
+  });
+  const repo=new PostgresLotesEmissao({connect:async()=>({query,release})} as any,'pepper');
+  await expect(repo.reservar()).rejects.toThrow('banco indisponível');
+  expect(query.mock.calls.map(([s])=>s)).toContain('rollback');
+  expect(query.mock.calls.some(([s])=>s.includes('pg_advisory_unlock'))).toBe(true);
+  expect(release).toHaveBeenCalledWith(true);
+});
+it('sem lote confirmado ou órfão antigo elegível não altera itens nem segura conexão', async () => {
+  const query=vi.fn(async()=>({rows:[]})),release=vi.fn();
+  const repo=new PostgresLotesEmissao({connect:async()=>({query,release})} as any,'pepper');
+  expect(await repo.reservar()).toBeNull();
+  expect(query.mock.calls).toHaveLength(3);
+  expect(release).toHaveBeenCalledOnce();
+});
