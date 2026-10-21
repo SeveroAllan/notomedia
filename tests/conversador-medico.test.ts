@@ -258,11 +258,11 @@ it('falha de acesso acionável orienta o médico sem mostrar código', async () 
   expect(completar).not.toHaveBeenCalled();
 });
 
-it('lista vazia afirma zero pendências na janela e oferece verificar períodos anteriores', async () => {
+it('lista vazia confirma zero apenas na janela disponível, sem oferecer períodos anteriores', async () => {
   const completar = vi.fn();
   const c = new ConversadorMedico('chave', 'modelo', completar);
   expect(await c.responder({ ...entrada, estado: { agenda: { conectada: true } }, resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total: 0, janelaDias: 90, consultas: [] } } }))
-    .toEqual({ fala: ['Não há nenhuma pendência nos últimos 90 dias. Quer que eu verifique períodos anteriores?'], acao: null });
+    .toEqual({ fala: ['Não há nenhuma pendência nos últimos 90 dias.'], acao: null });
   expect(completar).not.toHaveBeenCalled();
 });
 
@@ -329,4 +329,26 @@ it('duas recusas passam espera real e histórico à IA, sem texto de limite enla
   expect(chamadas[1][2][0].content).toContain('Espera real para novo link (servidor): 1 minutos');
   expect(chamadas[1][2][0].content).toContain('Nunca mencione limite, regra interna ou contagem');
   expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta.dadosNaoConfiaveis).toEqual({ ok: false, aguardarMinutos: 1 });
+});
+
+it('sincronização incompleta informa leitura em andamento sem concluir ausência', async () => {
+  const c = new ConversadorMedico('chave', 'modelo', vi.fn());
+  const r = await c.responder({ ...entrada, estado: { agenda: { conectada: true } }, resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: false, motivo: 'SEM_CONSULTAS_SINCRONIZADAS' } } });
+  expect(r.fala.join(' ')).toContain('Ainda estou lendo sua agenda');
+  expect(r.fala.join(' ')).not.toMatch(/não há|nenhuma pendência|períodos anteriores/i);
+});
+it.each([undefined, 173])('não entrega negativa de pendências sem zero confirmado (total=%s)', async total => {
+  const completar = vi.fn(async () => '{"fala":["Verifiquei e não há pendências. No entanto, encontrei 173 consultas sem nota."],"acao":null}');
+  const r = await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
+    ...(total === undefined ? {} : { resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: { ok: true, total, consultas: [{ paciente: 'Ana Ao Vivo', dataHora: '2026-10-19', valorCentavos: 30000 }] } } }) });
+  expect(r.fala.join(' ')).not.toMatch(/não há|nenhuma pendência/i);
+  if (total) { expect(r.fala.join(' ')).toContain('173'); expect(r.fala.join(' ')).toContain('Ana Ao Vivo'); }
+});
+
+it('descarta oferta de períodos anteriores que a ferramenta não executa', async () => {
+  const completar = vi.fn(async () => '{"fala":["Quer que eu verifique períodos anteriores?"],"acao":null}');
+  const r = await new ConversadorMedico('chave', 'modelo', completar).responder(entrada);
+  expect(r.fala.join(' ')).toContain('90 dias');
+  expect(r.fala.join(' ')).not.toContain('Quer que eu verifique');
+  expect(r.acao).toBeNull();
 });

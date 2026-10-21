@@ -173,20 +173,27 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     });
 
   // Função interna sob demanda; nenhuma tarefa periódica ou sincronização em produção.
-  const sincronizarAgendaHomologacao = async (medicoId: string, agora = new Date(), janelaDias = 90) => {
-    try {
-      const { rows } = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1', [medicoId]);
-      if (rows[0]?.ambiente !== 'homologacao') return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
-      if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 365) throw Error('JANELA_AGENDA_INVALIDA');
-      const repo = new PostgresConsultasSincronizadas(pool);
-      const resultado = await sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
-        (id, consulta) => repo.resolverPaciente(id, consulta));
-      if (resultado.tipo === 'erro') console.warn(registroErroNoto(resultado.codigo, 'tecnico', { medicoId, etapa: 'sincronizacao' }));
-      return resultado;
-    } catch (e) {
-      console.warn(registroErroNoto('SINCRONIZACAO_AGENDA_FALHOU', 'tecnico', { medicoId, etapa: 'sincronizacao', detalhe: e instanceof Error ? e.message : String(e) }));
-      return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
-    }
+  const sincronizacoesAgenda = new Map<string, Promise<Awaited<ReturnType<typeof sincronizarAgenda>>>>();
+  const sincronizarAgendaHomologacao = (medicoId: string, agora = new Date(), janelaDias = 90) => {
+    const trabalho = (sincronizacoesAgenda.get(medicoId) ?? Promise.resolve()).then(async () => {
+      try {
+        const { rows } = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1', [medicoId]);
+        if (rows[0]?.ambiente !== 'homologacao') return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
+        if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 365) throw Error('JANELA_AGENDA_INVALIDA');
+        const repo = new PostgresConsultasSincronizadas(pool);
+        const resultado = await sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
+          (id, consulta) => repo.resolverPaciente(id, consulta));
+        if (resultado.tipo === 'erro') console.warn(registroErroNoto(resultado.codigo, 'tecnico', { medicoId, etapa: 'sincronizacao' }));
+        return resultado;
+      } catch (e) {
+        console.warn(registroErroNoto('SINCRONIZACAO_AGENDA_FALHOU', 'tecnico', { medicoId, etapa: 'sincronizacao', detalhe: e instanceof Error ? e.message : String(e) }));
+        return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
+      }
+    });
+    sincronizacoesAgenda.set(medicoId, trabalho);
+    const limpar = () => { if (sincronizacoesAgenda.get(medicoId) === trabalho) sincronizacoesAgenda.delete(medicoId); };
+    void trabalho.then(limpar, limpar);
+    return trabalho;
   };
   app.locals.sincronizarAgendaHomologacao = sincronizarAgendaHomologacao;
 
@@ -196,16 +203,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
-      aoConversar: async (fala, chave) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa }); },
+      aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       listarConsultasSemNota: async (id, agenda, instante) => {
+        const nomesAoVivo = new Map<string, string | null>();
+        let sincronizacaoConcluida = false;
         if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
           const sincronizada = await sincronizarAgendaHomologacao(id, instante);
           if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
-          if (!sincronizada.consultas.length) return { ok: true, total: 0, consultas: [], janelaDias: 90 };
+          sincronizacaoConcluida = true;
+          for (const consulta of sincronizada.consultas) nomesAoVivo.set(consulta.idExterno, consulta.nomeAoVivo ?? null);
         }
         return new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
-          (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId));
+          (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId),
+          consultaId => nomesAoVivo.get(consultaId) ?? null, sincronizacaoConcluida);
       },
       enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
       lerContextoConexao: cofres.links ? (id, agora) => cofres.links!.lerContextoConexao(id, agora) : undefined,

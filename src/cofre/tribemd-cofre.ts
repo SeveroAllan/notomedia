@@ -194,12 +194,12 @@ export class CofreTribemd {
             const inicio = new Date(hoje + 'T12:00:00Z'); inicio.setUTCDate(inicio.getUTCDate() - janelaDias);
             if (resultado.cobertura !== 'intervalo_carregado_pelo_portal' || !resultado.agenda?.intervalo.fim ||
                 resultado.agenda.intervalo.fim < hoje || !resultado.agenda.intervalo.inicio || resultado.agenda.intervalo.inicio > inicio.toISOString().slice(0, 10) || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
-                return { tipo: 'erro', codigo: 'FONTE_INDISPONIVEL' };
+                return { tipo: 'erro', codigo: 'SINCRONIZACAO_INCOMPLETA' };
             }
             return { tipo: 'consultas', fonte: 'tribemd', consultas: resultado.consultas.map(c => {
                 if (!c.pacienteId || !c.atendimentoId || !c.dataConsultaObservada || c.dados?.codigo) throw new ErroCofre('LEITURA_INCOMPLETA');
                 const valor = c.dados?.valorConsulta;
-                return { pacienteId: c.pacienteId, idExterno: c.atendimentoId, dataHora: c.dataConsultaObservada,
+                return { nomeAoVivo: c.nome?.trim() || c.dados?.nomeCompleto?.trim() || null, pacienteId: c.pacienteId, idExterno: c.atendimentoId, dataHora: c.dataConsultaObservada,
                     telefonePaciente: c.dados?.contato.celular ?? c.dados?.contato.telefone ?? undefined,
                     status: 'realizada' as const, valorConsultaCentavos: valor && /^\d+\.\d{2}$/.test(valor) ? Number(valor.replace('.', '')) : null };
             }) };

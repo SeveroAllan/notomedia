@@ -22,7 +22,7 @@ export async function processarComunicacaoMedico(
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
     aoReagir?: (reacao: import('../whatsapp/reagir-mensagem.js').ReacaoMedico) => Promise<void>;
-    aoConversar?: (fala: string[], chave: string) => Promise<void>;
+    aoConversar?: (fala: string[], chave: string, falaMemoria?: string[]) => Promise<void>;
     memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     listarConsultasSemNota?: (medicoId: string, agenda: EstadoComunicacaoMedico['estado']['agenda'], agora: Date) => Promise<{
@@ -34,11 +34,23 @@ export async function processarComunicacaoMedico(
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
+  const nomesAoVivo = new Set<string>();
+  const auditarFerramenta = (ferramenta: string, resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number }) => {
+    if (ferramenta === 'listar_consultas_sem_notas') for (const consulta of resultado.consultas ?? []) {
+      const nome = (consulta as { paciente?: unknown })?.paciente;
+      if (typeof nome === 'string' && !nome.startsWith('Contato ')) nomesAoVivo.add(nome);
+    }
+    deps.log('info', 'FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: entrada.medicoId, ferramenta,
+      ok: resultado.ok, motivo: /^[A-Z0-9_]{1,80}$/.test(resultado.motivo ?? '') ? resultado.motivo : undefined,
+      total: resultado.total, retornadas: resultado.consultas?.length, janelaDias: resultado.janelaDias }));
+  };
   const enviarFala = async (fala: string[], chave: string) => {
     // O transporte real reserva a linha antes de enviar; o registro posterior é um no-op nesse caminho.
-    await deps.aoConversar?.(fala, chave);
+    const falaMemoria = fala.map(texto => [...nomesAoVivo].reduce((seguro, nome) => seguro.split(nome).join('[PACIENTE]'), texto));
+    if (falaMemoria.some((texto, i) => texto !== fala[i])) await deps.aoConversar?.(fala, chave, falaMemoria);
+    else await deps.aoConversar?.(fala, chave);
     if (entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(
-      entrada.medicoId, entrada.chaveConversa, `noto:${chave}`, fala.join('\n'), 'noto');
+      entrada.medicoId, entrada.chaveConversa, `noto:${chave}`, falaMemoria.join('\n'), 'noto');
   };
   const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
     if (!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) return;
@@ -78,6 +90,7 @@ export async function processarComunicacaoMedico(
           if (!estado?.estado.agenda.conectada || estado.estado.agenda.nome?.toLowerCase() !== 'tribemd' || !deps.listarConsultasSemNota) resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' };
           else resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora);
         }
+        auditarFerramenta('listar_consultas_sem_notas', resultado);
         const resposta = await deps.conversador?.responder({ texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
           resumo: memoria && conversa ? (await memoria.lerResumo(entrada.medicoId, conversa))?.resumo ?? null : null,
           estado: estado?.estado ?? {}, agora: entrada.agora, eventoAgenda: entrada.eventoAgenda, acoesPermitidas: [],
@@ -164,6 +177,7 @@ export async function processarComunicacaoMedico(
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
           catch (e) { deps.log('erro', registroErroNoto('AGENDA_INDISPONIVEL', 'tecnico', { etapa: 'listar', detalhe: e instanceof Error ? e.message : String(e) })); resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }
+          auditarFerramenta('listar_consultas_sem_notas', resultado);
           const conectar = !resultado.ok && ['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '') &&
             (resultado.motivo !== 'SEM_CONSULTAS_SINCRONIZADAS' || !estado.estado.agenda.conectada);
           resposta = await deps.conversador.responder({ ...contexto,
@@ -176,6 +190,7 @@ export async function processarComunicacaoMedico(
           let resultado;
           try { resultado = await deps.enviarLinkCofreAgenda(entrada.medicoId); }
           catch { resultado = { ok: false, motivo: 'COFRE_INDISPONIVEL' }; }
+          auditarFerramenta('enviar_link_cofre_agenda', resultado);
           resposta = await deps.conversador.responder({ ...contexto,
             resultadoFerramenta: { ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: resultado }, acoesPermitidas: [] });
         }

@@ -155,13 +155,14 @@ it('pendências usam o mesmo verificador de faturamento, janela de 90 dias, tota
   const rows = Array.from({ length: 25 }, (_, i) => ({ id_externo: String(i), paciente: `Paciente ${i}`, data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 }));
   const query = vi.fn(async (_sql: string, _p: unknown[]) => ({ rows })).mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows });
   const faturada = vi.fn(async (_fonte: string, id: string) => id === '0');
-  const resultado = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), faturada);
+  const resultado = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), faturada, id => `Paciente ${id}`);
   expect(resultado).toEqual({ ok: true, total: 24, janelaDias: 90, consultas: rows.slice(1, 21).map(c => ({ paciente: c.paciente, dataHora: c.data_hora, valorCentavos: c.valor_consulta_centavos })) });
   expect(faturada).toHaveBeenCalledTimes(25); expect(faturada).toHaveBeenCalledWith('tribemd', '0');
   expect(query.mock.calls[1][1]).toEqual([medico, 'tribemd', '2026-10-20T15:00:00.000Z']);
   const sql = query.mock.calls[1][0];
   expect(sql).toContain("c.status='realizada'"); expect(sql).toContain("interval '90 days'"); expect(sql).toContain('c.data_hora <= $3');
-  expect(sql).toContain('p.medico_id=c.medico_id'); expect(sql).not.toMatch(/cpf|telefone/);
+  expect(sql).toContain('p.medico_id=c.medico_id'); expect(sql).not.toMatch(/cpf/);
+  expect(JSON.stringify(resultado)).not.toContain('11999990000');
 });
 
 it('sync mapeia o ID numérico do portal só na persistência, preservando critério transitório do comprovante', async () => {
@@ -193,4 +194,16 @@ it('mapeamento recusa telefone ausente ou múltiplos cadastros e nunca salva ID 
   await expect(repo.resolverPaciente(medico, { ...agenda().consultas[0], telefonePaciente: undefined, valorConsultaCentavos: 35000 })).rejects.toThrow('TELEFONE_AGENDA_INVALIDO');
   expect(query).not.toHaveBeenCalled();
   await expect(repo.resolverPaciente(medico, agenda().consultas[0] as any)).rejects.toThrow('VINCULO_PACIENTE_AMBIGUO');
+});
+it('pendências usam nome ao vivo por atendimento e mascaram telefone quando não há nome, sem gravar', async () => {
+  const query = vi.fn(async (_sql: string, _p: unknown[]) => ({ rows: [{}] })).mockResolvedValueOnce({ rows: [{}] }).mockResolvedValueOnce({ rows: [
+    { id_externo: 'a', telefone: '5551993527271', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
+    { id_externo: 'b', telefone: '5551993528888', data_hora: '2026-10-18T15:00Z', valor_consulta_centavos: null }
+  ] } as any);
+  const vivo = vi.fn(async (id: string) => id === 'a' ? 'Nome Apenas Vivo' : null);
+  const r = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date(), vi.fn(async () => false), vivo);
+  expect(r).toMatchObject({ ok: true, total: 2, consultas: [{ paciente: 'Nome Apenas Vivo' }, { paciente: 'Contato •••• 8888' }] });
+  expect(JSON.stringify(r)).not.toContain('5551993528888');
+  expect(vivo).toHaveBeenCalledTimes(2); expect(JSON.stringify(query.mock.calls)).not.toContain('Nome Apenas Vivo');
+  expect(query.mock.calls.some(c => /insert|update/i.test(String(c[0])))).toBe(false);
 });

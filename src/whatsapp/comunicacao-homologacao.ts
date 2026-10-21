@@ -171,7 +171,7 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; conversa?: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, chave, fala } = entrada;
     if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
     if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
@@ -180,7 +180,7 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
-      if (!await this.reservarMensagem(medicoId, destino.telefone, chave, fala, entrada.conversa)) return 'repetido';
+      if (!await this.reservarMensagem(medicoId, destino.telefone, chave, entrada.falaMemoria ?? fala, entrada.conversa)) return 'repetido';
       return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
         for (const texto of fala) {
           const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,

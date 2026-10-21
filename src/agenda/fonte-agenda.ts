@@ -4,11 +4,12 @@ import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone
 const consultaSchema = z.object({
   pacienteId: z.string().min(1), telefonePaciente: z.string().min(1).optional(), idExterno: z.string().min(1), dataHora: z.string().min(1),
   status: z.enum(['realizada', 'cancelada', 'faltou', 'agendada']),
+  nomeAoVivo: z.string().trim().min(1).max(200).nullable().optional(),
   valorConsultaCentavos: z.number().int().nullable().optional()
 }).strict();
 const resultadoSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('consultas'), fonte: z.string().min(1), consultas: z.array(consultaSchema) }).strict(),
-  z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA']) }).strict()
+  z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA', 'SINCRONIZACAO_INCOMPLETA']) }).strict()
 ]);
 export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string; janelaDias?: number; agora?: Date }
 export type ResultadoFonteAgenda = z.infer<typeof resultadoSchema>;

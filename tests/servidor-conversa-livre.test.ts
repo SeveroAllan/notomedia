@@ -32,7 +32,7 @@ beforeEach(() => {
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set(); recebidas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks();
-  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
+  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', nomeAoVivo: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
   banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
   config.comunicacaoMedicoAtiva = true; config.conversaLivreAtiva = true; config.envioMedicoRealAtivo = true;
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
@@ -42,6 +42,7 @@ beforeEach(() => {
     if (sql.startsWith('select ambiente from medico_perfil_fiscal')) return { rows: [{ ambiente }] };
     if (sql.startsWith('select id from pacientes')) return { rows: [{ id: '00000000-0000-4000-8000-000000000002' }] };
     if (sql.startsWith('insert into public.noto_consultas_sincronizadas')) return { rows: [] };
+    if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas') || sql.includes('select c.id_externo, p.telefone')) return { rows: [] };
     if (sql.includes('regexp_replace(u.telefone')) return { rows: (parametros[0] as string[]).includes(telefone.replace(/\D/g, ''))
       ? [{ id: 'medico', nome_completo: 'Medica Ficticia', telefone }] : [] };
     if (sql.includes('select u.telefone, pf.ambiente from medicos m')) return { rows: [{ telefone, ambiente }] };
@@ -200,9 +201,9 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
         texto: 'Sua agenda já está conectada, deixa eu ver um minutinho.' });
       return { rows: [{ existe: 1 }] };
     }
-    if (sql.includes('select c.id_externo, p.nome')) return { rows: [
-      { id_externo: 'autorizada', paciente: 'Paciente faturado', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
-      { id_externo: 'pendente', paciente: 'Paciente exemplo', data_hora: '2026-10-19T14:00Z', valor_consulta_centavos: 40000 }
+    if (sql.includes('select c.id_externo, p.telefone')) return { rows: [
+      { id_externo: 'autorizada', telefone: '5551993521111', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
+      { id_externo: 'pendente', telefone: '5551993527271', data_hora: '2026-10-19T14:00Z', valor_consulta_centavos: 40000 }
     ] };
     if (sql.includes('from public.noto_emissoes_comprovantes')) {
       expect(sql).toContain("estado = 'nota_gerada'"); expect(parametros[0]).toBe('medico');
@@ -270,7 +271,7 @@ it('evento de conexão continua sozinho, verifica agenda e grava contexto nas va
   enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
   criarAppExpress(); const evento = { agenda: 'tribemd' as const, conectado: true, chave: 'link-salvo' };
   await fronteiras.concluirAgenda!('medico', evento); await fronteiras.concluirAgenda!('medico', evento);
-  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência nos últimos 90 dias. Quer que eu verifique períodos anteriores?'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência nos últimos 90 dias.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
   expect(banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
   for (const numero of ['5551993527271', '555193527271']) {
@@ -299,4 +300,39 @@ it('reentrega concorrente do mesmo id Evolution processa texto uma vez entre ins
   expect(resultados.filter(r => r.motivoDescarte === 'gatilho_nao_reconhecido')).toHaveLength(1);
   expect(fronteiras.openai.mock.calls.length - antes).toBe(2); // extrator + conversador, uma única vez
   expect(banco.mensagens.filter(m => m.mensagemId === 'noto:assistente:evolution-unico')).toHaveLength(1);
+});
+
+it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, com nome só ao vivo', async () => {
+  fronteiras.agenda = { nome: 'tribemd', conectada: true }; config.envioRealAllowlist = ['+5551993527271'];
+  enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 3; // acesso + total + paciente
+  let liberarFonte!: () => void, liberarBanco!: () => void, iniciouFonte!: () => void, iniciouBanco!: () => void;
+  const leitura = new Promise<void>(r => { liberarFonte = r; }), gravacao = new Promise<void>(r => { liberarBanco = r; });
+  const fonteIniciada = new Promise<void>(r => { iniciouFonte = r; }), bancoIniciado = new Promise<void>(r => { iniciouBanco = r; });
+  let gravou = false;
+  fronteiras.fonte.mockImplementationOnce(async () => {
+    iniciouFonte(); await leitura;
+    return { tipo: 'consultas', fonte: 'tribemd', consultas: Array.from({ length: 173 }, (_, i) => ({ pacienteId: '456', telefonePaciente: '5551993527271', nomeAoVivo: 'Pessoa Apenas Ao Vivo', idExterno: String(i), dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 30000 })) };
+  });
+  const anterior = fronteiras.query.getMockImplementation()!;
+  const consultar = vi.fn();
+  fronteiras.query.mockImplementation(async (sql: string, p: unknown[]) => {
+    if (sql.startsWith('insert into public.noto_consultas_sincronizadas')) { iniciouBanco(); await gravacao; gravou = true; return { rows: [] }; }
+    if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) { expect(gravou).toBe(true); consultar(); return { rows: [{}] }; }
+    if (sql.includes('select c.id_externo, p.telefone')) return { rows: Array.from({ length: 173 }, (_, i) => ({ id_externo: String(i), telefone: '5551993527271', data_hora: '2026-10-19T14:00:00Z', valor_consulta_centavos: 30000 })) };
+    if (sql.includes('from public.noto_emissoes_comprovantes')) return { rows: [] };
+    return anterior(sql, p);
+  });
+  fronteiras.openai.mockResolvedValue('{"fala":["Não há pendências. No entanto, encontrei 173 consultas sem nota."],"acao":null}');
+  criarAppExpress(); const evento = fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'sync-aguardada' });
+  await fonteIniciada; expect(consultar).not.toHaveBeenCalled(); expect(enviar).toHaveBeenCalledOnce();
+  liberarFonte(); await bancoIniciado; expect(consultar).not.toHaveBeenCalled(); expect(enviar).toHaveBeenCalledOnce();
+  liberarBanco(); await evento;
+  expect(consultar).toHaveBeenCalledOnce();
+  const falas = enviar.mock.calls.map(([p]) => p.texto).join(' ');
+  expect(falas).toContain('173 consultas sem nota'); expect(falas).toContain('Pessoa Apenas Ao Vivo');
+  expect(falas).not.toMatch(/não há pendências|períodos anteriores/i);
+  expect(JSON.stringify(fronteiras.query.mock.calls)).not.toContain('Pessoa Apenas Ao Vivo');
+  expect(JSON.stringify(banco.mensagens)).not.toContain('Pessoa Apenas Ao Vivo'); expect(JSON.stringify(banco.mensagens)).toContain('[PACIENTE]');
+  const auditoria = logs.mock.calls.filter(c => String(c[0]).startsWith('FERRAMENTA_AGENDA_RESULTADO'));
+  expect(auditoria).toHaveLength(1); expect(String(auditoria[0][0])).toContain('"total":173'); expect(String(auditoria[0][0])).not.toContain('Pessoa Apenas Ao Vivo');
 });
