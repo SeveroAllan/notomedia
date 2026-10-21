@@ -1,3 +1,4 @@
+import { formatarPendencias } from './pendencias-medico.js';
 import { contemCredencialAgenda, podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { RASCUNHO_FALLBACK_CONVERSA } from './conversador-medico.js';
@@ -21,13 +22,16 @@ export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string; chavePergunta?: string; eventoAgenda?: { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean } },
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
+    pendencias?: Pick<import('./pendencias-medico.js').PendenciasMedico, 'responder' | 'iniciar' | 'aposSyncIncompleta'>;
+    aguardaInicioRetroativo?: (medicoId: string) => Promise<boolean>;
+    prepararPendencias?: (medicoId: string, agora: Date) => Promise<{ ok: boolean; motivo?: string }>;
     retroativo?: Pick<import('./lote-retroativo.js').ConversaLoteRetroativo, 'iniciar' | 'responder'>;
     aoReagir?: (reacao: import('../whatsapp/reagir-mensagem.js').ReacaoMedico) => Promise<void>;
     aoConversar?: (fala: string[], chave: string, falaMemoria?: string[]) => Promise<void>;
     memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     listarConsultasSemNota?: (medicoId: string, agenda: EstadoComunicacaoMedico['estado']['agenda'], agora: Date) => Promise<{
-      ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number }>;
+      ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number }>;
     enviarLinkCofreAgenda?: (medicoId: string) => Promise<{ ok: boolean; motivo: string }>;
     lerContextoConexao?: (medicoId: string, agora: Date) => Promise<ContextoConexaoAgenda>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
@@ -36,7 +40,7 @@ export async function processarComunicacaoMedico(
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
   const nomesAoVivo = new Set<string>();
-  const auditarFerramenta = (ferramenta: string, resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number }) => {
+  const auditarFerramenta = (ferramenta: string, resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number }) => {
     if (ferramenta === 'listar_consultas_sem_notas') for (const consulta of resultado.consultas ?? []) {
       const nome = (consulta as { paciente?: unknown })?.paciente;
       if (typeof nome === 'string' && !nome.startsWith('Contato ')) nomesAoVivo.add(nome);
@@ -86,13 +90,25 @@ export async function processarComunicacaoMedico(
           estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
           if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
         }
-        let resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number } = { ok: false, motivo: 'ACESSO_NAO_CONFIRMADO' };
+        let resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number } = { ok: false, motivo: 'ACESSO_NAO_CONFIRMADO' };
         if (entrada.eventoAgenda.conectado) {
           if (!estado?.estado.agenda.conectada || estado.estado.agenda.nome?.toLowerCase() !== 'tribemd' || !deps.listarConsultasSemNota) resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' };
-          else resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora);
+          else resultado = deps.prepararPendencias ? await deps.prepararPendencias(entrada.medicoId, entrada.agora) : await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora);
         }
-        auditarFerramenta('listar_consultas_sem_notas', resultado);
+        if (!deps.prepararPendencias) auditarFerramenta('listar_consultas_sem_notas', resultado);
+        else deps.log('info', 'SINCRONIZACAO_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: entrada.medicoId, ok: resultado.ok, motivo: resultado.motivo }));
         if (entrada.eventoAgenda.conectado && resultado.ok && conversa && await deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora)) return { tipo: 'nenhuma' };
+        if (entrada.eventoAgenda.conectado && resultado.ok && conversa && await deps.pendencias?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora)) return { tipo: 'nenhuma' };
+        if (entrada.eventoAgenda.conectado && !resultado.ok && ['SINCRONIZACAO_INCOMPLETA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '') && conversa && deps.pendencias) {
+          await deps.pendencias.aposSyncIncompleta(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora,
+            () => deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora) ?? Promise.resolve(false));
+          return { tipo: 'nenhuma' };
+        }
+        if (resultado.ok && resultado.dataInicio) {
+          const formatada = formatarPendencias(resultado, resultado.dataInicio, '', 2);
+          await enviarFala(formatada.fala, entrada.chaveProcessamento);
+          return { tipo: 'nenhuma' };
+        }
         const resposta = await deps.conversador?.responder({ texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
           resumo: memoria && conversa ? (await memoria.lerResumo(entrada.medicoId, conversa))?.resumo ?? null : null,
           estado: estado?.estado ?? {}, agora: entrada.agora, eventoAgenda: entrada.eventoAgenda, acoesPermitidas: [],
@@ -115,17 +131,26 @@ export async function processarComunicacaoMedico(
         catch { deps.log('erro', registroErroNoto('COMUNICACAO_RESPOSTA_PROTEGIDA_FALHOU', 'tecnico', { etapa: 'entrada' })); }
         return { tipo: 'nenhuma' };
       }
+      // Na conversa livre a interpretação usa o histórico completo; o classificador legado não o recebe.
+      if (!deps.conversaLivreAtiva && entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      if (!deps.conversaLivreAtiva && entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      let estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
+      if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
+      if (deps.conversaLivreAtiva && estado.estado.agenda.conectada && entrada.respostaMedico && entrada.chaveConversa && deps.pendencias) {
+        const mensagens = await deps.memoriaPersistida?.ler(entrada.medicoId, entrada.chaveConversa) ?? [];
+        if (await deps.pendencias.responder({ medicoId: entrada.medicoId, conversa: entrada.chaveConversa, chave: entrada.chaveProcessamento,
+          texto: entrada.respostaMedico.texto, mensagens, agora: entrada.agora,
+          ...(await deps.aguardaInicioRetroativo?.(entrada.medicoId) ? { aoInicio: async (desde: string) => { await deps.retroativo?.responder(entrada.medicoId, entrada.chaveConversa!, entrada.chaveProcessamento, desde, entrada.agora); } } : {}) })) {
+          await deps.memoriaPersistida?.registrar(entrada.medicoId, entrada.chaveConversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
+          return { tipo: 'nenhuma' };
+        }
+      }
       if (deps.conversaLivreAtiva && entrada.respostaMedico && entrada.chaveConversa &&
         await deps.retroativo?.responder(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento,
           entrada.respostaMedico.texto, entrada.agora, entrada.chavePergunta)) {
         await deps.memoriaPersistida?.registrar(entrada.medicoId, entrada.chaveConversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
         return { tipo: 'nenhuma' };
       }
-      // Na conversa livre a interpretação usa o histórico completo; o classificador legado não o recebe.
-      if (!deps.conversaLivreAtiva && entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
-      if (!deps.conversaLivreAtiva && entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
-      let estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
-      if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
       const memoriaConversa = deps.conversaLivreAtiva === true ? deps.memoriaPersistida : deps.memoriaConversa;
       const conversa = entrada.chaveConversa;
       const respostaMedico = entrada.respostaMedico ? { ...entrada.respostaMedico,
@@ -176,12 +201,12 @@ export async function processarComunicacaoMedico(
           try { await deps.aoReagir?.(resposta.reacao); }
           catch { deps.log('erro', registroErroNoto('REACAO_FALHOU', 'tecnico', { etapa: 'reacao' })); }
         }
+        if (resposta.acao === 'listar_consultas_sem_notas' && estado.estado.agenda.conectada && conversa && deps.pendencias) {
+          await deps.memoriaPersistida?.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
+          await deps.pendencias.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora);
+          return acao;
+        }
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
-          if (estado.estado.agenda.conectada && !consultaAnunciada) {
-            const aviso = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
-            await enviarFala([aviso], `${entrada.chaveProcessamento}:consulta`);
-            consultaAnunciada = true;
-          }
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
           catch (e) { deps.log('erro', registroErroNoto('AGENDA_INDISPONIVEL', 'tecnico', { etapa: 'listar', detalhe: e instanceof Error ? e.message : String(e) })); resultado = { ok: false, motivo: 'AGENDA_INDISPONIVEL' }; }

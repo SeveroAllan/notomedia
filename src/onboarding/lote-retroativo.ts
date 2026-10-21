@@ -47,6 +47,7 @@ export class ConversaLoteRetroativo {
   constructor(private readonly repo: RepositorioLotes, private readonly deps: {
     permitido: (medicoId: string) => Promise<boolean>;
     contar: (medicoId: string, desde: string, ate: string) => Promise<ContagemPeriodo>;
+    listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: () => Promise<void>) => Promise<void>;
     comporContagem: (lote: LoteRetroativo) => { fala: string[] };
     interpretarData: (texto: string, agora: Date) => Promise<string | null>;
     interpretarConfirmacao: (texto: string, pergunta: string) => Promise<InterpretacaoConfirmacao>;
@@ -68,13 +69,17 @@ export class ConversaLoteRetroativo {
     if (lote.estado === 'aguardando_data_inicio') {
       const desde = validarInicioRetroativo(await this.deps.interpretarData(texto, agora), agora);
       if (!desde) { await enviar(['Pode confirmar o dia, mês e ano do início? Preciso de uma data dos últimos 90 dias, até hoje.']); return true; }
-      const contagem = await this.deps.contar(medicoId, desde, lote.ate);
-      this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
-        totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
-      const preparado = await this.repo.preparar(lote.id, desde, contagem);
-      if (!preparado.totalConsultas) { await enviar([`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`]); return true; }
-      await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, this.deps.comporContagem(preparado).fala,
-        id => this.repo.registrarPergunta(lote.id, id, agora));
+      const propor = async () => {
+        const contagem = await this.deps.contar(medicoId, desde, lote.ate);
+        this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
+          totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
+        const preparado = await this.repo.preparar(lote.id, desde, contagem);
+        if (!preparado.totalConsultas) { await enviar([`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`]); return; }
+        await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, this.deps.comporContagem(preparado).fala,
+          id => this.repo.registrarPergunta(lote.id, id, agora));
+      };
+      if (this.deps.listarPeriodo) await this.deps.listarPeriodo(medicoId, conversa, mensagemId, desde, agora, propor);
+      else await propor();
       return true;
     }
     // A resposta deve citar a pergunta enviada; um "sim" solto nunca libera um lote.

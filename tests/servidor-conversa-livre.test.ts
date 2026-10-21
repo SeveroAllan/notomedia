@@ -40,6 +40,8 @@ beforeEach(() => {
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
   fronteiras.connect.mockImplementation(() => historico.connect());
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
+    if (sql.startsWith('select data_inicio::text')) return { rows: [{ data_inicio: '2026-09-03', aguardando_data: false, ultimo_aviso: null }] };
+    if (sql.startsWith('insert into public.noto_contexto_pendencias') || sql.startsWith('update public.noto_contexto_pendencias')) return { rows: [{ medico_id: 'medico' }] };
     if (sql.startsWith('select u.telefone from medicos m')) return { rows: [{ telefone }] };
     if (sql.startsWith('select ambiente from medico_perfil_fiscal')) return { rows: [{ ambiente }] };
     if (sql.startsWith('select id from pacientes')) return { rows: [{ id: '00000000-0000-4000-8000-000000000002' }] };
@@ -195,12 +197,11 @@ it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas reservam mem
 it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo critério do comprovante e entrega pela conversa protegida', async () => {
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
   fronteiras.agenda = { nome: 'tribemd', conectada: true };
-  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 1;
   const queryAnterior = fronteiras.query.getMockImplementation()!;
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
     if (sql.startsWith('select 1 from public.noto_consultas_sincronizadas')) {
-      expect(enviar).toHaveBeenCalledExactlyOnceWith({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone,
-        texto: 'Sua agenda já está conectada, deixa eu ver um minutinho.' });
+      expect(enviar).not.toHaveBeenCalled();
       return { rows: [{ existe: 1 }] };
     }
     if (sql.includes('select c.id_externo, p.telefone')) return { rows: [
@@ -213,22 +214,13 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
     }
     return queryAnterior(sql, parametros);
   });
-  const openaiAnterior = fronteiras.openai.getMockImplementation()!;
-  fronteiras.openai.mockImplementation(async (...args: any[]) => {
-    const dados = JSON.parse(args[2][1].content);
-    if (args[2][0].content.startsWith('Extraia')) return openaiAnterior(...args);
-    if (!dados.resultadoFerramenta) return '{"fala":["Consultar"],"acao":"listar_consultas_sem_notas"}';
-    expect(dados.resultadoFerramenta).toEqual({ ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: {
-      ok: true, total: 1, janelaDias: 90, consultas: [{ paciente: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00.000Z', valorCentavos: 40000 }]
-    } });
-    return '{"fala":["Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400."],"acao":null}';
-  });
+  fronteiras.openai.mockResolvedValue('{"verificar":true,"desde":"2026-09-03","moldura":"Conferi esse período."}');
   await receber(app, 'listar', 'Verifique as notas pendentes');
-  expect(enviar).toHaveBeenCalledTimes(2);
+  expect(enviar).toHaveBeenCalledTimes(1);
   const enviosAntesDaReentrega = enviar.mock.calls.slice();
   await receber(criarAppExpress(), 'listar', 'Verifique as notas pendentes');
   expect(enviar.mock.calls).toEqual(enviosAntesDaReentrega);
-  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Sua agenda já está conectada, deixa eu ver um minutinho.', 'Encontrei uma consulta realizada sem nota associada: Paciente exemplo, 19/10, R$400.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Conferi esse período.\n1 consultas sem nota desde 03/09/2026:\nPaciente exemplo — 19/10/2026'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
   expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicoId: 'medico', janelaDias: 90, agora: expect.any(Date) }));
   const escrita = fronteiras.query.mock.calls.find(([sql]) => sql.startsWith('insert into public.noto_consultas_sincronizadas'))!;
@@ -273,8 +265,8 @@ it('evento de conexão continua sozinho, verifica agenda e grava contexto nas va
   enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
   criarAppExpress(); const evento = { agenda: 'tribemd' as const, conectado: true, chave: 'link-salvo' };
   await fronteiras.concluirAgenda!('medico', evento); await fronteiras.concluirAgenda!('medico', evento);
-  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência nos últimos 90 dias.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
-  expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência desde 03/09/2026.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(fronteiras.fonte).toHaveBeenCalledTimes(2); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
   expect(banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
   for (const numero of ['5551993527271', '555193527271']) {
     const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, numero])).digest('hex');
@@ -311,7 +303,7 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
   const leitura = new Promise<void>(r => { liberarFonte = r; }), gravacao = new Promise<void>(r => { liberarBanco = r; });
   const fonteIniciada = new Promise<void>(r => { iniciouFonte = r; }), bancoIniciado = new Promise<void>(r => { iniciouBanco = r; });
   let gravou = false;
-  fronteiras.fonte.mockImplementationOnce(async () => {
+  fronteiras.fonte.mockImplementation(async () => {
     iniciouFonte(); await leitura;
     return { tipo: 'consultas', fonte: 'tribemd', consultas: Array.from({ length: 173 }, (_, i) => ({ pacienteId: '456', telefonePaciente: '5551993527271', nomeAoVivo: 'Pessoa Apenas Ao Vivo', idExterno: String(i), dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 30000 })) };
   });
@@ -341,7 +333,7 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
 
 it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa apenas simulação sem PDF', async () => {
   config.emissaoComprovanteHomologacaoAtiva = true; config.envioRealAllowlist = ['+5551993527271']; fronteiras.agenda = { nome: 'tribemd', conectada: true };
-  enviosEsperados = 6;
+  enviosEsperados = 7;
   let atual: any;
   vi.spyOn(PostgresLotesEmissao.prototype, 'abrir').mockImplementation(async (medicoId, conversa, _chave, agora) => atual = { id: 'lote-servidor', medicoId, conversa, ate: agora.toISOString(), desde: null, estado: 'aguardando_data_inicio', totalConsultas: 0, totalCentavos: 0, semValor: 0 });
   vi.spyOn(PostgresLotesEmissao.prototype, 'ativo').mockImplementation(async () => atual);
@@ -356,9 +348,9 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'lote-evento' });
   expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(enviar.mock.calls[1][0].texto).toContain('Desde que dia');
   await receber(app, 'data-lote', 'desdi primeiru de otubro');
-  expect(enviar.mock.calls[2][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-3');
-  await receber(app, 'sim-lote', 'manda ver', true, 'evo-3'); await receber(app, 'sim-lote', 'manda ver', true, 'evo-3');
-  expect(confirmar).toHaveBeenCalledOnce(); expect(confirmar.mock.calls[0].slice(1, 4)).toEqual(['assistente:sim-lote', 'evo-3', { intencao: 'sim', confianca: .99 }]);
+  expect(enviar.mock.calls[2][0].texto).toContain('desde 01/10/2026'); expect(enviar.mock.calls[3][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-4');
+  await receber(app, 'sim-lote', 'manda ver', true, 'evo-4'); await receber(app, 'sim-lote', 'manda ver', true, 'evo-4');
+  expect(confirmar).toHaveBeenCalledOnce(); expect(confirmar.mock.calls[0].slice(1, 4)).toEqual(['assistente:sim-lote', 'evo-4', { intencao: 'sim', confianca: .99 }]);
   let reservado = false;
   vi.spyOn(PostgresLotesEmissao.prototype, 'reservar').mockImplementation(async () => { if (reservado) return null; reservado = true; return { ...atual, itens: snapshot.map((x, i) => ({ ...x, id: String(i) })) }; });
   vi.spyOn(PostgresLotesEmissao.prototype, 'reservarItem').mockResolvedValue(true);
@@ -371,6 +363,6 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   const emitir = vi.spyOn(PostgresEmissorDpsService.prototype, 'emitir');
   await app.locals.processarLoteRetroativo(); await app.locals.processarLoteRetroativo();
   expect(simular).toHaveBeenCalledOnce(); expect(emitir).not.toHaveBeenCalled(); expect(itens.mock.calls.map(c => c[1])).toEqual(['simulada','sem_valor']);
-  expect(enviar.mock.calls[4][0].texto).toContain('Simulei 1 de 1'); expect(enviar.mock.calls[5][0].texto).toContain('valor');
+  expect(enviar.mock.calls[5][0].texto).toContain('Simulei 1 de 1'); expect(enviar.mock.calls[6][0].texto).toContain('valor');
   expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });

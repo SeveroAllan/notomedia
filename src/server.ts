@@ -1,3 +1,5 @@
+import { PendenciasMedico, classificarPendencias } from './onboarding/pendencias-medico.js';
+import { PostgresContextoPendencias } from './io/postgres/postgres-contexto-pendencias.js';
 import { ConversaLoteRetroativo, interpretarDataRetroativo } from './onboarding/lote-retroativo.js';
 import { PostgresLotesEmissao } from './io/postgres/postgres-lotes-emissao.js';
 import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
@@ -201,10 +203,39 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   };
   app.locals.sincronizarAgendaHomologacao = sincronizarAgendaHomologacao;
 
+  const contextoPendencias = new PostgresContextoPendencias(pool);
+  const pendenciasPermitidas = async (id: string) => config.comunicacaoMedicoAtiva === true && config.conversaLivreAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
+  const listarPendencias = async (id: string, agenda: { nome: string | null; conectada: boolean }, instante: Date, dataInicio?: string) => {
+    if (!await pendenciasPermitidas(id)) return { ok: false, motivo: 'ENVIO_BLOQUEADO' };
+    dataInicio ??= (await contextoPendencias.ler(id)).dataInicio ?? undefined;
+    if (!dataInicio) return { ok: false, motivo: 'DATA_INICIO_NECESSARIA' };
+    const nomesAoVivo = new Map<string, string | null>();
+    let sincronizacaoConcluida = false;
+    if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
+      const sincronizada = await sincronizarAgendaHomologacao(id, instante);
+      if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
+      sincronizacaoConcluida = true;
+      for (const consulta of sincronizada.consultas) nomesAoVivo.set(consulta.idExterno, consulta.nomeAoVivo ?? null);
+    }
+    return new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
+      (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId),
+      consultaId => nomesAoVivo.get(consultaId) ?? null, sincronizacaoConcluida, dataInicio);
+  };
+  const pendencias = config.conversaLivreAtiva ? new PendenciasMedico(contextoPendencias, {
+    permitido: pendenciasPermitidas,
+    sincronizar: async (id, agora) => { const r = await sincronizarAgendaHomologacao(id, agora); return r.tipo === 'erro' ? { ok: false, motivo: r.codigo } : { ok: true }; },
+    classificar: entrada => classificarPendencias(iaApiKey, iaModeloTexto, completarIa, entrada),
+    listar: (id, inicio, agora) => listarPendencias(id, { nome: 'tribemd', conectada: true }, agora, inicio),
+    enviar: async (medicoId, conversa, chave, fala, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, falaMemoria }); },
+    log: mensagem => mensagem.startsWith('FERRAMENTA_AGENDA_RESULTADO ') ? console.info(mensagem) : console.warn(registroErroNoto(mensagem, 'tecnico', { etapa: 'pendencias' }))
+  }) : undefined;
+  app.locals.aguardarPendencias = () => pendencias?.aguardar();
+
   const lotes = new PostgresLotesEmissao(pool, config.appPepper);
   const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
   const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
+    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, aoConcluir); },
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
     contar: (id, desde, ate) => lotes.contarConsultasPeriodo(id, desde, ate),
     interpretarData: (texto, agora) => interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
@@ -229,23 +260,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { retroativo, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
+    }, { retroativo, pendencias, aguardaInicioRetroativo: retroativo ? async id => (await lotes.ativo(id))?.estado === 'aguardando_data_inicio' : undefined, prepararPendencias: async (id, instante) => {
+      if (!await pendenciasPermitidas(id)) return { ok: false, motivo: 'ENVIO_BLOQUEADO' };
+      const r = await sincronizarAgendaHomologacao(id, instante);
+      return r.tipo === 'erro' ? { ok: false, motivo: r.codigo } : { ok: true };
+    }, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
-      listarConsultasSemNota: async (id, agenda, instante) => {
-        const nomesAoVivo = new Map<string, string | null>();
-        let sincronizacaoConcluida = false;
-        if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
-          const sincronizada = await sincronizarAgendaHomologacao(id, instante);
-          if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
-          sincronizacaoConcluida = true;
-          for (const consulta of sincronizada.consultas) nomesAoVivo.set(consulta.idExterno, consulta.nomeAoVivo ?? null);
-        }
-        return new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
-          (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId),
-          consultaId => nomesAoVivo.get(consultaId) ?? null, sincronizacaoConcluida);
-      },
+      listarConsultasSemNota: (id, agenda, instante) => listarPendencias(id, agenda, instante),
       enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
       lerContextoConexao: cofres.links ? (id, agora) => cofres.links!.lerContextoConexao(id, agora) : undefined,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,

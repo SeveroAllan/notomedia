@@ -1,3 +1,4 @@
+import { validarInicioRetroativo } from '../../onboarding/lote-retroativo.js';
 import { PostgresAtendimentoRepositorio } from './postgres-atendimento-repositorio.js';
 import { gerarVariantesTelefoneBrasileiro } from '../../whatsapp/variantes-telefone-brasileiro.js';
 import type pg from 'pg';
@@ -7,9 +8,10 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
   constructor(private readonly pool: Pick<pg.Pool, 'query'>) {}
 
   async listarConsultasSemNota(medicoId: string, agenda: { nome: string | null; conectada: boolean }, agora: Date,
-    consultaJaFaturada: (fonte: string, id: string) => Promise<boolean>, nomeAoVivo?: (id: string) => string | null | Promise<string | null>, sincronizacaoConcluida = false) {
+    consultaJaFaturada: (fonte: string, id: string) => Promise<boolean>, nomeAoVivo?: (id: string) => string | null | Promise<string | null>, sincronizacaoConcluida = false, dataInicio?: string) {
     if (!agenda.conectada) return { ok: false as const, motivo: 'SEM_AGENDA_CONECTADA' };
     if (agenda.nome?.trim().toLowerCase() !== 'tribemd') return { ok: false as const, motivo: 'AGENDA_NAO_SUPORTADA' };
+    if (!validarInicioRetroativo(dataInicio ?? null, agora)) return { ok: false as const, motivo: 'DATA_INICIO_NECESSARIA' };
     try {
       const sincronizadas = await this.pool.query('select 1 from public.noto_consultas_sincronizadas where medico_id=$1 and fonte=$2 limit 1', [medicoId, 'tribemd']);
       if (!sincronizadas.rows.length && !sincronizacaoConcluida) return { ok: false as const, motivo: 'SEM_CONSULTAS_SINCRONIZADAS' };
@@ -17,8 +19,8 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
         `select c.id_externo, p.telefone as telefone, c.data_hora, c.valor_consulta_centavos
         from public.noto_consultas_sincronizadas c join public.pacientes p on p.id=c.paciente_id and p.medico_id=c.medico_id
         where c.medico_id=$1 and c.fonte=$2 and c.status='realizada'
-          and c.data_hora >= $3::timestamptz - interval '90 days' and c.data_hora <= $3::timestamptz
-        order by c.data_hora desc, c.id_externo`, [medicoId, 'tribemd', agora.toISOString()]);
+          and c.data_hora >= ($4::date::timestamp at time zone 'America/Sao_Paulo') and c.data_hora <= $3::timestamptz
+        order by c.data_hora desc, c.id_externo`, [medicoId, 'tribemd', agora.toISOString(), dataInicio]);
       const consultas: Array<{ paciente: string; dataHora: string; valorCentavos: number | null }> = [];
       let total = 0;
       for (const consulta of rows) {
@@ -31,7 +33,7 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
             dataHora: consulta.data_hora, valorCentavos: consulta.valor_consulta_centavos });
         }
       }
-      return { ok: true as const, total, consultas, janelaDias: 90 };
+      return { ok: true as const, total, consultas, dataInicio };
     } catch { return { ok: false as const, motivo: 'AGENDA_INDISPONIVEL' }; }
   }
 
