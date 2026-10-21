@@ -3,10 +3,10 @@ import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,norma
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
-it('prompt curto, uma chamada sem regeneração, histórico/resumo/fatos separados e temperatura baixa',async()=>{
+it('prompt estruturado, uma chamada sem regeneração, histórico/resumo/fatos separados e temperatura baixa',async()=>{
  const completar=vi.fn(async()=>'{"fala":["Oi! Como posso ajudar?"],"acao":null}');
  const r=await new ConversadorMedico('k','m',completar).responder({...entrada,mensagens:['Pergunta anterior','Resposta anterior'],resumo:'O período já foi informado.'});
- expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(2000);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
+ expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(5000);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
  const dados=JSON.parse(completar.mock.calls[0][2][1].content);expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
  expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:1});
 });
@@ -59,4 +59,9 @@ it('ação fiscal inválida não fornece interpretação utilizável para libera
  const {confirmacaoDaDecisao}=await import('../src/onboarding/conversador-medico.js');
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'emitir_nota',parametros:{confirmacao:{intencao:'sim',confianca:1}}})).toEqual({intencao:'duvida',confianca:0});
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.9}}})).toEqual({intencao:'sim',confianca:.9});
+});
+
+it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
+ for(const alias of ['Tribe','tribe md','o tribe']) expect(PROMPT_CONVERSA).toContain('"'+alias+'"');
+ for(let passo=1;passo<=8;passo++) expect(PROMPT_CONVERSA).toMatch(new RegExp('^'+passo+'\\. ', 'm'));
 });
