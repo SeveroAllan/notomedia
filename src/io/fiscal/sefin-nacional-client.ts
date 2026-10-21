@@ -88,6 +88,7 @@ export class SefinNacionalClient {
     } catch (err: any) {
       return {
         sucesso: false,
+        codigoErro: ['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(err?.code) || err?.name === 'AbortError' ? 'SEFIN_TIMEOUT' : 'SEFIN_INDISPONIVEL',
         falhaAntesDoEnvio: ['EAI_AGAIN', 'ECONNREFUSED'].includes(err?.code) ? err.code : undefined,
         motivo: `Falha de conexão com SEFIN Nacional (${url}): ${err?.message || err}`
       };
@@ -105,6 +106,7 @@ export class SefinNacionalClient {
     } catch {
       return {
         sucesso: false,
+        httpStatus: status,
         motivo: `Resposta HTTP ${status} da SEFIN não é JSON válido: ${corpo.slice(0, 300)}`
       };
     }
@@ -134,6 +136,7 @@ export class SefinNacionalClient {
       if (json['motivo'] || json['message']) {
         return {
           sucesso: false,
+          httpStatus: status,
           motivo: `SEFIN [HTTP ${status}]: ${json['motivo'] || json['message']}`,
           respostaRaw: json
         };

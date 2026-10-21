@@ -11,7 +11,7 @@ import type { DadosMensagemEvolution } from '../src/whatsapp/payload-webhook-sch
 import type { EstadoPedidoComprovante, ResultadoExtracaoComprovante, ExtratorComprovante } from '../src/atendimento/comprovante.js';
 
 const fronteiras = vi.hoisted(() => ({ completar: vi.fn(), emitir: vi.fn(() => { throw new Error('EMISSAO_REAL_PROIBIDA'); }) }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: fronteiras.completar }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.completar }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 let rede: ReturnType<typeof vi.spyOn>, texto: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {

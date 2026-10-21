@@ -5,7 +5,7 @@ import { orquestrarComunicacao } from '../src/onboarding/orquestrar-comunicacao.
 
 const hoje = '2026-10-18';
 const interpretar = (texto: string, data = hoje) => (regras as any).interpretarRespostaNota(texto, data);
-const pergunta = 'Tem alguma nota para emitir? Desde que dia?';
+const pergunta = 'Desde quando você não emite notas?';
 const agenda = 'Para eu achar suas consultas, preciso da sua agenda. Posso te mandar o link?';
 describe('resposta determinística e textos aprovados', () => {
   it.each([['não', { temNota: false, desde: null }], ['NÃO', { temNota: false, desde: null }],

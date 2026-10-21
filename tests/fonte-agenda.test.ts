@@ -133,3 +133,121 @@ it('migração e fixtures não contêm segredos nem dados pessoais na tabela nor
   expect(sql).toContain('from public'); expect(sql).toContain('from anon'); expect(sql).toContain('from authenticated');
   expect(sql).not.toMatch(/\b(senha|password|token|cookie|cpf|nome)\b/);
 });
+
+it.each([
+  [{ nome: 'tribemd', conectada: false }, 'SEM_AGENDA_CONECTADA'],
+  [{ nome: 'outra', conectada: true }, 'AGENDA_NAO_SUPORTADA'],
+  [{ nome: null, conectada: true }, 'AGENDA_NAO_SUPORTADA']
+])('consulta de pendências recusa agenda %j sem SQL', async (agenda, motivo) => {
+  const query = vi.fn(), faturada = vi.fn();
+  expect(await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, agenda as any, new Date('2026-10-20T15:00Z'), faturada))
+    .toEqual({ ok: false, motivo });
+  expect(query).not.toHaveBeenCalled(); expect(faturada).not.toHaveBeenCalled();
+});
+it.each(['sem sincronizadas', 'sem pendências', 'erro'])('consulta de pendências trata %s', async caso => {
+  const query = vi.fn(async () => ({ rows: caso === 'sem sincronizadas' ? [] : [{}] }));
+  if (caso === 'erro') query.mockRejectedValueOnce(Error('banco indisponível'));
+  if (caso === 'sem pendências') query.mockResolvedValueOnce({ rows: [{}] }).mockResolvedValueOnce({ rows: [] });
+  expect(await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), vi.fn(), undefined, false, '2026-09-03'))
+    .toEqual(caso === 'sem pendências' ? { ok: true, total: 0, consultas: [], dataInicio: '2026-09-03' } : { ok: false, motivo: caso === 'erro' ? 'AGENDA_INDISPONIVEL' : 'SEM_CONSULTAS_SINCRONIZADAS' });
+});
+it('pendências usam o mesmo verificador de faturamento, início informado, total e no máximo 20 sem identificadores sensíveis', async () => {
+  const rows = Array.from({ length: 25 }, (_, i) => ({ id_externo: String(i), paciente: `Paciente ${i}`, data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 }));
+  const query = vi.fn(async (_sql: string, _p: unknown[]) => ({ rows })).mockResolvedValueOnce({ rows }).mockResolvedValueOnce({ rows });
+  const faturada = vi.fn(async (_fonte: string, id: string) => id === '0');
+  const resultado = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), faturada, id => `Paciente ${id}`, false, '2026-09-03');
+  expect(resultado).toEqual({ ok: true, total: 24, dataInicio: '2026-09-03', consultas: rows.slice(1, 21).map(c => ({ paciente: c.paciente, dataHora: c.data_hora, valorCentavos: c.valor_consulta_centavos })) });
+  expect(faturada).toHaveBeenCalledTimes(25); expect(faturada).toHaveBeenCalledWith('tribemd', '0');
+  expect(query.mock.calls[1][1]).toEqual([medico, 'tribemd', '2026-10-20T15:00:00.000Z', '2026-09-03']);
+  const sql = query.mock.calls[1][0];
+  expect(sql).toContain("c.status='realizada'"); expect(sql).toContain("$4::date::timestamp at time zone 'America/Sao_Paulo'"); expect(sql).toContain('c.data_hora <= $3');
+  expect(sql).toContain('p.medico_id=c.medico_id'); expect(sql).not.toMatch(/cpf/);
+  expect(JSON.stringify(resultado)).not.toContain('11999990000');
+});
+
+it('sync mapeia o ID numérico do portal só na persistência, preservando critério transitório do comprovante', async () => {
+  const fonte = new FonteFalsa({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ ...agenda().consultas[0], pacienteId: '456' }] });
+  const salvar = vi.fn(async () => {}), resolver = vi.fn(async () => paciente);
+  const resultado = await sincronizarAgenda({ ...entrada, janelaDias: 90, agora: new Date('2026-10-20T15:00:00Z') }, fonte, { salvar }, resolver);
+  expect(resultado).toMatchObject({ consultas: [{ pacienteId: '456' }] });
+  expect(salvar).toHaveBeenCalledExactlyOnceWith(medico, 'tribemd', [expect.objectContaining({ pacienteId: paciente })]);
+  expect(resolver).toHaveBeenCalledExactlyOnceWith(medico, expect.objectContaining({ pacienteId: '456' }));
+  expect(fonte.recebidas[0]).toMatchObject({ janelaDias: 90, agora: new Date('2026-10-20T15:00:00Z') });
+});
+it.each([false, true])('telefone do portal resolve paciente local existente=%s sem gravar nome', async existe => {
+  const query = vi.fn(async (sql: string, p: any[]) => {
+    if (sql.startsWith('select id from pacientes')) { expect(p[1]).toContain('555193527271'); expect(p[1]).toContain('5551993527271'); return { rows: existe ? [{ id: paciente }] : [] }; }
+    if (sql.includes('insert into pacientes')) {
+      expect(p).toEqual([medico, '5551993527271', null, undefined, undefined, 'agenda_tribemd_sync', null, '']);
+      return { rows: [{ id: paciente, medico_id: medico, telefone: p[1], nome: null }] };
+    }
+    throw Error('SQL não modelado');
+  });
+  const repo = new PostgresConsultasSincronizadas({ query } as unknown as pg.Pool);
+  expect(await repo.resolverPaciente(medico, { ...agenda().consultas[0], pacienteId: '456', telefonePaciente: '555193527271', valorConsultaCentavos: 35000 })).toBe(paciente);
+  expect(query.mock.calls.filter(([s]) => s.includes('insert into pacientes'))).toHaveLength(existe ? 0 : 1);
+  expect(JSON.stringify(query.mock.calls)).not.toContain('Nome do portal');
+});
+it('mapeamento recusa telefone ausente ou múltiplos cadastros e nunca salva ID numérico', async () => {
+  const query = vi.fn(async () => ({ rows: [{ id: paciente }, { id: 'outro' }] }));
+  const repo = new PostgresConsultasSincronizadas({ query } as unknown as pg.Pool);
+  await expect(repo.resolverPaciente(medico, { ...agenda().consultas[0], telefonePaciente: undefined, valorConsultaCentavos: 35000 })).rejects.toThrow('TELEFONE_AGENDA_INVALIDO');
+  expect(query).not.toHaveBeenCalled();
+  await expect(repo.resolverPaciente(medico, agenda().consultas[0] as any)).rejects.toThrow('VINCULO_PACIENTE_AMBIGUO');
+});
+it('pendências usam nome ao vivo por atendimento e mascaram telefone quando não há nome, sem gravar', async () => {
+  const query = vi.fn(async (_sql: string, _p: unknown[]) => ({ rows: [{}] })).mockResolvedValueOnce({ rows: [{}] }).mockResolvedValueOnce({ rows: [
+    { id_externo: 'a', telefone: '5551993527271', data_hora: '2026-10-19T15:00Z', valor_consulta_centavos: 30000 },
+    { id_externo: 'b', telefone: '5551993528888', data_hora: '2026-10-18T15:00Z', valor_consulta_centavos: null }
+  ] } as any);
+  const vivo = vi.fn(async (id: string) => id === 'a' ? 'Nome Apenas Vivo' : null);
+  const r = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), vi.fn(async () => false), vivo, false, '2026-09-03');
+  expect(r).toMatchObject({ ok: true, total: 2, consultas: [{ paciente: 'Nome Apenas Vivo' }, { paciente: 'Contato •••• 8888' }] });
+  expect(JSON.stringify(r)).not.toContain('5551993528888');
+  expect(vivo).toHaveBeenCalledTimes(2); expect(JSON.stringify(query.mock.calls)).not.toContain('Nome Apenas Vivo');
+  expect(query.mock.calls.some(c => /insert|update/i.test(String(c[0])))).toBe(false);
+});
+it.each([undefined, '2026-10-21', '2026-02-30', '2025-01-01'])('pendências sem início válido não consultam o banco nem assumem 90 dias: %s', async inicio => {
+  const query = vi.fn(), faturada = vi.fn();
+  const r = await new PostgresConsultasSincronizadas({ query } as any).listarConsultasSemNota(medico, { nome: 'tribemd', conectada: true }, new Date('2026-10-20T15:00Z'), faturada, undefined, false, inicio);
+  expect(r).toEqual({ ok: false, motivo: 'DATA_INICIO_NECESSARIA' }); expect(query).not.toHaveBeenCalled(); expect(faturada).not.toHaveBeenCalled();
+});
+it('sync não grava nome nem cobrado ao vivo, mesmo quando diferentes do valor da consulta', async () => {
+  const query = vi.fn(async () => ({ rows: [] }));
+  await new PostgresConsultasSincronizadas({ query } as any).salvar(medico,'tribemd', [{ pacienteId: 'paciente', idExterno: '12', dataHora: '2026-10-19T12:00Z', status: 'realizada', nomeAoVivo: 'Pessoa Efemera', valorConsultaCentavos: 30000, valorCobradoAoVivoCentavos: 25000 }]);
+  const payload = JSON.parse(query.mock.calls[0][1][2]);
+  expect(payload).toEqual([{ paciente_id:'paciente',id_externo:'12',data_hora:'2026-10-19T12:00Z',status:'realizada',valor_consulta_centavos:30000 }]);
+  expect(JSON.stringify(query.mock.calls)).not.toMatch(/Pessoa Efemera|25000|valorCobrado/);
+});
+it('frescor só em RAM por médico: dez minutos, cobertura de janela, invalidação e isolamento', async () => {
+  vi.useFakeTimers();
+  try {
+    const { CacheAgendaProcesso } = await import('../src/agenda/sincronizar-agenda.js');
+    const cache = new CacheAgendaProcesso();
+    const carregar = vi.fn(async () => ({ tipo: 'consultas' as const, fonte:'tribemd',consultas:[] }));
+    await cache.consultar('a', 7, carregar); await cache.consultar('a', 3, carregar);
+    expect(carregar).toHaveBeenCalledOnce();
+    await cache.consultar('b', 3, carregar); expect(carregar).toHaveBeenCalledTimes(2);
+    await cache.consultar('a', 10, carregar); expect(carregar).toHaveBeenCalledTimes(3);
+    cache.invalidar('a'); await cache.consultar('a', 3, carregar); expect(carregar).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(600000);
+    await cache.consultar('a', 3, carregar); expect(carregar).toHaveBeenCalledTimes(5);
+    const novaInstancia = new CacheAgendaProcesso(); await novaInstancia.consultar('a',3,carregar); expect(carregar).toHaveBeenCalledTimes(6);
+  } finally { vi.useRealTimers(); }
+});
+it('cache não guarda falha nem restaura uma leitura invalidada durante sua execução', async () => {
+  const { CacheAgendaProcesso } = await import('../src/agenda/sincronizar-agenda.js'); const cache=new CacheAgendaProcesso();
+  const erro=vi.fn(async()=>({tipo:'erro' as const,codigo:'FONTE_INDISPONIVEL' as const}));
+  await cache.consultar('a',7,erro); await cache.consultar('a',7,erro); expect(erro).toHaveBeenCalledTimes(2);
+  let concluir!: (r:any)=>void; const antiga=cache.consultar('a',7,()=>new Promise(r=>{concluir=r;}));
+  await Promise.resolve(); cache.invalidar('a'); concluir({tipo:'consultas',fonte:'tribemd',consultas:[]}); await expect(antiga).rejects.toThrow('ACESSO_AGENDA_ALTERADO');
+  const nova=vi.fn(async()=>({tipo:'consultas' as const,fonte:'tribemd',consultas:[]}));
+  await cache.consultar('a',7,nova); expect(nova).toHaveBeenCalledOnce();
+});
+it('cache compartilha somente a mesma leitura concorrente por médico',async()=>{
+ const {CacheAgendaProcesso}=await import('../src/agenda/sincronizar-agenda.js');const cache=new CacheAgendaProcesso();
+ const carregar=vi.fn(async()=>({tipo:'consultas' as const,fonte:'tribemd',consultas:[]}));
+ const resultados=await Promise.all(Array.from({length:12},()=>cache.consultar('a',7,carregar)));
+ expect(carregar).toHaveBeenCalledOnce();expect(resultados).toHaveLength(12);
+ cache.invalidar('a');
+});

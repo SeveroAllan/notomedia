@@ -80,3 +80,61 @@ describe('emissão por comprovante no PostgreSQL', () => {
     expect(sql).toContain('enable row level security'); expect(sql).toContain('revoke all'); expect(sql).not.toMatch(/create policy|cpf|senha/);
   });
 });
+
+async function pendente() {
+  const banco = new BancoEmissaoComprovante(); const repo = await adaptador(banco); const agora = new Date('2026-10-20T15:00:00Z');
+  await repo.enfileirar({ ...entrada(banco), dataEnvioPagamento: '2026-10-20T12:00:00Z' });
+  expect(banco.solicitacoes[0].aguardando_confirmacao_medico).toBe(true);
+  await repo.registrarPergunta('medico', 'solicitacao-0', 'enviado', 'pergunta-1', agora);
+  return { banco, repo, agora };
+}
+it.each([
+  ['sim', 0.9, 'CONFIRMADA'], ['sim', 0.899, 'CONFIRMACAO_INSUFICIENTE'], ['nao', 1, 'RECUSADA'],
+  ['duvida', 1, 'CONFIRMACAO_INSUFICIENTE'], ['outro_assunto', 1, 'CONFIRMACAO_INSUFICIENTE'], ['sim', NaN, 'CONFIRMACAO_INSUFICIENTE']
+] as const)('assinatura exige intenção %s e confiança %s, sem palpite', async (intencao, confianca, motivo) => {
+  const c = await pendente();
+  expect(await c.repo.confirmar('medico', 'resposta-1', { intencao, confianca }, c.agora, true, 'pergunta-1')).toEqual({ liberada: motivo === 'CONFIRMADA', motivo });
+  expect(c.banco.solicitacoes[0].aguardando_confirmacao_medico).toBe(motivo !== 'CONFIRMADA');
+  expect(c.banco.auditorias[0].estado.confirmacaoMedico.eventos.at(-1)).toMatchObject({ chaveResposta: 'resposta-1', intencao, motivo });
+});
+it.each(['sem pendente', 'duas pendentes', '48 horas', 'pergunta diferente', 'sem envio', 'flag off', 'produção'])('não libera com %s', async caso => {
+  const c = await pendente(); let agora = c.agora, permitido = true, pergunta = 'pergunta-1';
+  if (caso === 'sem pendente') c.banco.solicitacoes = [];
+  if (caso === 'duas pendentes') c.banco.solicitacoes.push({ id: 'manual', medico_id: 'medico', aguardando_confirmacao_medico: true });
+  if (caso === '48 horas') agora = new Date(c.agora.getTime() + 48 * 60 * 60 * 1000);
+  if (caso === 'pergunta diferente') pergunta = 'outra-pergunta';
+  if (caso === 'sem envio') await c.repo.registrarPergunta('medico', 'solicitacao-0', 'simulado', undefined, c.agora);
+  if (caso === 'flag off') permitido = false;
+  if (caso === 'produção') c.banco.ambiente = 'producao';
+  expect((await c.repo.confirmar('medico', 'resposta', { intencao: 'sim', confianca: 1 }, agora, permitido, pergunta)).liberada).toBe(false);
+  expect(c.banco.solicitacoes.every(s => s.aguardando_confirmacao_medico)).toBe(true);
+});
+it('chave da resposta citada precisa corresponder à pergunta persistida', async () => {
+  const c = await pendente();
+  expect(await c.repo.confirmar('medico', 'r', { intencao: 'sim', confianca: 1 }, c.agora, true, 'pergunta-1', 'outra-msg'))
+    .toEqual({ liberada: false, motivo: 'PERGUNTA_NAO_CONFIRMADA' });
+});
+it('confirmação concorrente/repetida libera uma única vez e não cria outra solicitação', async () => {
+  const c = await pendente();
+  const r = await Promise.all([c.repo.confirmar('medico', 'r', { intencao: 'sim', confianca: 1 }, c.agora, true, 'pergunta-1'),
+    c.repo.confirmar('medico', 'r', { intencao: 'sim', confianca: 1 }, c.agora, true, 'pergunta-1')]);
+  expect(r.filter(r => r.liberada)).toHaveLength(1); expect(c.banco.solicitacoes).toHaveLength(1);
+  expect(c.banco.auditorias[0].estado.confirmacaoMedico.eventos.filter((e: any) => e.motivo === 'CONFIRMADA')).toHaveLength(1);
+});
+it('uma recusa e o silêncio não liberam a fila nem uma confirmação posterior da recusa', async () => {
+  const c = await pendente(); expect(c.banco.solicitacoes[0].aguardando_confirmacao_medico).toBe(true);
+  await c.repo.confirmar('medico', 'nao', { intencao: 'nao', confianca: 1 }, c.agora, true, 'pergunta-1');
+  expect(await c.repo.confirmar('medico', 'sim-depois', { intencao: 'sim', confianca: 1 }, c.agora, true, 'pergunta-1')).toEqual({ liberada: false, motivo: 'RECUSADA' });
+  expect(c.banco.solicitacoes[0].aguardando_confirmacao_medico).toBe(true);
+});
+it('nova pergunta preserva auditoria e invalida resposta citando a pergunta anterior', async () => {
+  const c = await pendente();
+  await c.repo.confirmar('medico', 'duvida', { intencao: 'duvida', confianca: 1 }, c.agora, true, 'pergunta-1');
+  const depois = new Date(c.agora.getTime() + 1000);
+  await c.repo.registrarPergunta('medico', 'solicitacao-0', 'enviado', 'pergunta-2', depois);
+  expect(await c.repo.confirmar('medico', 'resposta-antiga', { intencao: 'sim', confianca: 1 }, depois, true, 'pergunta-2', 'pergunta-1'))
+    .toEqual({ liberada: false, motivo: 'PERGUNTA_NAO_CONFIRMADA' });
+  expect(await c.repo.confirmar('medico', 'resposta-nova', { intencao: 'sim', confianca: 1 }, depois, true, 'pergunta-2', 'pergunta-2'))
+    .toEqual({ liberada: true, motivo: 'CONFIRMADA' });
+  expect(c.banco.auditorias[0].estado.confirmacaoMedico.eventos).toHaveLength(5);
+});

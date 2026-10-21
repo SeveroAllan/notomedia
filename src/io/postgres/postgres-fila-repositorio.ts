@@ -64,13 +64,13 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
     const client = await this.pool.connect();
     try {
       await client.query('begin');
-      const { rows } = await client.query(`select ec.estado, pf.ambiente
+      const { rows } = await client.query(`select ec.estado, pf.ambiente, sn.aguardando_confirmacao_medico
         from public.noto_emissoes_comprovantes ec
         join solicitacoes_nota sn on sn.id = ec.solicitacao_id and sn.medico_id = ec.medico_id
         left join medico_perfil_fiscal pf on pf.medico_id = ec.medico_id
         where ec.solicitacao_id = $1 and sn.origem = 'whatsapp'
         for update of ec, sn`, [solicitacaoId]);
-      if (rows[0]?.estado !== 'enfileirada') {
+      if (rows[0]?.estado !== 'enfileirada' || rows[0]?.aguardando_confirmacao_medico === true) {
         await client.query('commit');
         return 'ocupada';
       }

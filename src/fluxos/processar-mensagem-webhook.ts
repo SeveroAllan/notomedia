@@ -32,7 +32,8 @@ export interface ProcessarWebhookDeps {
   instanciaOficialNome?: string;
   instanciaAssistenteNome?: string;
   comunicacaoMedicoAtiva?: boolean;
-  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
+  reservarMensagemMedico?: (medicoId: string, instancia: string, mensagemId: string) => Promise<boolean>;
+  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
 }
@@ -96,12 +97,15 @@ export async function processarMensagemWebhook(
       try {
         const medico = await deps.repositorio.buscarMedicoPorTelefone(telefone);
         if (medico) {
+          if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medico.id, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
           const bruto = payload.data.messageTimestamp;
           const numero = typeof bruto === 'number' ? bruto : typeof bruto === 'string' && bruto.trim() ? Number(bruto) : NaN;
           const data = new Date(numero > 1e11 ? numero : numero * 1000);
           const dataMensagem = Number.isFinite(data.getTime()) ? data.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }) : null;
           const chaveConversa = createHash('sha256').update(JSON.stringify([payload.instance, telefone])).digest('hex');
-          await deps.aoReceberMensagemMedico({ medicoId: medico.id, texto, chaveMensagem: payload.data.key.id, chaveConversa, dataMensagem });
+          const referencia = payload.data.message?.extendedTextMessage?.contextInfo;
+          const chavePergunta = referencia && typeof referencia === 'object' && 'stanzaId' in referencia && typeof referencia.stanzaId === 'string' ? referencia.stanzaId : undefined;
+          await deps.aoReceberMensagemMedico({ medicoId: medico.id, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, ...(chavePergunta ? { chavePergunta } : {}) });
         }
       } catch { console.error('COMUNICACAO_MEDICO_CICLO_FALHOU'); }
     }

@@ -145,6 +145,33 @@ describe('DPS real sem prefeitura', () => {
     expect(parsed.valores.trib).toEqual({ tribMun: { tribISSQN: '1', tpRetISSQN: '1' }, tribFed: { piscofins: { CST: '08' } }, totTrib: { pTotTribSN: '6.00' } });
   });
 
+  // XSD v1.01: produção restrita 20261020 antecipa cNBS; produção 20260209 mantém a ordem anterior.
+  // Fontes oficiais e hashes dos pacotes estão em docs/evidencias/dps-schema-cserv.md.
+  it.each([
+    [2, true, true, ['cTribNac', 'cTribMun', 'cNBS', 'xDescServ']],
+    [2, false, true, ['cTribNac', 'cNBS', 'xDescServ']],
+    [2, true, false, ['cTribNac', 'cTribMun', 'xDescServ']],
+    [2, false, false, ['cTribNac', 'xDescServ']],
+    [1, true, true, ['cTribNac', 'cTribMun', 'xDescServ', 'cNBS']],
+    [1, false, true, ['cTribNac', 'xDescServ', 'cNBS']],
+    [1, true, false, ['cTribNac', 'cTribMun', 'xDescServ']],
+    [1, false, false, ['cTribNac', 'xDescServ']]
+  ] as const)('serv/cServ segue sequência XSD (ambiente=%s, municipal=%s, NBS=%s)', (ambiente, municipal, nbs, ordem) => {
+    const { xml } = gerarXmlDps({ ...entrada, cTribMun: municipal ? '001' : undefined, cNBS: nbs ? '122051000' : '',
+      fiscal: { ambiente: ambiente === 2 ? 'homologacao' : 'producao', vigenciaInicio: '2026-01-01', competencia: '2026-10-17',
+        municipioPrestacao: '4205407', opcaoSimplesNacional: 'me_epp', regimeApuracaoSn: 'regime_1',
+        regimeEspecialTributacao: 0, tribISSQN: 1, tpRetISSQN: 1, cstPisCofins: '08', percentualTotTribSN: 6 } },
+      { ...prestador, ambiente }, agora());
+    const dps = new XMLParser({ parseTagValue: false, ignoreAttributes: false }).parse(xml).DPS;
+    expect(dps['@_xmlns']).toBe('http://www.sped.fazenda.gov.br/nfse');
+    expect(dps['@_versao']).toBe('1.01');
+    expect(Object.keys(dps.infDPS.serv)).toEqual(['locPrest', 'cServ']);
+    expect(dps.infDPS.serv.locPrest).toEqual({ cLocPrestacao: '4205407' });
+    expect(Object.keys(dps.infDPS.serv.cServ)).toEqual(ordem);
+    expect(dps.infDPS.serv.cServ).toEqual({ cTribNac: '040101', ...(municipal ? { cTribMun: '001' } : {}),
+      ...(nbs ? { cNBS: '122051000' } : {}), xDescServ: entrada.xDescServ });
+  });
+
   it('MEI não inclui PIS/COFINS nem percentual total do Simples', () => {
     const { xml } = gerarXmlDps(entrada, { ...prestador, regTrib: { ...prestador.regTrib, opSimpNac: 2 } }, agora());
     expect(xml).toContain('<totTrib><indTotTrib>0</indTotTrib></totTrib>');

@@ -1,4 +1,10 @@
-import { createHmac } from 'node:crypto';
+import { PostgresMemoriaConversaMedico } from '../onboarding/memoria-conversa.js';
+import { REACOES_PERMITIDAS, type ReacaoMedico, type TransporteReacao } from './reagir-mensagem.js';
+import { registroErroNoto } from '../observabilidade/erros.js';
+import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
+import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
+import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
+import { createHash, createHmac } from 'node:crypto';
 import type pg from 'pg';
 import type { AppConfig } from '../config.js';
 import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
@@ -10,7 +16,7 @@ const textos: Record<AcaoMedico, string> = {
   perguntar_medico: 'Doutor(a), preciso que confira este comprovante e me oriente antes de emitir a nota.',
   perguntar_pacote: 'Doutor(a), o valor do comprovante corresponde a mais de uma consulta. É um pacote? Preciso da sua confirmação antes de emitir.',
   pedir_agenda: 'Doutor(a), preciso de acesso à sua agenda para conferir a consulta deste comprovante. Pode me orientar?',
-  falha_emissao: 'Doutor(a), não consegui concluir a emissão da nota. Pode revisar os dados fiscais e me orientar? Não vou tentar emitir novamente sozinho.',
+  falha_emissao: traduzirFalhaEmissao(undefined),
   nota_gerada: 'Doutor(a), a nota de teste foi autorizada em homologação e não tem valor fiscal.',
   instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
   falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
@@ -62,7 +68,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente, private readonly log: (texto: string) => void = console.info) {}
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao>, private readonly log: (texto: string) => void = console.info) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string;
     detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
@@ -74,7 +80,7 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
-      const texto = acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
+      const texto = acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
         ? montarPerguntaMultiplasConsultas(detalhe)
         : acao === 'perguntar_medico' && motivo === 'NOTA_FASE_INICIAL' && detalheNota
           ? montarAvisoNotaFaseInicial(detalheNota)
@@ -82,6 +88,111 @@ export class ComunicacaoHomologacao {
       return await this.enviarUnico(medicoId, acao, chave, async () => (await this.transporte.enviarTexto({
         instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto
       })).sucesso);
+    } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
+  async medicoPermitido(medicoId: string): Promise<boolean> {
+    if (!this.config.envioMedicoRealAtivo) return false;
+    const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+    return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, rows[0]?.telefone);
+  }
+
+  async marcarLida(medicoId: string, chave: ChaveMensagemLeitura): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('mensagem_lida');
+    if (!chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return 'erro';
+    try {
+      if (!await this.medicoPermitido(medicoId)) return this.simular('mensagem_lida');
+      const resultado = await this.enviarUnico(medicoId, 'mensagem_lida', JSON.stringify([chave.remoteJid, chave.id]), async () =>
+        (await this.transporte.marcarLida?.({ instanciaNome: this.config.evolutionAssistantInstanceName,
+          mensagemId: chave.id, contatoTelefone: chave.remoteJid.split('@')[0], chaveMensagem: chave }))?.sucesso === true);
+      if (resultado === 'erro') this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' }));
+      return resultado;
+    } catch { this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' })); return 'erro'; }
+  }
+
+  async reagir(medicoId: string, chave: ChaveMensagemLeitura, reacao: unknown): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    if (!REACOES_PERMITIDAS.includes(reacao as ReacaoMedico)) return 'simulado';
+    if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('reacao');
+    if (!chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return 'erro';
+    try {
+      if (!await this.medicoPermitido(medicoId)) return this.simular('reacao');
+      const resultado = await this.enviarUnico(medicoId, 'reacao', JSON.stringify([chave.remoteJid, chave.id, reacao]), async () =>
+        (await this.transporte.enviarReacao?.({ instanciaNome: this.config.evolutionAssistantInstanceName, chave, reacao: reacao as ReacaoMedico }))?.sucesso === true);
+      if (resultado === 'erro') this.log(registroErroNoto('REACAO_FALHOU', 'tecnico', { medicoId, etapa: 'reacao' }));
+      return resultado;
+    } catch { this.log(registroErroNoto('REACAO_FALHOU', 'tecnico', { medicoId, etapa: 'reacao' })); return 'erro'; }
+  }
+
+  async confirmarEmissao(entrada: { medicoId: string; solicitacaoId: string; chaveDisparo?: string; paciente: string; dataEnvioPagamento: string; dataConsulta: string }):
+    Promise<{ resultado: 'simulado' | 'enviado' | 'erro' | 'repetido'; chaveMensagem?: string }> {
+    if (!this.config.envioMedicoRealAtivo) return { resultado: this.simular('confirmar_emissao') };
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [entrada.medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return { resultado: this.simular('confirmar_emissao') };
+      const envio = new Date(entrada.dataEnvioPagamento), consulta = new Date(entrada.dataConsulta);
+      if (!Number.isFinite(envio.getTime()) || !Number.isFinite(consulta.getTime()) || !entrada.paciente.trim()) return { resultado: 'erro' };
+      const data = (d: Date) => d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+      const texto = `Pronto para emitir a nota do ${entrada.paciente.trim().slice(0, 100)}, que enviou o pagamento em ${data(envio)} da consulta de ${data(consulta)}. Posso emitir?`;
+      let chaveMensagem: string | undefined;
+      const resultado = await this.enviarUnico(entrada.medicoId, 'confirmar_emissao', entrada.chaveDisparo ?? entrada.solicitacaoId, async () => {
+        const r = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto });
+        chaveMensagem = r.mensagemId;
+        return r.sucesso && !!chaveMensagem;
+      });
+      return { resultado, ...(resultado === 'enviado' ? { chaveMensagem } : {}) };
+    } catch { this.log('CONFIRMACAO_EMISSAO_ENVIO_FALHOU'); return { resultado: 'erro' }; }
+  }
+
+  async boasVindas(entrada: { medicoId: string; nomeMedico?: string; ultimaNota: Parameters<typeof montarBoasVindas>[1];
+    aoEnviar?: (telefone: string, baloes: string[]) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    const { medicoId, nomeMedico, ultimaNota } = entrada;
+    if (!nomeMedico?.trim()) return 'erro';
+    if (!this.config.envioMedicoRealAtivo) return this.simular('boas_vindas');
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
+      const baloes = montarBoasVindas(nomeMedico, ultimaNota);
+      if (!await this.reservarMensagem(medicoId, destino.telefone, 'boas_vindas:unica', baloes)) return 'repetido';
+      const resultado = await this.enviarUnico(medicoId, 'boas_vindas', 'unica', async () => {
+        for (const texto of baloes) {
+          const envio = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
+            contatoTelefone: destino.telefone, texto });
+          if (!envio.sucesso) return false;
+        }
+        return true;
+      });
+      if (resultado === 'enviado') await entrada.aoEnviar?.(destino.telefone, baloes);
+      return resultado;
+    } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string; aoEnviar?: (mensagemId: string) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+    const { medicoId, chave, fala } = entrada;
+    if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
+    if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      const destino = rows[0];
+      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
+      if (!await this.reservarMensagem(medicoId, destino.telefone, chave, entrada.falaMemoria ?? fala, entrada.conversa)) return 'repetido';
+      return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
+        for (const texto of fala) {
+          const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
+            contatoTelefone: destino.telefone, texto });
+          if (!resultado.sucesso) return false;
+          if (entrada.aoEnviar) {
+            if (!resultado.mensagemId) return false;
+            await entrada.aoEnviar(resultado.mensagemId);
+          }
+        }
+        return true;
+      });
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
@@ -99,14 +210,15 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COFRE_ENVIO_FALHOU'); return 'erro'; }
   }
 
-  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato'> {
     if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
     const { medicoId, solicitacaoId } = entrada;
     try {
-      const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path,
-        p.telefone as contato_telefone, pf.ambiente, wi.nome_instancia,
+      const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, sn.origem,
+        case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
+          when sn.origem='lote' then null else p.telefone end as contato_telefone, pf.ambiente, wi.nome_instancia,
         wi.medico_id as instancia_medico_id, wi.status as instancia_status
-        from notas_fiscais nf join solicitacoes_nota sn on sn.id = nf.solicitacao_id
+        from notas_fiscais nf join solicitacoes_nota sn on (sn.id = nf.solicitacao_id or (sn.origem='lote' and sn.nota_reenvio_id=nf.id))
         join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id = nf.id and ec.estado = 'nota_gerada'
         join pacientes p on p.id = sn.paciente_id and p.medico_id = sn.medico_id
         join medico_perfil_fiscal pf on pf.medico_id = sn.medico_id
@@ -114,20 +226,25 @@ export class ComunicacaoHomologacao {
           where medico_id = sn.medico_id and oficial = false and status = 'conectado'
             and nome_instancia <> $3 and nome_instancia <> $4 order by criado_em desc limit 1) wi on true
         where sn.id = $1 and sn.medico_id = $2 and nf.medico_id = $2 and nf.status = 'autorizada'`,
-        [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName]);
+        [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName, this.config.encryptionKey]);
       const nota = rows[0];
+      if (nota?.origem === 'lote') {
+        const telefone = typeof nota.contato_telefone === 'string' ? nota.contato_telefone.replace(/\D/g, '') : '';
+        if (!/^\d{10,13}$/.test(telefone)) return 'sem_contato';
+        nota.contato_telefone = telefone;
+      }
       if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
       const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {
-        await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
+        if (nota.origem !== 'lote') await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
         return 'erro';
       }
       const resultado = await this.enviarUnico(medicoId, 'nota_paciente', nota.nota_fiscal_id, async () => (await transporte.enviarPdf({
         instanciaNome: nota.nome_instancia, contatoTelefone: nota.contato_telefone, pdfPathOuUrl: nota.pdf_storage_path,
         nomeArquivo: 'DANFSe.pdf', legenda: 'Segue sua nota enviada pelo consultório. Documento de homologação, sem valor fiscal.'
       })).sucesso);
-      if (resultado === 'erro') await this.medico({ medicoId, acao: 'falha_entrega', chave: nota.nota_fiscal_id });
+      if (resultado === 'erro' && nota.origem !== 'lote') await this.medico({ medicoId, acao: 'falha_entrega', chave: nota.nota_fiscal_id });
       return resultado;
     } catch { this.log('ENTREGA_COMPROVANTE_FALHOU'); return 'erro'; }
   }
@@ -138,6 +255,18 @@ export class ComunicacaoHomologacao {
     return /^\d{10,13}$/.test(telefone.replace(/\D/g, '')) && (this.config.envioRealAllowlist ?? []).some(t => gerarVariantesTelefoneBrasileiro(t).some(v => variantes.includes(v)));
   }
   private simular(acao: string): 'simulado' { this.log(`enviaria ${acao}`); return 'simulado'; }
+
+  private async reservarMensagem(medicoId: string, telefone: string, chave: string, fala: string[], conversa?: string): Promise<boolean> {
+    const chaveConversa = conversa ?? createHash('sha256').update(JSON.stringify([this.config.evolutionAssistantInstanceName, telefone.replace(/\D/g, '')])).digest('hex');
+    return new PostgresMemoriaConversaMedico(this.pool).registrar(medicoId, chaveConversa, `noto:${chave}`, fala.join('\n'), 'noto');
+  }
+
+  async reservarEntradaMedico(medicoId: string, instancia: string, mensagemId: string): Promise<boolean> {
+    const chave = createHmac('sha256', this.config.appPepper).update(JSON.stringify([instancia, mensagemId])).digest('hex');
+    const { rows } = await this.pool.query(`insert into public.noto_envios_homologacao (medico_id, acao, chave, estado)
+      values ($1, 'mensagem_recebida', $2, 'reservado') on conflict (medico_id, acao, chave) do nothing returning id`, [medicoId, chave]);
+    return rows.length === 1;
+  }
 
   private async enviarUnico(medicoId: string, acao: string, chave: string, enviar: () => Promise<boolean>): Promise<'enviado' | 'erro' | 'repetido'> {
     const hash = createHmac('sha256', this.config.appPepper).update(JSON.stringify([medicoId, acao, chave])).digest('hex');

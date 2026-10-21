@@ -11,12 +11,12 @@ if (!nome || args.includes('--help')) {
   console.error('Informe somente o nome completo. O adaptador acrescenta CRM à pesquisa automaticamente.');
   process.exitCode = 2;
 } else {
-  console.error('A consulta usa seu serviço OpenSerp e a extração NVIDIA. O comando não grava no banco.');
+  console.error('A consulta usa seu serviço OpenSerp e a extração OpenAI. O comando não grava no banco.');
   const diagnostico = [];
   const consulta = new OpenSerpConsultaRegistro({
     baseUrl: config.openserpBaseUrl,
-    nvidiaApiKey: config.nvidiaApiKey,
-    modelo: config.nvidiaRegistroModel,
+    openaiApiKey: config.openaiApiKey,
+    modelo: config.openaiTextoModel,
     ...(exibirDiagnostico ? { diagnosticar: evento => diagnostico.push(evento) } : {})
   });
   const resultado = await consulta.buscar(nome);

@@ -54,5 +54,5 @@ it('sem instância conectada avisa o médico passando pelos mesmos bloqueios', a
   const enviarPdf = vi.fn();
   await c.paciente({ medicoId: 'm', solicitacaoId: 's' }, { enviarPdf });
   expect(enviarPdf).not.toHaveBeenCalled();
-  expect(enviarTexto).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instanciaNome: 'notomed_assistente', contatoTelefone: '11988880000', texto: expect.stringContaining('WhatsApp próprio') }));
+  expect(enviarTexto).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ instanciaNome: 'notomed_assistente', contatoTelefone: '11988880000', texto: 'A nota foi emitida, mas seu WhatsApp está desconectado; conecte-o e peça o reenvio, sem emitir outra nota. Não vou tentar emitir novamente sozinho.' }));
 });

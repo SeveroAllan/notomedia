@@ -15,14 +15,32 @@ function bancoReservas() {
   const reservas: any[] = [], solicitacoes: any[] = [], auditorias: any[] = [], comandos: string[] = [];
   let fila = Promise.resolve();
   let ambiente = 'homologacao';
-  const pool = { async connect() {
+  const pool = { async query(texto: string, p: any[] = []) { const c = await pool.connect(); try { return await c.query(texto, p); } finally { c.release(); } }, async connect() {
     const anterior = fila; let soltar!: () => void; fila = new Promise<void>(r => { soltar = r; }); await anterior;
     let snapshot: any;
     return { release: soltar, async query(texto: string, p: any[] = []) {
       const sql = texto.replace(/\s+/g, ' ').trim().toLowerCase(); comandos.push(sql);
-      if (sql === 'begin') { snapshot = structuredClone([reservas, solicitacoes]); return { rows: [] }; }
-      if (sql === 'rollback') { reservas.splice(0, reservas.length, ...snapshot[0]); solicitacoes.splice(0, solicitacoes.length, ...snapshot[1]); return { rows: [] }; }
+      if (sql === 'begin') { snapshot = structuredClone([reservas, solicitacoes, auditorias]); return { rows: [] }; }
+      if (sql === 'rollback') { reservas.splice(0, reservas.length, ...snapshot[0]); solicitacoes.splice(0, solicitacoes.length, ...snapshot[1]); auditorias.splice(0, auditorias.length, ...snapshot[2]); return { rows: [] }; }
       if (sql === 'commit' || sql.includes('pg_advisory_xact_lock')) return { rows: [] };
+      if (sql.startsWith('select') && sql.includes("a.estado->'confirmacaomedico'")) return { rows: solicitacoes.filter(s => s.medico_id === p[0] && s.aguardando_confirmacao_medico).map(s => {
+        const e = reservas.find(e => e.solicitacao_id === s.id); const a = auditorias.find(a => a.id === e?.auditoria_comprovante_id);
+        return structuredClone({ id: s.id, auditoria_id: a?.id, confirmacao: a?.estado.confirmacaoMedico, ambiente,
+          estado_emissao: e?.estado, comprovante_chave: e?.comprovante_chave, consulta_chave: e?.consulta_chave });
+      }) };
+      if (sql.startsWith('update public.noto_auditoria_comprovantes')) {
+        const a = sql.includes('from public.noto_emissoes_comprovantes')
+          ? auditorias.find(a => a.id === reservas.find(e => e.medico_id === p[0] && e.solicitacao_id === p[1])?.auditoria_comprovante_id)
+          : auditorias.find(a => a.id === p[0]);
+        if (!a) throw Error('AUDITORIA_AUSENTE');
+        a.estado.confirmacaoMedico = sql.includes('from public.noto_emissoes_comprovantes') ? { ...a.estado.confirmacaoMedico, ...JSON.parse(p[2]), eventos: [...(a.estado.confirmacaoMedico.eventos ?? []), ...JSON.parse(p[3])] } : JSON.parse(p[1]);
+        return { rows: [] };
+      }
+      if (sql.startsWith('update solicitacoes_nota set aguardando_confirmacao_medico')) {
+        const s = solicitacoes.find(s => s.id === p[0] && (!p[1] || s.medico_id === p[1]));
+        if (!s) return { rows: [] };
+        s.aguardando_confirmacao_medico = !sql.includes('=false'); return { rows: [{ id: s.id }] };
+      }
       if (sql.includes('from public.noto_auditoria_comprovantes')) return { rows: auditorias.filter(a => a.medico_id === p[0] && a.lido.campos.comprovanteHash === p[1] && a.estado.consultaChave === p[2] && a.decisao.tipo === 'pedido_nota_pronto') };
       if (sql.includes('from pacientes p')) return { rows: p[1] === 'p' ? [paciente] : [] };
       if (sql.includes('from public.noto_emissoes_comprovantes')) return { rows: reservas.filter(r => r.medico_id === p[0] && (r.comprovante_chave === p[1] || r.consulta_chave === p[2])) };
@@ -33,7 +51,7 @@ function bancoReservas() {
         if (reservas.some(r => r.medico_id === medico_id && (r.consulta_chave === consulta_chave || r.comprovante_chave === comprovante_chave))) throw Error('UNIQUE');
         const r = { id: `r${reservas.length}`, medico_id, consulta_chave, comprovante_chave, auditoria_comprovante_id, estado, erro_codigo }; reservas.push(r); return { rows: [r] };
       }
-      if (sql.startsWith('insert into solicitacoes_nota')) { const s = { id: `s${solicitacoes.length}`, paciente_id: p[2], valor: p[3], descricao: p[4] }; solicitacoes.push(s); return { rows: [s] }; }
+      if (sql.startsWith('insert into solicitacoes_nota')) { const s = { id: `s${solicitacoes.length}`, medico_id: p[1], paciente_id: p[2], valor: p[3], descricao: p[4] }; solicitacoes.push(s); return { rows: [s] }; }
       if (sql.startsWith('update solicitacoes_nota s set servico_fiscal_id')) return { rows: [] };
       if (sql.startsWith('update public.noto_emissoes_comprovantes set solicitacao_id')) { reservas.find(r => r.id === p[0]).solicitacao_id = p[1]; return { rows: [] }; }
       throw Error(`SQL não modelado: ${sql}`);
@@ -53,6 +71,7 @@ it.each([false, true])('reprocessamento e corrida com comprovante diferente=%s c
   expect(resultados.filter(r => r.tipo === 'enfileirada')).toHaveLength(1);
   expect(await repo.enfileirar(primeiro)).toEqual({ tipo: 'nenhuma' });
   expect(b.solicitacoes).toHaveLength(1); expect(b.reservas).toHaveLength(1);
+  expect(b.solicitacoes[0].aguardando_confirmacao_medico).toBe(true);
   expect(b.solicitacoes[0].descricao).toContain('18/10/2026');
   expect(b.reservas[0].consulta_chave).toMatch(/^[a-f0-9]{64}$/);
   expect(b.reservas[0].comprovante_chave).toMatch(/^[a-f0-9]{64}$/);
@@ -105,7 +124,7 @@ it.each([false, true])('fila e worker concorrentes produzem no máximo uma nota 
   const deps = {
     emissorDps: { emitir: async () => { transmissoes++; return { sucesso: true as const, chaveAcesso: 'chave-ficticia', ndps: 1, serie: '1', competencia: '2026-10', dataEmissao: new Date('2026-10-19'), valorServicosCentavos: 20000, xmlStoragePath: 'xml', pdfStoragePath: 'pdf' }; } },
     filaRepositorio: {
-      iniciarEmissaoComprovante: async () => { if (b.reservas[0].estado !== 'enfileirada') return 'ocupada' as const; b.reservas[0].estado = 'emitindo'; return 'iniciada' as const; },
+      iniciarEmissaoComprovante: async () => { if (b.solicitacoes[0].aguardando_confirmacao_medico || b.reservas[0].estado !== 'enfileirada') return 'ocupada' as const; b.reservas[0].estado = 'emitindo'; return 'iniciada' as const; },
       registrarSucesso: async () => { if (b.reservas[0].estado !== 'emitindo') throw Error('SEM_RESERVA'); notas++; b.reservas[0].estado = 'nota_gerada'; },
       buscarETravarProximoItem: async () => null, buscarContextoEnvio: async () => null,
       reagendarTentativa: async () => { throw Error('RETENTATIVA_PROIBIDA'); }, marcarFalhaDefinitiva: async () => {}
@@ -114,6 +133,16 @@ it.each([false, true])('fila e worker concorrentes produzem no máximo uma nota 
     notificadorAlertas: { notificarMedicoWhatsApp: async () => { throw Error('ENVIO_REAL_PROIBIDO'); }, notificarDesenvolvedorEmail: async () => {} }
   };
   const item = { id: b.solicitacoes[0].id, medicoId: 'm', pacienteId: 'p', emissaoComprovante: true as const, tentativas: 0, valorServicoCentavos: 20000, xdescServ: 'Consulta fictícia', ctribNac: '040101' };
+  await processarItemFila(item, deps);
+  expect(transmissoes).toBe(0); expect(notas).toBe(0);
+  expect(b.solicitacoes[0].aguardando_confirmacao_medico).toBe(true);
+  const agora = new Date('2026-10-20T12:00:00Z');
+  await repo.registrarPergunta('m', item.id, 'enviado', 'pergunta-confirmacao', agora);
+  expect(await repo.confirmar('m', 'resposta-confirmacao', { intencao: 'sim', confianca: 0.99 }, agora, true, 'pergunta-confirmacao'))
+    .toEqual({ liberada: true, motivo: 'CONFIRMADA' });
+  expect(b.solicitacoes[0].aguardando_confirmacao_medico).toBe(false);
+  expect(await repo.confirmar('m', 'resposta-confirmacao', { intencao: 'sim', confianca: 0.99 }, agora, true, 'pergunta-confirmacao'))
+    .toEqual({ liberada: false, motivo: 'SEM_PENDENTE' });
   await Promise.all([processarItemFila(item, deps), processarItemFila(item, deps)]);
   await processarItemFila(item, deps); await repo.enfileirar(b.entrada());
   expect(transmissoes).toBe(1); expect(notas).toBe(1); expect(b.solicitacoes).toHaveLength(1);

@@ -5,8 +5,8 @@ import { ExtratorRespostaMedicoNvidia } from '../src/io/nvidia/extrator-resposta
 import { orquestrarComunicacao } from '../src/onboarding/orquestrar-comunicacao.js';
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
 const cliente = vi.hoisted(() => vi.fn());
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: cliente }));
-const contexto = { acaoPendente: 'perguntar_nota_pendente' as const, pergunta: 'Tem alguma nota para emitir? Desde que dia?', mensagens: [] };
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: cliente }));
+const contexto = { acaoPendente: 'perguntar_nota_pendente' as const, pergunta: 'Desde quando você não emite notas?', mensagens: [] };
 const data = '2026-03-02'; const agora = new Date('2026-10-18T15:00:00Z');
 let rede: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { cliente.mockReset(); rede = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw Error('REDE_PROIBIDA'); }); });
@@ -82,7 +82,7 @@ it.each(['incerto', 'baixa_confianca', 'falha_ia'] as const)('%s não grava e re
   expect(await orquestrarComunicacao(entrada, c.deps)).toEqual({ tipo: 'reperguntar', pergunta: 'nota_pendente' });
   expect(await orquestrarComunicacao({ ...entrada, chaveProcessamento: 'outra' }, c.deps)).toEqual({ tipo: 'nenhuma' });
   expect((await c.historico.ler('medico-ficticio', 'simulado')).perguntaNota.resposta).toBeNull();
-  expect(c.logs.filter(l => l.startsWith('enviaria reperguntar'))).toEqual(['enviaria reperguntar: Tem alguma nota para emitir? Desde que dia?']);
+  expect(c.logs.filter(l => l.startsWith('enviaria reperguntar'))).toEqual(['enviaria reperguntar: Desde quando você não emite notas?']);
   expect(c.logs.join()).not.toContain('RESPOSTA_PRIVADA_FICTICIA');
 });
 

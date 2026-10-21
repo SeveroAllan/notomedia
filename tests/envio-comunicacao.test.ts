@@ -43,7 +43,7 @@ function cenario(historico = new HistoricoComunicacaoEmMemoria(), transporte = n
 }
 
 describe('envio habilitado apenas com transporte falso nos testes', () => {
-  it('envia os quatro balões em ordem e só registra enviado após todas as confirmações', async () => {
+  it('envia os cinco balões em ordem e só registra enviado após todas as confirmações', async () => {
     const historico = new HistoricoComunicacaoEmMemoria();
     const observacoes: Array<{ boasVindasEm: string | null; registros: number; baloes: number[] }> = [];
     class TransporteObservado extends TransporteFalso {
@@ -60,22 +60,22 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
       instanciaNome: 'instancia-ficticia', contatoTelefone: 'destino-ficticio', texto
     })));
     expect(transporte.maximoEmAndamento).toBe(1);
-    expect(observacoes).toEqual([[], [0], [0, 1], [0, 1, 2]].map(baloes => ({ boasVindasEm: null, registros: 0, baloes })));
+    expect(observacoes).toEqual([[], [0], [0, 1], [0, 1, 2], [0, 1, 2, 3]].map(baloes => ({ boasVindasEm: null, registros: 0, baloes })));
     const salvo = await historico.ler(entrada.medicoId, 'real');
     expect(salvo.boasVindasEm).toBe(instante);
     expect(salvo.registros).toEqual([{ modo: 'real', estado: 'enviado', chaveProcessamento: entrada.chaveProcessamento,
       tipo: 'boas_vindas', quando: instante }]);
-    expect(salvo.envios[0].baloesEnviados).toEqual([0, 1, 2, 3]);
+    expect(salvo.envios[0].baloesEnviados).toEqual([0, 1, 2, 3, 4]);
     expect((await historico.ler(entrada.medicoId, 'simulado')).registros).toEqual([]);
   });
 
-  it('envia somente os três balões aprovados quando não há última nota', async () => {
+  it('envia quatro balões com pergunta final quando não há última nota', async () => {
     const { entrada, dependencias, transporte } = cenario();
     await orquestrarComunicacao({ ...entrada, estado: { ...entrada.estado, ultimaNota: null } }, dependencias);
     expect(transporte.confirmadas.map(params => params.texto)).toEqual(montarBoasVindas('Ana Exemplo', null));
   });
 
-  it.each([2, 3])('falha no balão %s interrompe e não reenvia os anteriores com nenhuma chave', async falharNoBalao => {
+  it.each([2, 3, 5])('falha no balão %s interrompe e não reenvia os anteriores com nenhuma chave', async falharNoBalao => {
     const { entrada, dependencias, transporte, historico, logs } = cenario(undefined, new TransporteFalso(falharNoBalao));
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'nenhuma' });
     const salvo = await historico.ler(entrada.medicoId, 'real');
@@ -104,7 +104,7 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
     const { entrada, dependencias, transporte } = cenario();
     await orquestrarComunicacao(entrada, dependencias);
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'nenhuma' });
-    expect(transporte.confirmadas).toHaveLength(4);
+    expect(transporte.confirmadas).toHaveLength(5);
   });
 
   it('duas execuções simultâneas enviam uma única vez', async () => {
@@ -114,7 +114,7 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
       orquestrarComunicacao({ ...entrada, chaveProcessamento: 'outro-evento' }, dependencias)
     ]);
     expect(resultados.map(acao => acao.tipo)).toEqual(['boas_vindas', 'nenhuma']);
-    expect(transporte.confirmadas).toHaveLength(4);
+    expect(transporte.confirmadas).toHaveLength(5);
   });
 
   it('falha na reserva do envio impede qualquer chamada ao transporte', async () => {
@@ -147,7 +147,7 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
     const { entrada, dependencias, transporte, historico, logs } = cenario(new HistoricoComFalha());
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'nenhuma' });
     expect(await orquestrarComunicacao({ ...entrada, chaveProcessamento: 'outra-chave' }, dependencias)).toEqual({ tipo: 'nenhuma' });
-    expect(transporte.confirmadas).toHaveLength(4);
+    expect(transporte.confirmadas).toHaveLength(5);
     expect((await historico.ler(entrada.medicoId, 'real')).registros).toEqual([]);
     expect(logs).toEqual([{ nivel: 'erro', mensagem: 'HISTORICO_COMUNICACAO_FALHOU' }]);
   });
@@ -157,7 +157,7 @@ describe('envio habilitado apenas com transporte falso nos testes', () => {
     await orquestrarComunicacao(entrada, dependencias);
     const acao = await orquestrarComunicacao({ ...entrada, chaveProcessamento: 'pergunta-seguinte' }, dependencias);
     expect(acao).toEqual({ tipo: 'perguntar_nota_pendente' });
-    expect(transporte.confirmadas).toHaveLength(4);
+    expect(transporte.confirmadas).toHaveLength(5);
     expect((await historico.ler(entrada.medicoId, 'real')).perguntaNota.feitaEm).toBeNull();
   });
 });
@@ -174,4 +174,26 @@ describe('flag desligada preserva modo seco independentemente do transporte conf
     expect((await historico.ler(entrada.medicoId, 'simulado')).boasVindasEm).toBe(instante);
     expect((await historico.ler(entrada.medicoId, 'real')).registros).toEqual([]);
   });
+});
+
+it.each(['orquestrador real', 'outro caminho real'])('boas-vindas recebidas via %s não são reenviadas pelo modo simulado', async caminho => {
+  const c = cenario();
+  if (caminho === 'orquestrador real') await orquestrarComunicacao(c.entrada, c.dependencias);
+  else {
+    await c.historico.reservar(c.entrada.medicoId, 'real', 'externo');
+    await c.historico.gravarAcao(c.entrada.medicoId, 'real', 'externo', { tipo: 'boas_vindas', ultimaNota: nota }, instante);
+    await c.historico.liberar(c.entrada.medicoId, 'real', 'externo');
+  }
+  const antes = c.transporte.confirmadas.length;
+  expect((await c.historico.ler(c.entrada.medicoId, 'simulado')).boasVindasComunicadas).toBe(false);
+  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'conversa-livre' }, { ...c.dependencias, envioRealAtivo: false }))
+    .toEqual({ tipo: 'perguntar_nota_pendente' });
+  expect(c.transporte.confirmadas).toHaveLength(antes);
+  expect((await c.historico.ler(c.entrada.medicoId, 'simulado')).registros.map(r => r.tipo)).toEqual(['perguntar_nota_pendente']);
+});
+it('boas-vindas apenas simuladas não suprimem o primeiro envio real', async () => {
+  const c = cenario();
+  await orquestrarComunicacao(c.entrada, { ...c.dependencias, envioRealAtivo: false });
+  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'real' }, c.dependencias)).toEqual({ tipo: 'boas_vindas', ultimaNota: nota });
+  expect(c.transporte.confirmadas).toHaveLength(5);
 });

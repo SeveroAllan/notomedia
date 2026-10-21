@@ -10,14 +10,16 @@ import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../
 let diretorio: string;
 let cofre: CofreTribemd;
 let perfis: PerfisTribemd;
+const invalidarFrescor = vi.fn();
 const credencial = { email: 'clinica@example.invalid', senha: 'senha-ficticia-de-conexao' };
 const estado = { cookies: [], origins: [{ origin: 'https://app.tribemd.com', localStorage: [{ name: 'bipp-user-token', value: 'cookie-ficticio' }] }] };
 const resultado: ResultadoLeituraTribemd = { consultas: [], cobertura: 'somente_linhas_visiveis', pagina: 'agenda', historicoCompleto: false, detalhe: 'Agenda fictícia vazia' };
 const perfilSalvo = (): PerfilTribemd => ({ ...credencial, estado, cofre: { ativo: true, estado: 'conectado', consentimentoEm: '2026-10-17T12:00:00Z', consentimentoVersao: consentimentoCofre, atualizadoEm: '2026-10-17T12:00:00Z' } });
 
 beforeEach(async () => {
+  invalidarFrescor.mockClear();
   diretorio = await mkdtemp(join(tmpdir(), 'noto-cofre-conexao-')); const chave = randomBytes(32).toString('base64');
-  perfis = new PerfisTribemd(diretorio, chave); cofre = new CofreTribemd({ diretorio, chave, chromium: '/nao-executar-navegador-real' });
+  perfis = new PerfisTribemd(diretorio, chave); cofre = new CofreTribemd({ aoAlterarAcesso: invalidarFrescor, diretorio, chave, chromium: '/nao-executar-navegador-real' });
 });
 afterEach(async () => { await cofre.encerrar(); vi.restoreAllMocks(); await rm(diretorio, { recursive: true, force: true }); });
 
@@ -111,4 +113,15 @@ describe('cofre real por conta, portal substituído na borda', () => {
     expect(fechado).toBe(true); expect(await cofre.status('conta-a')).toMatchObject({ estado: 'desconectado', ativo: false });
     expect(cofre.resultado('conta-a')).toBeNull();
   });
+});
+
+it('invalida frescor ao salvar outro acesso, reconectar e desconectar, sem invalidar leitura comum',async()=>{
+ portalFicticio();await perfis.salvar('conta-a',perfilSalvo());
+ await cofre.consultar('conta-a');await vi.waitFor(async()=>expect((await cofre.status('conta-a')).estado).toBe('conectado'));
+ expect(invalidarFrescor).not.toHaveBeenCalled();
+ await cofre.iniciar('conta-a',{...credencial});await vi.waitFor(async()=>expect((await cofre.status('conta-a')).estado).toBe('conectado'));
+ expect(invalidarFrescor).toHaveBeenCalledExactlyOnceWith('conta-a');
+ await cofre.iniciar('conta-a');await vi.waitFor(async()=>expect((await cofre.status('conta-a')).estado).toBe('conectado'));
+ expect(invalidarFrescor).toHaveBeenCalledTimes(2);
+ await cofre.desconectar('conta-a');expect(invalidarFrescor).toHaveBeenCalledTimes(3);
 });

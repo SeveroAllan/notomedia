@@ -4,7 +4,7 @@ import { criarAppExpress } from '../src/server.js';
 import { config } from '../src/config.js';
 import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js';
 const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), agenda: vi.fn(), completar: vi.fn(), sincronizar: vi.fn(), emitir: vi.fn() }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarNvidia: fronteiras.completar }));
+vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.completar }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/cofre/router.js', async () => { const express = await import('express'); return { criarCofreContas: () => ({ app: express.default(), statusAgenda: fronteiras.agenda, encerrar: async () => {} }) }; });
 vi.mock('../src/onboarding/io/sincronizar-historico-evolution.js', () => ({ sincronizarHistoricoEvolutionUmaVez: fronteiras.sincronizar }));
@@ -12,13 +12,18 @@ vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ process
 const medico = '00000000-0000-4000-8000-000000000001';
 let banco: BancoHistoricoFalso; let logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 let rede: ReturnType<typeof vi.spyOn>, enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>;
-const anterior = { ativo: config.comunicacaoMedicoAtiva, segredo: config.evolutionWebhookSecret, apiKey: config.nvidiaApiKey, modelo: config.nvidiaRegistroModel };
+const anterior = { ativo: config.comunicacaoMedicoAtiva, segredo: config.evolutionWebhookSecret, apiKey: config.openaiApiKey, modelo: config.openaiTextoModel };
 beforeEach(() => {
-  vi.clearAllMocks(); banco = new BancoHistoricoFalso(); config.comunicacaoMedicoAtiva = true; config.evolutionWebhookSecret = 'segredo-ficticio'; config.nvidiaApiKey = 'credencial-ficticia'; config.nvidiaRegistroModel = 'modelo-ficticio';
+  vi.clearAllMocks(); banco = new BancoHistoricoFalso(); config.comunicacaoMedicoAtiva = true; config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'credencial-ficticia'; config.openaiTextoModel = 'modelo-ficticio';
   fronteiras.completar.mockResolvedValue(JSON.stringify({ temNota: 'não', desde: null, confianca: 0.90 }));
   fronteiras.connect.mockImplementation(() => banco.connect()); fronteiras.agenda.mockResolvedValue({ nome: null, conectada: false });
   fronteiras.sincronizar.mockResolvedValue({});
-  fronteiras.query.mockImplementation(async (sql: string) => {
+  const entradas = new Set<string>();
+  fronteiras.query.mockImplementation(async (sql: string, parametros: unknown[] = []) => {
+    if (sql.includes("values ($1, 'mensagem_recebida'")) {
+      const chave = JSON.stringify(parametros); if (entradas.has(chave)) return { rows: [] };
+      entradas.add(chave); return { rows: [{ id: 'entrada' }] };
+    }
     if (sql.includes('as cert_ativos')) return { rows: [{ medico_id: medico, medico_nome: 'Medica Ficticia', crm: '12345/SC', rqe: null, confirmado_pelo_medico: true,
       cert_ativos: '1', whats_conectados: '1', whatsapp_vinculado: true,
       revisao_profissional: { estado: 'concluido', dados: { aprovacaoPainel: { confirmadoEm: '2026-10-17T15:00:00Z', nome: 'Medica Ficticia', crm: '12345/SC', rqe: null } } } }] };
@@ -34,7 +39,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   expect(rede).not.toHaveBeenCalled(); expect(enviar).not.toHaveBeenCalled(); expect(pdf).not.toHaveBeenCalled(); expect(fronteiras.emitir).not.toHaveBeenCalled();
-  config.comunicacaoMedicoAtiva = anterior.ativo; config.evolutionWebhookSecret = anterior.segredo; config.nvidiaApiKey = anterior.apiKey; config.nvidiaRegistroModel = anterior.modelo; vi.restoreAllMocks();
+  config.comunicacaoMedicoAtiva = anterior.ativo; config.evolutionWebhookSecret = anterior.segredo; config.openaiApiKey = anterior.apiKey; config.openaiTextoModel = anterior.modelo; vi.restoreAllMocks();
 });
 function mensagem(id: string, texto = 'Olá') { return { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: {
   messageTimestamp: 1772422200, key: { id, remoteJid: '5511999990000@s.whatsapp.net', fromMe: false }, message: { conversation: texto }
@@ -56,9 +61,12 @@ it('assistente liga banco real do estado e histórico Postgres em ciclo seco com
   const { app } = await receber(mensagem('m1'));
   await receber(mensagem('m2'), app);
   await receber(mensagem('m3', 'não'), app);
-  expect(intencoes()).toEqual([['enviaria boas_vindas'], ['enviaria perguntar_nota_pendente: Tem alguma nota para emitir? Desde que dia?'], ['enviaria aguardar_comprovante']]);
+  expect(intencoes()).toEqual([['enviaria boas_vindas'], ['enviaria perguntar_nota_pendente: Desde quando você não emite notas?'], ['enviaria aguardar_comprovante']]);
   expect(banco.historicos.get(JSON.stringify([medico, 'simulado']))!.resposta_nota).toEqual({ temNota: false, desde: null });
-  expect([...banco.historicos.values()].every(h => h.modo === 'simulado')).toBe(true);
+  expect([...banco.historicos.values()].map(h => h.modo).sort()).toEqual(['real', 'simulado']);
+  expect(banco.historicos.get(JSON.stringify([medico, 'real']))).toMatchObject({ boas_vindas_em: null, pergunta_nota_em: null, resposta_nota: null });
+  expect([...banco.tentativas.values()].every(t => t.modo === 'simulado')).toBe(true);
+  expect(banco.envios.size).toBe(0);
   await receber(mensagem('m3', 'não'), app); expect(intencoes()).toHaveLength(3); expect(erros).not.toHaveBeenCalled();
 });
 it('conexão autenticada do consultório aciona boas-vindas uma vez após onboarding', async () => {
@@ -83,7 +91,7 @@ it('mensagem atrasada calcula hoje pelo timestamp recebido, nunca pelo relógio 
   await receber(mensagem('m3', 'tenho sim desde hoje'), app);
   expect(banco.historicos.get(JSON.stringify([medico, 'simulado']))!.resposta_nota).toEqual({ temNota: true, desde: '2026-03-02' });
   expect(fronteiras.completar).toHaveBeenCalledTimes(1);
-  expect(fronteiras.completar.mock.calls[0][2][1]).toEqual({ role: 'user', content: JSON.stringify({ texto: 'tenho sim desde hoje', dataMensagem: '2026-03-02', contexto: { acaoPendente: 'perguntar_nota_pendente', pergunta: 'Tem alguma nota para emitir? Desde que dia?', mensagens: ['Olá', 'Olá', 'Tem alguma nota para emitir? Desde que dia?'] } }) });
+  expect(fronteiras.completar.mock.calls[0][2][1]).toEqual({ role: 'user', content: JSON.stringify({ texto: 'tenho sim desde hoje', dataMensagem: '2026-03-02', contexto: { acaoPendente: 'perguntar_nota_pendente', pergunta: 'Desde quando você não emite notas?', mensagens: ['Olá', 'Olá', 'Desde quando você não emite notas?'] } }) });
 });
 it('timestamp ausente não é substituído pelo processamento e repergunta sem chamar IA', async () => {
   const { app } = await receber(mensagem('m1')); await receber(mensagem('m2'), app);
@@ -91,7 +99,7 @@ it('timestamp ausente não é substituído pelo processamento e repergunta sem c
   await receber(payload, app);
   expect(fronteiras.completar).not.toHaveBeenCalled();
   expect(banco.historicos.get(JSON.stringify([medico, 'simulado']))!.resposta_nota).toBeNull();
-  expect(intencoes().at(-1)).toEqual(['enviaria reperguntar: Tem alguma nota para emitir? Desde que dia?']);
+  expect(intencoes().at(-1)).toEqual(['enviaria reperguntar: Desde quando você não emite notas?']);
 });
 
 it('contexto real do app usa só quatro textos mascarados e não os persiste nem loga', async () => {

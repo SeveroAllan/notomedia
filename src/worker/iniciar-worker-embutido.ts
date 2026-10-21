@@ -1,3 +1,5 @@
+import { categoriaFalhaEmissao } from './notificar-erro-medico.js';
+import { registroErroNoto } from '../observabilidade/erros.js';
 import { ComunicacaoHomologacao } from '../whatsapp/comunicacao-homologacao.js';
 import { iniciarAvisosPendenciasProfissionais } from './avisar-pendencias-profissionais.js';
 import { PostgresDadosProfissionaisService } from '../io/postgres/postgres-dados-profissionais-service.js';
@@ -20,7 +22,7 @@ import { SefinNacionalClient } from '../io/fiscal/sefin-nacional-client.js';
 import { processarItemFila } from './processar-item-fila.js';
 import { type NotificadorAlertas } from './notificar-erro-medico.js';
 
-export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
+export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processarLote?: (executor: import('../io/postgres/postgres-emissao-lote.js').ExecutorFiscalLote) => Promise<boolean>) {
   const workerId = `embedded-${process.pid}-${randomUUID().slice(0, 6)}`;
   const filaRepo = new PostgresFilaRepositorio(pool, config.agenteFiscalAtivo, config.emissaoComprovanteHomologacaoAtiva);
   const meuDanfeClient = config.meuDanfeApiKey ? new MeuDanfeClient(config.meuDanfeApiKey) : undefined;
@@ -60,10 +62,11 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
   const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient);
   const notificadorAlertas: NotificadorAlertas = {
     async notificarMedicoWhatsApp(params) {
+      console.warn(registroErroNoto(params.codigoErro ?? 'EMISSAO_FALHOU', categoriaFalhaEmissao(params.codigoErro), { medicoId: params.medicoId, solicitacaoId: params.solicitacaoId, etapa: 'emissao', detalhe: params.motivoErro }));
       if (!params.medicoId || !params.solicitacaoId) {
         throw new Error('Identificadores do médico ou da solicitação ausentes para envio de notificação.');
       }
-      await comunicacaoHomologacao.medico({ medicoId: params.medicoId, acao: 'falha_emissao', chave: params.solicitacaoId });
+      await comunicacaoHomologacao.medico({ medicoId: params.medicoId, acao: 'falha_emissao', chave: params.solicitacaoId, motivo: params.codigoErro ?? params.motivoErro });
     },
     async notificarDesenvolvedorEmail(params) {
       if (config.resendApiKey && config.devEmailAlerta) {
@@ -79,6 +82,8 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
   const loop = async () => {
     while (ativo) {
       try {
+        if (emissorComprovante && await processarLote?.({ emissorDps:emissorComprovante,
+          entregar:(medicoId,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId,solicitacaoId},evolutionClient) })) continue;
         const item = await filaRepo.buscarETravarProximoItem(workerId);
         if (!item) {
           await new Promise((resolve) => setTimeout(resolve, 5000));

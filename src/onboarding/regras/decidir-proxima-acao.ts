@@ -1,3 +1,4 @@
+import { PERGUNTA_INICIO_NOTAS } from '../falas.js';
 import { z } from 'zod';
 import { CONFIANCA_MINIMA_COMPROVANTE } from '../../atendimento/comprovante.js';
 
@@ -11,6 +12,7 @@ interface UltimaNotaConhecida {
   valorCentavos: number;
   diasDesdeEmissao: number;
 }
+export type EstadoConversaRetroativo = 'aguardando_data_inicio' | 'aguardando_confirmacao_lote' | 'confirmado' | 'processando' | 'simulado' | 'concluido' | 'recusado';
 export interface EstadoMedicoAposOnboarding {
   agora?: Date;
   intervaloReperguntaDias?: number;
@@ -40,6 +42,13 @@ export type ProximaAcaoNoto =
   | { tipo: 'reperguntar'; pergunta: 'nota_pendente' | 'agenda' | 'problema_fiscal' }
   | { tipo: 'nenhuma' };
 
+/** Normaliza somente o nome informado; não interpreta intenção nem autoriza conexão. */
+export function normalizarNomeAgenda(nome: string | null): string | null {
+  if (!nome?.trim()) return null;
+  const alias = nome.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ');
+  return ['tribe', 'tribe md', 'tribemd', 'o tribe'].includes(alias) ? 'tribemd' : nome.trim();
+}
+
 /** Histórico precisa refletir comunicações confirmadas; decidir não grava nem marca envio. */
 export function decidirProximaAcao(
   estado: EstadoMedicoAposOnboarding,
@@ -57,7 +66,7 @@ export function decidirProximaAcao(
   if (!historico.perguntaNota.feitaEm) return { tipo: 'perguntar_nota_pendente' };
 
   const resposta = historico.perguntaNota.resposta;
-  const agenda = estado.agenda.nome?.trim() || null;
+  const agenda = normalizarNomeAgenda(estado.agenda.nome);
   const agendaAtendida = agenda?.toLowerCase() === 'tribemd';
   if (resposta?.temNota && !estado.agenda.conectada && !historico.perguntaAgenda.feitaEm && (!agenda || agendaAtendida)) {
     return { tipo: 'pedir_agenda', agendaInformada: agenda };
@@ -92,22 +101,23 @@ function decidirRepergunta(
 export function montarBoasVindas(
   nomeMedico: string,
   ultimaNota: UltimaNotaConhecida | null
-): [string, string, string] | [string, string, string, string] {
+): [string, string, string, string] | [string, string, string, string, string] {
+  const primeiroNome = nomeMedico.trim().split(/\s+/)[0].toLocaleLowerCase('pt-BR').slice(0, 400);
+  const nomeSaudacao = primeiroNome.charAt(0).toLocaleUpperCase('pt-BR') + primeiroNome.slice(1);
   const baloes: [string, string, string] = [
-    `Olá, Dr(a). ${nomeMedico}! Sou o Noto, seu assistente de notas fiscais.`,
-    'Eu emito suas notas a partir dos comprovantes de pagamento dos pacientes e envio a nota fiscal direto na conversa do paciente, do seu próprio WhatsApp, como se fosse você.',
+    `Olá, Dr(a). ${nomeSaudacao}! Sou o Noto, seu assistente de notas fiscais.`,
+    'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
     'Se você pedir, também entrego uma nota nova ou antiga por aqui.'
   ];
-  if (!ultimaNota?.paciente) return baloes;
+  if (!ultimaNota?.paciente) return [...baloes, PERGUNTA_INICIO_NOTAS];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
-  return [
-    ...baloes,
-    `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`
-  ];
+  const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
+  const pergunta = PERGUNTA_INICIO_NOTAS;
+  return [...baloes, resumo.slice(0, 500), pergunta];
 }
 
 /** Reconhece somente respostas inequívocas; a data civil vem do chamador. */
@@ -133,7 +143,7 @@ export function interpretarRespostaNota(texto: string, dataMensagem: string): { 
 
 export function montarPerguntaComunicacao(acao: ProximaAcaoNoto): string | null {
   if (acao.tipo === 'perguntar_nota_pendente' || acao.tipo === 'reperguntar' && acao.pergunta === 'nota_pendente') {
-    return 'Tem alguma nota para emitir? Desde que dia?';
+    return PERGUNTA_INICIO_NOTAS;
   }
   if (acao.tipo === 'pedir_agenda' || acao.tipo === 'reperguntar' && acao.pergunta === 'agenda') {
     return 'Para eu achar suas consultas, preciso da sua agenda. Posso te mandar o link?';

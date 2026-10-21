@@ -141,8 +141,10 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, What
   expect((await chamar('/api/onboarding/confirmar-fiscal',{medicoId,referenciaHash,parametrosEmissao:politica.parametros,serieDps:'2',proximoNumeroDps:20,razaoSocial:'Consultorio Revisado Ficticio'})).status).toBe(200);
   await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`);
   await vi.waitFor(()=>expect(logs.mock.calls.filter((a: any[])=>a[0]==='enviaria boas_vindas')).toHaveLength(1));
-  expect(banco.historico.historicos.size).toBe(1);
-  expect([...banco.historico.historicos.values()].every(h=>h.modo==='simulado')).toBe(true);
+  expect(banco.historico.historicos.size).toBe(2);
+  expect([...banco.historico.historicos.values()].map(h=>h.modo).sort()).toEqual(['real', 'simulado']);
+  expect([...banco.historico.historicos.values()].find(h=>h.modo==='real')).toMatchObject({boas_vindas_em:null, pergunta_nota_em:null, resposta_nota:null});
+  expect([...banco.historico.tentativas.values()].every(t=>t.modo==='simulado')).toBe(true);
   expect(banco.historico.envios.size).toBe(0);
   expect(banco.consultas.some(s=>s.includes('parametros_emissao = $3'))).toBe(true);
 });

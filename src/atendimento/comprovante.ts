@@ -68,7 +68,7 @@ export function decidirPedidoComprovante(
 ): DecisaoPedidoComprovante {
   if (agenda?.tipo === 'erro') {
     if (agenda.codigo === 'SEM_AGENDA_CONECTADA') return { tipo: 'pedir_agenda', agendaInformada: null, motivo: agenda.codigo };
-    return { tipo: 'perguntar_medico', motivo: agenda.codigo };
+    return { tipo: 'perguntar_medico', motivo: agenda.codigo === 'SINCRONIZACAO_INCOMPLETA' ? 'FONTE_INDISPONIVEL' : agenda.codigo };
   }
   if (estado.duvidaVinculo === 'VINCULO_TELEFONE_INDEFINIDO' || estado.duvidaVinculo === 'CONSULTA_AMBIGUA_OU_AUSENTE'
     || estado.duvidaVinculo === 'CONSULTA_APOS_PAGAMENTO' || estado.duvidaVinculo === 'MULTIPLAS_CONSULTAS_SEM_NOTA') {

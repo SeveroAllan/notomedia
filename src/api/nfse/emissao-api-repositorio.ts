@@ -36,7 +36,8 @@ export interface PerfilFiscalMedicoRegistro {
 }
 
 export interface CriarSolicitacaoEmissaoParams {
-  origem?: 'api' | 'whatsapp';
+  origem?: 'api' | 'whatsapp' | 'lote';
+  contatoPaciente?: string | null;
   ref: string;
   medicoId: string;
   pacienteId: string;

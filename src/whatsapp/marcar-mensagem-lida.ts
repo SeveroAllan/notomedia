@@ -4,7 +4,7 @@
  * está sendo processada.
  */
 
-export interface ChaveMensagemLeitura { id: string; remoteJid: string; remoteJidAlt?: string; fromMe: boolean }
+export interface ChaveMensagemLeitura { id: string; remoteJid: string; remoteJidAlt?: string | null; fromMe: boolean }
 export interface ParamsLeitura { instanciaNome: string; mensagemId: string; contatoTelefone: string; chaveMensagem?: ChaveMensagemLeitura }
 export interface LeitorMensagemWhatsApp {
   marcarLida(params: ParamsLeitura): Promise<{ sucesso: boolean; erro?: string }>;

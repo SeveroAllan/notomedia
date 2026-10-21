@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { completarNvidia } from './chat-client.js';
+import { completarOpenAi } from './chat-client.js';
 import { extrairComprovantePdf } from '../pdf/extrator-comprovante-pdf.js';
 import type { ExtratorComprovante, ResultadoExtracaoComprovante } from '../../atendimento/comprovante.js';
 import type { DadosMensagemEvolution } from '../../whatsapp/payload-webhook-schema.js';
@@ -21,7 +21,7 @@ export class ExtratorComprovanteNvidia implements ExtratorComprovante {
     private readonly apiKey: string | undefined,
     private readonly modelo: string | undefined,
     private readonly lerMidia: (mensagem: DadosMensagemEvolution) => ReturnType<EvolutionApiClient['obterBase64MensagemMidia']>,
-    private readonly completar: typeof completarNvidia = completarNvidia
+    private readonly completar: typeof completarOpenAi = completarOpenAi
   ) {}
 
   async extrair(mensagem: DadosMensagemEvolution): Promise<ResultadoExtracaoComprovante> {

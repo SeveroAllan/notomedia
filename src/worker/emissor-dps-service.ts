@@ -7,6 +7,8 @@
 export interface SolicitacaoEmissaoItem {
   id: string;
   emissaoComprovante?: true;
+  origemLote?: true;
+  tomadorAoVivo?: import('../io/fiscal/postgres-emissor-dps-service.js').TomadorAoVivo;
   medicoId: string;
   pacienteId: string;
   xdescServ: string;

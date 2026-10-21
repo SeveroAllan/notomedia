@@ -72,3 +72,28 @@ it('adaptador fiscal real recusa produção antes do cliente SEFIN', async () =>
   expect(transmitirDps).not.toHaveBeenCalled();
   expect(query).toHaveBeenCalledTimes(2);
 });
+it('falha do comprovante encaminha código estruturado sem enviar o detalhe técnico ao médico', async () => {
+  const { deps } = preparar();
+  deps.emissorDps.emitir.mockResolvedValue({ sucesso: false, erro: 'detalhe técnico privado', codigoErroSefin: 'CERTIFICADO_AUSENTE' });
+  await processarItemFila(item, deps);
+  expect(deps.notificadorAlertas.notificarMedicoWhatsApp).toHaveBeenCalledWith(expect.objectContaining({ codigoErro: 'CERTIFICADO_AUSENTE' }));
+  expect(JSON.stringify(deps.notificadorAlertas.notificarMedicoWhatsApp.mock.calls)).not.toContain('detalhe técnico privado');
+  expect(deps.filaRepositorio.reagendarTentativa).not.toHaveBeenCalled();
+});
+it('rejeição do lote conserva código original no banco e motivo sanitizado só no diagnóstico interno',async()=>{
+ const {deps,filaRepositorio}=preparar();
+ deps.emissorDps.emitir.mockResolvedValue({sucesso:false,codigoErroSefin:'E9999',erro:'Prestador não habilitado; paciente Pessoa Ficticia CPF 52998224725; senha=SEGREDO'});
+ const lote={...item,origemLote:true as const,tomadorAoVivo:{nome:'Pessoa Ficticia',cpf:'52998224725',valorCobradoCentavos:10000}};
+ expect(await processarItemFila(lote,deps)).toEqual({ok:false,status:'necessita_intervencao',motivo:'EMISSAO_COMPROVANTE_RECUSADA'});
+ expect(filaRepositorio.registrarFalhaComprovante).toHaveBeenCalledExactlyOnceWith({solicitacaoId:item.id,erroCodigo:'EMISSAO_COMPROVANTE_RECUSADA: E9999'});
+ const p=deps.notificadorAlertas.notificarMedicoWhatsApp.mock.calls[0][0];
+ expect(p.codigoErro).toBe('E9999');expect(p.motivoErro).toContain('Prestador não habilitado');expect(p.motivoErro).not.toMatch(/Pessoa Ficticia|52998224725|SEGREDO/);
+ await processarItemFila(lote,deps);expect(deps.emissorDps.emitir).toHaveBeenCalledOnce();expect(filaRepositorio.reagendarTentativa).not.toHaveBeenCalled();expect(deps.enviarPdfDanfse.enviarPdf).not.toHaveBeenCalled();
+});
+it('sanitização fiscal remove identidades e XML antes de truncar sem esconder o motivo técnico',async()=>{
+ const {sanitizarErroFiscal}=await import('../src/observabilidade/erros.js');
+ const r=sanitizarErroFiscal('Prestador não habilitado; CLARA ALMEIDA FICTICIA; Clára; CPF 529.982.247-25; email a@example.com; telefone 11999990000; R$ 300,00; <DPS>nome desconhecido e outros dados</DPS>; '+ 'Detalhe '.repeat(100),['Clára Almeida Fictícia']);
+ expect(r).toContain('Prestador não habilitado');expect(r.length).toBeLessThanOrEqual(500);
+ expect(r).not.toMatch(/clara|clára|almeida|fict|529|example|1199999|300|DPS|desconhecido/iu);
+ expect(sanitizarErroFiscal({senha:'segredo'})).toBe('[OCULTO]');
+});
