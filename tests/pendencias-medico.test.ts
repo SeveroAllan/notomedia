@@ -10,6 +10,10 @@ it('lista determinística mantém nome + data, informa restantes e mascara memó
   for (const balao of r.fala) for (const linha of balao.split('\n')) if (linha.includes('Pessoa Ficticia')) expect(linha).toContain('19/10/2026');
   expect(r.falaMemoria.join('\n')).not.toContain('Pessoa Ficticia'); expect(r.falaMemoria.join('\n')).toContain('[PACIENTE]');
 });
+it('aceita dataHora como instância Date retornada pelo driver pg (timestamptz)', () => {
+  const r = formatarPendencias({ ok: true, total: 1, consultas: [{ paciente: 'Pessoa Ficticia A', dataHora: new Date('2026-10-19T14:00Z'), valorCentavos: 30000 }] }, '2026-09-03');
+  expect(r.fala.join('\n')).toContain('Pessoa Ficticia A — 19/10/2026');
+});
 it('zero exige total zero confirmado; lista contraditória ou incompleta não afirma ausência', () => {
   expect(formatarPendencias({ ok: true, total: 0, consultas: [] }, '2026-09-03').fala.join(' ')).toContain('Não há nenhuma pendência desde 03/09/2026');
   expect(() => formatarPendencias({ ok: true, total: 23, consultas: [] }, '2026-09-03')).toThrow();

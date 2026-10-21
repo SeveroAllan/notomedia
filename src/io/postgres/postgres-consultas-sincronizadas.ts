@@ -15,7 +15,7 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
     try {
       const sincronizadas = await this.pool.query('select 1 from public.noto_consultas_sincronizadas where medico_id=$1 and fonte=$2 limit 1', [medicoId, 'tribemd']);
       if (!sincronizadas.rows.length && !sincronizacaoConcluida) return { ok: false as const, motivo: 'SEM_CONSULTAS_SINCRONIZADAS' };
-      const { rows } = await this.pool.query<{ id_externo: string; telefone: string; data_hora: string; valor_consulta_centavos: number | null }>(
+      const { rows } = await this.pool.query<{ id_externo: string; telefone: string; data_hora: string | Date; valor_consulta_centavos: number | null }>(
         `select c.id_externo, p.telefone as telefone, c.data_hora, c.valor_consulta_centavos
         from public.noto_consultas_sincronizadas c join public.pacientes p on p.id=c.paciente_id and p.medico_id=c.medico_id
         where c.medico_id=$1 and c.fonte=$2 and c.status='realizada'
@@ -30,7 +30,7 @@ export class PostgresConsultasSincronizadas implements RepositorioConsultasSincr
           const nome = (await nomeAoVivo?.(consulta.id_externo))?.trim();
           const telefone = consulta.telefone?.replace(/\D/g, '') ?? '';
           consultas.push({ paciente: nome || (telefone ? `Contato •••• ${telefone.slice(-4)}` : 'Contato sem telefone'),
-            dataHora: consulta.data_hora, valorCentavos: consulta.valor_consulta_centavos });
+            dataHora: consulta.data_hora instanceof Date ? consulta.data_hora.toISOString() : consulta.data_hora, valorCentavos: consulta.valor_consulta_centavos });
         }
       }
       return { ok: true as const, total, consultas, dataInicio };

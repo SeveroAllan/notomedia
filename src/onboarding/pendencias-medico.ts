@@ -36,7 +36,7 @@ export function formatarPendencias(resultado: ResultadoPendencias, dataInicio: s
     const c = bruto as { paciente?: unknown; dataHora?: unknown };
     const nome = typeof c.paciente === 'string' ? c.paciente.trim() : '';
     const seguro = nome.length <= 80 && (/^[\p{L} .'-]+$/u.test(nome) || /^Contato •{4} \d{4}$/.test(nome)) && !/ignore|instru|regras|sistema|prompt|revele|execute|envie|emita|chave|segredo|obede|tool|ferramenta/i.test(nome);
-    const data = typeof c.dataHora === 'string' ? new Date(c.dataHora) : new Date(NaN);
+    const data = c.dataHora instanceof Date ? c.dataHora : typeof c.dataHora === 'string' ? new Date(c.dataHora) : new Date(NaN);
     if (!Number.isFinite(data.getTime())) throw Error('DATA_CONSULTA_INVALIDA');
     const linha = `${seguro ? nome : 'Contato não identificado'} — ${data.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
     if (fala.at(-1)!.length + linha.length + 1 > 465) { if (fala.length >= maxBaloes) break; fala.push(''); }
