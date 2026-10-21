@@ -16,6 +16,7 @@ export class BancoConversaFalso {
       return { rows: [{ id: String(this.mensagens.length) }] };
     }
     if (sql.startsWith('select 1 from conversa_mensagens')) return { rows: this.mensagens.filter(m => m.medico === medico && m.mensagemId === terceiro).map(() => ({ existe: 1 })) };
+    if (sql.includes("criada_em > now() - interval '10 minutes'")) return { rows: mensagens.filter(m => m.papel === 'noto').reverse().map(m => ({ texto: m.texto })) };
     if (sql.includes("and papel='noto' order")) return { rows: mensagens.filter(m => m.papel === 'noto').slice(-1).map(m => ({ texto: m.texto })) };
     if (sql.startsWith('select texto from conversa_mensagens')) return { rows: mensagens.slice(-terceiro).reverse().map(m => ({ texto: m.texto })) };
     if (sql.startsWith('select resumo, ate_id::text')) return { rows: this.resumos.has(chave) ? [this.resumos.get(chave)] : [] };

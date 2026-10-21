@@ -219,3 +219,35 @@ it('sync não grava nome nem cobrado ao vivo, mesmo quando diferentes do valor d
   expect(payload).toEqual([{ paciente_id:'paciente',id_externo:'12',data_hora:'2026-10-19T12:00Z',status:'realizada',valor_consulta_centavos:30000 }]);
   expect(JSON.stringify(query.mock.calls)).not.toMatch(/Pessoa Efemera|25000|valorCobrado/);
 });
+it('frescor só em RAM por médico: dez minutos, cobertura de janela, invalidação e isolamento', async () => {
+  vi.useFakeTimers();
+  try {
+    const { CacheAgendaProcesso } = await import('../src/agenda/sincronizar-agenda.js');
+    const cache = new CacheAgendaProcesso();
+    const carregar = vi.fn(async () => ({ tipo: 'consultas' as const, fonte:'tribemd',consultas:[] }));
+    await cache.consultar('a', 7, carregar); await cache.consultar('a', 3, carregar);
+    expect(carregar).toHaveBeenCalledOnce();
+    await cache.consultar('b', 3, carregar); expect(carregar).toHaveBeenCalledTimes(2);
+    await cache.consultar('a', 10, carregar); expect(carregar).toHaveBeenCalledTimes(3);
+    cache.invalidar('a'); await cache.consultar('a', 3, carregar); expect(carregar).toHaveBeenCalledTimes(4);
+    await vi.advanceTimersByTimeAsync(600000);
+    await cache.consultar('a', 3, carregar); expect(carregar).toHaveBeenCalledTimes(5);
+    const novaInstancia = new CacheAgendaProcesso(); await novaInstancia.consultar('a',3,carregar); expect(carregar).toHaveBeenCalledTimes(6);
+  } finally { vi.useRealTimers(); }
+});
+it('cache não guarda falha nem restaura uma leitura invalidada durante sua execução', async () => {
+  const { CacheAgendaProcesso } = await import('../src/agenda/sincronizar-agenda.js'); const cache=new CacheAgendaProcesso();
+  const erro=vi.fn(async()=>({tipo:'erro' as const,codigo:'FONTE_INDISPONIVEL' as const}));
+  await cache.consultar('a',7,erro); await cache.consultar('a',7,erro); expect(erro).toHaveBeenCalledTimes(2);
+  let concluir!: (r:any)=>void; const antiga=cache.consultar('a',7,()=>new Promise(r=>{concluir=r;}));
+  await Promise.resolve(); cache.invalidar('a'); concluir({tipo:'consultas',fonte:'tribemd',consultas:[]}); await expect(antiga).rejects.toThrow('ACESSO_AGENDA_ALTERADO');
+  const nova=vi.fn(async()=>({tipo:'consultas' as const,fonte:'tribemd',consultas:[]}));
+  await cache.consultar('a',7,nova); expect(nova).toHaveBeenCalledOnce();
+});
+it('cache compartilha somente a mesma leitura concorrente por médico',async()=>{
+ const {CacheAgendaProcesso}=await import('../src/agenda/sincronizar-agenda.js');const cache=new CacheAgendaProcesso();
+ const carregar=vi.fn(async()=>({tipo:'consultas' as const,fonte:'tribemd',consultas:[]}));
+ const resultados=await Promise.all(Array.from({length:12},()=>cache.consultar('a',7,carregar)));
+ expect(carregar).toHaveBeenCalledOnce();expect(resultados).toHaveLength(12);
+ cache.invalidar('a');
+});

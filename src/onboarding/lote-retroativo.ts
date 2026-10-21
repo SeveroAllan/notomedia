@@ -65,7 +65,7 @@ export class ConversaLoteRetroativo {
       await this.propor(lote, desde, conversa, chave, agora, true);
       return true;
     }
-    if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde que dia você quer verificar as consultas para as notas retroativas? Consigo consultar os últimos 90 dias. As notas deste teste serão emitidas em homologação, sem valor fiscal.']);
+    if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde quando você não emite notas? As notas deste teste serão emitidas em homologação, sem valor fiscal.']);
     else if (lote?.estado === 'aguardando_data_inicio') {
       const pergunta = 'Preciso saber desde que dia você quer emitir as notas. Qual é a data de início?';
       await this.deps.enviar(medicoId, conversa, `lote:resposta:${chave}`, [await this.deps.ultimaFala?.(medicoId, conversa) === pergunta

@@ -16,6 +16,7 @@ export interface OpcoesCofre {
     chromium: string;
     xvfb?: string;
     simultaneos?: number;
+    aoAlterarAcesso?: (medicoId: string) => void;
     aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
 }
 export const consentimentoCofre = 'tribemd-leitura-v1';
@@ -55,6 +56,7 @@ export class CofreTribemd {
             throw new ErroCofre('COFRE_OCUPADO');
         if (this.trabalhos.size >= (this.opcoes.simultaneos ?? 2))
             throw new ErroCofre('NAVEGADORES_OCUPADOS');
+        if (credencial || !janela) this.opcoes.aoAlterarAcesso?.(id);
         let concluir!: () => void;
         const trabalho: Trabalho = { janela, controller: new AbortController(), finalizada: new Promise<void>(r => { concluir = r; }), concluir: () => concluir() };
         this.trabalhos.set(id, trabalho);
@@ -157,6 +159,7 @@ export class CofreTribemd {
     private async alterar(id: string, apagar: boolean) {
         if (this.alterando.has(id))
             throw new ErroCofre('COFRE_OCUPADO');
+        this.opcoes.aoAlterarAcesso?.(id);
         this.alterando.add(id);
         let liberar: (() => Promise<void>) | undefined, p: PerfilTribemd = {};
         try {

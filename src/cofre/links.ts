@@ -141,7 +141,7 @@ export class LinksCofre {
         if (!rows.length) return;
         const falhaAcesso = !conectado && (await this.deps.cofre.status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
         if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
-        await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');
+        await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.');
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
         const credencial = contemCredencialAgenda(texto);

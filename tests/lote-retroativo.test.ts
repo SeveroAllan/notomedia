@@ -27,7 +27,7 @@ function cenario() {
 describe('retroativo com escopo e confirmação vinculados', () => {
   it('pergunta data, conta valores reais, confirma e não confirma duas vezes', async () => {
     const c = cenario(); await c.conversa.iniciar('medico', 'conversa', 'evento', agora);
-    expect(c.falas[0]).toContain('Desde que dia');
+    expect(c.falas[0]).toContain('Desde quando você não emite notas?');
     await c.conversa.responder('medico', 'conversa', 'data', 'desdi dia primeiru', agora);
     expect(c.deps.contar).toHaveBeenCalledWith('medico', '2026-10-01', agora.toISOString());
     expect(c.falas[1]).toContain('1 consultas'); expect(c.falas[1]).toContain('300,00'); expect(c.falas[1]).toContain('só os novos');
@@ -200,7 +200,7 @@ it('início pela conversa reutiliza período conhecido, conta e pergunta confirm
 });
 it.each([null,'2026-10-21','2026-02-30'])('período ausente/inválido pergunta data e não conta (%s)',async desde=>{
  const c=cenario();await c.conversa.iniciar('m','c','e',agora,desde);
- expect(c.falas[0]).toContain('Desde que dia');expect(c.deps.contar).not.toHaveBeenCalled();expect(c.repo.confirmar).not.toHaveBeenCalled();
+ expect(c.falas[0]).toContain('Desde quando você não emite notas?');expect(c.deps.contar).not.toHaveBeenCalled();expect(c.repo.confirmar).not.toHaveBeenCalled();
 });
 it('proposta usa leitura ao vivo sem exibir lista e mantém gate antes da contagem',async()=>{
  const c=cenario();const valores=new Map([['12',30000]]);

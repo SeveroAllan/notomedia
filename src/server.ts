@@ -4,7 +4,7 @@ import { ConversaLoteRetroativo, interpretarDataRetroativo, interpretarReenvioLo
 import { PostgresLotesEmissao } from './io/postgres/postgres-lotes-emissao.js';
 import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
 import { PostgresEmissaoLote, type ExecutorFiscalLote } from './io/postgres/postgres-emissao-lote.js';
-import { sincronizarAgenda } from './agenda/sincronizar-agenda.js';
+import { sincronizarAgenda, CacheAgendaProcesso } from './agenda/sincronizar-agenda.js';
 import { registroErroNoto } from './observabilidade/erros.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
@@ -107,10 +107,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.supabaseServiceRoleKey,
     pool
   );
+  const cacheAgenda = new CacheAgendaProcesso();
   const cofres = criarCofreContas({
+    aoAlterarAcesso: id => cacheAgenda.invalidar(id),
     pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
     obterWhatsappAssistente: () => evolutionAssistantClient.obterTelefoneInstancia(),
     aoConcluirAgenda: async (medicoId, evento) => {
+      cacheAgenda.invalidar(medicoId);
       try {
         if (!config.comunicacaoMedicoAtiva || !config.conversaLivreAtiva || !await comunicacaoHomologacao.medicoPermitido(medicoId)) return;
         const { rows } = await pool.query(`select u.telefone from medicos m join usuarios u on u.id=m.usuario_id where m.id=$1 and u.ativo=true`, [medicoId]);
@@ -187,8 +190,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if (rows[0]?.ambiente !== 'homologacao') return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
         if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 365) throw Error('JANELA_AGENDA_INVALIDA');
         const repo = new PostgresConsultasSincronizadas(pool);
-        const resultado = await sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
-          (id, consulta) => repo.resolverPaciente(id, consulta));
+        const resultado = await cacheAgenda.consultar(medicoId, janelaDias, () => sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
+          (id, consulta) => repo.resolverPaciente(id, consulta)));
         if (resultado.tipo === 'erro') console.warn(registroErroNoto(resultado.codigo, 'tecnico', { medicoId, etapa: 'sincronizacao' }));
         return resultado;
       } catch (e) {
@@ -213,7 +216,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const valoresAoVivo = new Map<string, number | null>();
     let sincronizacaoConcluida = false;
     if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
-      const sincronizada = await sincronizarAgendaHomologacao(id, instante);
+      const hoje = instante.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+      const janelaDias = Math.max(1, Math.ceil((Date.parse(hoje) - Date.parse(dataInicio)) / 86400000));
+      const sincronizada = await sincronizarAgendaHomologacao(id, instante, janelaDias);
       if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
       sincronizacaoConcluida = true;
       for (const consulta of sincronizada.consultas) {
@@ -227,8 +232,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     return { ...resultado, valoresAoVivo };
   };
   const pendencias = config.conversaLivreAtiva ? new PendenciasMedico(contextoPendencias, {
+    ultimasFalas: (id, conversa) => memoriaPersistida!.lerFalasRecentes(id, conversa),
     permitido: pendenciasPermitidas,
-    sincronizar: async (id, agora) => { const r = await sincronizarAgendaHomologacao(id, agora); return r.tipo === 'erro' ? { ok: false, motivo: r.codigo } : { ok: true }; },
     classificar: entrada => classificarPendencias(iaApiKey, iaModeloTexto, completarIa, entrada),
     listar: (id, inicio, agora) => listarPendencias(id, { nome: 'tribemd', conectada: true }, agora, inicio),
     enviar: async (medicoId, conversa, chave, fala, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, falaMemoria }); },
@@ -278,7 +283,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { retroativo, pendencias, aguardaInicioRetroativo: retroativo ? async id => (await lotes.ativo(id))?.estado === 'aguardando_data_inicio' : undefined, prepararPendencias: async (id, instante) => {
+    }, { retroativo, pendencias, lerInicioPendencias: async id => (await contextoPendencias.ler(id)).dataInicio, aguardaInicioRetroativo: retroativo ? async id => (await lotes.ativo(id))?.estado === 'aguardando_data_inicio' : undefined, prepararPendencias: async (id, instante) => {
       if (!await pendenciasPermitidas(id)) return { ok: false, motivo: 'ENVIO_BLOQUEADO' };
       const r = await sincronizarAgendaHomologacao(id, instante);
       return r.tipo === 'erro' ? { ok: false, motivo: r.codigo } : { ok: true };
@@ -293,7 +298,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
         if (acao.tipo === 'boas_vindas' && contexto?.nomeMedico) {
-          await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota });
+          const resultado = await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota });
+          if (resultado === 'enviado') await contextoPendencias.perguntarData(medicoId);
           return;
         }
         if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }

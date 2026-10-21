@@ -4,7 +4,7 @@ import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comun
 import { orquestrarComunicacao } from '../src/onboarding/orquestrar-comunicacao.js';
 const cliente = vi.hoisted(() => vi.fn());
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: cliente }));
-const pergunta = 'Tem alguma nota para emitir? Desde que dia?';
+const pergunta = 'Desde quando você não emite notas?';
 const perguntaAgenda = 'Para eu achar suas consultas, preciso da sua agenda. Posso te mandar o link?';
 const contexto = { acaoPendente: 'perguntar_nota_pendente' as const, pergunta, mensagens: ['Bom dia', pergunta] };
 const dia = '2026-03-02';

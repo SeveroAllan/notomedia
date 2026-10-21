@@ -13,13 +13,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
+  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -172,7 +172,7 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
   const registro = banco.mensagens.find(m => m.mensagemId === 'noto:boas_vindas:unica');
   expect(await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', chave)).toContain(baloes.join('\n'));
   expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
-  expect(baloes[3]).toBe('Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
+  expect(baloes[3]).toBe('Desde quando você não emite notas?');
   await receber(criarAppExpress(), 'resposta', 'quero');
   expect(fronteiras.openai).toHaveBeenCalledTimes(1);
   const dados = JSON.parse(fronteiras.openai.mock.calls[0][2][1].content);
@@ -220,9 +220,12 @@ it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo
   const enviosAntesDaReentrega = enviar.mock.calls.slice();
   await receber(criarAppExpress(), 'listar', 'Verifique as notas pendentes');
   expect(enviar.mock.calls).toEqual(enviosAntesDaReentrega);
-  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Conferi esse período.\n1 consultas sem nota desde 03/09/2026:\nPaciente exemplo — 19/10/2026'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Conferi esse período.\n1 consultas sem nota desde 03/09/2026:\nEm 19/10/2026: Paciente exemplo.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
   expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('from public.noto_emissoes_comprovantes'))).toHaveLength(2);
-  expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicoId: 'medico', janelaDias: 90, agora: expect.any(Date) }));
+  const instanteFonte = fronteiras.fonte.mock.calls[0][0].agora as Date;
+  const hojeFonte = instanteFonte.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+  const diasDesdeInicio = (Date.parse(hojeFonte) - Date.parse('2026-09-03')) / 86400000;
+  expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicoId: 'medico', janelaDias: diasDesdeInicio, agora: expect.any(Date) }));
   const escrita = fronteiras.query.mock.calls.find(([sql]) => sql.startsWith('insert into public.noto_consultas_sincronizadas'))!;
   expect(JSON.parse(escrita[1][2])).toEqual([{ paciente_id: '00000000-0000-4000-8000-000000000002', id_externo: 'pendente', data_hora: '2026-10-19T14:00:00Z', status: 'realizada', valor_consulta_centavos: 40000 }]);
 });
@@ -265,8 +268,8 @@ it('evento de conexão continua sozinho, verifica agenda e grava contexto nas va
   enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 2;
   criarAppExpress(); const evento = { agenda: 'tribemd' as const, conectado: true, chave: 'link-salvo' };
   await fronteiras.concluirAgenda!('medico', evento); await fronteiras.concluirAgenda!('medico', evento);
-  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.', 'Não há nenhuma pendência desde 03/09/2026.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
-  expect(fronteiras.fonte).toHaveBeenCalledTimes(2); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
+  expect(enviar.mock.calls.map(([p]: unknown[]) => p)).toEqual(['Já recebi o seu acesso ao TribeMD.', 'Não há nenhuma pendência desde 03/09/2026.'].map(texto => ({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto })));
+  expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(ler).not.toHaveBeenCalled(); expect(reagir).not.toHaveBeenCalled();
   expect(banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
   for (const numero of ['5551993527271', '555193527271']) {
     const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, numero])).digest('hex');
@@ -332,6 +335,8 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
 });
 
 it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa trilha fiscal real injetada com serviços falsos', async () => {
+  const queryAnterior=fronteiras.query.getMockImplementation()!;
+  fronteiras.query.mockImplementation((sql:string,p:unknown[])=>sql.startsWith('select data_inicio::text') ? {rows:[{data_inicio:null,aguardando_data:false,ultimo_aviso:null}]} : queryAnterior(sql,p));
   config.emissaoComprovanteHomologacaoAtiva = true; config.envioRealAllowlist = ['+5551993527271']; fronteiras.agenda = { nome: 'tribemd', conectada: true };
   enviosEsperados = 8;
   let atual: any;
@@ -346,7 +351,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   fronteiras.openai.mockImplementation(async (_key, _model, msgs) => msgs[0].content.startsWith('Interprete a data') ? '{"desde":"2026-10-01"}' : '{"intencao":"sim","confianca":0.99}');
   const app = criarAppExpress();
   await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'lote-evento' });
-  expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(enviar.mock.calls[1][0].texto).toContain('Desde que dia');
+  expect(fronteiras.fonte).not.toHaveBeenCalled(); expect(enviar.mock.calls[1][0].texto).toContain('Desde quando você não emite notas?');
   await receber(app, 'data-lote', 'desdi primeiru de otubro');
   expect(contar.mock.calls[0][3]).toEqual(new Map([['pendente', 30000]]));
   expect(enviar.mock.calls[2][0].texto).toContain('desde 01/10/2026'); expect(enviar.mock.calls[3][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-4');
@@ -411,4 +416,33 @@ it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as
  expect(classificar.mock.calls.map(([texto])=>texto)).toEqual(['Tem pendências de nota?',pedido]);expect(contar).toHaveBeenCalledOnce();expect(fronteiras.fonte).toHaveBeenCalledTimes(leituras);
  expect(JSON.stringify(banco.mensagens)).not.toContain('Pessoa Ficticia A');expect(JSON.stringify(banco.mensagens)).toContain('[PACIENTE]');
  expect(JSON.stringify(enviar.mock.calls)).not.toMatch(/CONTAR_CONSULTAS|AGUARDANDO_|cofre/i);expect(config.envioPacienteRealAtivo).toBe(false);
+});
+it('cache de agenda reutiliza leitura fresca, isola médicos e invalida ao alterar acesso sem persistir nomes',async()=>{
+ const app=criarAppExpress(); const agora=new Date('2026-10-20T15:00Z');
+ await app.locals.sincronizarAgendaHomologacao('medico',agora,7);
+ await app.locals.sincronizarAgendaHomologacao('medico',agora,3);expect(fronteiras.fonte).toHaveBeenCalledOnce();
+ await app.locals.sincronizarAgendaHomologacao('outro-medico',agora,3);expect(fronteiras.fonte).toHaveBeenCalledTimes(2);
+ fronteiras.alterarAcesso!('medico');await app.locals.sincronizarAgendaHomologacao('medico',agora,3);expect(fronteiras.fonte).toHaveBeenCalledTimes(3);
+ ambiente='producao';expect(await app.locals.sincronizarAgendaHomologacao('medico',agora,3)).toEqual({tipo:'erro',codigo:'FONTE_INDISPONIVEL'});
+ expect(fronteiras.fonte).toHaveBeenCalledTimes(3);
+ expect(JSON.stringify(fronteiras.query.mock.calls)).not.toContain('Paciente exemplo');expect(JSON.stringify(logs.mock.calls)).not.toContain('Paciente exemplo');
+});
+it('sem início pós-conexão pergunta antes de ler; data informada limita a janela real da fonte',async()=>{
+ vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-10-20T15:00Z'));
+ try {
+  fronteiras.agenda={nome:'tribemd',conectada:true};config.emissaoComprovanteHomologacaoAtiva=false;config.envioRealAllowlist=['+5551993527271'];
+  let inicio:string|null=null;const anterior=fronteiras.query.getMockImplementation()!;
+  fronteiras.query.mockImplementation((sql:string,p:unknown[])=>{
+   if(sql.startsWith('select data_inicio::text'))return{rows:[{data_inicio:inicio,aguardando_data:!inicio,ultimo_aviso:null}]};
+   if(sql.includes('data_inicio) values')){inicio=String(p[1]);return{rows:[{medico_id:'medico'}]};}
+   return anterior(sql,p);
+  });
+  enviar.mockResolvedValue({sucesso:true});enviosEsperados=3;const app=criarAppExpress();
+  await fronteiras.concluirAgenda!('medico',{agenda:'tribemd',conectado:true,chave:'nova-conexao-sem-inicio'});
+  expect(fronteiras.fonte).not.toHaveBeenCalled();expect(enviar.mock.calls[1][0].texto).toBe('Desde quando você não emite notas?');
+  fronteiras.openai.mockResolvedValue('{"verificar":true,"desde":"2026-10-18","moldura":"Conferi esse período."}');
+  await receber(app,'data-janela','desde anteontem');
+  expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith({medicoId:'medico',referenciaCofre:'medico',janelaDias:2,agora:new Date('2026-10-20T15:00Z')});
+  expect(enviar.mock.calls[2][0].texto).toContain('desde 18/10/2026');
+ }finally{vi.useRealTimers();}
 });

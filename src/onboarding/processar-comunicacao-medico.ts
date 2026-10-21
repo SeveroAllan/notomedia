@@ -23,6 +23,7 @@ export async function processarComunicacaoMedico(
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
     pendencias?: Pick<import('./pendencias-medico.js').PendenciasMedico, 'responder' | 'iniciar' | 'aposSyncIncompleta'>;
+    lerInicioPendencias?: (medicoId: string) => Promise<string | null>;
     aguardaInicioRetroativo?: (medicoId: string) => Promise<boolean>;
     prepararPendencias?: (medicoId: string, agora: Date) => Promise<{ ok: boolean; motivo?: string }>;
     retroativo?: Pick<import('./lote-retroativo.js').ConversaLoteRetroativo, 'iniciar' | 'responder'>;
@@ -48,6 +49,10 @@ export async function processarComunicacaoMedico(
     deps.log('info', 'FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: entrada.medicoId, ferramenta,
       ok: resultado.ok, motivo: /^[A-Z0-9_]{1,80}$/.test(resultado.motivo ?? '') ? resultado.motivo : undefined,
       total: resultado.total, retornadas: resultado.consultas?.length, janelaDias: resultado.janelaDias }));
+  };
+  const lerInstabilidades = async () => {
+    try { return entrada.chaveConversa ? await deps.memoriaPersistida?.lerFalasRecentes?.(entrada.medicoId, entrada.chaveConversa) ?? [] : []; }
+    catch { return []; }
   };
   const enviarFala = async (fala: string[], chave: string) => {
     // O transporte real reserva a linha antes de enviar; o registro posterior é um no-op nesse caminho.
@@ -85,10 +90,15 @@ export async function processarComunicacaoMedico(
         const memoria = deps.memoriaPersistida, conversa = entrada.chaveConversa;
         let estado: EstadoComunicacaoMedico | null = null;
         if (entrada.eventoAgenda.conectado) {
-          const aviso = 'Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.';
+          const aviso = 'Já recebi o seu acesso ao TribeMD.';
           await enviarFala([aviso], `${entrada.chaveProcessamento}:acesso`);
           estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
           if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
+        }
+        if (entrada.eventoAgenda.conectado && estado?.estado.agenda.conectada && estado.estado.agenda.nome?.toLowerCase() === 'tribemd' && conversa && deps.pendencias) {
+          if (await deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora, await deps.lerInicioPendencias?.(entrada.medicoId))) return { tipo: 'nenhuma' };
+          await deps.pendencias.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora);
+          return { tipo: 'nenhuma' };
         }
         let resultado: { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number } = { ok: false, motivo: 'ACESSO_NAO_CONFIRMADO' };
         if (entrada.eventoAgenda.conectado) {
@@ -100,8 +110,7 @@ export async function processarComunicacaoMedico(
         if (entrada.eventoAgenda.conectado && resultado.ok && conversa && await deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora)) return { tipo: 'nenhuma' };
         if (entrada.eventoAgenda.conectado && resultado.ok && conversa && await deps.pendencias?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora)) return { tipo: 'nenhuma' };
         if (entrada.eventoAgenda.conectado && !resultado.ok && ['SINCRONIZACAO_INCOMPLETA', 'SEM_CONSULTAS_SINCRONIZADAS'].includes(resultado.motivo ?? '') && conversa && deps.pendencias) {
-          await deps.pendencias.aposSyncIncompleta(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora,
-            () => deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora) ?? Promise.resolve(false));
+          await deps.pendencias.aposSyncIncompleta(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora);
           return { tipo: 'nenhuma' };
         }
         if (resultado.ok && resultado.dataInicio) {
@@ -109,7 +118,7 @@ export async function processarComunicacaoMedico(
           await enviarFala(formatada.fala, entrada.chaveProcessamento);
           return { tipo: 'nenhuma' };
         }
-        const resposta = await deps.conversador?.responder({ texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
+        const resposta = await deps.conversador?.responder({ instabilidadesRecentes: await lerInstabilidades(), texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
           resumo: memoria && conversa ? (await memoria.lerResumo(entrada.medicoId, conversa))?.resumo ?? null : null,
           estado: estado?.estado ?? {}, agora: entrada.agora, eventoAgenda: entrada.eventoAgenda, acoesPermitidas: [],
           resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: resultado } });
@@ -143,10 +152,10 @@ export async function processarComunicacaoMedico(
           entrada.respostaMedico!.texto, entrada.agora, entrada.chavePergunta);
         // Uma confirmação pendente tem prioridade sobre qualquer nova verificação de agenda.
         let atendida = !aguardandoInicio && !!await responderRetroativo();
-        if (!atendida && estado.estado.agenda.conectada && deps.pendencias) {
+        if (!atendida && deps.pendencias) {
           const mensagens = await deps.memoriaPersistida?.ler(entrada.medicoId, conversa) ?? [];
           atendida = await deps.pendencias.responder({ medicoId: entrada.medicoId, conversa, chave: entrada.chaveProcessamento,
-            texto: entrada.respostaMedico.texto, mensagens, agora: entrada.agora,
+            texto: entrada.respostaMedico.texto, mensagens, agora: entrada.agora, agendaConectada: estado.estado.agenda.conectada,
             ...(deps.retroativo ? { aoEmitir: async (desde: string | null) => {
               await deps.retroativo!.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora, desde);
             } } : {}),
@@ -184,7 +193,7 @@ export async function processarComunicacaoMedico(
         const resumo = conversa ? await deps.memoriaPersistida?.lerResumo(entrada.medicoId, conversa) : null;
         const linkCofreJaSolicitado = !!(conversa && await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, conversa));
         let contextoConexao = await deps.lerContextoConexao?.(entrada.medicoId, entrada.agora);
-        const contexto = { contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
+        const contexto = { instabilidadesRecentes: await lerInstabilidades(), contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
           ? estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });

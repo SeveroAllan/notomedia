@@ -215,8 +215,8 @@ describe('HTTP e segredos', () => {
     });
     it('falha técnica mantém token consumido e informa instabilidade sem vazar erro', async () => {
         const { token } = await pedir(); iniciar.mockRejectedValueOnce(Error(dados.senha));
-        const res = await post(token); expect(res.status).toBe(503); expect(await res.text()).toBe('Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');
-        expect((await post(token)).status).toBe(410); expect(textos.at(-1)).toBe('Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.'); expect(JSON.stringify(logs)).not.toContain(dados.senha);
+        const res = await post(token); expect(res.status).toBe(503); expect(await res.text()).toBe('Tive uma instabilidade e não consegui concluir agora.');
+        expect((await post(token)).status).toBe(410); expect(textos.at(-1)).toBe('Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.'); expect(JSON.stringify(logs)).not.toContain(dados.senha);
     });
 });
 

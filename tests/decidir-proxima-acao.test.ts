@@ -222,7 +222,7 @@ describe('boas-vindas com última nota em cinco balões', () => {
         'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
         'Se você pedir, também entrego uma nota nova ou antiga por aqui.',
         `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}.`,
-        'Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?'
+        'Desde quando você não emite notas?'
       ]);
       expect(nota).toEqual(antes);
     }
@@ -244,7 +244,7 @@ describe('boas-vindas sem última nota com paciente conhecido', () => {
       'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
       'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
       'Se você pedir, também entrego uma nota nova ou antiga por aqui.',
-      'Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?'
+      'Desde quando você não emite notas?'
     ]);
   });
 });
@@ -254,12 +254,12 @@ it.each(['ALICE CASTRO MENEZES XAVIER', '  alice Castro  ', 'Alice'])('saúda so
   expect(baloes[0]).toBe('Olá, Dr(a). Alice! Sou o Noto, seu assistente de notas fiscais.');
   expect(baloes).toHaveLength(4);
   expect(baloes.every(texto => texto.length <= 500)).toBe(true);
-  expect(baloes[3]).toBe('Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
+  expect(baloes[3]).toBe('Desde quando você não emite notas?');
 });
 it('limita os balões a 500 caracteres sem perder a pergunta final', () => {
   const baloes = montarBoasVindas('A'.repeat(800), { paciente: 'P'.repeat(800), dataEmissao: '2026-10-20', valorCentavos: 30000, diasDesdeEmissao: 0 });
   expect(baloes.every(texto => texto.length <= 500)).toBe(true);
   expect(baloes).toHaveLength(5);
   expect(baloes[3]).toHaveLength(500);
-  expect(baloes[4]).toBe('Tem alguma outra nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
+  expect(baloes[4]).toBe('Desde quando você não emite notas?');
 });

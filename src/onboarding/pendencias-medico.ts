@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { validarInicioRetroativo } from './lote-retroativo.js';
-import { MENSAGEM_INSTABILIDADE } from '../observabilidade/erros.js';
+import { mensagemInstabilidade } from '../observabilidade/erros.js';
 export interface ResultadoPendencias { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; valoresAoVivo?: ReadonlyMap<string, number | null> }
 export interface ContextoPendencias { dataInicio: string | null; aguardandoData: boolean; ultimoAviso?: string | null; syncAtiva?: boolean }
 export interface RepositorioContextoPendencias {
@@ -33,16 +33,34 @@ export function formatarPendencias(resultado: ResultadoPendencias, dataInicio: s
   const prefixo = ['Veja o que encontrei.', 'Conferi esse período.'].includes(moldura) ? moldura + '\n' : '';
   const fala = [`${prefixo}${resultado.total} consultas sem nota desde ${desde}:`];
   const nomes: string[] = []; let mostradas = 0;
+  const grupos = new Map<string, string[]>();
   for (const bruto of resultado.consultas.slice(0, 20)) {
     const c = bruto as { paciente?: unknown; dataHora?: unknown };
     const nome = typeof c.paciente === 'string' ? c.paciente.trim() : '';
     const seguro = nome.length <= 80 && (/^[\p{L} .'-]+$/u.test(nome) || /^Contato •{4} \d{4}$/.test(nome)) && !/ignore|instru|regras|sistema|prompt|revele|execute|envie|emita|chave|segredo|obede|tool|ferramenta/i.test(nome);
     const data = c.dataHora instanceof Date ? c.dataHora : typeof c.dataHora === 'string' ? new Date(c.dataHora) : new Date(NaN);
     if (!Number.isFinite(data.getTime())) throw Error('DATA_CONSULTA_INVALIDA');
-    const linha = `${seguro ? nome : 'Contato não identificado'} — ${data.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}`;
-    if (fala.at(-1)!.length + linha.length + 1 > 465) { if (fala.length >= maxBaloes) break; fala.push(''); }
-    fala[fala.length - 1] += (fala.at(-1) ? '\n' : '') + linha; mostradas++;
+    const dia = data.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+    grupos.set(dia, [...(grupos.get(dia) ?? []), seguro ? nome : 'Contato não identificado']);
     if (seguro && !nome.startsWith('Contato ')) nomes.push(nome);
+  }
+  const linhas: Array<{ texto: string; quantidade: number }> = [];
+  for (const [dia, pacientes] of [...grupos].sort(([a], [b]) => a.localeCompare(b))) {
+    const prefixo = `Em ${dia.split('-').reverse().join('/')}: `;
+    let parte: string[] = [];
+    for (const paciente of pacientes) {
+      if (prefixo.length + [...parte, paciente].join(', ').length > 350 && parte.length) {
+        linhas.push({ texto: prefixo + parte.join(', ') + '.', quantidade: parte.length }); parte = [];
+      }
+      parte.push(paciente);
+    }
+    const ultimo = parte.pop();
+    linhas.push({ texto: prefixo + (parte.length ? parte.join(', ') + ' e ' : '') + ultimo + '.', quantidade: parte.length + 1 });
+  }
+  for (const linha of linhas) {
+    if (fala.at(-1)!.length + linha.texto.length + 1 > 465) { if (fala.length >= maxBaloes) break; fala.push(''); }
+    fala[fala.length - 1] += (fala.at(-1) ? '\n' : '') + linha.texto;
+    mostradas += linha.quantidade;
   }
   if (resultado.total! > mostradas) fala[fala.length - 1] += `\ne mais ${resultado.total! - mostradas} consultas`;
   return { fala, falaMemoria: fala.map(t => nomes.sort((a,b) => b.length - a.length).reduce((s,n) => s.split(n).join('[PACIENTE]'), t)) };
@@ -50,9 +68,9 @@ export function formatarPendencias(resultado: ResultadoPendencias, dataInicio: s
 export class PendenciasMedico {
   private readonly trabalhos = new Set<Promise<void>>();
   constructor(private readonly repo: RepositorioContextoPendencias, private readonly deps: {
+    ultimasFalas?: (medicoId: string, conversa: string) => Promise<readonly string[]>;
     permitido: (medicoId: string) => Promise<boolean>;
     classificar: (entrada: { texto: string; mensagens: string[]; agora: Date; aguardandoData: boolean }) => Promise<{ verificar: boolean; emitir?: boolean; desde: string | null; moldura: string }>;
-    sincronizar?: (medicoId: string, agora: Date) => Promise<{ ok: boolean; motivo?: string }>;
     listar: (medicoId: string, dataInicio: string, agora: Date) => Promise<ResultadoPendencias>;
     enviar: (medicoId: string, conversa: string, chave: string, fala: string[], falaMemoria?: string[]) => Promise<void>;
     log: (mensagem: string) => void; demoraMs?: number;
@@ -64,41 +82,24 @@ export class PendenciasMedico {
     else await this.pedirData(medicoId, conversa, chave);
     return true;
   }
-  async aposSyncIncompleta(medicoId: string, conversa: string, chave: string, agora: Date, aoConcluir?: () => Promise<boolean>) {
+  async aposSyncIncompleta(medicoId: string, conversa: string, chave: string, agora: Date) {
     if (!await this.deps.permitido(medicoId)) return;
     const estado = await this.repo.ler(medicoId);
     if (estado.dataInicio && validarInicioRetroativo(estado.dataInicio, agora)) { await this.continuar(medicoId, conversa, chave, estado.dataInicio, agora, true); return; }
-    if (!this.deps.sincronizar || !await this.repo.reservarSync(medicoId, chave)) return;
-    const leitura = this.deps.sincronizar(medicoId, agora);
-    let terminou = false; void leitura.then(() => { terminou = true; }, () => { terminou = true; });
-    const trabalho = (async () => {
-      try {
-        await Promise.resolve();
-        if (!terminou) await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lendo`, ['Estou terminando a leitura da sua agenda. Depois confirmo com você o início do período.']);
-        const r = await leitura;
-        if (!r.ok) throw Error('SINCRONIZACAO_NAO_CONCLUIDA');
-        if (!await this.deps.permitido(medicoId)) { await this.repo.concluirSync(medicoId, chave, false); return; }
-        await this.repo.concluirSync(medicoId, chave, true);
-        if (await aoConcluir?.()) return;
-        await this.pedirData(medicoId, conversa, `${chave}:concluida`);
-      } catch {
-        await this.repo.concluirSync(medicoId, chave, false);
-        await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:falhou`, [MENSAGEM_INSTABILIDADE]);
-        this.deps.log('PENDENCIAS_SYNC_FALHOU');
-      }
-    })();
-    this.trabalhos.add(trabalho);
-    void trabalho.finally(() => this.trabalhos.delete(trabalho)).catch(() => {});
+    await this.pedirData(medicoId, conversa, chave);
+    return;
   }
   private async pedirData(medicoId: string, conversa: string, chave: string) {
     const primeira = await this.repo.perguntarData(medicoId);
-    await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:data`, [primeira ? 'Desde que dia você quer que eu verifique as consultas sem nota?' : 'Preciso da data de início para conferir o período que você quer.']);
+    await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:data`, [primeira ? 'Desde quando você não emite notas?' : 'Preciso da data de início para conferir o período que você quer.']);
   }
-  async responder(entrada: { medicoId: string; conversa: string; chave: string; texto: string; mensagens: string[]; agora: Date; aoInicio?: (desde: string) => Promise<void>; aoEmitir?: (desde: string | null) => Promise<void> }) {
+  async responder(entrada: { medicoId: string; conversa: string; chave: string; texto: string; mensagens: string[]; agora: Date; agendaConectada?: boolean; aoInicio?: (desde: string) => Promise<void>; aoEmitir?: (desde: string | null) => Promise<void> }) {
     if (!await this.deps.permitido(entrada.medicoId)) return false;
     const estado = await this.repo.ler(entrada.medicoId);
+    if (entrada.agendaConectada === false && !estado.aguardandoData) return false;
     const i = await this.deps.classificar({ texto: entrada.texto, mensagens: entrada.mensagens, agora: entrada.agora, aguardandoData: estado.aguardandoData || !!entrada.aoInicio });
     if (i.emitir) {
+      if (entrada.agendaConectada === false) return false;
       if (!entrada.aoEmitir) return false;
       await entrada.aoEmitir(validarInicioRetroativo(i.desde ?? estado.dataInicio, entrada.agora));
       return true;
@@ -107,6 +108,7 @@ export class PendenciasMedico {
     const desde = validarInicioRetroativo(i.desde ?? estado.dataInicio, entrada.agora);
     if (!desde) { await this.pedirData(entrada.medicoId, entrada.conversa, entrada.chave); return true; }
     await this.repo.definirInicio(entrada.medicoId, desde);
+    if (entrada.agendaConectada === false) return false;
     if (entrada.aoInicio) { await entrada.aoInicio(desde); return true; }
     await this.consultar(entrada.medicoId, entrada.conversa, entrada.chave, desde, entrada.agora, i.moldura);
     return true;
@@ -115,6 +117,7 @@ export class PendenciasMedico {
     if (!await this.deps.permitido(medicoId)) return;
     await this.repo.definirInicio(medicoId, desde);
     let aviso: Promise<void> | undefined;
+    let leituraConcluida = false;
     const timer = setTimeout(() => { aviso = this.avisarDemora(medicoId, conversa, chave).catch(() => { this.deps.log('PENDENCIAS_AVISO_FALHOU'); }); }, this.deps.demoraMs ?? 1500);
     try {
       const resultado = await this.listar(medicoId, desde, agora); clearTimeout(timer); await aviso;
@@ -123,9 +126,14 @@ export class PendenciasMedico {
         await this.continuar(medicoId, conversa, chave, desde, agora, !!aviso, aoConcluir, exibirLista); return;
       }
       const r = formatarPendencias(resultado, desde, moldura, aviso ? Math.max(1, maxBaloes - 1) : maxBaloes);
+      leituraConcluida = true;
       if (exibirLista) await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lista`, r.fala, r.falaMemoria);
       await aoConcluir?.(resultado);
-    } catch { await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:erro`, [MENSAGEM_INSTABILIDADE]); }
+    } catch {
+      this.deps.log('PENDENCIAS_CONSULTA_FALHOU');
+      if (leituraConcluida) { await this.informarFalha(medicoId, conversa, chave); return; }
+      await this.continuar(medicoId, conversa, chave, desde, agora, false, aoConcluir, exibirLista, true);
+    }
     finally { clearTimeout(timer); }
   }
   private async listar(medicoId: string, desde: string, agora: Date) {
@@ -137,12 +145,12 @@ export class PendenciasMedico {
   }
   private async avisarDemora(medicoId: string, conversa: string, chave: string) {
     const estado = await this.repo.ler(medicoId);
-    const padrao = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
-    const texto = estado.ultimoAviso === padrao ? 'Estou conferindo sua agenda para trazer as consultas desse período.' : padrao;
+    if (estado.ultimoAviso) return;
+    const texto = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
     await this.repo.registrarAviso?.(medicoId, texto);
     await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:espera`, [texto]);
   }
-  private async continuar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, avisou: boolean, aoConcluir?: (resultado: ResultadoPendencias) => Promise<void>, exibirLista = true) {
+  private async continuar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, avisou: boolean, aoConcluir?: (resultado: ResultadoPendencias) => Promise<void>, exibirLista = true, recuperando = false) {
     if (!await this.repo.reservarSync(medicoId, chave)) {
       const estado = await this.repo.ler(medicoId);
       if (estado.syncAtiva) await this.avisarDemora(medicoId, conversa, chave);
@@ -156,7 +164,13 @@ export class PendenciasMedico {
     const trabalho = (async () => {
       try {
         await Promise.resolve();
-        if (!avisou && !terminou) await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lendo`, ['Ainda estou lendo sua agenda. Assim que terminar, trago o resultado desse período por aqui.']);
+        if (recuperando && !terminou) {
+          const anterior = (await this.repo.ler(medicoId)).ultimoAviso;
+          const texto = mensagemInstabilidade([...(anterior ? [anterior] : []), ...await this.falasRecentes(medicoId, conversa)], true);
+          await this.repo.registrarAviso?.(medicoId, texto);
+          await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:verificando`, [texto]);
+        }
+        if (!recuperando && !avisou && !terminou) await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lendo`, ['Ainda estou lendo sua agenda. Assim que terminar, trago o resultado desse período por aqui.']);
         const resultado = await leitura;
         const r = formatarPendencias(resultado, desde, '', aoConcluir ? 1 : 2);
         if (!await this.deps.permitido(medicoId)) { await this.repo.concluirSync(medicoId, chave, false); return; }
@@ -165,12 +179,21 @@ export class PendenciasMedico {
         await aoConcluir?.(resultado);
       } catch {
         await this.repo.concluirSync(medicoId, chave, false);
-        await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:falhou`, [MENSAGEM_INSTABILIDADE]);
+        await this.informarFalha(medicoId, conversa, chave);
         this.deps.log('PENDENCIAS_SYNC_FALHOU');
       }
     })();
     this.trabalhos.add(trabalho);
     void trabalho.finally(() => this.trabalhos.delete(trabalho)).catch(() => {});
+  }
+  private async falasRecentes(medicoId: string, conversa: string) {
+    return this.deps.ultimasFalas ? this.deps.ultimasFalas(medicoId, conversa).catch(() => []) : [];
+  }
+  private async informarFalha(medicoId: string, conversa: string, chave: string) {
+    const anterior = (await this.repo.ler(medicoId)).ultimoAviso;
+    const texto = mensagemInstabilidade([...(anterior ? [anterior] : []), ...await this.falasRecentes(medicoId, conversa)]);
+    await this.repo.registrarAviso?.(medicoId, texto);
+    await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:falhou`, [texto]);
   }
   async aguardar() { await Promise.allSettled([...this.trabalhos]); }
 }

@@ -1,6 +1,22 @@
 import { sanitizarTextoMedico } from '../onboarding/contexto-conversa-medico.js';
 
-export const MENSAGEM_INSTABILIDADE = 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.';
+export const MENSAGEM_INSTABILIDADE = 'Tive uma instabilidade e não consegui concluir agora.';
+
+export function mensagemInstabilidade(historico: readonly string[], verificacaoEmAndamento = false): string {
+  const opcoes = verificacaoEmAndamento ? [
+    'Tive uma falha na consulta. Estou verificando novamente e volto com o resultado.',
+    'A primeira leitura falhou. Já comecei uma nova verificação e te trago o resultado por aqui.',
+    'Estou refazendo a leitura da agenda e aviso quando ela terminar.',
+    'A verificação está em andamento. Assim que concluir, trago o resultado por aqui.'
+  ] : [MENSAGEM_INSTABILIDADE, 'Ainda não consegui concluir a verificação. Não tenho um resultado confirmado para te passar.',
+    'A consulta não terminou desta vez. Prefiro conferir antes de te dar uma resposta.',
+    'Ainda não consegui concluir esse pedido. Não tenho o resultado para te passar.',
+    'Não consegui completar essa consulta agora. Você pode tentar novamente mais tarde.',
+    'Ainda não foi possível terminar essa consulta. O resultado segue sem confirmação.',
+    'A leitura encontrou um problema e terminou sem um resultado confirmado.',
+    'Desta vez, não consegui terminar a verificação. O resultado ainda não está confirmado.'];
+  return opcoes.find(texto => !historico.some(anterior => anterior.includes(texto))) ?? 'Não tenho um resultado confirmado desta consulta.';
+}
 /** Registro consumível por um futuro agente; nunca copiar o detalhe para mensagens. */
 export function registroErroNoto(codigo: string, categoria: 'tecnico' | 'acionavel' | 'validacao', contexto: { medicoId?: string; solicitacaoId?: string; etapa?: string; detalhe?: string; codigoErroOriginal?: string; motivoErro?: string } = {}): string {
   const seguro = Object.fromEntries(Object.entries(contexto).map(([k, v]) => [k, sanitizarTextoMedico(String(v)).slice(0, 500)]));

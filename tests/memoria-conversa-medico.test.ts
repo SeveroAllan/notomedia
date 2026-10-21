@@ -42,3 +42,10 @@ describe('memória curta só de uma conversa por médico', () => {
     memoria.registrar('medico-a', 'conversa-a', 'm1', 'sim'); expect(memoria.ler('medico-a', 'conversa-a')).toEqual(['sim']);
   });
 });
+it('histórico de erros usa janela de dez minutos isolada por médico e conversa, sem alterar limite do contexto da IA',async()=>{
+ const {PostgresMemoriaConversaMedico}=await import('../src/onboarding/conversa-repositorio.js');
+ const consultas:Array<{sql:string;p:unknown[]}>=[];
+ const memoria=new PostgresMemoriaConversaMedico({query:async(sql:string,p:unknown[])=>{consultas.push({sql,p});return{rows:[{texto:'senha=falsa; consulta indisponível'}]};}} as any);
+ expect(await memoria.lerFalasRecentes('m','c')).toEqual(['[OCULTO]; consulta indisponível']);
+ expect(consultas[0].p).toEqual(['m','c']);expect(consultas[0].sql).toContain("papel='noto'");expect(consultas[0].sql).toContain("criada_em > now() - interval '10 minutes'");
+});

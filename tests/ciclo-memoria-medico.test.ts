@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MemoriaConversaMedico } from '../src/onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico } from '../src/onboarding/processar-comunicacao-medico.js';
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
-const pergunta = 'Tem alguma nota para emitir? Desde que dia?';
+const pergunta = 'Desde quando você não emite notas?';
 let rede: ReturnType<typeof vi.spyOn>;
 beforeEach(() => { rede = vi.spyOn(globalThis, 'fetch').mockImplementation(() => { throw Error('REDE_PROIBIDA'); }); });
 afterEach(() => { expect(rede).not.toHaveBeenCalled(); vi.restoreAllMocks(); });
