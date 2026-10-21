@@ -484,6 +484,7 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
     const recebidas=await c.memoria.ler(medicoId,'conversa');expect(recebidas.join(' ')).toContain(textos[0]);expect(recebidas.join(' ')).toContain(textos[1]);
     expect(recebidas.join(' ')).not.toContain(token);expect(recebidas.join(' ')).toContain('[LINK_SEGURO]');
     c.completar.mockImplementation(async (_k,_m,msgs)=>{
+        if(msgs[0].content.startsWith('Revise a continuidade manual'))return '{"semAgendaDigitalAtual":true,"evidencia":"não tenho agenda digital","confianca":1,"repeteOrientacao":false}';
         if(msgs[0].content.startsWith('Resuma'))return '{"resumo":"O médico usa agenda de papel; já recebeu a explicação da conexão e o link."}';
         const contexto=JSON.parse(msgs[1].content);expect(contexto.texto).toBe('não tenho agenda digital, uso agenda de papel mesmo');
         expect(contexto.mensagens.join(' ')).toContain(textos[0]);expect(contexto.mensagens.join(' ')).toContain(textos[1]);
