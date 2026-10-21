@@ -254,3 +254,18 @@ it('lote recuperado continua só os itens prontos e resume também as notas ante
   expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 2 de 2 notas autorizadas.','1 notas entregues. 1 sem contato válido; corrija o contato na agenda e me peça o reenvio.']);
   expect(repo.liberarReserva).toHaveBeenCalledOnce();
 });
+
+it.each([0, 2])('texto/resultado apenas: expõe contagem %i sem alterar preparo, confirmação ou reserva', async totalConsultas => {
+  const c = cenario(); const dados = { ...contagem, totalConsultas, totalCentavos: totalConsultas * 30000 };
+  c.deps.contar.mockResolvedValue(dados);
+  const narrarContagem = vi.fn(async r => [`Conferi ${r.contagem.totalConsultas} consultas no período.`]);
+  const conversa = new ConversaLoteRetroativo(c.repo, {...c.deps,narrarContagem});
+  await conversa.iniciar('m','c','evento',agora,'2026-10-01');
+  expect(c.deps.contar).toHaveBeenCalledExactlyOnceWith('m','2026-10-01',agora.toISOString());
+  expect(c.repo.preparar).toHaveBeenCalledExactlyOnceWith('lote','2026-10-01',dados);
+  expect(narrarContagem).toHaveBeenCalledExactlyOnceWith({desde:'2026-10-01',ate:agora.toISOString(),contagem:dados,
+    perguntaConfirmacao:totalConsultas?perguntaLote(c.lote()):null});
+  expect(c.falas).toEqual([`Conferi ${totalConsultas} consultas no período.`]);
+  expect(c.repo.confirmar).not.toHaveBeenCalled();
+  expect(c.repo.registrarPergunta).toHaveBeenCalledTimes(totalConsultas?1:0);
+});

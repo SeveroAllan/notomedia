@@ -6,6 +6,9 @@ import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
 export interface ConsultaLote { fonte: string; idExterno: string; chave: string; assinatura: string | null }
 export interface ContagemPeriodo { consultas: ConsultaLote[]; totalConsultas: number; totalCentavos: number; semValor: number }
+export interface ResultadoContagemLote {
+  desde: string; ate: string; contagem: ContagemPeriodo; perguntaConfirmacao: string | null;
+}
 export interface LoteRetroativo {
   id: string; medicoId: string; conversa: string; desde: string | null; ate: string;
   totalConsultas: number; totalCentavos: number; semValor: number;
@@ -51,6 +54,7 @@ export class ConversaLoteRetroativo {
     contar: (medicoId: string, desde: string, ate: string, valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<ContagemPeriodo>;
     listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: (valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<void>, somenteContagem?: boolean) => Promise<void>;
     comporContagem: (lote: LoteRetroativo) => { fala: string[] };
+    narrarContagem?: (resultado: ResultadoContagemLote) => Promise<string[]>;
     interpretarData: (texto: string, agora: Date) => Promise<string | null>;
     interpretarConfirmacao: (texto: string, pergunta: string) => Promise<InterpretacaoConfirmacao>;
     enviar: (medicoId: string, conversa: string, chave: string, fala: string[], aoEnviar?: (mensagemId: string) => Promise<void>) => Promise<void>;
@@ -81,9 +85,13 @@ export class ConversaLoteRetroativo {
         totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
       const preparado = await this.repo.preparar(lote.id, desde, contagem);
       if (!preparado.totalConsultas) {
-        await this.deps.enviar(medicoId, conversa, `lote:resposta:${mensagemId}`, [`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`]); return;
+        const fala = this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: lote.ate, contagem, perguntaConfirmacao: null })
+          : [`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`];
+        await this.deps.enviar(medicoId, conversa, `lote:resposta:${mensagemId}`, fala); return;
       }
-      await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, this.deps.comporContagem(preparado).fala,
+      const fala = this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: lote.ate, contagem, perguntaConfirmacao: perguntaLote(preparado) })
+        : this.deps.comporContagem(preparado).fala;
+      await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, fala,
         id => this.repo.registrarPergunta(lote.id, id, agora));
     };
     if (this.deps.listarPeriodo) await this.deps.listarPeriodo(medicoId, conversa, mensagemId, desde, agora, propor, somenteContagem);
