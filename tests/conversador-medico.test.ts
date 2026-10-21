@@ -6,7 +6,7 @@ const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:[
 it('prompt estruturado, uma chamada sem regeneração, histórico/resumo/fatos separados e temperatura baixa',async()=>{
  const completar=vi.fn(async()=>'{"fala":["Oi! Como posso ajudar?"],"acao":null}');
  const r=await new ConversadorMedico('k','m',completar).responder({...entrada,mensagens:['Pergunta anterior','Resposta anterior'],resumo:'O período já foi informado.'});
- expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(5000);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
+ expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
  const dados=JSON.parse(completar.mock.calls[0][2][1].content);expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
  expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:1});
 });
@@ -124,4 +124,19 @@ it('sem lista recente a leitura continua permitida; lista recente não bloqueia 
  const f={...fatos,agenda:{nome:'tribemd',conectada:true},periodo:{desde:'2026-10-05',origem:'conversa'},listaRecente:false};
  expect(validarAcaoConversa({fala:['Conferindo.'],acao:'listar_pendencias'},f,['listar_pendencias'],'Veja as pendências',agora)).toBeNull();
  expect(validarAcaoConversa({fala:['Conferindo.'],acao:'iniciar_lote'},{...f,listaRecente:true},['iniciar_lote'],'Quero emitir',agora)).toBeNull();
+});
+
+it('prompt avança após lista recente e orienta pedido explícito para nova leitura',()=>{
+ expect(PROMPT_CONVERSA).toContain('2b. Se fatos.listaRecente=true');
+ expect(PROMPT_CONVERSA).toContain('parametros.pedidoExplicito=');
+ const exemplo=PROMPT_CONVERSA.match(/^- fatos.listaRecente=true, medico: "Certo\." -> (\{.*\})$/m);
+ expect(exemplo).not.toBeNull();const d=JSON.parse(exemplo![1]);
+ expect(d.acao).toBeNull();expect(d.fala.length).toBeLessThanOrEqual(3);
+ for(const balao of d.fala)expect(balao.length).toBeLessThanOrEqual(500);
+});
+it('prompt pede correção em UMA frase curta e respeita tamanho e incremento acordados',()=>{
+ expect(PROMPT_CONVERSA).toContain('UMA frase curta');
+ expect(PROMPT_CONVERSA).toContain('9. Se voce perceber');
+ expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
+ expect(PROMPT_CONVERSA.length-4947).toBeLessThanOrEqual(900);
 });
