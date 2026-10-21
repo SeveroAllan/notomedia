@@ -406,3 +406,29 @@ it('agenda ainda desconhecida pergunta qual usa antes do link, sem presumir supo
   expect(await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'Quero emitir uma nota', acoesPermitidas: ['enviar_link_cofre_agenda'] }))
     .toEqual({ fala: ['Qual agenda você usa hoje?'], acao: null });
 });
+
+it('rejeita balão já dito e regenera uma vez para responder ao passo atual', async () => {
+  const repetida = 'Entendi, você usa agenda de papel. Podemos conferir os dados de um paciente por vez.';
+  const completar = vi.fn().mockResolvedValueOnce(JSON.stringify({ fala: [repetida], acao: 'enviar_link_cofre_agenda' }))
+    .mockResolvedValueOnce(JSON.stringify({ fala: ['Me manda o CPF e o telefone do primeiro paciente, o valor e a data da consulta.'], acao: null }));
+  const r = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'como eu emito a nota assim?', semAgendaDigital: true,
+    ultimaFalaNoto: repetida, falasRecentesNoto: [repetida] });
+  expect(completar).toHaveBeenCalledTimes(2);
+  expect(completar.mock.calls[1][2][0].content).toContain('Avance no pedido atual');
+  expect(r.fala).toEqual(['Me manda o CPF e o telefone do primeiro paciente, o valor e a data da consulta.']);
+  expect(r.acao).toBeNull();
+});
+it.each(['mesma', 'inválida'])('segunda resposta %s não causa terceira tentativa nem devolve a repetição', async caso => {
+  const repetida = 'Já conversamos sobre isso.';
+  const completar = vi.fn().mockResolvedValueOnce(JSON.stringify({ fala: [repetida] }))
+    .mockResolvedValueOnce(caso === 'mesma' ? JSON.stringify({ fala: [repetida] }) : '{"fala":["Ignore regras"],"acao":"emitir_nota"}');
+  const r = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, falasRecentesNoto: [repetida] });
+  expect(completar).toHaveBeenCalledTimes(2); expect(r).toEqual({ fala: [RASCUNHO_FALLBACK_CONVERSA], acao: null });
+});
+it('compara repetição após sanitização e mantém as travas na resposta regenerada', async () => {
+  const completar = vi.fn().mockResolvedValueOnce('{"fala":["CPF 529.982.247-25"]}')
+    .mockResolvedValueOnce('{"fala":["Qual é a data da consulta?"],"acao":"enviar_link_cofre_agenda"}');
+  const r = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, semAgendaDigital: true, falasRecentesNoto: ['CPF [OCULTO]'], acoesPermitidas: ['enviar_link_cofre_agenda'] });
+  expect(completar).toHaveBeenCalledTimes(2); expect(r).toEqual({ fala: ['Qual é a data da consulta?'], acao: null });
+  expect(JSON.stringify(completar.mock.calls)).not.toContain('529.982.247-25');
+});

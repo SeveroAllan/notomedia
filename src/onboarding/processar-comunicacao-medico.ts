@@ -194,12 +194,12 @@ export async function processarComunicacaoMedico(
         const linkCofreJaSolicitado = !!(conversa && await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, conversa));
         let contextoConexao = await deps.lerContextoConexao?.(entrada.medicoId, entrada.agora);
         const semAgendaDigital = !estado.estado.agenda.conectada && !!(conversa && await deps.memoriaPersistida?.semAgendaDigital(entrada.medicoId, conversa));
-        const contexto = { semAgendaDigital, instabilidadesRecentes: await lerInstabilidades(), contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
+        const falasRecentesNoto = conversa ? await deps.memoriaPersistida?.lerUltimasFalasNoto(entrada.medicoId, conversa) ?? [] : [];
+        const contexto = { falasRecentesNoto, semAgendaDigital, instabilidadesRecentes: await lerInstabilidades(), contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
           ? estado.estado.agenda.conectada || contextoConexao?.link && !contextoConexao.link.expirado && !contextoConexao.link.usado ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
-        if (resposta.semAgendaDigital && conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
-          'contexto:sem_agenda_digital', 'O médico informou que não usa agenda digital. Continuar somente a conferência manual na conversa, sem pedir conexão.', 'medico');
+        if (resposta.semAgendaDigital && conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarSemAgendaDigital(entrada.medicoId, conversa);
         if (resposta.intencaoConexao === 'informar_conexao') {
           // A IA interpreta; conexão e possibilidade de reenvio são sempre relidas no backend.
           const atualizado = await deps.lerEstado(entrada.medicoId, entrada.agora);

@@ -13,21 +13,27 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
 
   async ler(medicoId: string, conversa: string): Promise<string[]> {
     const { rows } = await this.pool.query<{ texto: string }>(
-      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or papel='noto' and (mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%')) order by id desc limit $3",
+      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or papel='noto' and (mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%')) and mensagem_id not like 'contexto:%' order by id desc limit $3",
       [medicoId, conversa, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
     return rows.reverse().map(mensagem => sanitizarTextoMedico(mensagem.texto));
   }
 
   async lerFalasRecentes(medicoId: string, conversa: string): Promise<string[]> {
     const { rows } = await this.pool.query<{ texto: string }>(
-      "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and papel='noto' and criada_em > now() - interval '10 minutes' order by id desc", [medicoId, conversa]);
+      "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and papel='noto' and mensagem_id not like 'contexto:%' and criada_em > now() - interval '10 minutes' order by id desc", [medicoId, conversa]);
     return rows.map(m => sanitizarTextoMedico(m.texto));
   }
 
   async lerUltimaFalaNoto(medicoId: string, conversa: string): Promise<string | undefined> {
     const { rows } = await this.pool.query<{ texto: string }>(
-      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%') and papel='noto' order by id desc limit 1", [medicoId, conversa]);
+      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%') and papel='noto' and mensagem_id not like 'contexto:%' order by id desc limit 1", [medicoId, conversa]);
     return rows[0] ? sanitizarTextoMedico(rows[0].texto) : undefined;
+  }
+
+  async lerUltimasFalasNoto(medicoId: string, conversa: string): Promise<string[]> {
+    const { rows } = await this.pool.query<{ texto: string }>(
+      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%') and papel='noto' and mensagem_id not like 'contexto:%' order by id desc limit 6", [medicoId, conversa]);
+    return rows.flatMap(m => sanitizarTextoMedico(m.texto).split('\n')).slice(0, 6);
   }
 
   async registrar(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
@@ -47,6 +53,13 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
       [medicoId, conversa, 'noto:cofre_agenda:solicitado']);
     return rows.length > 0;
+  }
+
+  async registrarSemAgendaDigital(medicoId: string, conversa: string): Promise<void> {
+    // Marca de contexto, nunca uma fala. O upsert também corrige a marca legada no próximo reconhecimento.
+    await this.pool.query(`insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5)
+      on conflict (medico_id, mensagem_id) do update set texto=excluded.texto, papel=excluded.papel`,
+      [medicoId, conversa, 'contexto:sem_agenda_digital', JSON.stringify({ semAgendaDigital: true }), 'noto']);
   }
 
   async semAgendaDigital(medicoId: string, conversa: string): Promise<boolean> {
@@ -69,7 +82,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
 
   async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string }>> {
     const { rows } = await this.pool.query<{ id: string; texto: string }>(
-      `select id::text, texto from (select id, texto from conversa_mensagens where medico_id=$1 and conversa=$2
+      `select id::text, texto from (select id, texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id not like 'contexto:%'
         order by id desc offset $4) antigas where id > $3::bigint order by antigas.id asc`,
       [medicoId, conversa, ateId, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
     return rows.map(mensagem => ({ ...mensagem, texto: sanitizarTextoMedico(mensagem.texto) }));

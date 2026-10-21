@@ -118,7 +118,7 @@ it('resumo só após mais de vinte antigas, preserva janela e avança o marcador
   expect(await c.memoriaPersistida.ler('medico', 'conversa')).toHaveLength(4);
   c.completar.mockClear();
   for (let id = 1; id <= 19; id++) await c.memoriaPersistida.registrar('medico', 'conversa', `nova:${id}`, `nova ${id}`);
-  c.completar.mockResolvedValueOnce('{"fala":["Posso explicar."]}').mockResolvedValueOnce('{"resumo":"Resumo atualizado."}');
+  c.completar.mockResolvedValueOnce('{"fala":["Você pode me contar o que precisa agora."]}').mockResolvedValueOnce('{"resumo":"Resumo atualizado."}');
   await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'lote2' }, c.deps);
   const segundo = JSON.parse((c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>]>)[1][2][1].content);
   expect(segundo.resumo).toBe('Médico perguntou sobre o Noto.'); expect(segundo.mensagens).toHaveLength(21);
@@ -595,4 +595,35 @@ it('conferência manual mantém dados sensíveis mascarados e a pergunta não ex
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
   expect(JSON.stringify(c.banco.mensagens)).not.toMatch(/529\.982|99999-0000/);
   expect(c.deps.aoDecidir).toHaveBeenCalledExactlyOnceWith({ tipo: 'nenhuma' }, 'mensagem', { nomeMedico: undefined });
+});
+
+it('primeira orientação sem agenda é concreta e a próxima pergunta avança após rejeitar a repetição', async () => {
+  const c = await cenario();
+  const inicial = ['Entendi, você usa agenda de papel. Não consigo emitir retroativas pelo histórico porque não vejo os comprovantes antigos do seu WhatsApp.',
+    'Me mande CPF, telefone do paciente, valor e data da consulta, um paciente por vez; confiro com você e peço sua confirmação antes de emitir.',
+    'Os comprovantes novos continuam funcionando normalmente.'];
+  c.completar.mockImplementationOnce(async (_k, _m, mensagens) => {
+    const prompt = mensagens[0].content;
+    expect(prompt).toContain('Na primeira orientação, inclua');
+    expect(prompt).toContain('CPF, telefone do paciente, valor e data da consulta');
+    return JSON.stringify({ semAgendaDigital: true, fala: inicial, acao: null });
+  });
+  const enviarLinkCofreAgenda = vi.fn(); const listarConsultasSemNota = vi.fn();
+  const deps = { ...c.deps, enviarLinkCofreAgenda, listarConsultasSemNota };
+  await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'primeira', respostaMedico: { ...entrada.respostaMedico, texto: 'Não tenho agenda digital, uso papel.' } }, deps);
+  expect(c.aoConversar.mock.calls[0][0]).toEqual(inicial);
+  const marca = c.banco.mensagens.find(m => m.mensagemId === 'contexto:sem_agenda_digital')!;
+  expect(marca.papel).not.toBe('medico'); expect(marca.texto).toBe('{"semAgendaDigital":true}');
+  expect(await c.memoriaPersistida.ler('medico', 'conversa')).not.toContain(marca.texto);
+  c.completar.mockResolvedValueOnce(JSON.stringify({ fala: [inicial[0]], acao: 'enviar_link_cofre_agenda' }))
+    .mockImplementationOnce(async (_k, _m, mensagens) => {
+      expect(mensagens[0].content).toContain('Avance no pedido atual');
+      expect(mensagens[0].content).toContain('Sem agenda digital informado nesta conversa (servidor): true');
+      expect(mensagens[1].content).not.toContain('Continuar somente a conferência');
+      return '{"fala":["Me manda o CPF e o telefone do primeiro paciente, o valor e a data da consulta."],"acao":null}';
+    });
+  await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'seguinte', respostaMedico: { ...entrada.respostaMedico, texto: 'Minha agenda é de papel, não tem sistema. Como eu emito assim?' } }, deps);
+  expect(c.completar).toHaveBeenCalledTimes(3);
+  expect(c.aoConversar.mock.calls[1][0]).toEqual(['Me manda o CPF e o telefone do primeiro paciente, o valor e a data da consulta.']);
+  expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
 });
