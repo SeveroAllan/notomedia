@@ -1,6 +1,7 @@
-import { ERRO_CONVERSA, periodoDecisao, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
+import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
 import { FALA_PROTECAO_CREDENCIAL_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
+import { sanitizarErroFiscal } from '../observabilidade/erros.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { orquestrarComunicacao } from './orquestrar-comunicacao.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
@@ -99,19 +100,26 @@ export async function processarComunicacaoMedico(
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0;
-      const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown) => {
+      const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]}) => {
         if(++chamadas>2) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        return deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora,acoesPermitidas,resultadoFerramenta});
+        return deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora,acoesPermitidas,resultadoFerramenta,correcao});
       };
-      const narrar=async (resultado:unknown) => (await decidir([],resultado)).fala;
+      const narrar=async (resultado:unknown) => chamadas>=2 ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
       const permitidas=deps.ferramentas.permitidas(fatos);
-      const decisao=await decidir(permitidas);
+      let decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
-      const motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      const corrigirIntroducao=decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
+      if(corrigirIntroducao) {
+        deps.log('info',`CONVERSA_INTRODUCAO_CORRIGIR ${motivo}`);
+        decisao=await decidir(['pedir_link_agenda'],undefined,{motivo:motivo!,faltou:faltasIntroducaoLink(decisao.fala)});
+        const permissaoInventada=/n[aã]o (?:tenho|temos|possuo|h[aá])[^.!?]*permiss[aã]o/i.test(decisao.fala.join(' '));
+        motivo=decisao.acao==='pedir_link_agenda' && !permissaoInventada ? validarAcaoConversa(decisao,fatos,permitidas,texto,agora) : 'INTRODUCAO_NAO_CORRIGIDA';
+      }
       let fala=decisao.fala, falaMemoria:string[]|undefined;
       if(motivo) {
         deps.log('erro',`CONVERSA_ACAO_RECUSADA ${motivo}`);
-        fala=await narrar({ok:false,motivo,executada:false});
+        fala=corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
       } else {
         const desde=periodoDecisao(decisao,agora,texto);
         if(desde) { await deps.ferramentas.guardarPeriodo(medicoId,desde); fatos.periodo={desde,origem:'resposta_atual'}; }
@@ -143,9 +151,12 @@ export async function processarComunicacaoMedico(
       } catch {deps.log('erro','CONVERSA_RESUMO_FALHOU');}
       deps.log('info',`CONVERSA_CHAMADAS ${chamadas}`);
       return {tipo:'nenhuma'};
-    } catch {
+    } catch (erro) {
       if(!deps.conversaLivreAtiva) {deps.log('erro','COMUNICACAO_ESTADO_FALHOU');return {tipo:'nenhuma'};}
-      deps.log('erro','CONVERSA_FALHA_TECNICA');
+      const identificadores=[entrada.respostaMedico?.texto];
+      const nome=erro instanceof Error && /^(?:Error|TypeError|RangeError|SyntaxError|ReferenceError|URIError|AggregateError)$/.test(erro.name)?erro.name:'Error';
+      const mensagem=sanitizarErroFiscal(erro instanceof Error?erro.message:erro,identificadores).replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi,'[OCULTO]');
+      deps.log('erro','CONVERSA_FALHA_TECNICA '+JSON.stringify({nome,mensagem}));
       if(entrada.respostaMedico && conversa && memoria) {
         try {await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto));} catch { /* Best effort. */ }
       }

@@ -169,7 +169,7 @@ it('falha da IA no resumo preserva fala e resumo anterior',async()=>{
 it.each(['null','excecao'])('estado %s responde fallback, persiste os dois papéis e loga o motivo',async caso=>{
  const c=cenario();c.deps.lerEstado=async()=>{if(caso==='excecao')throw Error('PRIVADO');return null as any;};
  await c.turno('ausente','Oi');expect(c.enviar).toHaveBeenCalledOnce();expect(c.completar).not.toHaveBeenCalled();expect(c.executar).not.toHaveBeenCalled();
- expect(c.banco.mensagens.map(m=>m.papel)).toEqual(['medico','noto']);expect(c.deps.log).toHaveBeenCalledWith('erro','CONVERSA_FALHA_TECNICA');expect(JSON.stringify(c.enviar.mock.calls)).not.toContain('PRIVADO');
+ expect(c.banco.mensagens.map(m=>m.papel)).toEqual(['medico','noto']);expect(c.deps.log).toHaveBeenCalledWith('erro','CONVERSA_FALHA_TECNICA '+JSON.stringify({nome:'Error',mensagem:caso==='null'?'COMUNICACAO_ESTADO_AUSENTE':'PRIVADO'}));expect(JSON.stringify(c.enviar.mock.calls)).not.toContain('PRIVADO');
 });
 it.each(['null','excecao'])('flag desligada mantém silêncio quando estado %s',async caso=>{
  const c=cenario();c.deps.conversaLivreAtiva=false;c.deps.lerEstado=async()=>{if(caso==='excecao')throw Error('PRIVADO');return null as any;};
@@ -223,4 +223,42 @@ it.each([true,false])('evento do acesso conectado=%s continua sem mensagem do m�
  const c=cenario();c.completar.mockResolvedValue(JSON.stringify({fala:[conectado?'A conexão foi verificada. Qual período você quer conferir?':'Não consegui conectar a agenda. Confira o acesso na página segura.'],acao:null}));
  await processarComunicacaoMedico({medicoId:'m',chaveConversa:'c',chaveProcessamento:'evento',agora,eventoAgenda:{agenda:'tribemd',conectado}},c.deps);
  expect(c.banco.mensagens.map(m=>m.papel)).toEqual(['noto']);expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledOnce();
+});
+
+it('corrige introdução uma vez com motivo e faltas, revalida e envia sem narrar falta de permissão',async()=>{
+ const c=cenario();const d={fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}};
+ c.completar.mockResolvedValueOnce(JSON.stringify(d)).mockImplementationOnce(async(_k,_m,msgs)=>{
+  const dados=JSON.parse(msgs[1].content);expect(dados.correcao.motivo).toBe('INTRODUCAO_INCOMPLETA');expect(dados.correcao.faltou).toHaveLength(3);expect(dados.resultadoFerramenta).toBeUndefined();
+  return JSON.stringify({...d,fala:['Eu só leio a agenda; sua senha fica só no link e nada é enviado aos pacientes.']});
+ });
+ c.executar.mockResolvedValue({jaRespondida:true});await c.turno('link','Uso o tribemd');
+ expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0][0].fala[0]).toContain('só leio');expect(c.enviar).not.toHaveBeenCalled();
+});
+it('segunda introdução inválida é recusada sem terceira chamada nem texto de permissão inventada',async()=>{
+ const c=cenario();c.completar.mockResolvedValue(JSON.stringify({fala:['Não tenho permissão para enviar o link.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}));
+ await c.turno('link','Uso o tribemd');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).not.toHaveBeenCalled();expect(JSON.stringify(c.enviar.mock.calls)).not.toMatch(/permiss[aã]o/i);expect(c.enviar).toHaveBeenCalledOnce();
+});
+it('período sem parametros na decisão é salvo mesmo com ação null',async()=>{
+ const c=cenario();c.completar.mockResolvedValue('{"fala":["Vou considerar desde semana retrasada. Qual agenda você usa?"],"acao":null}');
+ await c.turno('data','quero emitir desde semana retrasada');expect(c.guardarPeriodo).toHaveBeenCalledExactlyOnceWith('m','2026-10-05');expect(c.executar).not.toHaveBeenCalled();
+});
+it('catch registra nome e mensagem sanitizados, sem identificadores nem detalhes no balão',async()=>{
+ const c=cenario();c.deps.ferramentas.lerFatos=async()=>{throw new TypeError('FALHA_LEITURA para Pessoa Ficticia CPF 529.982.247-25 contato fixture@example.invalid senha=segredo-ficticio');};
+ await c.turno('erro','Pessoa Ficticia');const log=c.deps.log.mock.calls.find(([_n,t])=>t.startsWith('CONVERSA_FALHA_TECNICA'))?.[1]??'';
+ expect(log).toContain('TypeError');expect(log).toContain('FALHA_LEITURA');expect(log).not.toMatch(/Pessoa|Ficticia|529|fixture@|segredo-ficticio/);expect(JSON.stringify(c.enviar.mock.calls)).not.toContain('FALHA_LEITURA');
+});
+
+it.each([
+ {fala:['a','b','c'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}},
+ {fala:['Senha só no link, eu só leio a agenda, nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'TribeMD'}},
+ {fala:['Agora vou emitir.'],acao:'emitir_nota'},
+ {fala:['Não tenho permissão para enviar o link. Eu só leio, senha só no link e nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}
+])('correção continua sujeita ao limite, à evidência literal e à lista fechada: %j',async corrigida=>{
+ const c=cenario();c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}})).mockResolvedValueOnce(JSON.stringify(corrigida));
+ await c.turno('link','Uso o tribemd');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).not.toHaveBeenCalled();expect(c.enviar).toHaveBeenCalledOnce();
+});
+it('falha da ferramenta após correção não abre terceira chamada nem promete envio',async()=>{
+ const c=cenario();c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}})).mockResolvedValueOnce(JSON.stringify({fala:['Eu só leio a agenda. Senha apenas no link e nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}));
+ c.executar.mockResolvedValue({dados:{ok:false,motivo:'LIMITE_PEDIDOS'}});await c.turno('link','Uso o tribemd');
+ expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar).toHaveBeenCalledOnce();expect(JSON.stringify(c.enviar.mock.calls)).not.toMatch(/enviei|vou enviar|permiss[aã]o|LIMITE_PEDIDOS/i);
 });

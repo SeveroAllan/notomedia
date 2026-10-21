@@ -29,7 +29,7 @@ it('ação inválida, não permitida ou sem agenda/período nunca é assinada',(
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},{...fatos,agenda:{nome:'tribemd',conectada:true}},['listar_pendencias'],'sim',agora)).toBe('PERIODO_NECESSARIO');
 });
 it.each(['leitura','senha','pacientes'])('primeiro link sem o fato %s é recusado antes do envio',ausente=>{
- const fala=['O link conecta só a agenda, em leitura das consultas para cruzar comprovantes e emitir notas. Login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'.replaceAll(ausente,'')];
+ const fala=['O link conecta só a agenda, em leitura das consultas para cruzar comprovantes e emitir notas. Login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'.replace(ausente==='senha'?/senha|login/gi:new RegExp(ausente,'g'),'')];
  expect(validarAcaoConversa({fala,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}},fatos,['pedir_link_agenda'],'Tribe',agora)).toBe('INTRODUCAO_INCOMPLETA');
 });
 it.each([.5,.89,.9,1])('modo sem agenda exige declaração literal atual e confiança >=.9 (%s)',confianca=>{
@@ -74,4 +74,25 @@ it('exemplo Tribe do prompt passa pela guarda real de introdução com dois bal�
  expect(decisao.fala).toHaveLength(2);
  expect(decisao.fala[1]).toMatch(/Aqui está o link seguro:$/);
  for(const balao of decisao.fala) expect(balao.length).toBeLessThanOrEqual(500);
+});
+
+it.each([
+ ['Perfeito, TribeMD. Vou te mandar um link seguro para voce conectar a agenda.','Eu so leio as consultas para conferir com os comprovantes e emitir; sua senha fica so no link e nada e enviado a pacientes.'],
+ ['Apenas vejo sua agenda. Login só no link; não envio nada ao paciente.'],
+ ['Só consulto a agenda, sem alterações. Sua senha vai somente no link, nada vai aos pacientes.']
+])('introdução natural preserva a essência sem palavras obrigatórias antigas: %j',(...fala)=>{
+ expect(validarAcaoConversa({fala,acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}},fatos,['pedir_link_agenda'],'Uso o tribemd',agora)).toBeNull();
+});
+it.each([
+ ['quero emitir desde semana retrasada','2026-10-05'],
+ ['quero conferir desde semana passada','2026-10-12'],
+ ['quero emitir desde mês passado','2026-09-01'],
+ ['quero emitir desde dia 5','2026-10-05']
+])('resolve período na frase inteira sem metadados do modelo: %s', (texto,desde)=>{
+ expect(periodoDecisao({fala:['Vou considerar esse período.'],acao:null},agora,texto)).toBe(desde);
+});
+it('completa parametros.desde pelo calendário quando a decisão omite o período que promete considerar',async()=>{
+ const completar=vi.fn(async()=>'{"fala":["Vou considerar desde semana retrasada. Qual agenda você usa?"],"acao":null}');
+ const d=await new ConversadorMedico('k','m',completar).responder({...entrada,agora,texto:'quero emitir desde semana retrasada'});
+ expect(d.parametros?.desde).toBe('2026-10-05');expect(completar).toHaveBeenCalledOnce();
 });
