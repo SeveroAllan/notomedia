@@ -6,7 +6,7 @@ import { REACOES_PERMITIDAS } from '../whatsapp/reagir-mensagem.js';
 import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lote-retroativo.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 
-export { ERRO_CONVERSA, ERRO_CONVERSA as RASCUNHO_FALLBACK_CONVERSA } from './falas.js';
+export { ERRO_CONVERSA } from './falas.js';
 export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Você é o Noto, assistente fiscal do médico no WhatsApp. Português do Brasil, primeira pessoa, humano, curto (até 3 balões), sem repetir frases, perguntas ou explicações que já aparecem no histórico.
 

@@ -7,7 +7,7 @@ import { createHash, createHmac } from 'node:crypto';
 import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { criarAppExpress } from '../src/server.js';
-import { RASCUNHO_FALLBACK_CONVERSA } from '../src/onboarding/conversador-medico.js';
+import { ERRO_CONVERSA as RASCUNHO_FALLBACK_CONVERSA } from '../src/onboarding/conversador-medico.js';
 import { config } from '../src/config.js';
 import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js';
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';

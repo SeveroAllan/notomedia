@@ -16,12 +16,6 @@ export function contemCredencialAgenda(texto: string): boolean {
         /^\S{12,}$/.test(texto.trim()) && /[0-9@#$_-]/.test(texto);
 }
 
-export function podeSolicitarLinkAgenda(conectada: boolean, solicitado: boolean, intencao?: string | null, contexto?: ContextoConexaoAgenda): boolean {
-    if (contexto?.link && !contexto.link.expirado && !contexto.link.usado) return false;
-    return !conectada && (!solicitado || intencao === 'pedir_novo_link' ||
-        intencao === 'informar_conexao' && !!(contexto?.link?.expirado || contexto?.link?.usado));
-}
-
 export interface ConclusaoAgenda { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean; chave: string }
 
 export interface TextoLinkAgendaEnviado { medicoId: string; telefoneMedico: string; linkId: string; indice: number; texto: string }

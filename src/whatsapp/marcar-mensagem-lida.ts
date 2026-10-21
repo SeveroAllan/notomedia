@@ -9,18 +9,3 @@ export interface ParamsLeitura { instanciaNome: string; mensagemId: string; cont
 export interface LeitorMensagemWhatsApp {
   marcarLida(params: ParamsLeitura): Promise<{ sucesso: boolean; erro?: string }>;
 }
-
-export async function marcarMensagemLida(
-  leitor: LeitorMensagemWhatsApp,
-  params: ParamsLeitura
-): Promise<{ sucesso: boolean; erro?: string }> {
-  if (!params.mensagemId || !params.instanciaNome || !params.contatoTelefone) {
-    return { sucesso: false, erro: 'parametros_obrigatorios_ausentes' };
-  }
-
-  try {
-    return await leitor.marcarLida(params);
-  } catch {
-    return { sucesso: false, erro: 'erro_ao_marcar_lida' };
-  }
-}
