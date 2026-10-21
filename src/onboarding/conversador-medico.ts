@@ -70,7 +70,7 @@ export function calendarioConversa(agora: Date) {
 export function normalizarAgenda(nome: string | undefined): string | null {
   if (!nome) return null;
   const n = nome.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g,' ');
-  return ['tribe','tribe md','tribemd','o tribe'].includes(n) ? 'tribemd' : n;
+  return /(?:^|[^a-z0-9])tribe\s*-?\s*md(?:[^a-z0-9]|$)|(?:^|[^a-z0-9])tribe(?:[^a-z0-9]|$)/.test(n) ? 'tribemd' : n;
 }
 export function periodoDecisao(d: DecisaoConversa, agora: Date, texto?: string): string | null {
   const calendario = calendarioConversa(agora);
@@ -124,7 +124,7 @@ export class ConversadorMedico {
       const resposta = respostaSchema.parse(JSON.parse(await this.consultar(PROMPT_CONVERSA, { ...entrada, calendario:calendarioConversa(entrada.agora) })));
       const desde=periodoDecisao(resposta,entrada.agora,entrada.texto);
       if(desde) resposta.parametros={...resposta.parametros,desde};
-      if (entrada.resultadoFerramenta!==undefined && resposta.acao && resposta.acao!=='nenhuma') throw Error('ACAO_NO_RESULTADO');
+      if (entrada.resultadoFerramenta!==undefined) resposta.acao = null;
       if (resposta.fala.some(t=>/\b(?:[A-Z][A-Z0-9]*_)+[A-Z0-9_]+\b/.test(t))) throw Error('CODIGO_NA_FALA');
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
     } catch (erro) {

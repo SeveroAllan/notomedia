@@ -96,3 +96,9 @@ it('completa parametros.desde pelo calendário quando a decisão omite o períod
  const d=await new ConversadorMedico('k','m',completar).responder({...entrada,agora,texto:'quero emitir desde semana retrasada'});
  expect(d.parametros?.desde).toBe('2026-10-05');expect(completar).toHaveBeenCalledOnce();
 });
+
+it('normalizarAgenda reconhece Tribe/TribeMD dentro de frases naturais', async () => {
+  const { normalizarAgenda } = await import('../src/onboarding/conversador-medico.js');
+  for (const t of ['Uso o Tribe', 'pelo tribemd', 'Tribe MD', 'uso o TribeMD mesmo', 'Tribe-MD', 'tribe']) expect(normalizarAgenda(t)).toBe('tribemd');
+  for (const t of ['Doctoralia', 'tribeca', 'anoto no papel']) expect(normalizarAgenda(t)).not.toBe('tribemd');
+});
