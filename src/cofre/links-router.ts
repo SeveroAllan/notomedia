@@ -27,18 +27,39 @@ export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: str
         res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
         if (!links || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
         const url = new URL(origem);
+        const semWww = url.host.replace(/^www\./, '');
+        const hostsPublicos = new Set([url.host, semWww, 'www.' + semWww,
+            req.header('x-forwarded-host')?.split(',')[0]?.trim()].filter((host): host is string => !!host));
+        const origemAceita = (valor: string) => {
+            try {
+                const recebida = new URL(valor);
+                return hostsPublicos.has(recebida.host) && (recebida.protocol === url.protocol ||
+                    recebida.protocol === 'http:' && url.protocol === 'https:' && req.secure);
+            } catch { return false; }
+        };
         // O POST precisa de Origin/Referer/Sec-Fetch-Site compatível; sem todos eles (navegadores móveis antigos), a capacidade é o token descartável na URL.
         const postConfiavel = () => {
             const cabecalhoOrigem = req.header('origin');
-            if (cabecalhoOrigem !== undefined) return cabecalhoOrigem === origem;
+            // No formulário com no-referrer, Origin null segue a mesma cadeia de um cabeçalho ausente.
+            if (cabecalhoOrigem !== undefined && cabecalhoOrigem !== 'null') return origemAceita(cabecalhoOrigem);
             const referer = req.header('referer');
-            if (referer !== undefined) return referer.startsWith(origem + '/');
+            if (referer !== undefined) { try { return origemAceita(new URL(referer).origin); } catch { return false; } }
             const fetchSite = req.header('sec-fetch-site');
             if (fetchSite !== undefined) return fetchSite === 'same-origin' || fetchSite === 'none';
             return true;
         };
-        if (req.headers.host !== url.host || url.protocol === 'https:' && !req.secure || req.method === 'POST' && !postConfiavel()) {
-            console.warn(registroErroNoto('ORIGEM_RECUSADA', 'tecnico', { detalhe: 'metodo=' + req.method }));
+        if (!hostsPublicos.has(req.headers.host ?? '') || url.protocol === 'https:' && !req.secure || req.method === 'POST' && !postConfiavel()) {
+            // Não copiar caminhos, credenciais de URL ou valores arbitrários de cabeçalhos para o log.
+            const valor = (nome: string) => {
+                const v = req.header(nome);
+                if (!v) return '-';
+                if (nome === 'origin' && v === 'null') return 'null';
+                if (nome === 'origin' || nome === 'referer') { try { return new URL(v).origin; } catch { return 'invalido'; } }
+                if (nome === 'sec-fetch-site') return ['same-origin', 'same-site', 'cross-site', 'none'].includes(v) ? v : 'invalido';
+                if (nome === 'x-forwarded-proto') return v.split(',').map(p => ['http', 'https'].includes(p.trim()) ? p.trim() : 'invalido').join(',');
+                return v.split(',').map(h => /^[a-z0-9.[\]:-]+$/i.test(h.trim()) ? h.trim().replace(/[A-Za-z0-9_-]{43,}/g, '[OCULTO]') : 'invalido').join(',');
+            };
+            console.warn(registroErroNoto('ORIGEM_RECUSADA', 'tecnico', { detalhe: 'metodo=' + req.method + ' origin=' + valor('origin') + ' referer=' + valor('referer') + ' secfetch=' + valor('sec-fetch-site') + ' host=' + valor('host') + ' xfh=' + valor('x-forwarded-host') + ' xfp=' + valor('x-forwarded-proto') }));
             res.status(403).type('html').send(origemRecusada); return;
         }
         next();

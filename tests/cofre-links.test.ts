@@ -1,6 +1,6 @@
 import { ConversadorMedico } from '../src/onboarding/conversador-medico.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
@@ -30,6 +30,7 @@ let instanteBanco = 0;
 let registros: Link[], auditoria: Array<{ link_id: string; evento: string }>;
 let medico: { ativo: boolean; telefone: string } | null;
 let estado: 'vazio' | 'desconectado' | 'conectado' | 'conectando' | 'salvo' | 'atencao';
+let origemRouter: string;
 let base: string, servidor: Server, links: LinksCofre;
 let textos: string[], logs: unknown[], consultas: unknown[];
 let flag: boolean, allowlist: string[];
@@ -94,11 +95,11 @@ beforeAll(async () => {
     }
     servidor = createServer(); await new Promise<void>(r => servidor.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
-    const app = express(); app.use('/c', (req, res, next) => criarRouterLinksCofre(links, base, async () => '5511999990000')(req, res, next));
+    const app = express(); app.use('/c', (req, res, next) => criarRouterLinksCofre(links, origemRouter, async () => '5511999990000')(req, res, next));
     servidor.on('request', app);
 });
 beforeEach(async () => {
-    instanteBanco = 0; registros = []; auditoria = []; consultas = []; textos = []; logs = [];
+    origemRouter = base; instanteBanco = 0; registros = []; auditoria = []; consultas = []; textos = []; logs = [];
     medico = { ativo: true, telefone }; estado = 'vazio'; flag = true; allowlist = [telefone];
     if (bancoReal) {
         await bancoReal.query('truncate usuarios, medicos, medico_perfil_fiscal, cofre_links, cofre_links_auditoria cascade');
@@ -124,6 +125,15 @@ afterAll(async () => {
 async function pedir() { const resultado = await links.solicitarLinkCofre(medicoId, 'tribemd'); return { resultado, token: textos.at(-1)!.match(/\/c\/([\w-]{43})/)![1] }; }
 async function post(token: string, corpo: unknown = dados, origem = base) {
     return fetch(`${base}/c/${token}/enviar`, { method: 'POST', headers: { Origin: origem, 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+}
+async function postCom(token: string, headers: Record<string, string>, corpo: unknown = dados) {
+    // fetch sobrescreve Host; o cliente HTTP permite simular o host recebido pelo proxy.
+    return new Promise<{ status: number }>((resolve, reject) => {
+        const req = request(`${base}/c/${token}/enviar`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers } }, res => {
+            res.resume(); res.on('end', () => resolve({ status: res.statusCode ?? 0 }));
+        });
+        req.on('error', reject); req.end(JSON.stringify(corpo));
+    });
 }
 async function salvos(): Promise<Link[]> { return bancoReal ? (await bancoReal.query('select * from cofre_links')).rows : registros; }
 async function configurarMedico(novo: typeof medico) {
@@ -384,4 +394,42 @@ it('expiração permite novo pedido e espera cai até o contado mais antigo sair
     if (bancoReal) await bancoReal.query("update cofre_links set criado_em=criado_em-interval '3 minutes', expira_em=expira_em-interval '3 minutes' where id=any($1::uuid[])", [antigos.map(l => l.id)]);
     else for (const l of antigos) { l.criado_em = new Date(l.criado_em.getTime() - 3 * 60000); l.expira_em = new Date(l.expira_em.getTime() - 3 * 60000); }
     expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: true, motivo: 'enviado' });
+});
+
+
+it.each([
+    [{ Origin: 'null', 'Sec-Fetch-Site': 'same-origin' }, 202],
+    [{ Origin: 'null', 'Sec-Fetch-Site': 'none' }, 202],
+    [{ Origin: 'null', 'Sec-Fetch-Site': 'cross-site' }, 403],
+    [{ Origin: 'https://invalido.example', 'Sec-Fetch-Site': 'same-origin' }, 403],
+    [{}, 202]
+] as const)('POST com cabeçalhos %j retorna %s sem afrouxar uso único', async (headers, status) => {
+    const { token } = await pedir();
+    expect((await postCom(token, headers)).status).toBe(status);
+    expect((await salvos())[0].usado_em !== null).toBe(status === 202);
+    expect(iniciar).toHaveBeenCalledTimes(status === 202 ? 1 : 0);
+    if (status === 202) expect((await postCom(token, headers)).status).toBe(410);
+});
+it.each([false, true])('Origin null segue o Referer antes do Sec-Fetch-Site (divergente=%s)', async divergente => {
+    const { token } = await pedir();
+    expect((await postCom(token, { Origin: 'null', Referer: `${divergente ? 'https://invalido.example' : base}/c/${token}`, 'Sec-Fetch-Site': 'same-origin' })).status).toBe(divergente ? 403 : 202);
+});
+it('aceita primeiro X-Forwarded-Host e recusa origem externa não declarada pelo proxy', async () => {
+    const primeiro = await pedir();
+    expect((await postCom(primeiro.token, { Origin: 'http://app.example.com', 'X-Forwarded-Host': 'app.example.com, proxy.interno' })).status).toBe(202);
+    const segundo = await pedir();
+    expect((await postCom(segundo.token, { Origin: 'https://invalido.example', 'X-Forwarded-Host': 'app.example.com' })).status).toBe(403);
+    expect((await salvos()).filter(l => l.usado_em)).toHaveLength(1);
+});
+it.each([true, false])('host www e esquema http sob origem https exigem TLS no proxy (%s)', async tls => {
+    origemRouter = 'https://app.example.com'; const { token } = await pedir();
+    const resposta = await postCom(token, { Host: 'www.app.example.com', Origin: 'http://www.app.example.com', 'X-Forwarded-Proto': tls ? 'https' : 'http' });
+    expect(resposta.status, JSON.stringify(logs)).toBe(tls ? 202 : 403);
+});
+it('log de origem recusada contém os cabeçalhos, sem token, senha, corpo ou caminho do Referer', async () => {
+    const { token } = await pedir();
+    expect((await postCom(token, { Origin: 'https://invalido.example', Referer: `${base}/c/${token}?senha=${dados.senha}`, 'Sec-Fetch-Site': 'cross-site', 'X-Forwarded-Host': 'notomed.tech', 'X-Forwarded-Proto': 'https' })).status).toBe(403);
+    const linha = JSON.stringify(logs);
+    for (const valor of ['ORIGEM_RECUSADA', 'metodo=POST', 'origin=https://invalido.example', `referer=${base}`, 'secfetch=cross-site', 'host=', 'xfh=notomed.tech', 'xfp=https']) expect(linha).toContain(valor);
+    for (const segredo of [token, dados.senha, dados.email, '/c/', 'consentimento']) expect(linha).not.toContain(segredo);
 });
