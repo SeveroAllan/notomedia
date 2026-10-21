@@ -225,7 +225,6 @@ it('nome-injeção e campos extras da ferramenta não chegam à IA nem são ecoa
 it.each([
   [true, 'enviado', ''],
   [true, 'simulado', 'O envio do link foi simulado; nenhum link foi enviado.'],
-  [true, 'repetido', 'O link já foi solicitado. Aguardo a conexão da agenda.'],
   [false, 'erro', 'Tive uma instabilidade e não consegui concluir agora.']
 ])('confirmação temporal do link ok=%s motivo=%s é determinística', async (ok, motivo, texto) => {
   const completar = vi.fn(async () => '{"fala":["Enviei o link"],"acao":null}');
@@ -364,4 +363,21 @@ it('evita frases de erro já usadas nos dez minutos mesmo fora das últimas quat
   expect(recentes).not.toContain(r.fala[0]);recentes.push(r.fala[0]);
  }
  expect(new Set(recentes).size).toBe(6);
+});
+
+it('link já solicitado usa o histórico para uma resposta natural sem alegar novo envio', async () => {
+  const completar = vi.fn(async (_k, _m, mensagens) => {
+    const dados = JSON.parse(mensagens[1].content);
+    expect(dados.resultadoFerramenta.dadosNaoConfiaveis.motivo).toBe('repetido');
+    expect(dados.mensagens).toContain('Noto: O link continua valendo.');
+    expect(mensagens[0].content).toContain('Reconheça informação nova já na primeira resposta');
+    return JSON.stringify({ fala: ['Entendi que você usa agenda de papel. Ainda não consigo seguir nesse formato.'], acao: null });
+  });
+  const resposta = await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada,
+    texto: 'Uso agenda de papel', mensagens: ['Noto: O link continua valendo.'], acoesPermitidas: [],
+    resultadoFerramenta: { ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: { ok: false, motivo: 'repetido' } } });
+  expect(completar).toHaveBeenCalledOnce();
+  expect(resposta.acao).toBeNull();
+  expect(resposta.fala.join(' ')).toContain('agenda de papel');
+  expect(resposta.fala.join(' ')).not.toMatch(/enviei|O link já foi solicitado/);
 });

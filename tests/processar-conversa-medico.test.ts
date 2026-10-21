@@ -446,14 +446,14 @@ it.each(['expirado', 'usado', 'novo link', 'limite'])('novo pedido interpretado 
   const c = await cenario();
   await c.memoriaPersistida.registrar('medico', 'conversa', 'noto:cofre_agenda:solicitado', 'Link seguro solicitado.', 'noto');
   const lerContextoConexao = vi.fn(async () => ({ agendaConectada: false, aguardandoConexao: true,
-    link: { enviado: true, minutosDesdeEnvio: 20, usado: caso === 'usado', expirado: caso === 'expirado', rejeitado: null } }));
+    link: { enviado: true, minutosDesdeEnvio: 20, usado: caso === 'usado', expirado: caso !== 'usado', rejeitado: null } }));
   c.completar.mockResolvedValueOnce(JSON.stringify({ fala: ['Vou pedir outro link seguro.'], acao: 'enviar_link_cofre_agenda', intencaoConexao: ['expirado', 'usado'].includes(caso) ? 'informar_conexao' : 'pedir_novo_link' }));
   const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: caso !== 'limite', motivo: caso === 'limite' ? 'LIMITE_PEDIDOS' : 'enviado' }));
   const listarConsultasSemNota = vi.fn();
   const evento = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: ['expirado', 'usado'].includes(caso) ? 'Conectei' : 'Pode reenviar um novo link?' } };
   const deps = { ...c.deps, lerContextoConexao, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(evento, deps); await processarComunicacaoMedico(evento, deps);
-  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico', { reenvio: true }); expect(listarConsultasSemNota).not.toHaveBeenCalled();
   if (caso === 'limite') { expect(c.aoConversar).toHaveBeenCalledOnce(); expect(JSON.stringify(c.aoConversar.mock.calls)).not.toMatch(/O limite de pedidos|LIMITE_PEDIDOS/); }
   else expect(c.aoConversar).not.toHaveBeenCalled();
 });
@@ -532,4 +532,11 @@ it('resposta de data/confirmacao é tratada pelo retroativo sem passar pelo extr
   expect(retroativo.responder).toHaveBeenCalledExactlyOnceWith('medico', 'conversa', 'mensagem', 'Como funciona?', agora, 'evolution-pergunta');
   expect(c.completar).not.toHaveBeenCalled(); expect(c.extrair).not.toHaveBeenCalled();
   expect(await c.memoriaPersistida.ler('medico', 'conversa')).toContain('Como funciona?');
+});
+it('link ativo bloqueia outra criação mesmo se a marca de solicitado estiver ausente e o modelo pedir novo',async()=>{
+ const c=await cenario();c.completar.mockResolvedValue('{"fala":["O link anterior continua valendo."],"acao":"enviar_link_cofre_agenda","intencaoConexao":"pedir_novo_link"}');
+ const enviarLinkCofreAgenda=vi.fn();
+ await processarComunicacaoMedico({...entrada,respostaMedico:{...entrada.respostaMedico,texto:'Pode mandar outro link?'}},{...c.deps,listarConsultasSemNota:vi.fn(),enviarLinkCofreAgenda,
+  lerContextoConexao:async()=>({aguardandoConexao:true,agendaConectada:false,link:{enviado:true,minutosDesdeEnvio:2,expirado:false,usado:false,rejeitado:null}})});
+ expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua valendo.'],'mensagem');
 });

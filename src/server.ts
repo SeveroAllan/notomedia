@@ -111,6 +111,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const cofres = criarCofreContas({
     aoAlterarAcesso: id => cacheAgenda.invalidar(id),
     pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
+    registrarTextoLink: async entrada => {
+      if (!memoriaPersistida) return;
+      const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, entrada.telefoneMedico.replace(/\D/g, '')])).digest('hex');
+      await memoriaPersistida.registrar(entrada.medicoId, chave,
+        `noto:agenda:link:${entrada.linkId}:${entrada.indice}`, entrada.texto, 'noto');
+    },
     obterWhatsappAssistente: () => evolutionAssistantClient.obterTelefoneInstancia(),
     aoConcluirAgenda: async (medicoId, evento) => {
       cacheAgenda.invalidar(medicoId);
@@ -292,7 +298,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       listarConsultasSemNota: (id, agenda, instante) => listarPendencias(id, agenda, instante),
-      enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
+      enviarLinkCofreAgenda: async (id, opcoes) => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd', opcoes) : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
       lerContextoConexao: cofres.links ? (id, agora) => cofres.links!.lerContextoConexao(id, agora) : undefined,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,

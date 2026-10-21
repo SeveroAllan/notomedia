@@ -33,7 +33,7 @@ export async function processarComunicacaoMedico(
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     listarConsultasSemNota?: (medicoId: string, agenda: EstadoComunicacaoMedico['estado']['agenda'], agora: Date) => Promise<{
       ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number }>;
-    enviarLinkCofreAgenda?: (medicoId: string) => Promise<{ ok: boolean; motivo: string }>;
+    enviarLinkCofreAgenda?: (medicoId: string, opcoes?: { reenvio?: boolean }) => Promise<{ ok: boolean; motivo: string }>;
     lerContextoConexao?: (medicoId: string, agora: Date) => Promise<ContextoConexaoAgenda>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
     aoDecidir?: (acao: ProximaAcaoNoto, chave: string, contexto?: { nomeMedico?: string }) => Promise<void>;
@@ -196,7 +196,7 @@ export async function processarComunicacaoMedico(
         const contexto = { instabilidadesRecentes: await lerInstabilidades(), contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
-          ? estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
+          ? estado.estado.agenda.conectada || contextoConexao?.link && !contextoConexao.link.expirado && !contextoConexao.link.usado ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
         if (resposta.intencaoConexao === 'informar_conexao') {
           // A IA interpreta; conexão e possibilidade de reenvio são sempre relidas no backend.
           const atualizado = await deps.lerEstado(entrada.medicoId, entrada.agora);
@@ -212,7 +212,7 @@ export async function processarComunicacaoMedico(
               consultaAnunciada = true;
             }
             resposta = await deps.conversador.responder({ ...contexto, verificacaoConexao: true,
-              acoesPermitidas: estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] });
+              acoesPermitidas: estado.estado.agenda.conectada || contextoConexao?.link && !contextoConexao.link.expirado && !contextoConexao.link.usado ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] });
           }
         }
         if (resposta.reacao) {
@@ -239,7 +239,8 @@ export async function processarComunicacaoMedico(
           if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
             'noto:cofre_agenda:solicitado', 'O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
           let resultado;
-          try { resultado = await deps.enviarLinkCofreAgenda(entrada.medicoId); }
+          try { resultado = linkCofreJaSolicitado || resposta.intencaoConexao === 'pedir_novo_link'
+            ? await deps.enviarLinkCofreAgenda(entrada.medicoId, { reenvio: true }) : await deps.enviarLinkCofreAgenda(entrada.medicoId); }
           catch { resultado = { ok: false, motivo: 'COFRE_INDISPONIVEL' }; }
           auditarFerramenta('enviar_link_cofre_agenda', resultado);
           resposta = await deps.conversador.responder({ ...contexto,

@@ -16,11 +16,14 @@ export function contemCredencialAgenda(texto: string): boolean {
 }
 
 export function podeSolicitarLinkAgenda(conectada: boolean, solicitado: boolean, intencao?: string | null, contexto?: ContextoConexaoAgenda): boolean {
+    if (contexto?.link && !contexto.link.expirado && !contexto.link.usado) return false;
     return !conectada && (!solicitado || intencao === 'pedir_novo_link' ||
         intencao === 'informar_conexao' && !!(contexto?.link?.expirado || contexto?.link?.usado));
 }
 
 export interface ConclusaoAgenda { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean; chave: string }
+
+export interface TextoLinkAgendaEnviado { medicoId: string; telefoneMedico: string; linkId: string; indice: number; texto: string }
 
 export class LinksCofre {
     private aguardando = new Map<string, { id: string; agenda: string }>();
@@ -29,14 +32,15 @@ export class LinksCofre {
         origem: string;
         cofre: Pick<CofreTribemd, 'status' | 'iniciar'>;
         aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
+        registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
 
-    async solicitarLinkCofre(medicoId: string, agenda: string) {
+    async solicitarLinkCofre(medicoId: string, agenda: string, opcoes: { reenvio?: boolean } = {}) {
         if (agenda !== 'tribemd') return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
         const cliente = await this.deps.pool.connect();
         let link: { id: string };
-        let token = '', confirmado = false;
+        let token = '', telefoneMedico = '', confirmado = false;
         try {
             await cliente.query('begin');
             // A linha do médico serializa limite e invalidação, inclusive entre réplicas.
@@ -45,6 +49,7 @@ export class LinksCofre {
             if (!medico) return { ok: false, motivo: 'MEDICO_INEXISTENTE' };
             if (!medico.ativo) return { ok: false, motivo: 'MEDICO_INATIVO' };
             if (!medico.telefone?.trim()) return { ok: false, motivo: 'SEM_TELEFONE' };
+            telefoneMedico = medico.telefone;
             const status = await this.deps.cofre.status(medicoId);
             if (!['vazio', 'desconectado', 'atencao'].includes(status.estado)) return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
             const limite = (await cliente.query(`with referencia as (select clock_timestamp() as agora), pedidos_contados as (
@@ -78,16 +83,22 @@ export class LinksCofre {
             try { if (!confirmado) await cliente.query('rollback'); } finally { cliente.release(); }
         }
         try {
-            const baloes = [
+            const url = `${this.deps.origem}/c/${token}`;
+            const baloes = opcoes.reenvio ? ['Claro. Aqui está o novo link seguro:', url] : [
                 'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.',
                 'Por segurança, eu não recebo senha pela conversa. Seu login e senha da agenda vão só neste link seguro, que vale por 15 minutos e só pode ser usado uma vez.',
-                `${this.deps.origem}/c/${token}`
+                url
             ];
             let motivo: 'simulado' | 'enviado' | undefined;
-            for (const texto of baloes) {
+            for (const [indice, texto] of baloes.entries()) {
                 const envio = await this.deps.enviar(medicoId, texto);
                 if (envio === 'erro' || motivo && motivo !== envio) return { ok: false, motivo: 'erro' };
                 motivo = envio;
+                if (envio === 'enviado') {
+                    try { await this.deps.registrarTextoEnviado?.({ medicoId, telefoneMedico, linkId: link.id, indice,
+                        texto: texto === url ? `${this.deps.origem}/c/[LINK_SEGURO]` : texto }); }
+                    catch { console.warn('COFRE_MEMORIA_FALHOU'); }
+                }
             }
             if (motivo === 'enviado') await this.auditar(link.id, 'enviado');
             return { ok: true, motivo: motivo! };

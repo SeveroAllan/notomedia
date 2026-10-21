@@ -1,4 +1,4 @@
-import { LinksCofre, type ConclusaoAgenda } from './links.js';
+import { LinksCofre, type ConclusaoAgenda, type TextoLinkAgendaEnviado } from './links.js';
 import { criarRouterLinksCofre } from './links-router.js';
 import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
@@ -22,6 +22,7 @@ export function criarCofreContas(deps: {
     aoAlterarAcesso?: (medicoId: string) => void;
     aoConcluirAgenda?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
     obterWhatsappAssistente?: () => Promise<string | null>;
+    registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
     enviarCofre?: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
 }) {
     const env = deps.env ?? process.env, app = express();
@@ -38,7 +39,7 @@ export function criarCofreContas(deps: {
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
         cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
-        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
+        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
     app.use(async (req, res, next) => {

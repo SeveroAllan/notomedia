@@ -13,13 +13,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
+  return { criarCofreContas: (deps: any) => { fronteiras.registrarTextoLink = deps.registrarTextoLink; fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -445,4 +445,13 @@ it('sem início pós-conexão pergunta antes de ler; data informada limita a jan
   expect(fronteiras.fonte).toHaveBeenCalledExactlyOnceWith({medicoId:'medico',referenciaCofre:'medico',janelaDias:2,agora:new Date('2026-10-20T15:00Z')});
   expect(enviar.mock.calls[2][0].texto).toContain('desde 18/10/2026');
  }finally{vi.useRealTimers();}
+});
+
+it('registra os balões reais do link no histórico lido pelo conversador, inclusive entre variantes do telefone', async () => {
+  criarAppExpress();
+  const textos = ['Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.',
+    'Por segurança, eu não recebo senha pela conversa. Seu login e senha vão só no link seguro.', 'https://exemplo.invalid/c/[LINK_SEGURO]'];
+  for (const [indice, texto] of textos.entries()) await fronteiras.registrarTextoLink!({ medicoId: 'medico', telefoneMedico: telefone, linkId: 'link-fixture', indice, texto });
+  const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, '555193527271'])).digest('hex');
+  expect(await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', chave)).toEqual(textos);
 });
