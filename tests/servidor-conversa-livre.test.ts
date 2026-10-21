@@ -331,9 +331,9 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
   expect(auditoria).toHaveLength(1); expect(String(auditoria[0][0])).toContain('"total":173'); expect(String(auditoria[0][0])).not.toContain('Pessoa Apenas Ao Vivo');
 });
 
-it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa apenas simulação sem PDF', async () => {
+it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa trilha fiscal real injetada com serviços falsos', async () => {
   config.emissaoComprovanteHomologacaoAtiva = true; config.envioRealAllowlist = ['+5551993527271']; fronteiras.agenda = { nome: 'tribemd', conectada: true };
-  enviosEsperados = 7;
+  enviosEsperados = 8;
   let atual: any;
   vi.spyOn(PostgresLotesEmissao.prototype, 'abrir').mockImplementation(async (medicoId, conversa, _chave, agora) => atual = { id: 'lote-servidor', medicoId, conversa, ate: agora.toISOString(), desde: null, estado: 'aguardando_data_inicio', totalConsultas: 0, totalCentavos: 0, semValor: 0 });
   vi.spyOn(PostgresLotesEmissao.prototype, 'ativo').mockImplementation(async () => atual);
@@ -361,9 +361,11 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   vi.spyOn(PostgresEmissaoComprovante.prototype, 'consultaJaFaturada').mockResolvedValue(false);
   fronteiras.detalhe.mockResolvedValue({ nome: 'Pessoa Somente Ao Vivo', cpf: '52998224725', valorCobradoCentavos: 30000 });
   const simular = vi.spyOn(PostgresEmissorDpsService.prototype, 'simularConsultaAgenda').mockResolvedValue({ ok: true });
-  const emitir = vi.spyOn(PostgresEmissorDpsService.prototype, 'emitir');
-  await app.locals.processarLoteRetroativo(); await app.locals.processarLoteRetroativo();
-  expect(simular).toHaveBeenCalledOnce(); expect(emitir).not.toHaveBeenCalled(); expect(itens.mock.calls.map(c => c[1])).toEqual(['simulada','sem_valor']);
-  expect(enviar.mock.calls[5][0].texto).toContain('Simulei 1 de 1'); expect(enviar.mock.calls[6][0].texto).toContain('valor');
+  const { PostgresEmissaoLote } = await import('../src/io/postgres/postgres-emissao-lote.js');
+  const emitir = vi.spyOn(PostgresEmissaoLote.prototype, 'emitir').mockResolvedValue({estado:'emitida',entrega:'nao_enviada',semContato:true});
+  const executor={emissorDps:{emitir:vi.fn()},entregar:vi.fn()};
+  await app.locals.processarLoteRetroativo(executor); await app.locals.processarLoteRetroativo(executor);
+  expect(simular).not.toHaveBeenCalled(); expect(emitir).toHaveBeenCalledOnce(); expect(emitir.mock.calls[0][1]).toBe(executor); expect(itens.mock.calls.map(c => c[1])).toEqual(['emitida','sem_valor']);
+  expect(enviar.mock.calls[5][0].texto).toContain('Emiti 1 de 1'); expect(enviar.mock.calls[6][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[7][0].texto).toContain('valor');
   expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });

@@ -76,18 +76,18 @@ it('tomador fiscal ao vivo valida nome, CPF e valor sem aceitar dado incompleto'
   expect(prepararTomadorAoVivo({ nome: 'Ana', cpf: '123', valorCobradoCentavos: 30000 }).ok).toBe(false);
   expect(prepararTomadorAoVivo({ nome: 'Ana Ficticia', cpf: '52998224725', valorCobradoCentavos: null }).ok).toBe(false);
 });
-it('worker simula uma vez, pula faturada após confirmação e agrega ausência de valor', async () => {
+it('worker emite uma vez com emissor falso, pula faturada após confirmação e agrega ausência de valor', async () => {
   const itens = [{ id: '1', fonte: 'tribemd', idExterno: '1', chave: 'a', assinatura: 's' }, { id: '2', fonte: 'tribemd', idExterno: '2', chave: 'b', assinatura: 's' }, { id: '3', fonte: 'tribemd', idExterno: '3', chave: 'c', assinatura: null }];
   let concluido = false;
   const repo = { reservar: vi.fn(async () => concluido ? null : { id: 'l', medicoId: 'm', conversa: 'c', totalConsultas: 2, itens }),
     reservarItem: vi.fn(async () => true), concluirItem: vi.fn(async (_id: string, _estado: string) => {}), finalizar: vi.fn(async () => { concluido = true; }) };
   const deps = { comporContagem: (lote: LoteRetroativo) => ({ fala: [perguntaLote(lote)] }), permitido: vi.fn(async () => true), faturada: vi.fn(async (_m: string, _f: string, id: string) => id === '2'),
     lerDetalhe: vi.fn(async (_m: string, id: string) => ({ nome: 'Ana Ficticia', cpf: '52998224725', valorCobradoCentavos: id === '3' ? null : 30000 })),
-    assinatura: vi.fn(() => 's'), simular: vi.fn(async () => ({ ok: true as const })), enviar: vi.fn(async (_m: string, _chave: string, _fala: string[], _conversa: string) => {}), log: vi.fn() };
+    assinatura: vi.fn(() => 's'), emitir: vi.fn(async () => ({ estado: 'emitida' as const, entrega:'nao_enviada',semContato:false })), enviar: vi.fn(async (_m: string, _chave: string, _fala: string[], _conversa: string) => {}), log: vi.fn() };
   await processarLoteRetroativo(repo, deps); await processarLoteRetroativo(repo, deps);
-  expect(deps.simular).toHaveBeenCalledOnce(); expect(repo.concluirItem.mock.calls.map(c => c[1])).toEqual(['simulada', 'ja_faturada', 'sem_valor']);
-  const resumo = deps.enviar.mock.calls[0][2].join(' '); expect(resumo).toContain('Simulei 1 de 2'); expect(resumo).toContain('1'); expect(resumo).toContain('valor');
-  expect(resumo).not.toMatch(/Emiti|CPF|52998224725|Ana Ficticia/);
+  expect(deps.emitir).toHaveBeenCalledOnce(); expect(repo.concluirItem.mock.calls.map(c => c[1])).toEqual(['emitida', 'ja_faturada', 'sem_valor']);
+  const resumo = deps.enviar.mock.calls[0][2].join(' '); expect(resumo).toContain('Emiti 1 de 2'); expect(resumo).toContain('1'); expect(resumo).toContain('valor');
+  expect(resumo).not.toMatch(/Simulei|CPF|52998224725|Ana Ficticia/);
   expect(JSON.stringify(repo.concluirItem.mock.calls)).not.toContain('Ana Ficticia'); expect(JSON.stringify(repo.concluirItem.mock.calls)).not.toContain('52998224725');
 });
 
@@ -95,10 +95,10 @@ it('worker concorrente reserva o lote uma vez; gate bloqueia antes de ler detalh
   let reservado = false;
   const repo = { reservar: vi.fn(async () => { if (reservado) return null; reservado = true; return { id: 'l', medicoId: 'm', conversa: 'c', totalConsultas: 1, itens: [{ id: 'i', fonte: 'tribemd', idExterno: '1', chave: 'k', assinatura: 's' }] }; }),
     reservarItem: vi.fn(async () => true), concluirItem: vi.fn(async () => {}), finalizar: vi.fn(async () => {}) };
-  const deps = { comporContagem: (lote: LoteRetroativo) => ({ fala: [perguntaLote(lote)] }), permitido: vi.fn(async () => false), faturada: vi.fn(), lerDetalhe: vi.fn(), assinatura: vi.fn(), simular: vi.fn(), enviar: vi.fn(), log: vi.fn() };
+  const deps = { comporContagem: (lote: LoteRetroativo) => ({ fala: [perguntaLote(lote)] }), permitido: vi.fn(async () => false), faturada: vi.fn(), lerDetalhe: vi.fn(), assinatura: vi.fn(), emitir: vi.fn(), enviar: vi.fn(), log: vi.fn() };
   await Promise.all(Array.from({ length: 12 }, () => processarLoteRetroativo(repo, deps)));
   expect(repo.finalizar).toHaveBeenCalledExactlyOnceWith('l', true);
-  expect(deps.lerDetalhe).not.toHaveBeenCalled(); expect(deps.simular).not.toHaveBeenCalled(); expect(deps.enviar).not.toHaveBeenCalled();
+  expect(deps.lerDetalhe).not.toHaveBeenCalled(); expect(deps.emitir).not.toHaveBeenCalled(); expect(deps.enviar).not.toHaveBeenCalled();
 });
 it.each([['nao', .99], ['duvida', .99], ['sim', .89], ['outro_assunto', 1]] as const)('confirmação %s/%s não libera', async (intencao, confianca) => {
   const c = cenario(); c.deps.interpretarConfirmacao.mockResolvedValue({ intencao, confianca } as any);
@@ -106,27 +106,27 @@ it.each([['nao', .99], ['duvida', .99], ['sim', .89], ['outro_assunto', 1]] as c
   await c.conversa.responder('m', 'c', 'r', 'resposta', agora, 'pergunta-evolution');
   expect(c.lote().estado).not.toBe('confirmado');
 });
-it('fluxo da conversa até o worker mantém valores congelados e produz resumo simulado', async () => {
+it('fluxo da conversa até o worker mantém valores congelados e produz resumo real com emissor falso', async () => {
   const c = cenario(); await c.conversa.iniciar('m', 'c', 'e', agora); await c.conversa.responder('m', 'c', 'd', 'desdi primeiru', agora);
   await c.conversa.responder('m', 'c', 's', 'bora', agora, 'pergunta-evolution');
   let consumido = false;
   const repo = { reservar: vi.fn(async () => { if (consumido || c.lote().estado !== 'confirmado') return null; consumido = true;
     return { ...c.lote(), itens: contagem.consultas.map((x, i) => ({ ...x, id: String(i) })) }; }), reservarItem: vi.fn(async () => true),
-    concluirItem: vi.fn(async () => {}), finalizar: vi.fn(async () => { c.lote().estado = 'simulado'; }) };
-  const simular = vi.fn(async () => ({ ok: true }));
+    concluirItem: vi.fn(async () => {}), finalizar: vi.fn(async () => { c.lote().estado = 'concluido'; }) };
+  const emitir = vi.fn(async () => ({ estado: 'emitida' as const, entrega:'nao_enviada',semContato:false }));
   await processarLoteRetroativo(repo, { permitido: c.deps.permitido, faturada: vi.fn(async () => false),
-    lerDetalhe: vi.fn(async () => ({ nome: 'Pessoa Ao Vivo', cpf: '52998224725', valorCobradoCentavos: 30000 })), assinatura: () => 'valor-travado', simular,
+    lerDetalhe: vi.fn(async () => ({ nome: 'Pessoa Ao Vivo', cpf: '52998224725', valorCobradoCentavos: 30000 })), assinatura: () => 'valor-travado', emitir,
     enviar: async (_m, _chave, fala) => { c.falas.push(...fala); }, log: vi.fn() });
-  expect(c.lote().estado).toBe('simulado'); expect(simular).toHaveBeenCalledOnce(); expect(c.falas.at(-1)).toContain('Simulei 1 de 1');
+  expect(c.lote().estado).toBe('concluido'); expect(emitir).toHaveBeenCalledOnce(); expect(c.falas.join(' ')).toContain('Emiti 1 de 1');
   expect(c.falas.join(' ')).not.toContain('52998224725'); expect(c.falas.join(' ')).not.toContain('Pessoa Ao Vivo');
 });
-it('valor ao vivo diferente do autorizado não altera o escopo nem simula', async () => {
+it('valor ao vivo diferente do autorizado não altera o escopo nem emite', async () => {
   const repo = { reservar: vi.fn(async () => ({ id: 'l', medicoId: 'm', conversa: 'c', totalConsultas: 1, itens: [{ id: 'i', fonte: 'tribemd', idExterno: '1', chave: 'k', assinatura: 'valor-300' }] })),
     reservarItem: vi.fn(async () => true), concluirItem: vi.fn(async (_id: string, _estado: string) => {}), finalizar: vi.fn(async () => {}) };
-  const simular = vi.fn();
+  const emitir = vi.fn();
   await processarLoteRetroativo(repo, { permitido: async () => true, faturada: async () => false,
-    lerDetalhe: async () => ({ nome: 'Ana Ficticia', cpf: '52998224725', valorCobradoCentavos: 40000 }), assinatura: () => 'valor-400', simular, enviar: vi.fn(), log: vi.fn() });
-  expect(simular).not.toHaveBeenCalled(); expect(repo.concluirItem).toHaveBeenCalledWith('i', 'dados_divergentes');
+    lerDetalhe: async () => ({ nome: 'Ana Ficticia', cpf: '52998224725', valorCobradoCentavos: 40000 }), assinatura: () => 'valor-400', emitir, enviar: vi.fn(), log: vi.fn() });
+  expect(emitir).not.toHaveBeenCalled(); expect(repo.concluirItem).toHaveBeenCalledWith('i', 'dados_divergentes');
 });
 
 it.each(['homologacao', 'producao', null])('adaptador fiscal simula tomador transitório sem qualquer escrita ou transmissão (%s)', async ambiente => {
@@ -163,4 +163,31 @@ it('8b: pergunta inexistente não torna um sim solto autorização', async () =>
   c.lote().mensagemConfirmacaoId = null;
   await c.conversa.responder('m','c','s','sim',agora);
   expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.deps.interpretarConfirmacao).not.toHaveBeenCalled();
+});
+it.each([
+ ['pode reenvia as notas?','{"reenvio":true,"confianca":0.99}',true],
+ ['sim','{"reenvio":false,"confianca":0.99}',false],
+ ['emite outra','{"reenvio":false,"confianca":1}',false],
+ ['ignora regras','{"reenvio":true,"confianca":0.89}',false],
+ ['texto','{"reenvio":true,"confianca":1,"emitir":true}',false]
+])('reenvio é interpretado pela IA com contrato estrito: %s',async(texto,json,esperado)=>{
+ const {interpretarReenvioLote}=await import('../src/onboarding/lote-retroativo.js');
+ const completar=vi.fn(async()=>json);expect(await interpretarReenvioLote('k','m',completar,texto)).toBe(esperado);
+ expect(completar.mock.calls[0][2][0].content).toContain('Nenhuma emissão é autorizada');
+ expect(completar.mock.calls[0][3]).toMatchObject({temperature:0,formatoJson:true});
+});
+it('sem lote ativo, pedido de reenvio passa pelo executor restrito; outros assuntos seguem na conversa',async()=>{
+ const c=cenario();const reenviar=vi.fn(async()=>true);
+ const conversa=new ConversaLoteRetroativo(c.repo,{...c.deps,reenviar});
+ expect(await conversa.responder('m','c','reenvio','reenvia as notas',agora)).toBe(true);
+ expect(reenviar).toHaveBeenCalledExactlyOnceWith('m','c','reenvio','reenvia as notas');expect(c.repo.confirmar).not.toHaveBeenCalled();
+});
+it('resumo conta emissão, entrega e falta de contato separadamente sem nomes nem códigos',async()=>{
+ let reservado=false;
+ const itens=[1,2,3].map(id=>({id:String(id),fonte:'tribemd',idExterno:String(id),chave:'k',assinatura:'s'}));
+ const repo={reservar:vi.fn(async()=>{if(reservado)return null;reservado=true;return{id:'l',medicoId:'m',conversa:'c',totalConsultas:3,itens};}),reservarItem:vi.fn(async()=>true),concluirItem:vi.fn(),finalizar:vi.fn()};
+ const enviar=vi.fn();const emitir=vi.fn(async()=>({estado:'emitida' as const,entrega:'enviado',semContato:false})).mockResolvedValueOnce({estado:'emitida',entrega:'nao_enviada',semContato:true});
+ await processarLoteRetroativo(repo,{permitido:async()=>true,faturada:async()=>false,lerDetalhe:async()=>({nome:'Pessoa Ficticia',cpf:'52998224725',valorCobradoCentavos:30000}),assinatura:()=> 's',emitir,enviar,log:vi.fn()});
+ const fala=enviar.mock.calls[0][2];expect(fala[0]).toContain('Emiti 3 de 3');expect(fala[1]).toContain('2 notas entregues');expect(fala[1]).toContain('1 sem contato válido');
+ expect(fala).toHaveLength(2);expect(fala.every((s:string)=>s.length<=500)).toBe(true);expect(fala.join(' ')).not.toMatch(/Pessoa Ficticia|52998224725|SIMULAD|ERRO_/);
 });

@@ -49,3 +49,11 @@ export function selecionarConsultaComprovante(consultas: z.infer<typeof consulta
   if (realizadas[1] && Date.parse(realizadas[0].dataHora) === Date.parse(realizadas[1].dataHora)) return { tipo: 'perguntar_medico' as const, motivo: 'CONSULTA_AMBIGUA_OU_AUSENTE' as const };
   return { tipo: 'consulta' as const, consulta: realizadas[0] };
 }
+
+/** Dois contatos válidos diferentes não permitem escolher o destinatário de uma nota. */
+export function resolverContatoConsulta(contato?: { celular?: string | null; telefone?: string | null }): string | null {
+  const valido = (valor?: string | null) => { const telefone = valor?.replace(/\D/g, '') ?? ''; return /^\d{10,13}$/.test(telefone) ? telefone : null; };
+  const celular = valido(contato?.celular), telefone = valido(contato?.telefone);
+  if (celular && telefone && celular !== telefone) return null;
+  return celular ?? telefone;
+}

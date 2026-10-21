@@ -33,7 +33,7 @@ import type { MeuDanfeClient } from '../meudanfe/meu-danfe-client.js';
 import type { ConsultaCpfProvider } from '../../paciente/consulta-cpf-provider.js';
 import { ehNomeCivilValido } from '../../paciente/regras/validar-nome-civil.js';
 
-export interface TomadorAoVivo { nome: string | null; cpf: string | null; valorCobradoCentavos: number | null }
+export interface TomadorAoVivo { nome: string | null; cpf: string | null; valorCobradoCentavos: number | null; contato?: { celular?: string | null; telefone?: string | null } }
 export function prepararTomadorAoVivo(dados: TomadorAoVivo) {
   if (!ehNomeCivilValido(dados.nome) || !validarCpf(dados.cpf) || !Number.isSafeInteger(dados.valorCobradoCentavos) || dados.valorCobradoCentavos! <= 0)
     return { ok: false as const };
@@ -87,6 +87,11 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
   }
 
   private async emitirPreparado(item: SolicitacaoEmissaoItem, correcao?: FalhaEmissao): Promise<ResultadoEmissaoDps> {
+    const aoVivo = item.origemLote && item.tomadorAoVivo ? prepararTomadorAoVivo(item.tomadorAoVivo) : undefined;
+    if (item.origemLote && (!aoVivo?.ok || aoVivo.valorCentavos !== item.valorServicoCentavos))
+      return { sucesso: false, erro: 'Dados da consulta precisam de conferência.', codigoErroSefin: 'TOMADOR_AO_VIVO_INVALIDO' };
+    if (item.origemLote && (!this.modoAgenteConservador || !this.preparacaoFiscalAtiva || !this.supabaseClient || !this.sefinClient))
+      return { sucesso: false, erro: 'Integração fiscal indisponível.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' };
     // Um mesmo instante define competência e dhEmi, inclusive na virada do dia.
     // Correções preservam o instante da DPS original, sem gerar outra emissão.
     const dataGeracao = correcao ? new Date(String(correcao.contextoTecnico!.dataGeracao)) : new Date();
@@ -110,7 +115,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     if (!prestadorConfig) {
       return { sucesso: false, erro: `Perfil fiscal não cadastrado para o médico ${item.medicoId}`, codigoErroSefin: 'PERFIL_FISCAL_INCOMPLETO' };
     }
-    if (item.emissaoComprovante && prestadorConfig.ambiente !== 2) {
+    if ((item.emissaoComprovante || item.origemLote) && prestadorConfig.ambiente !== 2) {
       return { sucesso: false, erro: 'AMBIENTE_FISCAL_BLOQUEADO', codigoErroSefin: 'AMBIENTE_FISCAL_BLOQUEADO' };
     }
     if (prestadorConfig.referenciaImportada && !this.preparacaoFiscalAtiva) {
@@ -126,7 +131,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
         pendenciasFiscais: preparacao.pendencias, contextoTecnico: { etapa: 'preparacao', transmitida: false } };
     }
-    const tomador = await this.carregarDadosTomador(item.pacienteId);
+    const tomador = aoVivo?.ok ? { ...aoVivo, endereco: undefined, telefone: undefined, enderecoCompleto: undefined } : await this.carregarDadosTomador(item.pacienteId);
     if (!tomador || !tomador.cpf) {
       return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
@@ -473,7 +478,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
             upsert: true
           });
       } catch (err: any) {
-        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', err?.message || err);
+        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote ? 'XML_STORAGE_FALHOU' : err?.message || err);
       }
     }
 

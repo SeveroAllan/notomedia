@@ -192,6 +192,7 @@ export class CofreTribemd {
             if (!consulta?.dados || consulta.dados.codigo) throw new ErroCofre('DETALHES_NAO_CONCLUIDOS');
             const valor = consulta.dados.valorCobrado;
             return { nome: consulta.dados.nomeCompleto ?? consulta.nome ?? null, cpf: consulta.dados.cpf,
+                contato: { celular: consulta.dados.contato.celular ?? null, telefone: consulta.dados.contato.telefone ?? null },
                 valorCobradoCentavos: valor && /^\d+\.\d{2}$/.test(valor) ? Number(valor.replace('.', '')) : null };
         } finally { this.limparResultado(medicoId); }
     }

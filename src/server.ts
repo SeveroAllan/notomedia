@@ -1,9 +1,9 @@
 import { PendenciasMedico, classificarPendencias } from './onboarding/pendencias-medico.js';
 import { PostgresContextoPendencias } from './io/postgres/postgres-contexto-pendencias.js';
-import { ConversaLoteRetroativo, interpretarDataRetroativo } from './onboarding/lote-retroativo.js';
+import { ConversaLoteRetroativo, interpretarDataRetroativo, interpretarReenvioLote } from './onboarding/lote-retroativo.js';
 import { PostgresLotesEmissao } from './io/postgres/postgres-lotes-emissao.js';
 import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
-import { PostgresEmissorDpsService } from './io/fiscal/postgres-emissor-dps-service.js';
+import { PostgresEmissaoLote, type ExecutorFiscalLote } from './io/postgres/postgres-emissao-lote.js';
 import { sincronizarAgenda } from './agenda/sincronizar-agenda.js';
 import { registroErroNoto } from './observabilidade/erros.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
@@ -238,8 +238,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const lotes = new PostgresLotesEmissao(pool, config.appPepper);
   const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
+  const emissaoLote = new PostgresEmissaoLote(pool, config.encryptionKey, config.appPepper, lotePermitido);
   const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
+    reenviar: async (medicoId,conversa,chave,texto) => {
+      const candidatos=await emissaoLote.pendentesReenvio(medicoId);
+      if(!candidatos.length || !await interpretarReenvioLote(iaApiKey,iaModeloTexto,completarIa,texto)) return false;
+      const r=await emissaoLote.reenviarSemContato(medicoId,chave,candidatos,(id,consulta)=>cofres.detalheAoVivo(id,consulta),
+        (id,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId:id,solicitacaoId},evolutionClient));
+      await comunicacaoHomologacao.conversa({medicoId,conversa,chave:`lote:reenvio:${chave}`,
+        fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido; confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas; vou verificar o que impediu a entrega.' : ''}`]});
+      console.info(JSON.stringify({evento:'LOTE_REENVIO',medicoId,...r}));return true;
+    },
     listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo)); },
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
     contar: (id, desde, ate, valoresAoVivo) => {
@@ -252,16 +262,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     log: mensagem => console.info(mensagem)
   }) : undefined;
   if (retroativo) {
-    const simulador = new PostgresEmissorDpsService(pool, config.encryptionKey);
-    app.locals.processarLoteRetroativo = () => processarLoteRetroativo(lotes, {
+    app.locals.processarLoteRetroativo = async (executor?: ExecutorFiscalLote) => executor ? processarLoteRetroativo(lotes, {
       permitido: lotePermitido,
       faturada: (id, fonte, consulta) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consulta),
       lerDetalhe: (id, consulta) => cofres.detalheAoVivo(id, consulta),
       assinatura: (id, fonte, consulta, valor) => lotes.assinatura(id, fonte, consulta, valor),
-      simular: (id, dados) => simulador.simularConsultaAgenda(id, dados),
+      emitir: entrada => emissaoLote.emitir(entrada, executor),
       enviar: async (medicoId, chave, fala, conversa) => { await comunicacaoHomologacao.conversa({ medicoId, chave, fala, conversa }); },
       log: mensagem => console.info(mensagem)
-    });
+    }) : false;
   }
 
   const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string) => {

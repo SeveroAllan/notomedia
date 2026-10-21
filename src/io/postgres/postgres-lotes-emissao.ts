@@ -89,6 +89,6 @@ export class PostgresLotesEmissao implements RepositorioLotes {
     await this.pool.query(`update public.noto_lotes_itens set estado=$2 where id=$1 and estado in ('pronto','processando','sem_valor')`, [id, estado]);
   }
   async finalizar(id: string, bloqueado = false) {
-    await this.pool.query(`update public.noto_lotes_emissao set estado=$2 where id=$1 and estado='processando'`, [id, bloqueado ? 'bloqueado' : 'simulado']);
+    await this.pool.query(`update public.noto_lotes_emissao set estado=$2 where id=$1 and estado='processando'`, [id, bloqueado ? 'bloqueado' : 'concluido']);
   }
 }

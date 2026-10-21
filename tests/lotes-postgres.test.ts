@@ -64,13 +64,13 @@ it.each([25000,26000])('contagem congela cobrado 25000 e execução só aceita s
   const contado = await origem.contarConsultasPeriodo('m','2026-10-01','2026-10-20T15:00Z',new Map([['1',25000]]));
   const fila = { reservar: vi.fn(async () => ({ id: 'l', medicoId: 'm', conversa: 'c', totalConsultas: contado.totalConsultas, itens: contado.consultas.map(c => ({ ...c, id: 'i' })) })),
     reservarItem: vi.fn(async () => true), concluirItem: vi.fn(async (_id: string, _estado: string) => {}), finalizar: vi.fn(async () => {}) };
-  const simular = vi.fn(async () => ({ ok: true }));
+  const emitir = vi.fn(async () => ({ estado: 'emitida' as const, entrega:'nao_enviada',semContato:false }));
   await processarLoteRetroativo(fila,{ permitido: async () => true, faturada: async () => false,
     lerDetalhe: async () => ({ nome: 'Pessoa Ao Vivo', cpf: '52998224725', valorCobradoCentavos: cobradoExecucao }),
-    assinatura: (m,f,id,v) => origem.assinatura(m,f,id,v), simular, enviar: vi.fn(), log: vi.fn() });
+    assinatura: (m,f,id,v) => origem.assinatura(m,f,id,v), emitir, enviar: vi.fn(), log: vi.fn() });
   expect(contado.totalCentavos).toBe(25000);
-  expect(simular).toHaveBeenCalledTimes(cobradoExecucao === 25000 ? 1 : 0);
-  expect(fila.concluirItem).toHaveBeenCalledWith('i', cobradoExecucao === 25000 ? 'simulada' : 'dados_divergentes');
+  expect(emitir).toHaveBeenCalledTimes(cobradoExecucao === 25000 ? 1 : 0);
+  expect(fila.concluirItem).toHaveBeenCalledWith('i', cobradoExecucao === 25000 ? 'emitida' : 'dados_divergentes');
   expect(JSON.stringify(fila.concluirItem.mock.calls)).not.toMatch(/52998224725|Pessoa Ao Vivo|25000|26000/);
 });
 it('ausência de cobrado ao vivo exclui; consulta fora da leitura ao vivo não entra no escopo', async () => {

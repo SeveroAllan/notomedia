@@ -105,12 +105,14 @@ export class PostgresEmissaoApiRepositorio implements EmissaoApiRepositorio {
     const client = clientExterno ?? await this.pool.connect();
     try {
       if (!clientExterno) await client.query('begin');
+      const contatoLote = params.origem === 'lote';
+      if (contatoLote && params.contatoPaciente && !/^\d{10,13}$/.test(params.contatoPaciente)) throw Error('CONTATO_PACIENTE_INVALIDO');
       const sql = `
         insert into solicitacoes_nota (
           referencia_externa, medico_id, paciente_id, valor_servico_centavos,
           xdesc_serv, ctrib_nac, cnbs, cclass_trib, cind_op,
-          datas_consulta_texto, origem, status, fila, tentativas
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pronta', 'pronta', 0)
+          datas_consulta_texto, origem, status, fila, tentativas${contatoLote ? ', contato_paciente_encriptado' : ''}
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pronta', 'pronta', 0${contatoLote ? ', case when $12::text is null then null else pgp_sym_encrypt($12,$13) end' : ''})
         returning id
       `;
       const values = [
@@ -118,6 +120,7 @@ export class PostgresEmissaoApiRepositorio implements EmissaoApiRepositorio {
         params.xdescServ, params.ctribNac, params.cnbs ?? null, params.cclassTrib ?? null,
         params.cindOp ?? null, params.datasConsultaTexto ?? null, params.origem ?? 'api'
       ];
+      if (contatoLote) values.push(params.contatoPaciente ?? null, this.chaveCriptografia);
       const { rows } = await client.query(sql, values);
       const solicitacaoId = rows[0].id;
       await client.query(`

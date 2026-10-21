@@ -22,7 +22,7 @@ import { SefinNacionalClient } from '../io/fiscal/sefin-nacional-client.js';
 import { processarItemFila } from './processar-item-fila.js';
 import { type NotificadorAlertas } from './notificar-erro-medico.js';
 
-export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processarLote?: () => Promise<boolean>) {
+export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processarLote?: (executor: import('../io/postgres/postgres-emissao-lote.js').ExecutorFiscalLote) => Promise<boolean>) {
   const workerId = `embedded-${process.pid}-${randomUUID().slice(0, 6)}`;
   const filaRepo = new PostgresFilaRepositorio(pool, config.agenteFiscalAtivo, config.emissaoComprovanteHomologacaoAtiva);
   const meuDanfeClient = config.meuDanfeApiKey ? new MeuDanfeClient(config.meuDanfeApiKey) : undefined;
@@ -82,7 +82,8 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processa
   const loop = async () => {
     while (ativo) {
       try {
-        if (await processarLote?.()) continue;
+        if (emissorComprovante && await processarLote?.({ emissorDps:emissorComprovante,
+          entregar:(medicoId,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId,solicitacaoId},evolutionClient) })) continue;
         const item = await filaRepo.buscarETravarProximoItem(workerId);
         if (!item) {
           await new Promise((resolve) => setTimeout(resolve, 5000));

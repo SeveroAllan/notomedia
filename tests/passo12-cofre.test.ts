@@ -20,7 +20,7 @@ it('cofre consulta portal falso sob demanda e descarta resultado, sem guardar co
     expect(await cofre.fonteAgenda.consultar({ medicoId: 'm', referenciaCofre: 'm' })).toEqual({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ valorCobradoAoVivoCentavos: 15000, nomeAoVivo: 'Ana Ficticia', pacienteId: '456', idExterno: '123', telefonePaciente: '11999990000', dataHora: '2026-10-18', status: 'realizada', valorConsultaCentavos: 20000 }] });
     expect(ler).toHaveBeenCalledWith('agenda', true, expect.objectContaining({ janelaDias: 90, agora: expect.any(Date) }));
     expect(cofre.resultado('m')).toBeNull();
-    expect(await cofre.detalheAoVivo('m', '123')).toEqual({ nome: 'Ana Ficticia', cpf: '52998224725', valorCobradoCentavos: 15000 });
+    expect(await cofre.detalheAoVivo('m', '123')).toEqual({ nome: 'Ana Ficticia', cpf: '52998224725', contato: { celular: '11999990000', telefone: null }, valorCobradoCentavos: 15000 });
     expect(cofre.resultado('m')).toBeNull();
     ler.mockResolvedValueOnce({ consultas: [] });
     expect(await cofre.fonteAgenda.consultar({ medicoId: 'm', referenciaCofre: 'm' })).toEqual({ tipo: 'erro', codigo: 'SINCRONIZACAO_INCOMPLETA' });
