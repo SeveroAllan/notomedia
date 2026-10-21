@@ -1,7 +1,7 @@
+import { RASCUNHO_FALLBACK_CONVERSA, FALA_PROTECAO_CREDENCIAL_AGENDA } from './falas.js';
 import { formatarPendencias } from './pendencias-medico.js';
 import { contemCredencialAgenda, podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
-import { RASCUNHO_FALLBACK_CONVERSA } from './conversador-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
 import { orquestrarComunicacao } from './orquestrar-comunicacao.js';
@@ -136,7 +136,7 @@ export async function processarComunicacaoMedico(
       }
       if (entrada.respostaMedico && contemCredencialAgenda(entrada.respostaMedico.texto) && deps.conversaLivreAtiva) {
         deps.log('erro', registroErroNoto('COMUNICACAO_ENTRADA_PROTEGIDA', 'acionavel', { etapa: 'entrada' }));
-        try { await enviarFala(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], entrada.chaveProcessamento); }
+        try { await enviarFala([FALA_PROTECAO_CREDENCIAL_AGENDA], entrada.chaveProcessamento); }
         catch { deps.log('erro', registroErroNoto('COMUNICACAO_RESPOSTA_PROTEGIDA_FALHOU', 'tecnico', { etapa: 'entrada' })); }
         return { tipo: 'nenhuma' };
       }

@@ -1,3 +1,4 @@
+import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, FALA_NOVO_LINK_AGENDA } from '../onboarding/falas.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import type { CofreTribemd } from './tribemd-cofre.js';
@@ -84,9 +85,9 @@ export class LinksCofre {
         }
         try {
             const url = `${this.deps.origem}/c/${token}`;
-            const baloes = opcoes.reenvio ? ['Claro. Aqui está o novo link seguro:', url] : [
-                'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.',
-                'Por segurança, eu não recebo senha pela conversa. Seu login e senha da agenda vão só neste link seguro, que vale por 15 minutos e só pode ser usado uma vez.',
+            const baloes = opcoes.reenvio ? [FALA_NOVO_LINK_AGENDA, url] : [
+                FALA_PEDIDO_CONEXAO_AGENDA,
+                FALA_SEGURANCA_LINK_AGENDA,
                 url
             ];
             let motivo: 'simulado' | 'enviado' | undefined;

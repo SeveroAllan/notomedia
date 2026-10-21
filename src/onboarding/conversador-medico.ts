@@ -1,3 +1,4 @@
+import { RASCUNHO_FALLBACK_CONVERSA, FALA_LINK_ANTERIOR_VALIDO, PERGUNTA_INICIO_NOTAS } from './falas.js';
 import { formatarPendencias } from './pendencias-medico.js';
 import { perguntaLote, type LoteRetroativo } from './lote-retroativo.js';
 import { podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
@@ -8,7 +9,7 @@ import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
 // Fallback da conversa livre, também utilizado no teste de homologação.
-export const RASCUNHO_FALLBACK_CONVERSA = 'Não consegui entender direito. Posso te ajudar com as notas fiscais. O que você precisa?';
+export { RASCUNHO_FALLBACK_CONVERSA } from './falas.js';
 
 const falaSchema = z.object({ semAgendaDigital: z.boolean().optional(), intencaoConexao: z.enum(['pedir_novo_link', 'informar_conexao']).nullable().optional(), reacao: z.enum(REACOES_PERMITIDAS).optional().catch(undefined), acao: z.enum(['listar_consultas_sem_notas', 'enviar_link_cofre_agenda']).nullable().optional(), fala: z.array(z.string().trim().min(1).max(500)).min(1).max(3) }).strict();
 const revisaoManualSchema = z.object({ semAgendaDigitalAtual: z.boolean(), evidencia: z.string().trim().min(1).max(2000).nullable(),
@@ -46,7 +47,7 @@ export class ConversadorMedico {
       if (resultado?.ferramenta === 'listar_consultas_sem_notas' && resultado.dadosNaoConfiaveis?.motivo === 'LEITURA_AGENDA_SEM_PERMISSAO') return { fala: ['Sua conta não tem permissão para ler a agenda. Confira essa permissão com o administrador da clínica antes de tentar novamente.'], acao: null };
       if (lista) {
         const inicio = resultado.dadosNaoConfiaveis?.dataInicio;
-        if (!inicio) return { fala: ['Desde quando você não emite notas?'], acao: null };
+        if (!inicio) return { fala: [PERGUNTA_INICIO_NOTAS], acao: null };
         return { fala: formatarPendencias({ ...resultado.dadosNaoConfiaveis, ok: true }, inicio).fala, acao: null };
       }
       const espera = resultado?.ferramenta === 'enviar_link_cofre_agenda' && resultado.dadosNaoConfiaveis?.motivo === 'LIMITE_PEDIDOS';
@@ -129,7 +130,7 @@ export class ConversadorMedico {
       const manual = !conectada && (semAgendaDigital || validada.semAgendaDigital === true);
       if (manual) validada.acao = null;
       if (!manual && (validada.intencaoConexao === 'pedir_novo_link' || validada.acao === 'enviar_link_cofre_agenda') && contextoConexao?.link?.enviado && !contextoConexao.link.usado && !contextoConexao.link.expirado) {
-        return { fala: ['O link anterior continua válido; pode usar o mesmo.'], acao: null, intencaoConexao: validada.intencaoConexao };
+        return { fala: [FALA_LINK_ANTERIOR_VALIDO], acao: null, intencaoConexao: validada.intencaoConexao };
       }
       if (validada.acao === 'enviar_link_cofre_agenda' && !podeSolicitarLinkAgenda((entrada.estado as { agenda?: { conectada?: boolean } })?.agenda?.conectada === true, linkCofreJaSolicitado, validada.intencaoConexao, contextoConexao)) validada.acao = null;
       if (validada.fala.some(texto => /(?:n[aã]o (?:h[aá]|existem|encontrei)|nenhuma|zero|sem) (?:nenhuma? |qualquer )?pend[eê]ncias?/i.test(texto))) {

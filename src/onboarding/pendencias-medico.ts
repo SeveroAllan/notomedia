@@ -1,3 +1,4 @@
+import { PERGUNTA_INICIO_NOTAS, FALA_DATA_INICIO_NECESSARIA } from './falas.js';
 import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
@@ -91,7 +92,7 @@ export class PendenciasMedico {
   }
   private async pedirData(medicoId: string, conversa: string, chave: string) {
     const primeira = await this.repo.perguntarData(medicoId);
-    await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:data`, [primeira ? 'Desde quando você não emite notas?' : 'Preciso da data de início para conferir o período que você quer.']);
+    await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:data`, [primeira ? PERGUNTA_INICIO_NOTAS : FALA_DATA_INICIO_NECESSARIA]);
   }
   async responder(entrada: { medicoId: string; conversa: string; chave: string; texto: string; mensagens: string[]; agora: Date; agendaConectada?: boolean; aoInicio?: (desde: string) => Promise<void>; aoEmitir?: (desde: string | null) => Promise<void> }) {
     if (!await this.deps.permitido(entrada.medicoId)) return false;

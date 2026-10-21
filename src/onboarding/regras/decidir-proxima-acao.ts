@@ -1,3 +1,4 @@
+import { PERGUNTA_INICIO_NOTAS } from '../falas.js';
 import { z } from 'zod';
 import { CONFIANCA_MINIMA_COMPROVANTE } from '../../atendimento/comprovante.js';
 
@@ -101,14 +102,14 @@ export function montarBoasVindas(
     'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
     'Se você pedir, também entrego uma nota nova ou antiga por aqui.'
   ];
-  if (!ultimaNota?.paciente) return [...baloes, 'Desde quando você não emite notas?'];
+  if (!ultimaNota?.paciente) return [...baloes, PERGUNTA_INICIO_NOTAS];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
   const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
-  const pergunta = 'Desde quando você não emite notas?';
+  const pergunta = PERGUNTA_INICIO_NOTAS;
   return [...baloes, resumo.slice(0, 500), pergunta];
 }
 
@@ -135,7 +136,7 @@ export function interpretarRespostaNota(texto: string, dataMensagem: string): { 
 
 export function montarPerguntaComunicacao(acao: ProximaAcaoNoto): string | null {
   if (acao.tipo === 'perguntar_nota_pendente' || acao.tipo === 'reperguntar' && acao.pergunta === 'nota_pendente') {
-    return 'Desde quando você não emite notas?';
+    return PERGUNTA_INICIO_NOTAS;
   }
   if (acao.tipo === 'pedir_agenda' || acao.tipo === 'reperguntar' && acao.pergunta === 'agenda') {
     return 'Para eu achar suas consultas, preciso da sua agenda. Posso te mandar o link?';
