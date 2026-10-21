@@ -268,3 +268,43 @@ it('dadoCadastralIsolado aceita só CPF válido, telefone, data e valor; nunca t
   for (const t of ['123.456.789-09', '12345678909', '(51) 99352-7271', '51993527271', '21/10', '05/10/2026', 'R$ 150,00']) expect(dadoCadastralIsolado(t), t).toBe(true);
   for (const t of ['111.111.111-11', 'senha 123.456.789-09', 'abc12345678901', 'Xk9#mP2$vL8@qR']) expect(dadoCadastralIsolado(t), t).toBe(false);
 });
+
+it('Certo após lista assinada não executa nova leitura e narra a recusa pela IA',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'conversa'};
+ await c.memoria.registrarFala('m','c','noto:lista-anterior','7 consultas sem nota desde 05/10/2026:\nEm 05/10/2026: [PACIENTE].','noto');
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  const d=JSON.parse(msgs[1].content);expect(d.fatos.listaRecente).toBe(true);
+  if(!d.resultadoFerramenta)return JSON.stringify({fala:['Vou conferir.'],acao:'listar_pendencias'});
+  expect(d.resultadoFerramenta).toEqual({ok:false,motivo:'LISTA_JA_ENVIADA',executada:false});
+  return JSON.stringify({fala:['Perfeito. Quer conferir os valores ou preparar a emissão desse período?'],acao:null});
+ });
+ await c.turno('certo','Certo.');expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(c.enviar).toHaveBeenCalledExactlyOnceWith(['Perfeito. Quer conferir os valores ou preparar a emissão desse período?'],'certo');
+ expect(c.enviar.mock.calls.flatMap(([fala])=>fala).join('\n')).not.toContain('consultas sem nota desde');
+});
+it.each(['','Veja o que encontrei.'])('detecta o cabeçalho real do formatador com moldura %j, após leitura da memória',async moldura=>{
+ const {formatarPendencias}=await import('../src/onboarding/pendencias-medico.js');
+ const lista=formatarPendencias({ok:true,total:1,consultas:[{paciente:'Pessoa Ficticia',dataHora:'2026-10-05T14:00Z'}]},'2026-10-05',moldura);
+ const c=cenario();await c.memoria.registrarFala('m','c','noto:lista-anterior',lista.falaMemoria.join('\n'),'noto');
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  expect(JSON.parse(msgs[1].content).fatos.listaRecente).toBe(true);return '{"fala":["Qual próximo passo você prefere?"],"acao":null}';
+ });
+ await c.turno('certo','Certo.');expect(c.executar).not.toHaveBeenCalled();
+});
+it('sem lista nas falas Noto, listar pendências continua executando normalmente',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'conversa'};
+ await c.memoria.registrarFala('m','c','medico:lista-citada','7 consultas sem nota desde 05/10/2026:');
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  const d=JSON.parse(msgs[1].content);expect(d.fatos.listaRecente).toBe(false);
+  return JSON.stringify(d.resultadoFerramenta?{fala:['Conferi o período.'],acao:null}:{fala:['Conferindo.'],acao:'listar_pendencias'});
+ });
+ await c.turno('listar','Veja as pendências');expect(c.executar).toHaveBeenCalledOnce();expect(c.completar).toHaveBeenCalledTimes(2);
+});
+it('lista fora das seis falas recentes não mantém o bloqueio',async()=>{
+ const c=cenario();await c.memoria.registrarFala('m','c','noto:lista-antiga','7 consultas sem nota desde 05/10/2026:','noto');
+ for(let i=0;i<6;i++)await c.memoria.registrarFala('m','c',`noto:posterior:${i}`,`Continuação ${i}`,'noto');
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  expect(JSON.parse(msgs[1].content).fatos.listaRecente).toBe(false);return '{"fala":["O que vamos conferir?"],"acao":null}';
+ });
+ await c.turno('outra','Veja as pendências');expect(c.completar).toHaveBeenCalledOnce();
+});

@@ -102,3 +102,26 @@ it('normalizarAgenda reconhece Tribe/TribeMD dentro de frases naturais', async (
   for (const t of ['Uso o Tribe', 'pelo tribemd', 'Tribe MD', 'uso o TribeMD mesmo', 'Tribe-MD', 'tribe']) expect(normalizarAgenda(t)).toBe('tribemd');
   for (const t of ['Doctoralia', 'tribeca', 'anoto no papel']) expect(normalizarAgenda(t)).not.toBe('tribemd');
 });
+
+it.each([
+ undefined,
+ {evidencia:'atualize a lista',confianca:.95},
+ {evidencia:'lista de novo',confianca:.89},
+ {evidencia:'',confianca:1}
+])('lista recente exige pedido explícito confiável com evidência literal atual: %j',pedidoExplicito=>{
+ const f={...fatos,agenda:{nome:'tribemd',conectada:true},periodo:{desde:'2026-10-05',origem:'conversa'},listaRecente:true};
+ expect(validarAcaoConversa({fala:['Vou conferir.'],acao:'listar_pendencias',parametros:{pedidoExplicito}},f,['listar_pendencias'],'me manda a lista de novo',agora)).toBe('LISTA_JA_ENVIADA');
+});
+it('pedido explícito literal permite atualizar uma lista recente e preserva o protocolo',async()=>{
+ const pedidoExplicito={evidencia:'lista de novo',confianca:.95};
+ const completar=vi.fn(async()=>JSON.stringify({fala:['Vou atualizar.'],acao:'listar_pendencias',parametros:{pedidoExplicito}}));
+ const d=await new ConversadorMedico('k','m',completar).responder({...entrada,texto:'me manda a lista de novo'});
+ expect(d.parametros?.pedidoExplicito).toEqual(pedidoExplicito);
+ const f={...fatos,agenda:{nome:'tribemd',conectada:true},periodo:{desde:'2026-10-05',origem:'conversa'},listaRecente:true};
+ expect(validarAcaoConversa(d,f,['listar_pendencias'],'me manda a lista de novo',agora)).toBeNull();
+});
+it('sem lista recente a leitura continua permitida; lista recente não bloqueia a preparação do lote',()=>{
+ const f={...fatos,agenda:{nome:'tribemd',conectada:true},periodo:{desde:'2026-10-05',origem:'conversa'},listaRecente:false};
+ expect(validarAcaoConversa({fala:['Conferindo.'],acao:'listar_pendencias'},f,['listar_pendencias'],'Veja as pendências',agora)).toBeNull();
+ expect(validarAcaoConversa({fala:['Conferindo.'],acao:'iniciar_lote'},{...f,listaRecente:true},['iniciar_lote'],'Quero emitir',agora)).toBeNull();
+});

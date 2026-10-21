@@ -38,6 +38,7 @@ SAÍDA: JSON estrito {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:em
 const parametrosSchema = z.object({ agenda: z.string().trim().max(80).optional(), desde: z.string().optional(),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional(),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
+  pedidoExplicito: z.object({evidencia:z.string().trim().min(1).max(300),confianca:z.number().min(0).max(1)}).strict().optional(),
   confirmacao: z.object({ intencao: z.enum(['sim','nao','duvida','outro_assunto']), confianca: z.number().min(0).max(1) }).strict().optional()
 }).strict();
 const respostaSchema = z.object({ fala: z.array(z.string().trim().min(1).max(500)).min(1).max(3),
@@ -53,6 +54,7 @@ export interface FatosConversa {
   link: { ativo: boolean; enviados: number; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
   periodo: { desde: string | null; origem: string | null };
   semAgendaDigital: boolean;
+  listaRecente?: boolean;
   lote?: { estado: string; pergunta?: string; perguntaId?: string | null } | null;
   [chave: string]: unknown;
 }
@@ -108,6 +110,10 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if (!fatos.agenda.conectada || normalizarAgenda(fatos.agenda.nome ?? undefined) !== 'tribemd' || fatos.semAgendaDigital) return 'AGENDA_NAO_CONECTADA';
     if ((d.parametros?.desde || d.parametros?.periodo) && !periodoDecisao(d,agora,texto)) return 'PERIODO_INVALIDO';
     if (!periodoDecisao(d, agora,texto) && !validarInicioRetroativo(fatos.periodo.desde, agora)) return 'PERIODO_NECESSARIO';
+  }
+  if (acao === 'listar_pendencias' && fatos.listaRecente === true) {
+    const pedido = d.parametros?.pedidoExplicito;
+    if (!pedido || !pedido.evidencia.trim() || !(pedido.confianca >= .9) || !texto.includes(pedido.evidencia)) return 'LISTA_JA_ENVIADA';
   }
   if (acao === 'registrar_modo_sem_agenda') {
     const evidencia = d.parametros?.evidencia;
