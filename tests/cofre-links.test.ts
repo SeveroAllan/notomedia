@@ -293,6 +293,20 @@ it.each([true, false])('cofre atual notifica conclusão real, conectado=%s, sem 
     } finally { await cofre.encerrar(); await rm(diretorio, { recursive: true, force: true }); }
 });
 
+const introducaoLinkV2 = ['Para conseguir emitir suas notas, o link conecta só a agenda TribeMD, em modo de leitura para cruzar consultas e comprovantes.',
+    'Por segurança, login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'];
+function ferramentasLinkV2(enviar: (id:string,opcoes?:{reenvio?:boolean;fala?:readonly string[]})=>Promise<{ok:boolean;motivo:string}>, snapshotDesatualizado=false) {
+    return {
+        lerFatos: async () => {
+            const c=await links.lerContextoConexao(medicoId,new Date());
+            return {ambiente:'homologacao',agenda:{nome:'tribemd',conectada:false},link:{ativo:snapshotDesatualizado?false:!!c.link&&!c.link.usado&&!c.link.expirado,
+                enviados:snapshotDesatualizado?0:auditoria.filter(a=>a.evento==='enviado').length},periodo:{desde:null,origem:null},semAgendaDigital:false};
+        },
+        permitidas:()=>['pedir_link_agenda','registrar_modo_sem_agenda','nenhuma'],guardarPeriodo:async()=>{},
+        executar:async(d:any,c:any)=>{const r=await enviar(c.medicoId,{...(c.fatos.link.enviados?{reenvio:true}:{}),fala:d.fala});return {jaRespondida:r.ok&&r.motivo==='enviado',dados:r};}
+    };
+}
+
 it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica reentrega antes do envio', async () => {
     const historico = new HistoricoComunicacaoEmMemoria();
     for (const [chave, acao] of [['inicio', { tipo: 'boas_vindas', ultimaNota: null }], ['pergunta', { tipo: 'perguntar_nota_pendente' }]] as const) {
@@ -304,13 +318,16 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: unknown }>) => {
         const dados = JSON.parse(String(mensagens[1].content));
         if (dados.resultadoFerramenta) { return '{"fala":["Você pode pedir outro link em uma hora."],"acao":null}'; }
-        return '{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}';
+        return JSON.stringify({fala:introducaoLinkV2,acao:'pedir_link_agenda'});
     });
-    const deps = { ativo: true, conversaLivreAtiva: true, historico, conversador: new ConversadorMedico('chave', 'modelo', completar),
+    const memoriaPersistida=new PostgresMemoriaConversaMedico(new BancoConversaFalso() as unknown as pg.Pool);
+    // Snapshot antigo permite a tentativa; o cofre continua assinando o limite real sob a trava existente.
+    const ferramenta=ferramentasLinkV2(async id=>{const r=await links.solicitarLinkCofre(id,'tribemd');resultados.push(r);return r;},true);
+    const deps = { ativo: true, conversaLivreAtiva: true, historico, memoriaPersistida,ferramentas:ferramenta,conversador: new ConversadorMedico('chave', 'modelo', completar),
         listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda: async (id: string) => { const r = await links.solicitarLinkCofre(id, 'tribemd'); resultados.push(r); return r; },
         lerEstado: async () => ({ estado: { agora: new Date(), fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const }, agenda: { nome: 'tribemd', conectada: false }, ultimaNota: null } }),
         extratorResposta: { extrair: async () => ({ temNota: 'fora_do_assunto' as const, desde: null, confianca: 0.95 }) }, log: vi.fn(), aoConversar: vi.fn() };
-    const evento = { medicoId, chaveProcessamento: 'link-0', agora: new Date(), respostaMedico: { texto: 'Envie o link para conectar minha agenda', dataMensagem: '2026-10-20' } };
+    const evento = { medicoId, chaveConversa:'conversa', chaveProcessamento: 'link-0', agora: new Date(), respostaMedico: { texto: 'Envie o link para conectar minha agenda', dataMensagem: '2026-10-20' } };
     await processarComunicacaoMedico(evento, deps);
     await processarComunicacaoMedico(evento, { ...deps, conversador: new ConversadorMedico('chave', 'modelo', completar) });
     expect(textos).toHaveLength(3);
@@ -318,7 +335,7 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     expect(textos).toHaveLength(9); expect(await salvos()).toHaveLength(3);
     expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 }]);
     expect(completar).toHaveBeenCalledTimes(5); expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['Você pode pedir outro link em uma hora.'], 'link-3');
-    const chamada = completar.mock.calls.at(-1)!; expect(String(chamada[2][0].content)).toContain('Espera real para novo link (servidor): 60 minutos');
+    const chamada = completar.mock.calls.at(-1)!; expect(JSON.parse(String(chamada[2][1].content)).resultadoFerramenta.aguardarMinutos).toBe(60);
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
 
@@ -467,11 +484,11 @@ async function conversaComLinkRealFalso() {
     }
     registrarTextoLink = async e => { await memoria.registrar(e.medicoId, 'conversa', `noto:agenda:link:${e.linkId}:${e.indice}`, e.texto, 'noto'); };
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Resuma')
-        ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : '{"fala":["Vou pedir o link."],"acao":"enviar_link_cofre_agenda"}');
-    const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
+        ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : JSON.stringify({fala:introducaoLinkV2,acao:'pedir_link_agenda'}));
+    const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean; fala?:readonly string[] }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
     const aoConversar = vi.fn(async (_fala: string[]) => {});
     const deps = { ativo:true, conversaLivreAtiva:true, memoriaPersistida:memoria, memoriaConversa:new MemoriaConversaMedico(), historico,
-        conversador:new ConversadorMedico('k','m',completar), aoConversar, enviarLinkCofreAgenda:enviarLink,
+        conversador:new ConversadorMedico('k','m',completar), aoConversar, ferramentas:ferramentasLinkV2(enviarLink), enviarLinkCofreAgenda:enviarLink,
         listarConsultasSemNota:vi.fn(), lerContextoConexao:(id:string, instante:Date)=>links.lerContextoConexao(id, instante),
         extratorResposta:{extrair:async()=>({temNota:'fora_do_assunto' as const,desde:null,confianca:.95})},
         lerEstado:async()=>({estado:{fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:{nome:null,conectada:false},ultimaNota:null}}),log:vi.fn() };
@@ -488,8 +505,8 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
         if(msgs[0].content.startsWith('Resuma'))return '{"resumo":"O médico usa agenda de papel; já recebeu a explicação da conexão e o link."}';
         const contexto=JSON.parse(msgs[1].content);expect(contexto.texto).toBe('não tenho agenda digital, uso agenda de papel mesmo');
         expect(contexto.mensagens.join(' ')).toContain(textos[0]);expect(contexto.mensagens.join(' ')).toContain(textos[1]);
-        expect(msgs[0].content).toContain('não repetir');
-        return '{"fala":["Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta."],"semAgendaDigital":true,"acao":null}';
+        expect(contexto.fatos.link.ativo).toBe(true);
+        return '{"fala":["Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta."],"acao":"registrar_modo_sem_agenda","parametros":{"evidencia":"não tenho agenda digital","confianca":1}}';
     });
     await c.turno('papel','não tenho agenda digital, uso agenda de papel mesmo');
     expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta.'],'papel');
@@ -498,9 +515,9 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
 it('novo link depois de expirar é curto e não repete o motivo da conexão ou a explicação de segurança',async()=>{
     const c=await conversaComLinkRealFalso();await c.turno('primeiro','Preciso emitir.');
     if(bancoReal)await bancoReal.query("update cofre_links set expira_em=now()-interval '1 second'");else registros[0].expira_em=new Date(Date.now()-1000);
-    c.completar.mockImplementation(async (_k,_m,msgs)=>msgs[0].content.startsWith('Resuma') ? '{"resumo":"O médico recebeu um novo link seguro."}' : '{"fala":["Claro."],"acao":"enviar_link_cofre_agenda","intencaoConexao":"pedir_novo_link"}');
+    c.completar.mockImplementation(async (_k,_m,msgs)=>msgs[0].content.startsWith('Resuma') ? '{"resumo":"O médico recebeu um novo link seguro."}' : '{"fala":["Claro. Aqui está o novo link seguro:"],"acao":"pedir_link_agenda"}');
     await c.turno('novo','Me manda um novo link.');
-    expect(c.enviarLink).toHaveBeenLastCalledWith(medicoId,{reenvio:true});expect(textos.slice(3)).toHaveLength(2);
+    expect(c.enviarLink).toHaveBeenLastCalledWith(medicoId,{reenvio:true,fala:['Claro. Aqui está o novo link seguro:']});expect(textos.slice(3)).toHaveLength(2);
     expect(textos[3]).toBe('Claro. Aqui está o novo link seguro:');expect(textos[4]).toMatch(/^https?:\/\/.+\/c\/[A-Za-z0-9_-]{43}$/);
     expect(textos.filter(t=>t.startsWith('Para conseguir emitir'))).toHaveLength(1);expect(textos.filter(t=>t.startsWith('Por segurança'))).toHaveLength(1);
 });
@@ -523,7 +540,7 @@ it('pedido de novo com link ativo informa validade, conserva a mesma URL e uma �
     const c = await conversaComLinkRealFalso();
     await c.turno('inicial', 'Uso TribeMD e preciso emitir uma nota.');
     const url = textos[2];
-    c.completar.mockResolvedValue('{"fala":["Vou enviar o link seguro."],"acao":"enviar_link_cofre_agenda","intencaoConexao":"pedir_novo_link"}');
+    c.completar.mockResolvedValue('{"fala":["O link anterior continua válido; pode usar o mesmo."],"acao":null}');
     await c.turno('de-novo', 'me manda o link de novo');
     expect(await salvos()).toHaveLength(1); expect(c.enviarLink).toHaveBeenCalledOnce();
     expect(textos).toHaveLength(3); expect(textos.at(-1)).toBe(url);

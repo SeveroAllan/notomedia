@@ -7,3 +7,5 @@ export const RASCUNHO_FALLBACK_CONVERSA = 'Não consegui entender direito. Posso
 export const FALA_NOVO_LINK_AGENDA = 'Claro. Aqui está o novo link seguro:';
 export const PERGUNTA_INICIO_NOTAS = 'Desde quando você não emite notas?';
 export const FALA_DATA_INICIO_NECESSARIA = 'Preciso da data de início para conferir o período que você quer.';
+
+export const ERRO_CONVERSA = 'Não consegui concluir agora. Pode tentar de novo em instantes?';

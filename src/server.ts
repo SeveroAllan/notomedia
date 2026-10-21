@@ -1,6 +1,7 @@
-import { PendenciasMedico, classificarPendencias } from './onboarding/pendencias-medico.js';
+import { contemCredencialAgenda } from './cofre/links.js';
+import { PendenciasMedico, classificarPendencias, formatarPendencias } from './onboarding/pendencias-medico.js';
 import { PostgresContextoPendencias } from './io/postgres/postgres-contexto-pendencias.js';
-import { ConversaLoteRetroativo, interpretarDataRetroativo, interpretarReenvioLote } from './onboarding/lote-retroativo.js';
+import { ConversaLoteRetroativo, interpretarDataRetroativo, interpretarReenvioLote, perguntaLote } from './onboarding/lote-retroativo.js';
 import { PostgresLotesEmissao } from './io/postgres/postgres-lotes-emissao.js';
 import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
 import { PostgresEmissaoLote, type ExecutorFiscalLote } from './io/postgres/postgres-emissao-lote.js';
@@ -45,9 +46,9 @@ import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
-import { ConversadorMedico } from './onboarding/conversador-medico.js';
+import { ConversadorMedico, periodoDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
-import { processarComunicacaoMedico } from './onboarding/processar-comunicacao-medico.js';
+import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
 import { orquestrarComprovante } from './fluxos/processar-comprovante.js';
 import { PostgresEmissaoComprovante } from './io/postgres/postgres-emissao-comprovante.js';
@@ -250,10 +251,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const lotes = new PostgresLotesEmissao(pool, config.appPepper);
   const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
   const emissaoLote = new PostgresEmissaoLote(pool, config.encryptionKey, config.appPepper, lotePermitido);
-  const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
+  const diagnosticarPeriodo = async (medicoId:string, desde:string, ate:string) => {
+    const {rows} = await pool.query<{id_externo:string}>(`select id_externo from public.noto_consultas_sincronizadas
+      where medico_id=$1 and fonte='tribemd' and status='realizada'
+      and data_hora>=($2::date::timestamp at time zone 'America/Sao_Paulo') and data_hora<=$3::timestamptz`,[medicoId,desde,ate]);
+    let jaEmitidas=0;
+    for(const r of rows) if(await new PostgresEmissaoComprovante(pool,'',config.appPepper).consultaJaFaturada(medicoId,'tribemd',r.id_externo)) jaEmitidas++;
+    return {totalNoPeriodo:rows.length,jaEmitidas};
+  };
+  const criarRetroativo = (narrar?: ContextoAcaoConversa['narrar'], decisao?: DecisaoConversa, medicoId?: string, perguntaInterpretada?: string) => config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
     ultimaFala: (id, conversa) => memoriaPersistida!.lerUltimaFalaNoto(id, conversa),
-    reenviar: async (medicoId,conversa,chave,texto) => {
+    reenviar: narrar ? undefined : async (medicoId,conversa,chave,texto) => {
       const candidatos=await emissaoLote.pendentesReenvio(medicoId);
       if(!candidatos.length || !await interpretarReenvioLote(iaApiKey,iaModeloTexto,completarIa,texto)) return false;
       const r=await emissaoLote.reenviarSemContato(medicoId,chave,candidatos,(id,consulta)=>cofres.detalheAoVivo(id,consulta),
@@ -262,17 +271,32 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido; confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas; vou verificar o que impediu a entrega.' : ''}`]});
       console.info(JSON.stringify({evento:'LOTE_REENVIO',medicoId,...r}));return true;
     },
-    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir, somenteContagem = false) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo), !somenteContagem); },
+    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir, somenteContagem = false) => {
+      if (!narrar) { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo), !somenteContagem); return; }
+      const resultado = await listarPendencias(id, {nome:'tribemd',conectada:true}, agora, inicio);
+      if (resultado.ok && 'valoresAoVivo' in resultado) await aoConcluir(resultado.valoresAoVivo);
+      else await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:resultado:${chave}`,
+        fala:await narrar({ferramenta:'iniciar_lote',ok:false,motivo:resultado.motivo})});
+    },
+    narrarContagem: narrar ? async resultado => {
+      const diagnostico = resultado.contagem.totalConsultas ? {} : await diagnosticarPeriodo(medicoId!, resultado.desde, resultado.ate);
+      const fala = await narrar({ferramenta:'iniciar_lote',ok:true,desde:resultado.desde,
+        totalConsultas:resultado.contagem.totalConsultas,totalCentavos:resultado.contagem.totalCentavos,
+        semValor:resultado.contagem.semValor,...diagnostico,perguntaAssinada:resultado.perguntaConfirmacao});
+      // A pergunta fiscal conserva exatamente escopo/valor e a interpretação já vinculada no lote.
+      return resultado.perguntaConfirmacao ? [resultado.perguntaConfirmacao] : fala.slice(0,1);
+    } : undefined,
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
     contar: (id, desde, ate, valoresAoVivo) => {
       if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');
       return lotes.contarConsultasPeriodo(id, desde, ate, valoresAoVivo);
     },
-    interpretarData: (texto, agora) => interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
-    interpretarConfirmacao: (texto, pergunta) => interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
+    interpretarData: (texto, agora) => decisao ? Promise.resolve(periodoDecisao(decisao,agora,texto)) : interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
+    interpretarConfirmacao: (texto, pergunta) => decisao ? Promise.resolve(pergunta === perguntaInterpretada ? confirmacaoDaDecisao(decisao) : {intencao:'duvida' as const,confianca:0}) : interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
     enviar: async (medicoId, conversa, chave, fala, aoEnviar) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, aoEnviar }); },
     log: mensagem => console.info(mensagem)
   }) : undefined;
+  const retroativo = criarRetroativo();
   if (retroativo) {
     app.locals.processarLoteRetroativo = async (executor?: ExecutorFiscalLote) => executor ? processarLoteRetroativo(lotes, {
       permitido: lotePermitido,
@@ -285,21 +309,59 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }) : false;
   }
 
+  const ferramentasConversa: FerramentasConversa = {
+    lerFatos: async (medicoId,agora) => {
+      const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
+      const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,await cofres.statusAgenda(medicoId),config.preparacaoFiscalAtiva===true);
+      const conexao = await cofres.links?.lerContextoConexao(medicoId,agora);
+      const periodo = await contextoPendencias.ler(medicoId);
+      const lote = retroativo ? await lotes.ativo(medicoId) : null;
+      const enviados = await pool.query(`select count(*)::int as total from cofre_links l join cofre_links_auditoria a on a.link_id=l.id
+        where l.medico_id=$1 and a.evento='enviado'`,[medicoId]);
+      return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
+        link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
+          usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
+        periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
+        lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
+        homologacaoInformada:false};
+    },
+    permitidas: fatos => fatos.ambiente!=='homologacao'?[]:['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??'')?['nenhuma']:
+      ['nenhuma',...(!fatos.agenda.conectada?['registrar_modo_sem_agenda']:[]),
+        ...(!fatos.agenda.conectada&&!fatos.link.ativo&&!fatos.semAgendaDigital?['pedir_link_agenda']:[]),
+        ...(fatos.agenda.conectada&&!fatos.semAgendaDigital?['listar_pendencias',...(retroativo?['iniciar_lote']:[])]:[])],
+    guardarPeriodo:(id,desde)=>contextoPendencias.definirInicio(id,desde),
+    executar:async (decisao,c) => {
+      if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
+      if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
+        await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada');
+        return {jaRespondida:true};
+      }
+      if(decisao.acao==='pedir_link_agenda') {
+        await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
+        const r=await cofres.links?.solicitarLinkCofre(c.medicoId,'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
+        return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
+      }
+      const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
+      if(decisao.acao==='iniciar_lote') {
+        await criarRetroativo(c.narrar,decisao,c.medicoId)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);
+        return {jaRespondida:true};
+      }
+      const r=await listarPendencias(c.medicoId,c.fatos.agenda,c.agora,desde);
+      console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',ok:r.ok,total:'total' in r?r.total:undefined}));
+      if(!r.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:r.motivo}};
+      const lista=formatarPendencias(r,desde,'',2);
+      return {dados:{ferramenta:'listar_pendencias',ok:true,total:'total' in r?r.total:undefined,desde},falaAssinada:lista.fala,falaMemoria:lista.falaMemoria};
+    }
+  };
+
   const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string) => {
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { retroativo, pendencias, lerInicioPendencias: async id => (await contextoPendencias.ler(id)).dataInicio, aguardaInicioRetroativo: retroativo ? async id => (await lotes.ativo(id))?.estado === 'aguardando_data_inicio' : undefined, prepararPendencias: async (id, instante) => {
-      if (!await pendenciasPermitidas(id)) return { ok: false, motivo: 'ENVIO_BLOQUEADO' };
-      const r = await sincronizarAgendaHomologacao(id, instante);
-      return r.tipo === 'erro' ? { ok: false, motivo: r.codigo } : { ok: true };
-    }, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
+    }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
-      listarConsultasSemNota: (id, agenda, instante) => listarPendencias(id, agenda, instante),
-      enviarLinkCofreAgenda: async (id, opcoes) => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd', opcoes) : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
-      lerContextoConexao: cofres.links ? (id, agora) => cofres.links!.lerContextoConexao(id, agora) : undefined,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
@@ -844,6 +906,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         comunicacaoMedicoAtiva: config.comunicacaoMedicoAtiva,
         aoReceberMensagemMedico: async contexto => {
           if (config.conversaLivreAtiva) await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp);
+          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
           if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
           if (emissaoComprovante && config.envioMedicoRealAtivo) {
             const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
@@ -852,7 +915,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               const c = unica?.confirmacao;
               const pergunta = c?.paciente && c?.dataEnvioPagamento && c?.dataConsulta
                 ? `Autoriza emitir a nota de ${c.paciente}, pagamento enviado em ${c.dataEnvioPagamento}, consulta de ${c.dataConsulta}?` : 'Não há uma oportunidade única vinculada a uma pergunta de emissão.';
-              const interpretacao = await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
+              const usarDecisor = config.conversaLivreAtiva && conversador && await comunicacaoHomologacao.medicoPermitido(contexto.medicoId);
+              const memoriaConfirmacao = usarDecisor ? await memoriaPersistida!.lerContextoParaModelo(contexto.medicoId,contexto.chaveConversa) : null;
+              const interpretacao = usarDecisor ? confirmacaoDaDecisao(await conversador.responder({texto:contexto.texto,mensagens:memoriaConfirmacao!.historicoRecente,
+                resumo:memoriaConfirmacao!.resumo?.resumo??null,agora:new Date(),acoesPermitidas:['nenhuma'],
+                fatos:{ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+                  lote:{estado:'aguardando_confirmacao_individual',pergunta,perguntaId:c?.perguntaChave},pendentes:pendentes.length}
+              }))
+                : await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
               const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, interpretacao, new Date(),
                 await comunicacaoHomologacao.medicoPermitido(contexto.medicoId), c?.perguntaChave ?? '', contexto.chavePergunta);
               if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
