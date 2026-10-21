@@ -34,6 +34,8 @@ describe('retroativo com escopo e confirmação vinculados', () => {
     await c.conversa.responder('medico', 'conversa', 'sim', 'manda ver', agora, 'pergunta-evolution');
     await c.conversa.responder('medico', 'conversa', 'sim', 'manda ver', agora, 'pergunta-evolution');
     expect(c.repo.confirmar).toHaveBeenCalledOnce(); expect(c.lote().estado).toBe('confirmado');
+    expect(c.falas.some(f=>f.includes('vou emitir as 1 notas agora'))).toBe(true);
+    expect(c.falas.some(f=>f.includes('Nada é enviado a pacientes nos testes.'))).toBe(true);
     expect(c.deps.contar).toHaveBeenCalledOnce(); // não amplia o escopo no sim
   });
   it.each(['outra-pergunta'])('sim com referência divergente não autoriza (%s)', async pergunta => {
@@ -86,8 +88,9 @@ it('worker emite uma vez com emissor falso, pula faturada após confirmação e 
     assinatura: vi.fn(() => 's'), emitir: vi.fn(async () => ({ estado: 'emitida' as const, entrega:'nao_enviada',semContato:false })), enviar: vi.fn(async (_m: string, _chave: string, _fala: string[], _conversa: string) => {}), log: vi.fn() };
   await processarLoteRetroativo(repo, deps); await processarLoteRetroativo(repo, deps);
   expect(deps.emitir).toHaveBeenCalledOnce(); expect(repo.concluirItem.mock.calls.map(c => c[1])).toEqual(['emitida', 'ja_faturada', 'sem_valor']);
-  const resumo = deps.enviar.mock.calls[0][2].join(' '); expect(resumo).toContain('Emiti 1 de 2'); expect(resumo).toContain('1'); expect(resumo).toContain('valor');
-  expect(resumo).not.toMatch(/Simulei|CPF|52998224725|Ana Ficticia/);
+  const resumo = deps.enviar.mock.calls[0][2].join(' '); expect(resumo).toContain('emiti 1 de 2'); expect(resumo).toContain('1'); expect(resumo).toContain('valor');
+  expect(resumo).not.toMatch(/Simulei|CPF|52998224725|Ana Ficticia|Autorização registrada|permissões de envio/);
+  expect(resumo).toContain('Nada foi enviado aos pacientes nos testes.');
   expect(JSON.stringify(repo.concluirItem.mock.calls)).not.toContain('Ana Ficticia'); expect(JSON.stringify(repo.concluirItem.mock.calls)).not.toContain('52998224725');
 });
 
@@ -117,7 +120,7 @@ it('fluxo da conversa até o worker mantém valores congelados e produz resumo r
   await processarLoteRetroativo(repo, { permitido: c.deps.permitido, faturada: vi.fn(async () => false),
     lerDetalhe: vi.fn(async () => ({ nome: 'Pessoa Ao Vivo', cpf: '52998224725', valorCobradoCentavos: 30000 })), assinatura: () => 'valor-travado', emitir,
     enviar: async (_m, _chave, fala) => { c.falas.push(...fala); }, log: vi.fn() });
-  expect(c.lote().estado).toBe('concluido'); expect(emitir).toHaveBeenCalledOnce(); expect(c.falas.join(' ')).toContain('Emiti 1 de 1');
+  expect(c.lote().estado).toBe('concluido'); expect(emitir).toHaveBeenCalledOnce(); expect(c.falas.join(' ')).toContain('emiti 1 de 1');
   expect(c.falas.join(' ')).not.toContain('52998224725'); expect(c.falas.join(' ')).not.toContain('Pessoa Ao Vivo');
 });
 it('valor ao vivo diferente do autorizado não altera o escopo nem emite', async () => {
@@ -188,7 +191,7 @@ it('resumo conta emissão, entrega e falta de contato separadamente sem nomes ne
  const repo={reservar:vi.fn(async()=>{if(reservado)return null;reservado=true;return{id:'l',medicoId:'m',conversa:'c',totalConsultas:3,itens};}),reservarItem:vi.fn(async()=>true),concluirItem:vi.fn(),finalizar:vi.fn()};
  const enviar=vi.fn();const emitir=vi.fn(async()=>({estado:'emitida' as const,entrega:'enviado',semContato:false})).mockResolvedValueOnce({estado:'emitida',entrega:'nao_enviada',semContato:true});
  await processarLoteRetroativo(repo,{permitido:async()=>true,faturada:async()=>false,lerDetalhe:async()=>({nome:'Pessoa Ficticia',cpf:'52998224725',valorCobradoCentavos:30000}),assinatura:()=> 's',emitir,enviar,log:vi.fn()});
- const fala=enviar.mock.calls[0][2];expect(fala[0]).toContain('Emiti 3 de 3');expect(fala[1]).toContain('2 notas entregues');expect(fala[1]).toContain('1 sem contato válido');
+ const fala=enviar.mock.calls[0][2];expect(fala[0]).toContain('emiti 3 de 3');expect(fala[1]).toContain('2 notas entregues');expect(fala[1]).toContain('1 pacientes estão sem contato válido');
  expect(fala).toHaveLength(2);expect(fala.every((s:string)=>s.length<=500)).toBe(true);expect(fala.join(' ')).not.toMatch(/Pessoa Ficticia|52998224725|SIMULAD|ERRO_/);
 });
 it('início pela conversa reutiliza período conhecido, conta e pergunta confirmação sem solicitar data',async()=>{
@@ -229,7 +232,7 @@ it('retomada preserva resultados anteriores e libera a sessão mesmo se o gate l
   ]})),reservarItem:vi.fn(),concluirItem:vi.fn(),finalizar:vi.fn(),liberarReserva:vi.fn() };
   const deps={permitido:vi.fn(async()=>true),faturada:vi.fn(),lerDetalhe:vi.fn(),assinatura:vi.fn(),emitir:vi.fn(),enviar:vi.fn(async (_m:string,_ch:string,_fala:string[],_c:string)=>{}),log:vi.fn()};
   await processarLoteRetroativo(repo,deps);
-  expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 1 de 2 notas autorizadas. 1 precisam de conferência antes de continuar.','1 notas entregues.','1 consultas ficaram de fora por falta de valor. Pode conferir os valores na sua agenda?']);
+  expect(deps.enviar.mock.calls[0][2]).toEqual(['Pronto, emiti 1 de 2 notas em homologação (teste, sem valor fiscal). 1 precisam ser conferidas antes de seguir.','1 notas entregues.','1 consultas ficaram de fora por falta de valor. Pode conferir os valores na sua agenda?']);
   expect(repo.reservarItem).not.toHaveBeenCalled(); expect(deps.emitir).not.toHaveBeenCalled(); expect(deps.lerDetalhe).not.toHaveBeenCalled();
   expect(repo.liberarReserva).toHaveBeenCalledWith('l');
   deps.permitido.mockRejectedValueOnce(Error('falha de banco'));
@@ -251,7 +254,7 @@ it('lote recuperado continua só os itens prontos e resume também as notas ante
   expect(deps.emitir).toHaveBeenCalledOnce();
   expect(repo.concluirItem).toHaveBeenCalledWith('antigo','emitida');
   expect(repo.concluirItem).toHaveBeenCalledWith('pendente','emitida');
-  expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 2 de 2 notas autorizadas.','1 notas entregues. 1 sem contato válido; corrija o contato na agenda e me peça o reenvio.']);
+  expect(deps.enviar.mock.calls[0][2]).toEqual(['Pronto, emiti 2 de 2 notas em homologação (teste, sem valor fiscal).','1 notas entregues. 1 pacientes estão sem contato válido na agenda; corrija e me peça o reenvio.']);
   expect(repo.liberarReserva).toHaveBeenCalledOnce();
 });
 
@@ -268,4 +271,10 @@ it.each([0, 2])('texto/resultado apenas: expõe contagem %i sem alterar preparo,
   expect(c.falas).toEqual([`Conferi ${totalConsultas} consultas no período.`]);
   expect(c.repo.confirmar).not.toHaveBeenCalled();
   expect(c.repo.registrarPergunta).toHaveBeenCalledTimes(totalConsultas?1:0);
+});
+
+it('confirmação e fechamento não usam a frase antiga de autorização', async () => {
+ const {readFile}=await import('node:fs/promises');
+ const antiga=['Autorização registrada para emitir somente essas consultas em homologação.', 'A entrega depende das permissões de envio.'].join(' ');
+ for(const arquivo of ['src/onboarding/lote-retroativo.ts','src/worker/processar-lote-retroativo.ts']) expect(await readFile(arquivo,'utf8')).not.toContain(antiga);
 });

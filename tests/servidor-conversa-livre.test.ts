@@ -380,7 +380,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   const executor={emissorDps:{emitir:vi.fn()},entregar:vi.fn()};
   await app.locals.processarLoteRetroativo(executor); await app.locals.processarLoteRetroativo(executor);
   expect(simular).not.toHaveBeenCalled(); expect(emitir).toHaveBeenCalledOnce(); expect(emitir.mock.calls[0][1]).toBe(executor); expect(itens.mock.calls.map(c => c[1])).toEqual(['emitida','sem_valor']);
-  expect(enviar.mock.calls[3][0].texto).toContain('Emiti 1 de 1'); expect(enviar.mock.calls[4][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[5][0].texto).toContain('valor');
+  expect(enviar.mock.calls[3][0].texto).toContain('emiti 1 de 1'); expect(enviar.mock.calls[4][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[5][0].texto).toContain('valor');
   expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });
 it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as notaas'])('após listar pendências, pedido atual abre lote pelo período e sim simples não relista: %s',async pedido=>{

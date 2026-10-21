@@ -126,7 +126,7 @@ export class ConversaLoteRetroativo {
     const interpretacao = await this.deps.interpretarConfirmacao(texto, perguntaLote(lote));
     const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));
-    await enviar([confirmou ? 'Autorização registrada para emitir somente essas consultas em homologação. A entrega depende das permissões de envio.'
+    await enviar([confirmou ? `Pronto, vou emitir as ${lote.totalConsultas} notas agora, em homologação (teste, sem valor fiscal). Nada é enviado a pacientes nos testes. Aviso por aqui quando terminar.`
       : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não consegui confirmar com segurança. Você autoriza emitir todas as consultas desse período e total em homologação?']);
     return true;
   }
