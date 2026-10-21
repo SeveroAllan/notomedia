@@ -212,11 +212,11 @@ it.each(['LIMITE_PEDIDOS', 'erro', 'simulado', 'COFRE_INDISPONIVEL'])('resultado
   const listarConsultasSemNota = vi.fn();
   const enviarLinkCofreAgenda = vi.fn(async () => { if (motivo === 'COFRE_INDISPONIVEL') throw Error('privado'); return { ok: motivo === 'simulado', motivo }; });
   c.completar.mockResolvedValueOnce('{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}')
-    .mockResolvedValueOnce('{"fala":["O link não foi enviado."],"acao":null}');
+    .mockResolvedValueOnce('{"fala":["Me dá um minutinho para você pedir outro link."],"acao":null}');
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
-  expect(c.completar).toHaveBeenCalledOnce();
-  const texto = motivo === 'LIMITE_PEDIDOS' ? 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.' : motivo === 'simulado' ? 'O envio do link foi simulado; nenhum link foi enviado.' : 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.';
+  expect(c.completar).toHaveBeenCalledTimes(motivo === 'LIMITE_PEDIDOS' ? 2 : 1);
+  const texto = motivo === 'LIMITE_PEDIDOS' ? 'Me dá um minutinho para você pedir outro link.' : motivo === 'simulado' ? 'O envio do link foi simulado; nenhum link foi enviado.' : 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.';
   expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([texto], 'mensagem');
   await processarComunicacaoMedico(entrada, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
@@ -454,7 +454,7 @@ it.each(['expirado', 'usado', 'novo link', 'limite'])('novo pedido interpretado 
   const deps = { ...c.deps, lerContextoConexao, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(evento, deps); await processarComunicacaoMedico(evento, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
-  if (caso === 'limite') expect(JSON.stringify(c.aoConversar.mock.calls)).toContain('aguardar');
+  if (caso === 'limite') { expect(c.aoConversar).toHaveBeenCalledOnce(); expect(JSON.stringify(c.aoConversar.mock.calls)).not.toMatch(/O limite de pedidos|LIMITE_PEDIDOS/); }
   else expect(c.aoConversar).not.toHaveBeenCalled();
 });
 
@@ -476,4 +476,29 @@ it.each(['minha senha é credencial-ficticia-987', 'credencial-ficticia-987', 'c
   expect(c.completar).not.toHaveBeenCalled(); expect(c.extrair).not.toHaveBeenCalled();
   expect(JSON.stringify(c.banco.mensagens)).toBe(antes); expect(JSON.stringify(c.deps.log.mock.calls)).not.toContain(texto);
   expect(c.aoConversar).toHaveBeenCalledOnce();
+});
+
+it('duas recusas de novo link entregam minutos e resposta anterior à IA, mantendo dedup', async () => {
+  const c = await cenario();
+  const respostas = ['Você pode pedir outro link em sete minutos.', 'Faltam seis minutinhos para você pedir um novo link.'];
+  const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => {
+    const dados = JSON.parse(mensagens[1].content);
+    return JSON.stringify(dados.resultadoFerramenta ? { fala: [respostas.shift()], acao: null } :
+      { fala: ['Vou pedir outro link.'], acao: 'enviar_link_cofre_agenda', intencaoConexao: 'pedir_novo_link' });
+  });
+  const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 7 }))
+    .mockResolvedValueOnce({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 7 })
+    .mockResolvedValueOnce({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 6 });
+  const deps = { ...c.deps, conversador: new ConversadorMedico('chave', 'modelo', completar), enviarLinkCofreAgenda, listarConsultasSemNota: vi.fn() };
+  const evento = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Pode mandar um novo link?' } };
+  await processarComunicacaoMedico(evento, deps);
+  await processarComunicacaoMedico({ ...evento, chaveProcessamento: 'nova-cobranca' }, deps);
+  await processarComunicacaoMedico({ ...evento, chaveProcessamento: 'nova-cobranca' }, deps);
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledTimes(2); expect(c.aoConversar).toHaveBeenCalledTimes(2);
+  const falas = c.aoConversar.mock.calls as unknown as Array<[string[], string]>;
+  expect(falas[0][0]).not.toEqual(falas[1][0]); expect(JSON.stringify(falas)).not.toMatch(/limite|regra|contagem|O limite de pedidos/i);
+  expect(completar).toHaveBeenCalledTimes(4);
+  expect(completar.mock.calls[1][2][0].content).toContain('Espera real para novo link (servidor): 7 minutos');
+  expect(completar.mock.calls[3][2][0].content).toContain('Espera real para novo link (servidor): 6 minutos');
+  expect(JSON.parse(completar.mock.calls[3][2][1].content).mensagens).toContain(falas[0][0][0]);
 });

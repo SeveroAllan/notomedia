@@ -77,3 +77,40 @@ Duration    110.61s
 ```
 
 A primeira execução com concorrência padrão teve falhas; a repetição integral acima passou sem falhas. Logs brutos locais: `work/ux-red.log`, `work/ux-focused4.log`, `work/ux-vitest-full.log`, `work/ux-chromium-isolado.log`, `work/ux-vitest-full-serial.log` e `work/ux-typecheck-final.log` (diretório ignorado).
+
+## Steer 3 — contagem de reenvios e resposta de espera
+
+Base `85a1fbf`: typecheck limpo e gate integral anterior de 62 arquivos, 1.029 testes passando e 3 ignorados, no mesmo código antes desta alteração.
+
+Regressão antes da implementação (`work/steer3-red.log`): 5 falhas, 90 passando e 3 ignorados. Falharam os pedidos após expiração/invalidação/uso, o retorno dos minutos na rajada e a passagem das recusas para a IA.
+
+Mudança restrita em produção a `links.ts` e `conversador-medico.ts`:
+
+- Self-join lateral escolhe o link imediatamente anterior do mesmo médico. Só entram na contagem as substituições enquanto ele estava vivo e sem uso. O pedido atual só é bloqueado se também substituir um link vivo: o quarto pedido da rajada seria a terceira substituição; pedidos após expiração/uso/invalidação continuam atendidos.
+- O instante é capturado pelo relógio do banco depois do lock do médico e antes da invalidação, e gravado explicitamente na criação. A invalidação usa seu instante real posterior. Assim o campo de expiração preserva a diferença entre substituir um link vivo e pedir depois de um link já invalidado, sem nova tabela.
+- O banco calcula os minutos restantes, arredondados para cima, até o pedido contado mais antigo sair da janela. O valor segue pelo resultado existente da ferramenta; a IA recebe somente o tempo validado (1–60 minutos), sem o código interno da recusa nesse dado. A frase fixa foi removida. O prompt exige resposta natural, sem contagem/regra/limite, sem status idêntico e sem prometer envio automático.
+
+Testes alterados:
+
+- `cofre-links.test.ts`: fake acompanha a seleção do predecessor, janela, relógio e cálculo de espera. Mantém o quarto pedido bloqueado na rajada; acrescenta quatro pedidos atendidos com predecessor expirado/invalidado/usado e liberação após saída da janela. As expectativas de recusa passam a exigir os minutos. A integração da ferramenta exige a passagem de 60 minutos à IA e preserva os asserts de reentrega, auditoria e bloqueios de envio.
+- `conversador-medico.test.ts`: recusa deixa a tabela de respostas determinísticas e ganha cenário de duas respostas da IA com tempos e histórico atualizados, diferentes entre si e sem a frase antiga/regra interna. Os demais resultados e travas continuam cobertos.
+- `processar-conversa-medico.test.ts`: atualiza os asserts do caminho de recusa para exigir consulta à IA; acrescenta dois turnos com espera 7→6 minutos e reentrega do segundo, verificando histórico, variação da fala e ausência de efeito duplicado.
+
+Verificado com testes locais: cenários acima, minutos presentes na mensagem de sistema, sanitização do resultado, dedup preservado e demais cenários da suíte. A contagem SQL foi revisada e exercitada pelo fake do contrato; não foi executada contra PostgreSQL. Naturalidade e interpretação com OpenAI real continuam dependendo da bateria em homologação; os testes usam provedor simulado.
+
+Sem alterações em flags, ambiente/allowlist, dedup, proteção de credenciais ou validação de origem. Sem banco real, envio real, migration, deploy ou merge.
+
+```text
+npx tsc --noEmit: exit 0
+Focados: 3 arquivos passando; 175 testes passaram, 3 ignorados.
+```
+
+Gate integral desta alteração, `npx vitest run --maxWorkers=1`:
+
+```text
+Test Files  62 passed (62)
+Tests       1035 passed | 3 skipped (1038)
+Duration    93.37s
+```
+
+Sem falhas nesta execução integral. Configuração e timeouts originais preservados. Logs locais ignorados: `work/steer3-typecheck.log`, `work/steer3-focused-final.log`, `work/steer3-full.log`.

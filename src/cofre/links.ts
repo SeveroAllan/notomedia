@@ -47,17 +47,30 @@ export class LinksCofre {
             if (!medico.telefone?.trim()) return { ok: false, motivo: 'SEM_TELEFONE' };
             const status = await this.deps.cofre.status(medicoId);
             if (!['vazio', 'desconectado', 'atencao'].includes(status.estado)) return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
-            const limite = (await cliente.query(`select count(*)::int as total from cofre_links
-                where medico_id=$1 and criado_em>now()-interval '1 hour'`, [medicoId])).rows[0];
-            if (limite.total >= 3) return { ok: false, motivo: 'LIMITE_PEDIDOS' };
+            const limite = (await cliente.query(`with referencia as (select clock_timestamp() as agora), pedidos_contados as (
+                select pedido.criado_em from cofre_links pedido cross join referencia
+                join lateral (select anterior.expira_em, anterior.usado_em from cofre_links anterior
+                    where anterior.medico_id=pedido.medico_id and (anterior.criado_em, anterior.id)<(pedido.criado_em, pedido.id)
+                    order by anterior.criado_em desc, anterior.id desc limit 1) anterior
+                    on anterior.usado_em is null and anterior.expira_em>pedido.criado_em
+                where pedido.medico_id=$1 and pedido.criado_em>referencia.agora-interval '1 hour'
+            ), contagem as (select count(*)::int as total, min(criado_em) as mais_antigo from pedidos_contados)
+            select contagem.total, referencia.agora::text as instante,
+                coalesce((select usado_em is null and expira_em>referencia.agora from cofre_links where medico_id=$1
+                    order by criado_em desc, id desc limit 1), false) as substitui_valido,
+                greatest(1, ceil(extract(epoch from (contagem.mais_antigo+interval '1 hour'-referencia.agora))/60))::int as aguardar_minutos
+            from contagem cross join referencia`, [medicoId])).rows[0];
+            // Duas substituições anteriores mais o pedido atual com link vivo bloqueiam a quarta criação.
+            if (limite.substitui_valido && limite.total >= 2) return { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: limite.aguardar_minutos };
+            // O instante do pedido precede a invalidação: o self-join preserva se o anterior estava vivo.
             await cliente.query(`with expirados as (
-                update cofre_links set expira_em=least(expira_em,now())
+                update cofre_links set expira_em=least(expira_em,clock_timestamp())
                 where medico_id=$1 and agenda=$2 and usado_em is null returning id
             ) insert into cofre_links_auditoria (link_id, evento)
                 select id, 'expirado' from expirados on conflict do nothing`, [medicoId, agenda]);
             token = randomBytes(32).toString('base64url');
-            link = (await cliente.query(`insert into cofre_links (medico_id, agenda, token_hash, expira_em)
-                values ($1,$2,$3,now()+interval '15 minutes') returning id`, [medicoId, agenda, this.hash(token)])).rows[0];
+            link = (await cliente.query(`insert into cofre_links (medico_id, agenda, token_hash, expira_em, criado_em)
+                values ($1,$2,$3,$4::timestamptz+interval '15 minutes',$4::timestamptz) returning id`, [medicoId, agenda, this.hash(token), limite.instante])).rows[0];
             await cliente.query('insert into cofre_links_auditoria (link_id, evento) values ($1,$2)', [link.id, 'criado']);
             await cliente.query('commit');
             confirmado = true;

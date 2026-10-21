@@ -26,6 +26,7 @@ const outroId = '22222222-2222-4222-8222-222222222222';
 const telefone = '5511999990000';
 const dados = { email: 'teste@example.invalid', senha: 'credencial-ficticia-987', consentimento: 'tribemd-leitura-v1' };
 type Link = { id: string; medico_id: string; agenda: string; token_hash: string; expira_em: Date; usado_em: Date | null; criado_em: Date };
+let instanteBanco = 0;
 let registros: Link[], auditoria: Array<{ link_id: string; evento: string }>;
 let medico: { ativo: boolean; telefone: string } | null;
 let estado: 'vazio' | 'desconectado' | 'conectado' | 'conectando' | 'salvo' | 'atencao';
@@ -45,23 +46,35 @@ async function query(sql: string, valores: any[] = []): Promise<{ rows: any[] }>
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return { rows: [] };
     if (sql.includes('select u.ativo')) return { rows: medico ? [medico] : [] };
     if (sql.includes('select u.telefone')) return { rows: medico ? [{ ...medico, ambiente: 'homologacao' }] : [] };
+    if (sql.includes('pedidos_contados')) {
+        expect(sql).toContain('join lateral'); expect(sql).toContain('anterior.expira_em>pedido.criado_em');
+        expect(sql).toContain('anterior.usado_em is null'); expect(sql).toContain('order by anterior.criado_em desc, anterior.id desc limit 1');
+        instanteBanco = Math.max(Date.now(), instanteBanco + 2);
+        const pedidos = registros.filter(l => l.medico_id === valores[0]).sort((a, b) => a.criado_em.getTime() - b.criado_em.getTime() || a.id.localeCompare(b.id));
+        const contados = pedidos.filter((pedido, i) => i > 0 && pedido.criado_em.getTime() > instanteBanco - 3600000 &&
+            !pedidos[i - 1].usado_em && pedidos[i - 1].expira_em > pedido.criado_em);
+        const anterior = pedidos.at(-1);
+        return { rows: [{ total: contados.length, instante: new Date(instanteBanco).toISOString(),
+            substitui_valido: !!anterior && !anterior.usado_em && anterior.expira_em.getTime() > instanteBanco,
+            aguardar_minutos: contados.length ? Math.max(1, Math.ceil((contados[0].criado_em.getTime() + 3600000 - instanteBanco) / 60000)) : 1 }] };
+    }
     if (sql.includes('count(*)')) return { rows: [{ total: registros.filter(l => l.medico_id === valores[0] && l.criado_em.getTime() > Date.now() - 3600000).length }] };
     if (sql.includes('with expirados')) {
         for (const l of registros.filter(l => l.medico_id === valores[0] && l.agenda === valores[1] && !l.usado_em)) {
-            l.expira_em = new Date(Math.min(l.expira_em.getTime(), Date.now())); auditoria.push({ link_id: l.id, evento: 'expirado' });
+            l.expira_em = new Date(Math.min(l.expira_em.getTime(), sql.includes('clock_timestamp()') ? instanteBanco + 1 : Date.now())); auditoria.push({ link_id: l.id, evento: 'expirado' });
         }
         return { rows: [] };
     }
     if (sql.includes('insert into cofre_links (')) {
-        const l = { id: randomUUID(), medico_id: valores[0], agenda: valores[1], token_hash: valores[2], expira_em: new Date(Date.now() + 900000), usado_em: null, criado_em: new Date() };
+        const l = { id: randomUUID(), medico_id: valores[0], agenda: valores[1], token_hash: valores[2], expira_em: new Date(new Date(valores[3] ?? Date.now()).getTime() + 900000), usado_em: null, criado_em: new Date(valores[3] ?? Date.now()) };
         registros.push(l); return { rows: [{ id: l.id }] };
     }
     if (sql.includes('insert into cofre_links_auditoria')) { auditoria.push({ link_id: valores[0], evento: valores[1] }); return { rows: [] }; }
     if (sql.includes('update cofre_links set usado_em')) {
-        const l = registros.find(l => l.token_hash === valores[0] && !l.usado_em && l.expira_em.getTime() > Date.now());
+        const l = registros.find(l => l.token_hash === valores[0] && !l.usado_em && l.expira_em.getTime() > Math.max(Date.now(), instanteBanco + 2));
         if (!l) return { rows: [] }; l.usado_em = new Date(); return { rows: [{ medico_id: l.medico_id, id: l.id, agenda: l.agenda }] };
     }
-    if (sql.includes('where token_hash')) return { rows: registros.filter(l => l.token_hash === valores[0]).map(l => ({ ...l, expirado: l.expira_em.getTime() <= Date.now() })) };
+    if (sql.includes('where token_hash')) return { rows: registros.filter(l => l.token_hash === valores[0]).map(l => ({ ...l, expirado: l.expira_em.getTime() <= Math.max(Date.now(), instanteBanco + 2) })) };
     if (sql.includes('from cofre_links l where')) return { rows: registros.filter(l => l.medico_id === valores[0]).slice(-1).map(l => ({ ...l, enviado_em: auditoria.some(a => a.link_id === l.id && a.evento === 'enviado') ? l.criado_em : null })) };
     if (sql.includes('where medico_id')) return { rows: registros.filter(l => l.medico_id === valores[0] && !l.usado_em && l.expira_em.getTime() > Date.now()) };
     throw Error('SQL_NAO_ESPERADO');
@@ -85,7 +98,7 @@ beforeAll(async () => {
     servidor.on('request', app);
 });
 beforeEach(async () => {
-    registros = []; auditoria = []; consultas = []; textos = []; logs = [];
+    instanteBanco = 0; registros = []; auditoria = []; consultas = []; textos = []; logs = [];
     medico = { ativo: true, telefone }; estado = 'vazio'; flag = true; allowlist = [telefone];
     if (bancoReal) {
         await bancoReal.query('truncate usuarios, medicos, medico_perfil_fiscal, cofre_links, cofre_links_auditoria cascade');
@@ -132,7 +145,7 @@ describe('gatilho determinístico do link', () => {
     });
     it('permite desconectado e limita três pedidos por hora por médico', async () => {
         estado = 'desconectado'; await pedir(); await pedir(); await pedir();
-        expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS' }); expect(textos).toHaveLength(9);
+        expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 }); expect(textos).toHaveLength(9);
     });
     it.each(['flag', 'allowlist'] as const)('não envia nem loga o link com %s bloqueando', async caso => {
         flag = caso !== 'flag'; allowlist = caso === 'allowlist' ? [] : [telefone];
@@ -272,7 +285,7 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     const resultados: unknown[] = [];
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: unknown }>) => {
         const dados = JSON.parse(String(mensagens[1].content));
-        if (dados.resultadoFerramenta) { return '{"fala":["Resultado recebido."],"acao":"enviar_link_cofre_agenda"}'; }
+        if (dados.resultadoFerramenta) { return '{"fala":["Você pode pedir outro link em uma hora."],"acao":null}'; }
         return '{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}';
     });
     const deps = { ativo: true, conversaLivreAtiva: true, historico, conversador: new ConversadorMedico('chave', 'modelo', completar),
@@ -285,8 +298,9 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     expect(textos).toHaveLength(3);
     for (let i = 1; i <= 3; i++) await processarComunicacaoMedico({ ...evento, chaveProcessamento: `link-${i}` }, deps);
     expect(textos).toHaveLength(9); expect(await salvos()).toHaveLength(3);
-    expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS' }]);
-    expect(completar).toHaveBeenCalledTimes(4); expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.'], 'link-3');
+    expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 }]);
+    expect(completar).toHaveBeenCalledTimes(5); expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['Você pode pedir outro link em uma hora.'], 'link-3');
+    const chamada = completar.mock.calls.at(-1)!; expect(String(chamada[2][0].content)).toContain('Espera real para novo link (servidor): 60 minutos');
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
 
@@ -342,4 +356,32 @@ it('falha de acesso permite novo link mantendo limite e invalidação', async ()
     const anterior = await pedir(); estado = 'atencao'; const novo = await pedir();
     expect(novo.resultado).toEqual({ ok: true, motivo: 'enviado' });
     expect(await links.validar(anterior.token)).toBe(false); expect(await links.validar(novo.token)).toBe(true);
+});
+
+it.each(['expirado', 'invalidado', 'usado'])('quatro pedidos após link %s são atendidos sem penalidade', async encerramento => {
+    for (let i = 0; i < 4; i++) {
+        if (i) {
+            const anterior = (await salvos()).at(-1)!;
+            if (encerramento === 'usado') anterior.usado_em = new Date(Date.now() - 1000);
+            else anterior.expira_em = new Date(Date.now() - (encerramento === 'expirado' ? 60000 : 1000));
+        }
+        expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: true, motivo: 'enviado' });
+    }
+    expect(await salvos()).toHaveLength(4); expect(textos).toHaveLength(12);
+});
+it('rajada recusa quarto pedido e informa minutos até o pedido contado mais antigo sair', async () => {
+    await pedir(); await pedir(); await pedir();
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 });
+    expect(await salvos()).toHaveLength(3); expect(textos).toHaveLength(9);
+});
+it('expiração permite novo pedido e espera cai até o contado mais antigo sair da hora', async () => {
+    await pedir(); await pedir(); await pedir();
+    if (bancoReal) await bancoReal.query("update cofre_links set criado_em=criado_em-interval '58 minutes', expira_em=expira_em-interval '58 minutes'");
+    else for (const l of registros) { l.criado_em = new Date(l.criado_em.getTime() - 58 * 60000); l.expira_em = new Date(l.expira_em.getTime() - 58 * 60000); }
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: true, motivo: 'enviado' });
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 2 });
+    const antigos = (await salvos()).slice(0, 3);
+    if (bancoReal) await bancoReal.query("update cofre_links set criado_em=criado_em-interval '3 minutes', expira_em=expira_em-interval '3 minutes' where id=any($1::uuid[])", [antigos.map(l => l.id)]);
+    else for (const l of antigos) { l.criado_em = new Date(l.criado_em.getTime() - 3 * 60000); l.expira_em = new Date(l.expira_em.getTime() - 3 * 60000); }
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: true, motivo: 'enviado' });
 });

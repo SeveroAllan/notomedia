@@ -228,7 +228,6 @@ it.each([
   [true, 'enviado', ''],
   [true, 'simulado', 'O envio do link foi simulado; nenhum link foi enviado.'],
   [true, 'repetido', 'O link já foi solicitado. Aguardo a conexão da agenda.'],
-  [false, 'LIMITE_PEDIDOS', 'O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.'],
   [false, 'erro', 'Estamos com uma instabilidade no sistema; já vou verificar e te retorno.']
 ])('confirmação temporal do link ok=%s motivo=%s é determinística', async (ok, motivo, texto) => {
   const completar = vi.fn(async () => '{"fala":["Enviei o link"],"acao":null}');
@@ -310,4 +309,24 @@ it.each(['emitir_nota', { acao: 'enviar_link_cofre_agenda' }])('intenção de co
   const completar = vi.fn(async () => JSON.stringify({ fala: ['Envie'], acao: 'enviar_link_cofre_agenda', intencaoConexao }));
   expect(await new ConversadorMedico('chave', 'modelo', completar).responder({ ...entrada, acoesPermitidas: ['enviar_link_cofre_agenda'] }))
     .toEqual({ fala: [RASCUNHO_FALLBACK_CONVERSA], acao: null });
+});
+
+it('duas recusas passam espera real e histórico à IA, sem texto de limite enlatado', async () => {
+  const completar = vi.fn(async () => JSON.stringify({ fala: ['Me dá um minutinho e você pode pedir outro link.'], acao: null }))
+    .mockResolvedValueOnce(JSON.stringify({ fala: ['Você pode pedir outro link seguro em dois minutinhos.'], acao: null }));
+  const conversador = new ConversadorMedico('chave', 'modelo', completar);
+  const resultadoFerramenta = { ferramenta: 'enviar_link_cofre_agenda', dadosNaoConfiaveis: { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 2 } };
+  const primeira = await conversador.responder({ ...entrada, resultadoFerramenta });
+  const segunda = await conversador.responder({ ...entrada, mensagens: primeira.fala, resultadoFerramenta: { ...resultadoFerramenta, dadosNaoConfiaveis: { ...resultadoFerramenta.dadosNaoConfiaveis, aguardarMinutos: 1 } } });
+  expect(completar).toHaveBeenCalledTimes(2); expect(primeira.fala).not.toEqual(segunda.fala);
+  for (const resposta of [primeira, segunda]) {
+    expect(resposta.fala.join(' ')).not.toMatch(/limite|regra|contagem|O limite de pedidos de link foi atingido/i);
+    expect(resposta.acao).toBeNull();
+  }
+  const chamadas = completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
+  expect(chamadas[0][2][0].content).toContain('Espera real para novo link (servidor): 2 minutos');
+  expect(JSON.parse(chamadas[1][2][1].content).mensagens).toEqual(primeira.fala);
+  expect(chamadas[1][2][0].content).toContain('Espera real para novo link (servidor): 1 minutos');
+  expect(chamadas[1][2][0].content).toContain('Nunca mencione limite, regra interna ou contagem');
+  expect(JSON.parse(chamadas[1][2][1].content).resultadoFerramenta.dadosNaoConfiaveis).toEqual({ ok: false, aguardarMinutos: 1 });
 });
