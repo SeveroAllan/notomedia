@@ -62,6 +62,7 @@ async function query(sql: string, valores: any[] = []): Promise<{ rows: any[] }>
         if (!l) return { rows: [] }; l.usado_em = new Date(); return { rows: [{ medico_id: l.medico_id, id: l.id, agenda: l.agenda }] };
     }
     if (sql.includes('where token_hash')) return { rows: registros.filter(l => l.token_hash === valores[0]).map(l => ({ ...l, expirado: l.expira_em.getTime() <= Date.now() })) };
+    if (sql.includes('from cofre_links l where')) return { rows: registros.filter(l => l.medico_id === valores[0]).slice(-1).map(l => ({ ...l, enviado_em: auditoria.some(a => a.link_id === l.id && a.evento === 'enviado') ? l.criado_em : null })) };
     if (sql.includes('where medico_id')) return { rows: registros.filter(l => l.medico_id === valores[0] && !l.usado_em && l.expira_em.getTime() > Date.now()) };
     throw Error('SQL_NAO_ESPERADO');
 }
@@ -126,12 +127,12 @@ describe('gatilho determinístico do link', () => {
         await configurarMedico(conta); expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo }); expect(textos).toEqual([]);
     });
     it('recusa agenda não suportada', async () => { expect(await links.solicitarLinkCofre(medicoId, 'outra')).toEqual({ ok: false, motivo: 'AGENDA_NAO_SUPORTADA' }); expect(textos).toEqual([]); });
-    it.each(['conectado', 'conectando', 'salvo', 'atencao'] as const)('recusa cofre %s', async valor => {
+    it.each(['conectado', 'conectando', 'salvo'] as const)('recusa cofre %s', async valor => {
         estado = valor; expect((await links.solicitarLinkCofre(medicoId, 'tribemd')).ok).toBe(false); expect(textos).toEqual([]);
     });
     it('permite desconectado e limita três pedidos por hora por médico', async () => {
         estado = 'desconectado'; await pedir(); await pedir(); await pedir();
-        expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS' }); expect(textos).toHaveLength(3);
+        expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'LIMITE_PEDIDOS' }); expect(textos).toHaveLength(9);
     });
     it.each(['flag', 'allowlist'] as const)('não envia nem loga o link com %s bloqueando', async caso => {
         flag = caso !== 'flag'; allowlist = caso === 'allowlist' ? [] : [telefone];
@@ -203,10 +204,10 @@ it('ponta a ponta: WhatsApp fake → link → GET → POST → confirmação só
         repositorio: { buscarMedicoPorTelefone: async () => ({ id: medicoId }) } as unknown as AtendimentoRepositorio,
         aoReceberMensagemMedico: entrada => processarComunicacaoMedico({ medicoId: entrada.medicoId, chaveProcessamento: entrada.chaveMensagem, chaveConversa: 'conversa', agora: new Date(), respostaMedico: { texto: entrada.texto, dataMensagem: null } }, deps) });
     await webhook('Quero conectar TribeMD', 'pedido');
-    const token = textos[0].match(/\/c\/([\w-]{43})/)![1];
+    const token = textos[2].match(/\/c\/([\w-]{43})/)![1];
     expect((await fetch(`${base}/c/${token}`)).status).toBe(200); expect((await post(token)).status).toBe(202);
-    expect(textos).toHaveLength(1); await links.concluir(medicoId, true); await links.concluir(medicoId, true);
-    expect(textos.at(-1)).toBe('Já recebi o seu acesso ao TribeMD.'); expect(textos).toHaveLength(2);
+    expect(textos).toHaveLength(3); await links.concluir(medicoId, true); await links.concluir(medicoId, true);
+    expect(textos.at(-1)).toBe('Já recebi o seu acesso ao TribeMD.'); expect(textos).toHaveLength(4);
     await webhook(`minha senha é ${dados.senha}`, 'senha');
     await webhook('credencial-sem-rotulo', 'senha-sem-rotulo');
     expect(classificar).toHaveBeenCalledTimes(1); expect(extrair).not.toHaveBeenCalled(); expect(lerEstado).not.toHaveBeenCalled();
@@ -281,22 +282,22 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     const evento = { medicoId, chaveProcessamento: 'link-0', agora: new Date(), respostaMedico: { texto: 'Envie o link para conectar minha agenda', dataMensagem: '2026-10-20' } };
     await processarComunicacaoMedico(evento, deps);
     await processarComunicacaoMedico(evento, { ...deps, conversador: new ConversadorMedico('chave', 'modelo', completar) });
-    expect(textos).toHaveLength(1);
+    expect(textos).toHaveLength(3);
     for (let i = 1; i <= 3; i++) await processarComunicacaoMedico({ ...evento, chaveProcessamento: `link-${i}` }, deps);
-    expect(textos).toHaveLength(3); expect(await salvos()).toHaveLength(3);
+    expect(textos).toHaveLength(9); expect(await salvos()).toHaveLength(3);
     expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS' }]);
-    expect(completar).toHaveBeenCalledTimes(4); expect(deps.aoConversar).toHaveBeenCalledTimes(4);
+    expect(completar).toHaveBeenCalledTimes(4); expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['O limite de pedidos de link foi atingido. Será preciso aguardar para pedir outro.'], 'link-3');
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
 
 it('mensagem de conexão explica necessidade, login na página segura e nunca usa jargão', async () => {
     const { token } = await pedir();
-    const texto = textos.at(-1)!;
-    expect(texto).toContain('preciso que você conecte sua agenda para cruzar consultas e pagamentos');
-    expect(texto).toContain('login e senha da agenda');
-    expect(texto).toContain('Eu não recebo senha pela conversa, só por esse link seguro');
-    expect(texto).toContain(`/c/${token}`); expect(texto).not.toMatch(/cofre/i);
-    expect(texto.length).toBeLessThanOrEqual(500);
+    expect(textos).toEqual([
+        'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.',
+        'Por segurança, eu não recebo senha pela conversa. Seu login e senha da agenda vão só neste link seguro, que vale por 15 minutos e só pode ser usado uma vez.',
+        `${base}/c/${token}`
+    ]);
+    for (const texto of textos) { expect(texto).not.toMatch(/cofre/i); expect(texto.length).toBeLessThanOrEqual(500); }
 });
 
 it.each([true, false])('POST e conclusão conectado=%s entregam o evento uma vez com o provedor real', async conectado => {
@@ -308,7 +309,7 @@ it.each([true, false])('POST e conclusão conectado=%s entregam o evento uma vez
     expect(html).not.toMatch(/<form|type="password"|cofre|iClinic/i); expect(html).not.toContain(token); expect(html).not.toContain(dados.senha);
     await links.concluir(medicoId, conectado); await links.concluir(medicoId, conectado);
     expect(concluir).toHaveBeenCalledExactlyOnceWith(medicoId, { agenda: 'tribemd', conectado, chave: (await salvos())[0].id, ...(!conectado ? { falhaAcesso: false } : {}) });
-    expect(textos).toHaveLength(1);
+    expect(textos).toHaveLength(3);
 });
 
 it('falha de acesso é identificada pelo status real depois da verificação', async () => {
@@ -318,4 +319,27 @@ it('falha de acesso é identificada pelo status real depois da verificação', a
     const { token } = await pedir(); expect((await post(token)).status).toBe(202); falhou = true;
     await links.concluir(medicoId, false);
     expect(concluir).toHaveBeenCalledExactlyOnceWith(medicoId, { agenda: 'tribemd', conectado: false, falhaAcesso: true, chave: (await salvos())[0].id });
+});
+
+it.each([2, 3])('falha no balão %s interrompe e não audita enviado', async falha => {
+    const enviar = vi.fn(async () => enviar.mock.calls.length === falha ? 'erro' as const : 'enviado' as const);
+    links = new LinksCofre({ pool, origem: base, cofre: { status: async () => ({ salvo: false, estado: 'vazio', ativo: false, verificadoEm: null, codigo: null, consultasDisponiveis: null }), iniciar }, enviar });
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd')).toEqual({ ok: false, motivo: 'erro' });
+    expect(enviar).toHaveBeenCalledTimes(falha); expect(auditoria.some(a => a.evento === 'enviado')).toBe(false);
+    expect(await salvos()).toHaveLength(1);
+});
+it('estado real do link expõe idade, uso e expiração sem token ou credenciais', async () => {
+    const { token } = await pedir(); const link = (await salvos())[0];
+    const agora = new Date(link.criado_em.getTime() + 20 * 60000);
+    expect(await links.lerContextoConexao(medicoId, agora)).toEqual({ agendaConectada: false, aguardandoConexao: true,
+        link: { enviado: true, minutosDesdeEnvio: 20, usado: false, expirado: true, rejeitado: null } });
+    await links.enviarCredencial(token, { ...dados });
+    expect((await links.lerContextoConexao(medicoId, agora)).link?.usado).toBe(true);
+    estado = 'conectado'; expect(await links.lerContextoConexao(medicoId, agora)).toMatchObject({ agendaConectada: true, aguardandoConexao: false });
+    expect(JSON.stringify(await links.lerContextoConexao(medicoId, agora))).not.toMatch(new RegExp(`${token}|${dados.senha}|${dados.email}`));
+});
+it('falha de acesso permite novo link mantendo limite e invalidação', async () => {
+    const anterior = await pedir(); estado = 'atencao'; const novo = await pedir();
+    expect(novo.resultado).toEqual({ ok: true, motivo: 'enviado' });
+    expect(await links.validar(anterior.token)).toBe(false); expect(await links.validar(novo.token)).toBe(true);
 });

@@ -71,10 +71,8 @@ it('injeção só produz fala, mantendo nenhuma como única ação decidida', as
   expect(c.aoConversar).toHaveBeenCalledOnce();
   expect(JSON.stringify(c.completar.mock.calls)).not.toContain('"tools"');
 });
-it.each(['cofre', 'segredo', 'sem estado', 'estado falha', 'reserva ocupada', 'histórico falha', 'liberação falha', 'extrator falha', 'sem resposta', 'ação determinística'])('não conversa em %s', async caso => {
+it.each(['segredo', 'sem estado', 'estado falha', 'reserva ocupada', 'histórico falha', 'liberação falha', 'extrator falha', 'sem resposta', 'ação determinística'])('não conversa em %s', async caso => {
   const c = await cenario(); let evento: typeof entrada | Omit<typeof entrada, 'respostaMedico'> = entrada;
-  let tratarCofre: (() => Promise<boolean>) | undefined;
-  if (caso === 'cofre') tratarCofre = async () => true;
   if (caso === 'segredo') evento = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'token=segredo-ficticio' } };
   if (caso === 'sem estado') c.deps.lerEstado.mockResolvedValueOnce(null as any);
   if (caso === 'estado falha') c.deps.lerEstado.mockRejectedValueOnce(Error('ERRO'));
@@ -89,9 +87,12 @@ it.each(['cofre', 'segredo', 'sem estado', 'estado falha', 'reserva ocupada', 'h
   }
   if (caso === 'sem resposta') { const { respostaMedico: _resposta, ...semResposta } = entrada; evento = semResposta; }
   if (caso === 'ação determinística') c.extrair.mockResolvedValueOnce({ temNota: 'sim', desde: null, confianca: 0.95 });
-  await processarComunicacaoMedico(evento, { ...c.deps, tratarCofre });
-  if (['cofre', 'sem resposta'].includes(caso)) expect(c.aoConversar).not.toHaveBeenCalled();
-  else expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
+  await processarComunicacaoMedico(evento, c.deps);
+  if (caso === 'sem resposta') expect(c.aoConversar).not.toHaveBeenCalled();
+  else if (caso === 'segredo') {
+    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], 'mensagem');
+    expect(c.banco.mensagens).toEqual([]);
+  } else expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
   expect(c.completar).not.toHaveBeenCalled();
 });
 it('sem decisão após fluxo concluído também gera fala sem chamar o extrator', async () => {
@@ -202,7 +203,7 @@ it.each(['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONI
   await processarComunicacaoMedico(entrada, deps);
   expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico');
   expect(c.completar).toHaveBeenCalledTimes(2);
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link seguro; aguardo a conexão.'], 'mensagem');
+  expect(c.aoConversar).not.toHaveBeenCalled();
   await processarComunicacaoMedico(entrada, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce(); expect(c.completar).toHaveBeenCalledTimes(2);
 });
@@ -281,7 +282,7 @@ it('emissão pedida sem cofre passa pela ferramenta de link e só confirma o env
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(pedido, deps);
   expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Preciso conectar sua agenda para cruzar consultas e pagamentos. Enviei o link seguro; aguardo a conexão.'], 'mensagem');
+  expect(c.aoConversar).not.toHaveBeenCalled();
   const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
   expect(chamadas[0][2][0].content).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
   expect(JSON.parse(chamadas[0][2][1].content).estado.agenda.conectada).toBe(false);
@@ -290,13 +291,13 @@ it('emissão pedida sem cofre passa pela ferramenta de link e só confirma o env
 });
 it('dois turnos de cobrança não pedem o link novamente, inclusive com memória recuperada', async () => {
   const c = await cenario(); const listarConsultasSemNota = vi.fn(); const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
-  c.completar.mockResolvedValue('{"fala":["Envie o link novamente"],"acao":"enviar_link_cofre_agenda"}');
+  c.completar.mockResolvedValueOnce('{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}').mockResolvedValue('{"fala":["Você conseguiu salvar o acesso pelo link seguro?"],"acao":"enviar_link_cofre_agenda"}');
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
   await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'cobranca-2' }, { ...deps,
     memoriaPersistida: new PostgresMemoriaConversaMedico(c.banco as unknown as pg.Pool) });
   expect(enviarLinkCofreAgenda).toHaveBeenCalledOnce();
-  expect(c.aoConversar.mock.calls.at(-1)).toEqual([['O link já foi solicitado. Aguardo a conexão da agenda.'], 'cobranca-2']);
+  expect(c.aoConversar.mock.calls.at(-1)).toEqual([['Você conseguiu salvar o acesso pelo link seguro?'], 'cobranca-2']);
   expect(c.banco.mensagens.filter(m => m.mensagemId === 'noto:cofre_agenda:solicitado')).toHaveLength(1);
 });
 it.each(['null', 'excecao'])('estado %s responde fallback, persiste os dois papéis e loga o motivo', async caso => {
@@ -376,4 +377,103 @@ it('continuação automática mantém três balões totais e informa o total qua
   const baloes = (c.aoConversar.mock.calls as unknown as Array<[string[], string]>).flatMap(c => c[0]);
   expect(baloes).toHaveLength(3); expect(baloes.every(t => t.length <= 500)).toBe(true);
   expect(baloes[2]).toContain('Resumo de 3 consultas; lista abreviada.'); expect(baloes).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
+});
+
+it('oferta anterior com typo continua no conversador mesmo se o extrator decidir aguardar comprovante', async () => {
+  const c = await cenario();
+  await c.memoriaPersistida.registrar('medico', 'conversa', 'oferta', 'Quer que eu verifique se há notas pendentes?', 'noto');
+  c.extrair.mockResolvedValueOnce({ temNota: 'não', desde: null, confianca: 0.99 } as any);
+  c.completar.mockResolvedValueOnce(JSON.stringify({ fala: ['Preciso conectar sua agenda para cruzar consultas e pagamentos.'], acao: 'enviar_link_cofre_agenda' }));
+  const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Vê se tem uma das penentes' } },
+    { ...c.deps, listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda });
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico');
+  expect(c.aoConversar).not.toHaveBeenCalled(); // os três balões do link já respondem
+  expect(c.extrair.mock.calls[0]?.[2]).toMatchObject({ pergunta: 'Quer que eu verifique se há notas pendentes?' });
+});
+
+// Provedor simulado: esta bateria verifica contexto/protocolo/execução, não a qualidade da OpenAI real.
+it.each([
+  ['Vê se tem uma das penentes', true], ['Vê se tem notas pendentes', true],
+  ['Olha as pendentis pra mim', true], ['Tem pendente demais, vê pra mim', true],
+  ['Recebi um conprovante, vê se falta nota fisca', true], ['Chegou comprovanti, verifica as notas', true],
+  ['Preciso emtiir a nota fisca', true], ['Pode emiti a noh ta desse atendimento?', true],
+  ['sim', true], ['isso', true], ['isso mesmo', true], ['pode', true], ['pode sim', true], ['quero', true],
+  ['não', false], ['nao', false], ['agora não', false]
+])('frase contextual %j mantém interpretação na IA e valida ferramentas (aceite=%s)', async (texto, aceita) => {
+  for (const conectada of [false, true]) {
+    const c = await cenario();
+    await c.memoriaPersistida.registrar('medico', 'conversa', 'oferta', 'Quer que eu verifique se há notas pendentes?', 'noto');
+    c.deps.lerEstado.mockResolvedValue({ estado: { agora, fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: conectada ? 'tribemd' : null, conectada }, ultimaNota: null } });
+    const acao = aceita ? conectada ? 'listar_consultas_sem_notas' : 'enviar_link_cofre_agenda' : null;
+    c.completar.mockResolvedValueOnce(JSON.stringify({ fala: [aceita ? 'Vou verificar.' : 'Tudo bem, deixamos para depois.'], acao }));
+    const listarConsultasSemNota = vi.fn(async () => ({ ok: true, total: 0, consultas: [], janelaDias: 90 }));
+    const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
+    await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto } }, { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda });
+    expect(listarConsultasSemNota).toHaveBeenCalledTimes(aceita && conectada ? 1 : 0);
+    expect(enviarLinkCofreAgenda).toHaveBeenCalledTimes(aceita && !conectada ? 1 : 0);
+    const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
+    const dados = JSON.parse(chamadas[0][2][1].content);
+    expect(dados.texto).toBe(texto); expect(dados.ultimaFalaNoto).toBe('Quer que eu verifique se há notas pendentes?');
+    expect(chamadas[0][2][0].content).toContain('typos, abreviações ou transcrição ruim');
+    expect(JSON.stringify(c.aoConversar.mock.calls)).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
+    expect(c.deps.aoDecidir).not.toHaveBeenCalledWith(expect.objectContaining({ tipo: 'emitir_nota' }), expect.anything(), expect.anything());
+  }
+});
+
+it.each([false, true])('conectei verifica novamente o backend e continua naturalmente (conectada=%s)', async conectada => {
+  const c = await cenario();
+  await c.memoriaPersistida.registrar('medico', 'conversa', 'noto:cofre_agenda:solicitado', 'Link seguro solicitado.', 'noto');
+  c.deps.lerEstado.mockResolvedValue({ estado: { agora, fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: 'tribemd', conectada }, ultimaNota: null } });
+  const contexto = { agendaConectada: conectada, aguardandoConexao: !conectada, link: { enviado: true, minutosDesdeEnvio: 4, usado: false, expirado: false, rejeitado: null } };
+  const lerContextoConexao = vi.fn(async () => contexto);
+  c.completar.mockResolvedValueOnce('{"fala":["Ok, vou verificar."],"intencaoConexao":"informar_conexao","acao":null}')
+    .mockResolvedValueOnce(JSON.stringify({ fala: [conectada ? 'A conexão está confirmada, vou consultar.' : 'Ainda não recebi o acesso. Você conseguiu salvar os dados pelo link seguro?'], acao: conectada ? 'listar_consultas_sem_notas' : null }));
+  const listarConsultasSemNota = vi.fn(async () => ({ ok: true, total: 0, consultas: [], janelaDias: 90 }));
+  const enviarLinkCofreAgenda = vi.fn();
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Conectei' } }, { ...c.deps, lerContextoConexao, listarConsultasSemNota, enviarLinkCofreAgenda });
+  expect(c.deps.lerEstado).toHaveBeenCalledTimes(2); expect(lerContextoConexao).toHaveBeenCalledTimes(2);
+  expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).toHaveBeenCalledTimes(conectada ? 1 : 0);
+  const falas = JSON.stringify(c.aoConversar.mock.calls);
+  expect(falas).toContain('Ok, vou verificar.'); expect(falas).not.toContain('O link já foi solicitado. Aguardo');
+  expect(falas).toContain(conectada ? 'Não há nenhuma pendência' : 'Você conseguiu salvar');
+  const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
+  expect(chamadas[1][2][0].content).toContain('Verificação realizada neste turno: true');
+  expect(chamadas[1][2][0].content).toContain(JSON.stringify(contexto));
+});
+
+it.each(['expirado', 'usado', 'novo link', 'limite'])('novo pedido interpretado pela IA usa a ferramenta protegida: %s', async caso => {
+  const c = await cenario();
+  await c.memoriaPersistida.registrar('medico', 'conversa', 'noto:cofre_agenda:solicitado', 'Link seguro solicitado.', 'noto');
+  const lerContextoConexao = vi.fn(async () => ({ agendaConectada: false, aguardandoConexao: true,
+    link: { enviado: true, minutosDesdeEnvio: 20, usado: caso === 'usado', expirado: caso === 'expirado', rejeitado: null } }));
+  c.completar.mockResolvedValueOnce(JSON.stringify({ fala: ['Vou pedir outro link seguro.'], acao: 'enviar_link_cofre_agenda', intencaoConexao: ['expirado', 'usado'].includes(caso) ? 'informar_conexao' : 'pedir_novo_link' }));
+  const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: caso !== 'limite', motivo: caso === 'limite' ? 'LIMITE_PEDIDOS' : 'enviado' }));
+  const listarConsultasSemNota = vi.fn();
+  const evento = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: ['expirado', 'usado'].includes(caso) ? 'Conectei' : 'Pode reenviar um novo link?' } };
+  const deps = { ...c.deps, lerContextoConexao, listarConsultasSemNota, enviarLinkCofreAgenda };
+  await processarComunicacaoMedico(evento, deps); await processarComunicacaoMedico(evento, deps);
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+  if (caso === 'limite') expect(JSON.stringify(c.aoConversar.mock.calls)).toContain('aguardar');
+  else expect(c.aoConversar).not.toHaveBeenCalled();
+});
+
+it('aguardar conexão não trava assunto novo nem chama o classificador legado sem contexto', async () => {
+  const c = await cenario();
+  await c.memoriaPersistida.registrar('medico', 'conversa', 'noto:cofre_agenda:solicitado', 'Link seguro solicitado.', 'noto');
+  const tratarCofre = vi.fn(async () => true);
+  c.completar.mockResolvedValueOnce('{"fala":["Esse assunto escapa de mim. Posso ajudar com suas notas."],"acao":null}');
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Viu o jogo ontem?' } }, { ...c.deps, tratarCofre });
+  expect(tratarCofre).not.toHaveBeenCalled(); expect(c.completar).toHaveBeenCalledOnce();
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Esse assunto escapa de mim. Posso ajudar com suas notas.'], 'mensagem');
+});
+
+it.each(['minha senha é credencial-ficticia-987', 'credencial-ficticia-987', 'credencial-sem-rotulo', 'Bearer token-ficticio'])('credencial %j nunca chega a IA, memória ou log', async texto => {
+  const c = await cenario();
+  await c.memoriaPersistida.registrar('medico', 'conversa', 'noto:cofre_agenda:solicitado', 'Link seguro solicitado.', 'noto');
+  const antes = JSON.stringify(c.banco.mensagens);
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto } }, c.deps);
+  expect(c.completar).not.toHaveBeenCalled(); expect(c.extrair).not.toHaveBeenCalled();
+  expect(JSON.stringify(c.banco.mensagens)).toBe(antes); expect(JSON.stringify(c.deps.log.mock.calls)).not.toContain(texto);
+  expect(c.aoConversar).toHaveBeenCalledOnce();
 });

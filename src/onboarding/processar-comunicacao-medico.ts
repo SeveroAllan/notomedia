@@ -1,3 +1,4 @@
+import { contemCredencialAgenda, podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { RASCUNHO_FALLBACK_CONVERSA } from './conversador-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
@@ -27,6 +28,7 @@ export async function processarComunicacaoMedico(
     listarConsultasSemNota?: (medicoId: string, agenda: EstadoComunicacaoMedico['estado']['agenda'], agora: Date) => Promise<{
       ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; janelaDias?: number }>;
     enviarLinkCofreAgenda?: (medicoId: string) => Promise<{ ok: boolean; motivo: string }>;
+    lerContextoConexao?: (medicoId: string, agora: Date) => Promise<ContextoConexaoAgenda>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
     aoDecidir?: (acao: ProximaAcaoNoto, chave: string, contexto?: { nomeMedico?: string }) => Promise<void>;
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
@@ -89,29 +91,22 @@ export async function processarComunicacaoMedico(
         if (!await deps.historico.reservar(entrada.medicoId, 'simulado', chave)) return { tipo: 'nenhuma' };
         await deps.historico.liberar(entrada.medicoId, 'simulado', chave);
       }
-      const pedidoCofreRegistrado = !!(deps.conversaLivreAtiva && entrada.chaveConversa &&
-        await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, entrada.chaveConversa));
-      if (pedidoCofreRegistrado && entrada.respostaMedico) {
-        const estadoCofre = await deps.lerEstado(entrada.medicoId, entrada.agora);
-        if (!estadoCofre) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
-        if (!estadoCofre.estado.agenda.conectada) {
-          // Nem credenciais sem rótulo seguem para memória/IA enquanto aguarda conexão.
-          await deps.aoConversar?.(['O link já foi solicitado. Aguardo a conexão da agenda.'], entrada.chaveProcessamento);
-          return { tipo: 'nenhuma' };
-        }
-      }
-      if (!pedidoCofreRegistrado && entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) {
-        if (deps.conversaLivreAtiva && entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(
-          entrada.medicoId, entrada.chaveConversa, 'noto:cofre_agenda:solicitado', 'Link seguro solicitado; aguardo a conexão. Isso não confirma envio.', 'noto');
+      if (entrada.respostaMedico && contemCredencialAgenda(entrada.respostaMedico.texto) && deps.conversaLivreAtiva) {
+        deps.log('erro', registroErroNoto('COMUNICACAO_ENTRADA_PROTEGIDA', 'acionavel', { etapa: 'entrada' }));
+        try { await deps.aoConversar?.(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], entrada.chaveProcessamento); }
+        catch { deps.log('erro', registroErroNoto('COMUNICACAO_RESPOSTA_PROTEGIDA_FALHOU', 'tecnico', { etapa: 'entrada' })); }
         return { tipo: 'nenhuma' };
       }
-      if (entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) { await fallback('COMUNICACAO_ENTRADA_PROTEGIDA'); return { tipo: 'nenhuma' }; }
-      const estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
+      // Na conversa livre a interpretação usa o histórico completo; o classificador legado não o recebe.
+      if (!deps.conversaLivreAtiva && entrada.respostaMedico && await deps.tratarCofre?.(entrada.medicoId, entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      if (!deps.conversaLivreAtiva && entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
+      let estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
       if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
       const memoriaConversa = deps.conversaLivreAtiva === true ? deps.memoriaPersistida : deps.memoriaConversa;
       const conversa = entrada.chaveConversa;
       const respostaMedico = entrada.respostaMedico ? { ...entrada.respostaMedico,
         texto: sanitizarTextoMedico(entrada.respostaMedico.texto),
+        ultimaFalaNoto: deps.conversaLivreAtiva && conversa ? await deps.memoriaPersistida?.lerUltimaFalaNoto(entrada.medicoId, conversa) : undefined,
         mensagensSeguras: memoriaConversa && conversa ? await memoriaConversa.ler(entrada.medicoId, conversa) : entrada.respostaMedico.mensagensSeguras
       } : undefined;
       let semDecisao = false;
@@ -120,7 +115,7 @@ export async function processarComunicacaoMedico(
         aoSemDecisao: deps.conversaLivreAtiva === true ? () => { semDecisao = true; } : undefined
       });
       const agendaViaConversa = deps.conversaLivreAtiva === true && respostaMedico && deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda &&
-        (acao.tipo === 'listar_consultas_sem_nota' || acao.tipo === 'pedir_agenda' || acao.tipo === 'reperguntar' && acao.pergunta !== 'problema_fiscal');
+        (acao.tipo === 'aguardar_comprovante' || acao.tipo === 'listar_consultas_sem_nota' || acao.tipo === 'pedir_agenda' || acao.tipo === 'reperguntar' && acao.pergunta !== 'problema_fiscal');
       if (!agendaViaConversa) await deps.aoDecidir?.(acao, entrada.chaveProcessamento, { nomeMedico: estado.nomeMedico });
       if (deps.conversaLivreAtiva === true && acao.tipo === 'nenhuma' && !semDecisao) { await fallback('COMUNICACAO_SEM_DECISAO_SEGURA'); return acao; }
       let fala: string[] | undefined;
@@ -129,17 +124,37 @@ export async function processarComunicacaoMedico(
         acao.tipo === 'perguntar_nota_pendente' && await deps.memoriaPersistida?.temBoasVindas(entrada.medicoId, conversa);
       if (deps.conversaLivreAtiva === true && respostaMedico && (acao.tipo === 'nenhuma' || responderBoasVindas || agendaViaConversa) && deps.conversador) {
         const resumo = conversa ? await deps.memoriaPersistida?.lerResumo(entrada.medicoId, conversa) : null;
-        let linkCofreJaSolicitado = !!(conversa && await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, conversa));
-        const contexto = { linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
+        const linkCofreJaSolicitado = !!(conversa && await deps.memoriaPersistida?.temPedidoCofre(entrada.medicoId, conversa));
+        let contextoConexao = await deps.lerContextoConexao?.(entrada.medicoId, entrada.agora);
+        const contexto = { contextoConexao, ultimaFalaNoto: respostaMedico.ultimaFalaNoto, linkCofreJaSolicitado, texto: respostaMedico.texto, mensagens: respostaMedico.mensagensSeguras ?? [],
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
-          ? linkCofreJaSolicitado || estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
+          ? estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
+        if (resposta.intencaoConexao === 'informar_conexao') {
+          // A IA interpreta; conexão e possibilidade de reenvio são sempre relidas no backend.
+          const atualizado = await deps.lerEstado(entrada.medicoId, entrada.agora);
+          if (!atualizado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return acao; }
+          estado = atualizado;
+          contextoConexao = await deps.lerContextoConexao?.(entrada.medicoId, entrada.agora);
+          contexto.estado = estado.estado;
+          contexto.contextoConexao = contextoConexao;
+          if (resposta.acao !== 'enviar_link_cofre_agenda') {
+            const aviso = resposta.fala.slice(0, 1);
+            if (aviso.length) {
+              await deps.aoConversar?.(aviso, `${entrada.chaveProcessamento}:verificacao`);
+              consultaAnunciada = true;
+              if (conversa && memoriaConversa) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:verificacao`, aviso.join('\n'), 'noto');
+            }
+            resposta = await deps.conversador.responder({ ...contexto, verificacaoConexao: true,
+              acoesPermitidas: estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] });
+          }
+        }
         if (resposta.reacao) {
           try { await deps.aoReagir?.(resposta.reacao); }
           catch { deps.log('erro', registroErroNoto('REACAO_FALHOU', 'tecnico', { etapa: 'reacao' })); }
         }
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
-          if (estado.estado.agenda.conectada) {
+          if (estado.estado.agenda.conectada && !consultaAnunciada) {
             const aviso = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
             await deps.aoConversar?.([aviso], `${entrada.chaveProcessamento}:consulta`);
             consultaAnunciada = true;
@@ -154,7 +169,7 @@ export async function processarComunicacaoMedico(
             resultadoFerramenta: { ferramenta: 'listar_consultas_sem_notas', dadosNaoConfiaveis: resultado },
             acoesPermitidas: conectar && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda ? ['enviar_link_cofre_agenda'] : [] });
         }
-        if (resposta.acao === 'enviar_link_cofre_agenda' && !estado.estado.agenda.conectada && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda) {
+        if (resposta.acao === 'enviar_link_cofre_agenda' && podeSolicitarLinkAgenda(estado.estado.agenda.conectada, linkCofreJaSolicitado, resposta.intencaoConexao, contextoConexao) && deps.enviarLinkCofreAgenda) {
           if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
             'noto:cofre_agenda:solicitado', 'O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
           let resultado;
@@ -179,7 +194,7 @@ export async function processarComunicacaoMedico(
         const pergunta = fala ? fala.join('\n') : montarPerguntaComunicacao(acao);
         if (pergunta) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, pergunta, 'noto');
       }
-      if (fala) await deps.aoConversar?.(fala, entrada.chaveProcessamento);
+      if (fala?.length) await deps.aoConversar?.(fala, entrada.chaveProcessamento);
       if (deps.conversaLivreAtiva === true && respostaMedico && conversa && deps.memoriaPersistida && deps.conversador) {
         await atualizarResumo(deps.memoriaPersistida, deps.conversador, entrada.medicoId, conversa);
       }

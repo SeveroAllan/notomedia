@@ -7,7 +7,7 @@ interface EntradaComunicacao {
   medicoId: string;
   chaveProcessamento: string;
   nomeMedico?: string;
-  respostaMedico?: { texto: string; dataMensagem: string | null; mensagensSeguras?: readonly string[] };
+  respostaMedico?: { texto: string; dataMensagem: string | null; mensagensSeguras?: readonly string[]; ultimaFalaNoto?: string };
   instanciaNome?: string;
   contatoTelefone?: string;
   estado: Omit<EstadoMedicoAposOnboarding, 'historico'> & { agora: Date };
@@ -49,7 +49,7 @@ export async function orquestrarComunicacao(
       const pedirAgenda = ultimaPergunta?.tipo === 'pedir_agenda' || ultimaPergunta?.pergunta === 'agenda';
       const contexto: ContextoRespostaMedico = {
         acaoPendente: pedirAgenda ? 'pedir_agenda' : 'perguntar_nota_pendente',
-        pergunta: montarPerguntaComunicacao(pedirAgenda ? { tipo: 'pedir_agenda', agendaInformada: null } : { tipo: 'perguntar_nota_pendente' })!,
+        pergunta: entrada.respostaMedico.ultimaFalaNoto ?? montarPerguntaComunicacao(pedirAgenda ? { tipo: 'pedir_agenda', agendaInformada: null } : { tipo: 'perguntar_nota_pendente' })!,
         mensagens: entrada.respostaMedico.mensagensSeguras?.slice(-LIMITE_MENSAGENS_CONTEXTO_MEDICO) ?? []
       };
       let extraido: unknown = null;

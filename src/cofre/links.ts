@@ -2,6 +2,24 @@ import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import type { CofreTribemd } from './tribemd-cofre.js';
 
+export interface ContextoConexaoAgenda {
+    aguardandoConexao: boolean;
+    agendaConectada: boolean;
+    link: { enviado: boolean; minutosDesdeEnvio: number | null; usado: boolean; expirado: boolean; rejeitado: boolean | null } | null;
+}
+
+// Protege credenciais antes de qualquer classificação, memória ou log do texto.
+export function contemCredencialAgenda(texto: string): boolean {
+    return /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(texto) ||
+        /\/c\/[A-Za-z0-9_-]{43}|Bearer\s+\S+/i.test(texto) ||
+        /^\S{12,}$/.test(texto.trim()) && /[0-9@#$_-]/.test(texto);
+}
+
+export function podeSolicitarLinkAgenda(conectada: boolean, solicitado: boolean, intencao?: string | null, contexto?: ContextoConexaoAgenda): boolean {
+    return !conectada && (!solicitado || intencao === 'pedir_novo_link' ||
+        intencao === 'informar_conexao' && !!(contexto?.link?.expirado || contexto?.link?.usado));
+}
+
 export interface ConclusaoAgenda { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean; chave: string }
 
 export class LinksCofre {
@@ -28,7 +46,7 @@ export class LinksCofre {
             if (!medico.ativo) return { ok: false, motivo: 'MEDICO_INATIVO' };
             if (!medico.telefone?.trim()) return { ok: false, motivo: 'SEM_TELEFONE' };
             const status = await this.deps.cofre.status(medicoId);
-            if (!['vazio', 'desconectado'].includes(status.estado)) return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
+            if (!['vazio', 'desconectado', 'atencao'].includes(status.estado)) return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
             const limite = (await cliente.query(`select count(*)::int as total from cofre_links
                 where medico_id=$1 and criado_em>now()-interval '1 hour'`, [medicoId])).rows[0];
             if (limite.total >= 3) return { ok: false, motivo: 'LIMITE_PEDIDOS' };
@@ -47,11 +65,35 @@ export class LinksCofre {
             try { if (!confirmado) await cliente.query('rollback'); } finally { cliente.release(); }
         }
         try {
-            const envio = await this.deps.enviar(medicoId,
-                `Para conseguir emitir suas notas, preciso que você conecte sua agenda para cruzar consultas e pagamentos. Use este link seguro para colocar seu login e senha da agenda: ${this.deps.origem}/c/${token}\nEu não recebo senha pela conversa, só por esse link seguro. Vale por 15 minutos e só pode ser usado uma vez.`);
-            if (envio === 'enviado') await this.auditar(link.id, 'enviado');
-            return { ok: envio !== 'erro', motivo: envio };
+            const baloes = [
+                'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.',
+                'Por segurança, eu não recebo senha pela conversa. Seu login e senha da agenda vão só neste link seguro, que vale por 15 minutos e só pode ser usado uma vez.',
+                `${this.deps.origem}/c/${token}`
+            ];
+            let motivo: 'simulado' | 'enviado' | undefined;
+            for (const texto of baloes) {
+                const envio = await this.deps.enviar(medicoId, texto);
+                if (envio === 'erro' || motivo && motivo !== envio) return { ok: false, motivo: 'erro' };
+                motivo = envio;
+            }
+            if (motivo === 'enviado') await this.auditar(link.id, 'enviado');
+            return { ok: true, motivo: motivo! };
+        } catch { return { ok: false, motivo: 'erro' };
         } finally { token = ''; }
+    }
+
+    async lerContextoConexao(medicoId: string, agora: Date): Promise<ContextoConexaoAgenda> {
+        const status = await this.deps.cofre.status(medicoId);
+        const link = (await this.deps.pool.query(`select l.usado_em, l.expira_em,
+            (select a.criado_em from cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado' limit 1) as enviado_em
+            from cofre_links l where l.medico_id=$1 and l.agenda='tribemd' order by l.criado_em desc limit 1`, [medicoId])).rows[0];
+        const agendaConectada = status.estado === 'conectado' && status.ativo;
+        return { agendaConectada, aguardandoConexao: !agendaConectada && !!link, link: link ? {
+            enviado: !!link.enviado_em,
+            minutosDesdeEnvio: link.enviado_em ? Math.max(0, Math.floor((agora.getTime() - new Date(link.enviado_em).getTime()) / 60000)) : null,
+            usado: !!link.usado_em, expirado: new Date(link.expira_em).getTime() <= agora.getTime(),
+            rejeitado: status.estado === 'atencao' ? true : null
+        } : null };
     }
 
     private hash(token: string) { return createHash('sha256').update(token).digest('hex'); }
@@ -87,7 +129,7 @@ export class LinksCofre {
         await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
-        const credencial = /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(texto) || /\/c\/[A-Za-z0-9_-]{43}/.test(texto);
+        const credencial = contemCredencialAgenda(texto);
         // Enquanto há link pendente, nem uma senha sem rótulo segue para memória ou IA.
         const pendente = (await this.deps.pool.query(`select id from cofre_links where medico_id=$1
             and usado_em is null and expira_em>now() limit 1`, [medicoId])).rows[0];

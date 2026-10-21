@@ -213,6 +213,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId));
       },
       enviarLinkCofreAgenda: async id => cofres.links ? cofres.links.solicitarLinkCofre(id, 'tribemd') : { ok: false, motivo: 'COFRE_INDISPONIVEL' },
+      lerContextoConexao: cofres.links ? (id, agora) => cofres.links!.lerContextoConexao(id, agora) : undefined,
       tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
