@@ -134,9 +134,26 @@ it('prompt avança após lista recente e orienta pedido explícito para nova lei
  expect(d.acao).toBeNull();expect(d.fala.length).toBeLessThanOrEqual(3);
  for(const balao of d.fala)expect(balao.length).toBeLessThanOrEqual(500);
 });
-it('prompt pede correção em UMA frase curta e respeita tamanho e incremento acordados',()=>{
+it('prompt pede correção em UMA frase curta e respeita o teto atualizado',()=>{
  expect(PROMPT_CONVERSA).toContain('UMA frase curta');
  expect(PROMPT_CONVERSA).toContain('9. Se voce perceber');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
- expect(PROMPT_CONVERSA.length-4947).toBeLessThanOrEqual(900);
+
+});
+
+it('prompt orienta anúncio e próximo passo sem impor frases fixas',()=>{
+ expect(PROMPT_CONVERSA).toContain('com suas palavras');
+ expect(PROMPT_CONVERSA).toContain('quem faz o que a seguir');
+ expect(PROMPT_CONVERSA).not.toContain('Vou conferir sua agenda');
+ expect(PROMPT_CONVERSA).not.toContain('Vou te enviar um link');
+ expect(PROMPT_CONVERSA).toContain('reescreva com suas palavras');
+ expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
+});
+it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('ação %s sem fala exige anúncio antes de validar seu conteúdo',async acao=>{
+ for(const fala of [undefined,[],['   ']]) {
+  const completar=vi.fn(async()=>JSON.stringify({fala,acao}));
+  const decisao=await new ConversadorMedico('k','m',completar).responder({...entrada,acoesPermitidas:[acao]});
+  expect(decisao.fala).toEqual([]);expect(decisao.acao).toBe(acao);
+  expect(validarAcaoConversa(decisao,fatos,[acao],'Tribe',agora)).toBe('anuncie a acao com suas palavras');
+ }
 });

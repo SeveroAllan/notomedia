@@ -55,11 +55,12 @@ export async function processarComunicacaoMedico(
   const executar = async ():Promise<ProximaAcaoNoto> => {
     const {medicoId,chaveProcessamento:chave,chaveConversa:conversa,agora}=entrada;
     const memoria=deps.memoriaPersistida;
-    const enviar = async (fala:string[], falaMemoria?:string[]) => {
+    const enviar = async (fala:string[], falaMemoria?:string[], sufixo='') => {
+      const chaveEnvio=chave+sufixo;
       if(!fala.length) return;
-      if(falaMemoria) await deps.aoConversar?.(fala,chave,falaMemoria);
-      else await deps.aoConversar?.(fala,chave);
-      if(conversa && memoria) { try {await memoria.registrarFala(medicoId,conversa,`noto:${chave}`,(falaMemoria??fala).join('\n'),'noto');} catch {deps.log('erro','CONVERSA_MEMORIA_FALHOU');} }
+      if(falaMemoria) await deps.aoConversar?.(fala,chaveEnvio,falaMemoria);
+      else await deps.aoConversar?.(fala,chaveEnvio);
+      if(conversa && memoria) { try {await memoria.registrarFala(medicoId,conversa,`noto:${chaveEnvio}`,(falaMemoria??fala).join('\n'),'noto');} catch {deps.log('erro','CONVERSA_MEMORIA_FALHOU');} }
     };
     try {
       if(!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) {
@@ -121,7 +122,12 @@ export async function processarComunicacaoMedico(
       let decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
-      const corrigirIntroducao=decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
+      if(motivo==='anuncie a acao com suas palavras') {
+        deps.log('info','CONVERSA_ANUNCIO_CORRIGIR');
+        decisao=await decidir(permitidas,undefined,{motivo,faltou:[]});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
+      const corrigirIntroducao=chamadas<2 && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
       if(corrigirIntroducao) {
         deps.log('info',`CONVERSA_INTRODUCAO_CORRIGIR ${motivo}`);
         decisao=await decidir(['pedir_link_agenda'],undefined,{motivo:motivo!,faltou:faltasIntroducaoLink(decisao.fala)});
@@ -138,6 +144,7 @@ export async function processarComunicacaoMedico(
         if(decisao.acao==='registrar_modo_sem_agenda') {
           await memoria.registrarMarca(medicoId,conversa,'sem_agenda_digital');
         } else if(decisao.acao && decisao.acao!=='nenhuma' || fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
+          if(decisao.acao==='listar_pendencias' || decisao.acao==='iniciar_lote') await enviar(decisao.fala.slice(0,1),undefined,':anuncio');
           const r=await deps.ferramentas.executar(decisao,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,fatos,narrar});
           if(r.jaRespondida) fala=[];
           else {

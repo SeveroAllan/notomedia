@@ -70,7 +70,8 @@ it.each([0,3])('lote sem elegíveis: distingue %i consultas existentes com resul
  const fala=totalNoPeriodo?'Vi 3 consultas desde 05/10, mas todas já têm nota emitida.':'Não encontrei consultas desde 05/10.';
  c.completar.mockResolvedValueOnce('{"fala":["Vou conferir o período informado."],"acao":"iniciar_lote"}').mockResolvedValueOnce(JSON.stringify({fala:[fala],acao:null}));
  c.executar.mockResolvedValue({dados:{ok:true,totalNoPeriodo,jaEmitidas:totalNoPeriodo,totalConsultas:0}});
- await c.turno('lote','Pode preparar esse período?');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.enviar).toHaveBeenCalledExactlyOnceWith([fala],'lote');
+ await c.turno('lote','Pode preparar esse período?');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.enviar.mock.calls.map(([f])=>f)).toEqual([['Vou conferir o período informado.'],[fala]]);
+ expect(c.enviar.mock.calls[0][1]).toBe('lote:anuncio');expect(c.enviar.mock.calls[1][1]).toBe('lote');
  expect(c.executar.mock.calls[0][1].fatos.periodo.desde).toBe('2026-10-05');
 });
 it.each(['emitir_nota','listar_pendencias'])('ação inválida ou sem fato %s é recusada sem executar',async acao=>{
@@ -307,4 +308,33 @@ it('lista fora das seis falas recentes não mantém o bloqueio',async()=>{
   expect(JSON.parse(msgs[1].content).fatos.listaRecente).toBe(false);return '{"fala":["O que vamos conferir?"],"acao":null}';
  });
  await c.turno('outra','Veja as pendências');expect(c.completar).toHaveBeenCalledOnce();
+});
+
+it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('rascunho %s sem anúncio corrige uma vez e só então executa',async acao=>{
+ const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:acao!=='pedir_link_agenda'};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ const fala=acao==='pedir_link_agenda'?introducao:['Estou verificando o período informado; você não precisa fazer nada agora.'];
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:[],acao})).mockResolvedValueOnce(JSON.stringify({fala,acao}));
+ c.executar.mockImplementation(async d=>{
+  expect(c.completar).toHaveBeenCalledTimes(2);expect(d.fala).toEqual(fala);
+  if(acao!=='pedir_link_agenda') expect(c.enviar).toHaveBeenCalledWith(fala,'anuncio:anuncio');
+  return {jaRespondida:true};
+ });
+ await c.turno('anuncio','Uso o tribemd');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(JSON.parse(c.completar.mock.calls[1][2][1].content).correcao.motivo).toBe('anuncie a acao com suas palavras');
+ expect(JSON.stringify(c.enviar.mock.calls)).not.toContain('anuncie a acao');
+});
+it('dois rascunhos sem fala recusam a ação sem terceiro pedido nem efeito',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ c.completar.mockResolvedValue('{"fala":[],"acao":"listar_pendencias"}');
+ await c.turno('sem-fala','Liste');expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(c.enviar).toHaveBeenCalledOnce();
+});
+it('anúncio vem antes da leitura, tem chave própria e reentrega não repete nenhum envio',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ c.completar.mockResolvedValueOnce('{"fala":["Estou conferindo esse período; aguarde o resultado."],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":["Conferência terminada; você pode escolher o próximo passo."],"acao":null}');
+ c.executar.mockImplementation(async()=>{expect(c.enviar).toHaveBeenCalledOnce();return{dados:{ok:true,total:0}};});
+ await c.turno('ordem','Confira');await c.turno('ordem','Confira');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.map(([,chave])=>chave)).toEqual(['ordem:anuncio','ordem']);
+ expect(c.banco.mensagens.filter(m=>m.papel==='noto').map(m=>m.mensagemId)).toEqual(['noto:ordem:anuncio','noto:ordem']);
 });
