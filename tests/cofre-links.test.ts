@@ -529,3 +529,12 @@ it('pedido de novo com link ativo informa validade, conserva a mesma URL e uma �
     expect(textos).toHaveLength(3); expect(textos.at(-1)).toBe(url);
     expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua válido; pode usar o mesmo.'], 'de-novo');
 });
+
+it('texto/resultado apenas: usa fala contextual do chamador antes da URL, sem alterar uso único ou dedup de conclusão', async () => {
+    const fala = ['O link conecta só a agenda, em leitura. Login e senha ficam no link seguro; nada é enviado a pacientes.'];
+    expect(await links.solicitarLinkCofre(medicoId, 'tribemd', { fala })).toEqual({ ok: true, motivo: 'enviado' });
+    expect(textos).toHaveLength(2); expect(textos[0]).toBe(fala[0]);
+    const token = new URL(textos[1]).pathname.split('/').at(-1)!;
+    expect((await post(token)).status).toBe(202); expect((await post(token)).status).toBe(410);
+    expect(iniciar).toHaveBeenCalledOnce();
+});

@@ -37,7 +37,7 @@ export class LinksCofre {
         enviar: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
 
-    async solicitarLinkCofre(medicoId: string, agenda: string, opcoes: { reenvio?: boolean } = {}) {
+    async solicitarLinkCofre(medicoId: string, agenda: string, opcoes: { reenvio?: boolean; fala?: readonly string[] } = {}) {
         if (agenda !== 'tribemd') return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
         const cliente = await this.deps.pool.connect();
         let link: { id: string };
@@ -85,7 +85,7 @@ export class LinksCofre {
         }
         try {
             const url = `${this.deps.origem}/c/${token}`;
-            const baloes = opcoes.reenvio ? [FALA_NOVO_LINK_AGENDA, url] : [
+            const baloes = opcoes.fala ? [...opcoes.fala, url] : opcoes.reenvio ? [FALA_NOVO_LINK_AGENDA, url] : [
                 FALA_PEDIDO_CONEXAO_AGENDA,
                 FALA_SEGURANCA_LINK_AGENDA,
                 url
