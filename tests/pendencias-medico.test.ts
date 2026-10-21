@@ -130,3 +130,27 @@ it('controle persistido guarda só período/estado, com reserva atômica e migra
   expect(sql).toContain('enable row level security'); expect(sql).toContain('from anon, authenticated'); expect(sql).toContain('references public.medicos(id) on delete cascade');
   expect(sql).not.toMatch(/nome|cpf|valor_cobrado|valor_consulta|create policy/i);
 });
+it('pedido atual de emissão tem prioridade sobre verificar e reaproveita o período sem relistar',async()=>{
+ const c=cenario();c.estado.dataInicio='2026-09-03';
+ c.deps.classificar.mockResolvedValue({verificar:true,emitir:true,desde:null,moldura:'Veja o que encontrei.'} as any);
+ const aoEmitir=vi.fn();
+ expect(await c.fluxo.responder({medicoId:'m',conversa:'c',chave:'emitir',texto:'Pode emitir as notas desse período',mensagens:['173 consultas sem nota desde 03/09/2026'],agora,aoEmitir})).toBe(true);
+ expect(aoEmitir).toHaveBeenCalledExactlyOnceWith('2026-09-03');expect(c.deps.listar).not.toHaveBeenCalled();expect(c.deps.enviar).not.toHaveBeenCalled();
+});
+it('pedido de emissão sem período encaminha null; sem executor não é convertido em verificação',async()=>{
+ const c=cenario();c.deps.classificar.mockResolvedValue({verificar:true,emitir:true,desde:null,moldura:'Veja o que encontrei.'} as any);
+ const entrada={medicoId:'m',conversa:'c',chave:'e',texto:'quero emtiir as notas',mensagens:[],agora};const aoEmitir=vi.fn();
+ expect(await c.fluxo.responder({...entrada,aoEmitir})).toBe(true);expect(aoEmitir).toHaveBeenCalledExactlyOnceWith(null);
+ expect(await c.fluxo.responder(entrada)).toBe(false);expect(c.deps.listar).not.toHaveBeenCalled();
+});
+it('contagem lê ferramenta e chama continuação sem reenviar a lista já apresentada',async()=>{
+ const c=cenario();const concluir=vi.fn();
+ await c.fluxo.consultar('m','c','e','2026-09-03',agora,'',3,concluir,false);
+ expect(concluir).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ok:true,total:1}));expect(c.deps.listar).toHaveBeenCalledOnce();expect(c.deps.enviar).not.toHaveBeenCalled();
+});
+it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as notaas'])('protocolo IA distingue emissão atual com contexto: %s',async texto=>{
+ const {classificarPendencias}=await import('../src/onboarding/pendencias-medico.js');
+ const completar=vi.fn(async()=>'{"verificar":true,"emitir":true,"desde":null,"moldura":"Conferi esse período."}');
+ expect(await classificarPendencias('k','m',completar,{texto,mensagens:['173 consultas sem nota desde 03/09/2026'],agora,aguardandoData:false})).toMatchObject({emitir:true,verificar:false});
+ expect(completar.mock.calls[0][2][0].content).toContain('Pedido ATUAL de emissão');expect(completar.mock.calls[0][2][1].content).toContain(texto);
+});

@@ -136,20 +136,29 @@ export async function processarComunicacaoMedico(
       if (!deps.conversaLivreAtiva && entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return { tipo: 'nenhuma' };
       let estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
       if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
-      if (deps.conversaLivreAtiva && estado.estado.agenda.conectada && entrada.respostaMedico && entrada.chaveConversa && deps.pendencias) {
-        const mensagens = await deps.memoriaPersistida?.ler(entrada.medicoId, entrada.chaveConversa) ?? [];
-        if (await deps.pendencias.responder({ medicoId: entrada.medicoId, conversa: entrada.chaveConversa, chave: entrada.chaveProcessamento,
-          texto: entrada.respostaMedico.texto, mensagens, agora: entrada.agora,
-          ...(await deps.aguardaInicioRetroativo?.(entrada.medicoId) ? { aoInicio: async (desde: string) => { await deps.retroativo?.responder(entrada.medicoId, entrada.chaveConversa!, entrada.chaveProcessamento, desde, entrada.agora); } } : {}) })) {
-          await deps.memoriaPersistida?.registrar(entrada.medicoId, entrada.chaveConversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
+      if (deps.conversaLivreAtiva && entrada.respostaMedico && entrada.chaveConversa) {
+        const conversa = entrada.chaveConversa;
+        const aguardandoInicio = await deps.aguardaInicioRetroativo?.(entrada.medicoId);
+        const responderRetroativo = () => deps.retroativo?.responder(entrada.medicoId, conversa, entrada.chaveProcessamento,
+          entrada.respostaMedico!.texto, entrada.agora, entrada.chavePergunta);
+        // Uma confirmação pendente tem prioridade sobre qualquer nova verificação de agenda.
+        let atendida = !aguardandoInicio && !!await responderRetroativo();
+        if (!atendida && estado.estado.agenda.conectada && deps.pendencias) {
+          const mensagens = await deps.memoriaPersistida?.ler(entrada.medicoId, conversa) ?? [];
+          atendida = await deps.pendencias.responder({ medicoId: entrada.medicoId, conversa, chave: entrada.chaveProcessamento,
+            texto: entrada.respostaMedico.texto, mensagens, agora: entrada.agora,
+            ...(deps.retroativo ? { aoEmitir: async (desde: string | null) => {
+              await deps.retroativo!.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora, desde);
+            } } : {}),
+            ...(aguardandoInicio ? { aoInicio: async (desde: string) => {
+              await deps.retroativo?.responder(entrada.medicoId, conversa, entrada.chaveProcessamento, desde, entrada.agora);
+            } } : {}) });
+        }
+        if (!atendida && aguardandoInicio) atendida = !!await responderRetroativo();
+        if (atendida) {
+          await deps.memoriaPersistida?.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
           return { tipo: 'nenhuma' };
         }
-      }
-      if (deps.conversaLivreAtiva && entrada.respostaMedico && entrada.chaveConversa &&
-        await deps.retroativo?.responder(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento,
-          entrada.respostaMedico.texto, entrada.agora, entrada.chavePergunta)) {
-        await deps.memoriaPersistida?.registrar(entrada.medicoId, entrada.chaveConversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
-        return { tipo: 'nenhuma' };
       }
       const memoriaConversa = deps.conversaLivreAtiva === true ? deps.memoriaPersistida : deps.memoriaConversa;
       const conversa = entrada.chaveConversa;

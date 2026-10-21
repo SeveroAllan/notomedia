@@ -369,3 +369,46 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   expect(enviar.mock.calls[5][0].texto).toContain('Emiti 1 de 1'); expect(enviar.mock.calls[6][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[7][0].texto).toContain('valor');
   expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });
+it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as notaas'])('após listar pendências, pedido atual abre lote pelo período e sim simples não relista: %s',async pedido=>{
+ config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};
+ // O cenário não tem confirmações individuais nem notas sem contato aguardando reenvio.
+ const queryOriginal=fronteiras.query.getMockImplementation()!;
+ fronteiras.query.mockImplementation((sql:string,p:unknown[])=>sql.includes('s.aguardando_confirmacao_medico=true') || sql.includes('sn.contato_paciente_encriptado is null') ? {rows:[]} : queryOriginal(sql,p));
+ const {PostgresConsultasSincronizadas}=await import('../src/io/postgres/postgres-consultas-sincronizadas.js');
+ const {formatarPendencias}=await import('../src/onboarding/pendencias-medico.js');
+ const lista={ok:true as const,total:173,consultas:Array.from({length:20},()=>({paciente:'Pessoa Ficticia A',dataHora:'2026-10-19T14:00Z',valorCentavos:30000}))};
+ vi.spyOn(PostgresConsultasSincronizadas.prototype,'listarConsultasSemNota').mockResolvedValue(lista);
+ fronteiras.fonte.mockResolvedValue({tipo:'consultas',fonte:'tribemd',consultas:Array.from({length:173},(_,i)=>({pacienteId:'456',telefonePaciente:'5551993527271',idExterno:String(i),nomeAoVivo:'Pessoa Ficticia A',dataHora:'2026-10-19T14:00Z',status:'realizada',valorConsultaCentavos:40000,valorCobradoAoVivoCentavos:30000}))});
+ let atual:any=null;
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>atual);
+ const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>atual={id:'lote-pedido',medicoId,conversa,ate:agora.toISOString(),desde:null,estado:'aguardando_data_inicio',totalConsultas:0,totalCentavos:0,semValor:0,mensagemConfirmacaoId:null,perguntaEm:null});
+ const snapshot=Array.from({length:173},(_,i)=>({fonte:'tribemd',idExterno:String(i),chave:`chave-${i}`,assinatura:`assinatura-${i}`}));
+ const contar=vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:snapshot,totalConsultas:173,totalCentavos:5190000,semValor:0});
+ vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockImplementation(async(_id,desde,c)=>Object.assign(atual,{desde,totalConsultas:c.totalConsultas,totalCentavos:c.totalCentavos,estado:'aguardando_confirmacao_lote'}));
+ vi.spyOn(PostgresLotesEmissao.prototype,'registrarPergunta').mockImplementation(async(_id,mensagemId,agora)=>{Object.assign(atual,{mensagemConfirmacaoId:mensagemId,perguntaEm:agora.toISOString()});});
+ const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockImplementation(async()=>{atual.estado='confirmado';return true;});
+ const classificar=vi.fn();
+ fronteiras.openai.mockImplementation(async(_key,_modelo,mensagens)=>{
+  if(mensagens[0].content.startsWith('Classifique a intenção atual')){
+   const {texto}=JSON.parse(mensagens[1].content);classificar(texto);
+   return JSON.stringify({verificar:true,emitir:texto!=='Tem pendências de nota?',desde:null,moldura:'Conferi esse período.'});
+  }
+  if(mensagens[0].content.startsWith('Interprete somente a resposta'))return '{"intencao":"sim","confianca":0.99}';
+  return '{"fala":["Resposta indevida"]}';
+ });
+ const baloesLista=formatarPendencias(lista,'2026-09-03','Conferi esse período.').fala.length;enviosEsperados=baloesLista+2;
+ enviar.mockImplementation(async()=>({sucesso:true,mensagemId:`evo-${enviar.mock.calls.length}`}));
+ const app=criarAppExpress();await receber(app,'listar-periodo','Tem pendências de nota?');
+ expect(abrir).not.toHaveBeenCalled();expect(fronteiras.fonte).toHaveBeenCalledOnce();
+ await receber(app,'emitir-periodo',pedido);
+ expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-09-03',atual.ate,new Map(Array.from({length:173},(_,i)=>[String(i),30000])));
+ const pergunta=enviar.mock.calls[baloesLista][0].texto;expect(pergunta).toContain('173 consultas');expect(pergunta).toContain('03/09/2026');expect(pergunta).toContain('51.900,00');expect(pergunta).toContain('Posso emitir');expect(pergunta).not.toContain('Desde que dia');
+ expect(enviar.mock.calls.slice(baloesLista).every(([p])=>!p.texto.includes('consultas sem nota desde'))).toBe(true);
+ expect(confirmar).not.toHaveBeenCalled();expect(logs.mock.calls.some(([m])=>String(m).includes('CONTAR_CONSULTAS_PERIODO'))).toBe(true);
+ const leituras=fronteiras.fonte.mock.calls.length;
+ await receber(app,'confirmar-periodo','sim');await receber(app,'confirmar-periodo','sim');
+ expect(confirmar).toHaveBeenCalledExactlyOnceWith('lote-pedido','assistente:confirmar-periodo',`evo-${baloesLista+1}`,{intencao:'sim',confianca:.99},expect.any(Date));
+ expect(classificar.mock.calls.map(([texto])=>texto)).toEqual(['Tem pendências de nota?',pedido]);expect(contar).toHaveBeenCalledOnce();expect(fronteiras.fonte).toHaveBeenCalledTimes(leituras);
+ expect(JSON.stringify(banco.mensagens)).not.toContain('Pessoa Ficticia A');expect(JSON.stringify(banco.mensagens)).toContain('[PACIENTE]');
+ expect(JSON.stringify(enviar.mock.calls)).not.toMatch(/CONTAR_CONSULTAS|AGUARDANDO_|cofre/i);expect(config.envioPacienteRealAtivo).toBe(false);
+});

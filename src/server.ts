@@ -241,6 +241,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const emissaoLote = new PostgresEmissaoLote(pool, config.encryptionKey, config.appPepper, lotePermitido);
   const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
+    ultimaFala: (id, conversa) => memoriaPersistida!.lerUltimaFalaNoto(id, conversa),
     reenviar: async (medicoId,conversa,chave,texto) => {
       const candidatos=await emissaoLote.pendentesReenvio(medicoId);
       if(!candidatos.length || !await interpretarReenvioLote(iaApiKey,iaModeloTexto,completarIa,texto)) return false;
@@ -250,7 +251,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido; confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas; vou verificar o que impediu a entrega.' : ''}`]});
       console.info(JSON.stringify({evento:'LOTE_REENVIO',medicoId,...r}));return true;
     },
-    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo)); },
+    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir, somenteContagem = false) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo), !somenteContagem); },
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
     contar: (id, desde, ate, valoresAoVivo) => {
       if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');

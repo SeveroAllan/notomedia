@@ -45,42 +45,63 @@ export function perguntaLote(lote: Pick<LoteRetroativo, 'desde' | 'totalConsulta
 }
 export class ConversaLoteRetroativo {
   constructor(private readonly repo: RepositorioLotes, private readonly deps: {
+    ultimaFala?: (medicoId: string, conversa: string) => Promise<string | undefined>;
     reenviar?: (medicoId: string, conversa: string, mensagemId: string, texto: string) => Promise<boolean>;
     permitido: (medicoId: string) => Promise<boolean>;
     contar: (medicoId: string, desde: string, ate: string, valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<ContagemPeriodo>;
-    listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: (valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<void>) => Promise<void>;
+    listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: (valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<void>, somenteContagem?: boolean) => Promise<void>;
     comporContagem: (lote: LoteRetroativo) => { fala: string[] };
     interpretarData: (texto: string, agora: Date) => Promise<string | null>;
     interpretarConfirmacao: (texto: string, pergunta: string) => Promise<InterpretacaoConfirmacao>;
     enviar: (medicoId: string, conversa: string, chave: string, fala: string[], aoEnviar?: (mensagemId: string) => Promise<void>) => Promise<void>;
     log: (mensagem: string) => void;
   }) {}
-  async iniciar(medicoId: string, conversa: string, chave: string, agora: Date): Promise<boolean> {
+  async iniciar(medicoId: string, conversa: string, chave: string, agora: Date, inicioConhecido?: string | null): Promise<boolean> {
     if (!await this.deps.permitido(medicoId)) return false;
-    const lote = await this.repo.abrir(medicoId, conversa, chave, agora);
-    if (lote) await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:data`, ['Desde que dia você quer verificar as consultas para as notas retroativas? Consigo consultar os últimos 90 dias. As notas deste teste serão emitidas em homologação, sem valor fiscal.']);
+    const desde = validarInicioRetroativo(inicioConhecido ?? null, agora);
+    const novo = await this.repo.abrir(medicoId, conversa, chave, agora);
+    const lote = novo ?? (inicioConhecido !== undefined ? await this.repo.ativo(medicoId) : null);
+    if (lote?.estado === 'aguardando_data_inicio' && desde) {
+      await this.propor(lote, desde, conversa, chave, agora, true);
+      return true;
+    }
+    if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde que dia você quer verificar as consultas para as notas retroativas? Consigo consultar os últimos 90 dias. As notas deste teste serão emitidas em homologação, sem valor fiscal.']);
+    else if (lote?.estado === 'aguardando_data_inicio') {
+      const pergunta = 'Preciso saber desde que dia você quer emitir as notas. Qual é a data de início?';
+      await this.deps.enviar(medicoId, conversa, `lote:resposta:${chave}`, [await this.deps.ultimaFala?.(medicoId, conversa) === pergunta
+        ? 'Para conferir as notas, falta a data de início. Desde que dia?' : pergunta]);
+    }
     return true;
+  }
+  private async propor(lote: LoteRetroativo, desde: string, conversa: string, mensagemId: string, agora: Date, somenteContagem = false) {
+    const medicoId = lote.medicoId;
+    const propor = async (valoresAoVivo?: ReadonlyMap<string, number | null>) => {
+      const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, lote.ate, valoresAoVivo) : await this.deps.contar(medicoId, desde, lote.ate);
+      this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
+        totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
+      const preparado = await this.repo.preparar(lote.id, desde, contagem);
+      if (!preparado.totalConsultas) {
+        await this.deps.enviar(medicoId, conversa, `lote:resposta:${mensagemId}`, [`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`]); return;
+      }
+      await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, this.deps.comporContagem(preparado).fala,
+        id => this.repo.registrarPergunta(lote.id, id, agora));
+    };
+    if (this.deps.listarPeriodo) await this.deps.listarPeriodo(medicoId, conversa, mensagemId, desde, agora, propor, somenteContagem);
+    else await propor();
   }
   async responder(medicoId: string, conversa: string, mensagemId: string, texto: string, agora: Date, perguntaId?: string): Promise<boolean> {
     if (!await this.deps.permitido(medicoId)) return false;
     const lote = await this.repo.ativo(medicoId);
     if (!lote) return await this.deps.reenviar?.(medicoId,conversa,mensagemId,texto) ?? false;
     const enviar = (fala: string[]) => this.deps.enviar(medicoId, conversa, `lote:resposta:${mensagemId}`, fala);
-    if (lote.estado === 'confirmado' || lote.estado === 'processando') { await enviar(['Estou conferindo as consultas que você autorizou para a emissão em homologação.']); return true; }
+    if (lote.estado === 'confirmado' || lote.estado === 'processando') {
+      const padrao = 'Estou conferindo as consultas que você autorizou para a emissão em homologação.';
+      await enviar([await this.deps.ultimaFala?.(medicoId, conversa) === padrao ? 'Sigo conferindo as notas autorizadas. Quando terminar, trago o resultado por aqui.' : padrao]); return true;
+    }
     if (lote.estado === 'aguardando_data_inicio') {
       const desde = validarInicioRetroativo(await this.deps.interpretarData(texto, agora), agora);
       if (!desde) { await enviar(['Pode confirmar o dia, mês e ano do início? Preciso de uma data dos últimos 90 dias, até hoje.']); return true; }
-      const propor = async (valoresAoVivo?: ReadonlyMap<string, number | null>) => {
-        const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, lote.ate, valoresAoVivo) : await this.deps.contar(medicoId, desde, lote.ate);
-        this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
-          totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
-        const preparado = await this.repo.preparar(lote.id, desde, contagem);
-        if (!preparado.totalConsultas) { await enviar([`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`]); return; }
-        await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, this.deps.comporContagem(preparado).fala,
-          id => this.repo.registrarPergunta(lote.id, id, agora));
-      };
-      if (this.deps.listarPeriodo) await this.deps.listarPeriodo(medicoId, conversa, mensagemId, desde, agora, propor);
-      else await propor();
+      await this.propor(lote, desde, conversa, mensagemId, agora);
       return true;
     }
     // Sem citação, o único lote ativo vincula a resposta à sua pergunta ainda válida.

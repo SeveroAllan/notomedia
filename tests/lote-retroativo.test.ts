@@ -191,3 +191,33 @@ it('resumo conta emissão, entrega e falta de contato separadamente sem nomes ne
  const fala=enviar.mock.calls[0][2];expect(fala[0]).toContain('Emiti 3 de 3');expect(fala[1]).toContain('2 notas entregues');expect(fala[1]).toContain('1 sem contato válido');
  expect(fala).toHaveLength(2);expect(fala.every((s:string)=>s.length<=500)).toBe(true);expect(fala.join(' ')).not.toMatch(/Pessoa Ficticia|52998224725|SIMULAD|ERRO_/);
 });
+it('início pela conversa reutiliza período conhecido, conta e pergunta confirmação sem solicitar data',async()=>{
+ const c=cenario();await c.conversa.iniciar('m','c','pedido-emissao',agora,'2026-09-03');
+ expect(c.deps.interpretarData).not.toHaveBeenCalled();expect(c.deps.contar).toHaveBeenCalledExactlyOnceWith('m','2026-09-03',agora.toISOString());
+ expect(c.falas).toEqual([perguntaLote({...c.lote(),desde:'2026-09-03'})]);expect(c.repo.confirmar).not.toHaveBeenCalled();
+ await c.conversa.responder('m','c','sim','sim',agora);
+ expect(c.repo.confirmar).toHaveBeenCalledExactlyOnceWith('lote','sim','pergunta-evolution',{intencao:'sim',confianca:.99},agora);
+});
+it.each([null,'2026-10-21','2026-02-30'])('período ausente/inválido pergunta data e não conta (%s)',async desde=>{
+ const c=cenario();await c.conversa.iniciar('m','c','e',agora,desde);
+ expect(c.falas[0]).toContain('Desde que dia');expect(c.deps.contar).not.toHaveBeenCalled();expect(c.repo.confirmar).not.toHaveBeenCalled();
+});
+it('proposta usa leitura ao vivo sem exibir lista e mantém gate antes da contagem',async()=>{
+ const c=cenario();const valores=new Map([['12',30000]]);
+ const listarPeriodo=vi.fn(async(_m,_c,_k,_desde,_agora,concluir)=>concluir(valores));
+ const conversa=new ConversaLoteRetroativo(c.repo,{...c.deps,listarPeriodo});
+ await conversa.iniciar('m','c','e',agora,'2026-09-03');
+ expect(listarPeriodo.mock.calls[0][6]).toBe(true);expect(c.deps.contar).toHaveBeenCalledWith('m','2026-09-03',agora.toISOString(),valores);
+ c.deps.permitido.mockResolvedValue(false);await conversa.iniciar('m','c','e2',agora,'2026-09-03');expect(c.deps.contar).toHaveBeenCalledOnce();
+});
+it('status de lote confirmado varia em mensagens consecutivas sem nova contagem ou confirmação',async()=>{
+ const c=cenario();const conversa=new ConversaLoteRetroativo(c.repo,{...c.deps,ultimaFala:async()=>c.falas.at(-1)});
+ await conversa.iniciar('m','c','e',agora);await conversa.responder('m','c','d','1/10',agora);await conversa.responder('m','c','s','sim',agora);
+ await conversa.responder('m','c','e1','e as notas?',agora);await conversa.responder('m','c','e2','e agora?',agora);
+ expect(c.falas.at(-1)).not.toBe(c.falas.at(-2));expect(c.repo.confirmar).toHaveBeenCalledOnce();expect(c.deps.contar).toHaveBeenCalledOnce();
+});
+it('outro pedido de emissão sem período não fica mudo enquanto aguarda data nem abre segundo lote',async()=>{
+ const c=cenario();await c.conversa.iniciar('m','c','e',agora,null);c.repo.abrir.mockResolvedValue(null);
+ await c.conversa.iniciar('m','c','e2',agora,null);
+ expect(c.falas).toHaveLength(2);expect(c.falas[1]).not.toBe(c.falas[0]);expect(c.falas[1]).toContain('dia');expect(c.deps.contar).not.toHaveBeenCalled();
+});
