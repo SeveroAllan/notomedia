@@ -9,7 +9,7 @@ import type { HistoricoComunicacaoRepositorio } from './historico-comunicacao-re
 import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-proxima-acao.js';
 
 import type { ConversadorMedico } from './conversador-medico.js';
-import type { PostgresMemoriaConversaMedico, MemoriaConversa } from './conversa-repositorio.js';
+import type { PostgresMemoriaConversaMedico, MemoriaConversa } from './memoria-conversa.js';
 
 type Entrada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<Entrada, 'nomeMedico' | 'estado'>;
@@ -59,7 +59,7 @@ export async function processarComunicacaoMedico(
     const falaMemoria = fala.map(texto => [...nomesAoVivo].reduce((seguro, nome) => seguro.split(nome).join('[PACIENTE]'), texto));
     if (falaMemoria.some((texto, i) => texto !== fala[i])) await deps.aoConversar?.(fala, chave, falaMemoria);
     else await deps.aoConversar?.(fala, chave);
-    if (entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(
+    if (entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarFala(
       entrada.medicoId, entrada.chaveConversa, `noto:${chave}`, falaMemoria.join('\n'), 'noto');
   };
   const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
@@ -71,7 +71,7 @@ export async function processarComunicacaoMedico(
       catch { /* A indisponibilidade da memória não impede a tentativa de resposta. */ }
       for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico?.texto ?? ''), 'medico']] as const) {
         if (!entrada.respostaMedico) continue;
-        try { await deps.memoriaPersistida.registrar(entrada.medicoId, entrada.chaveConversa, id, texto, papel); }
+        try { await deps.memoriaPersistida.registrarFala(entrada.medicoId, entrada.chaveConversa, id, texto, papel); }
         catch (e) { deps.log('erro', `COMUNICACAO_MEMORIA_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
       }
     }
@@ -199,7 +199,7 @@ export async function processarComunicacaoMedico(
           resumo: resumo?.resumo ?? null, estado: estado.estado, agora: entrada.agora };
         let resposta = await deps.conversador.responder({ ...contexto, acoesPermitidas: deps.listarConsultasSemNota && deps.enviarLinkCofreAgenda
           ? estado.estado.agenda.conectada || contextoConexao?.link && !contextoConexao.link.expirado && !contextoConexao.link.usado ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] : [] });
-        if (resposta.semAgendaDigital && conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarSemAgendaDigital(entrada.medicoId, conversa);
+        if (resposta.semAgendaDigital && conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarMarca(entrada.medicoId, conversa, 'sem_agenda_digital');
         if (resposta.intencaoConexao === 'informar_conexao') {
           // A IA interpreta; conexão e possibilidade de reenvio são sempre relidas no backend.
           const atualizado = await deps.lerEstado(entrada.medicoId, entrada.agora);
@@ -239,8 +239,7 @@ export async function processarComunicacaoMedico(
             acoesPermitidas: conectar && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda ? ['enviar_link_cofre_agenda'] : [] });
         }
         if (resposta.acao === 'enviar_link_cofre_agenda' && podeSolicitarLinkAgenda(estado.estado.agenda.conectada, linkCofreJaSolicitado, resposta.intencaoConexao, contextoConexao) && deps.enviarLinkCofreAgenda) {
-          if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(entrada.medicoId, conversa,
-            'noto:cofre_agenda:solicitado', 'O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
+          if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarMarca(entrada.medicoId, conversa, 'link_agenda_solicitado');
           let resultado;
           try { resultado = linkCofreJaSolicitado || resposta.intencaoConexao === 'pedir_novo_link'
             ? await deps.enviarLinkCofreAgenda(entrada.medicoId, { reenvio: true }) : await deps.enviarLinkCofreAgenda(entrada.medicoId); }
@@ -287,6 +286,6 @@ async function atualizarResumo(memoria: PostgresMemoriaConversaMedico, conversad
     const antigas = await memoria.lerAntigas(medicoId, conversa, anterior?.ateId ?? '0');
     if (antigas.length <= 20) return;
     const resumo = await conversador.resumir({ resumo: anterior?.resumo ?? null, mensagens: antigas.map(mensagem => mensagem.texto) });
-    if (resumo !== null) await memoria.gravarResumo(medicoId, conversa, resumo, antigas.at(-1)!.id);
+    if (resumo !== null) await memoria.registrarResumo(medicoId, conversa, resumo, antigas.at(-1)!.id);
   } catch { /* Resumo é auxiliar: sua indisponibilidade não interrompe a conversa. */ }
 }

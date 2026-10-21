@@ -10,6 +10,11 @@ export class BancoConversaFalso {
     const [medico, conversa, terceiro, quarto, papel] = parametros;
     const chave = JSON.stringify([medico, conversa]);
     const mensagens = this.mensagens.filter(m => m.medico === medico && (m.conversa === conversa || sql.includes("mensagem_id like 'noto:agenda:%'") && m.papel === 'noto' && (m.mensagemId === 'noto:boas_vindas:unica' || m.mensagemId.startsWith('noto:agenda:')))).filter(m => !sql.includes("mensagem_id not like 'contexto:%'") || !m.mensagemId.startsWith('contexto:'));
+    if (sql.startsWith('with mensagens_removidas as')) {
+      this.mensagens = this.mensagens.filter(m => m.medico !== medico);
+      for (const chaveResumo of this.resumos.keys()) if (JSON.parse(chaveResumo)[0] === medico) this.resumos.delete(chaveResumo);
+      return { rows: [] };
+    }
     if (sql.startsWith('insert into conversa_mensagens')) {
       const existente = this.mensagens.find(m => m.medico === medico && m.mensagemId === terceiro);
       if (existente) {

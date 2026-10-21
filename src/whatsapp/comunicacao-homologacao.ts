@@ -1,4 +1,4 @@
-import { PostgresMemoriaConversaMedico } from '../onboarding/conversa-repositorio.js';
+import { PostgresMemoriaConversaMedico } from '../onboarding/memoria-conversa.js';
 import { REACOES_PERMITIDAS, type ReacaoMedico, type TransporteReacao } from './reagir-mensagem.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';

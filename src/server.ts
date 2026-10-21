@@ -44,7 +44,7 @@ import { SupabaseAuthAdminService } from './io/supabase/supabase-auth-admin-serv
 import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
-import { PostgresMemoriaConversaMedico } from './onboarding/conversa-repositorio.js';
+import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
 import { ConversadorMedico } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico } from './onboarding/processar-comunicacao-medico.js';
@@ -114,7 +114,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     registrarTextoLink: async entrada => {
       if (!memoriaPersistida) return;
       const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, entrada.telefoneMedico.replace(/\D/g, '')])).digest('hex');
-      await memoriaPersistida.registrar(entrada.medicoId, chave,
+      await memoriaPersistida.registrarFala(entrada.medicoId, chave,
         `noto:agenda:link:${entrada.linkId}:${entrada.indice}`, entrada.texto, 'noto');
     },
     obterWhatsappAssistente: () => evolutionAssistantClient.obterTelefoneInstancia(),
