@@ -65,3 +65,13 @@ it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
  for(const alias of ['Tribe','tribe md','o tribe']) expect(PROMPT_CONVERSA).toContain('"'+alias+'"');
  for(let passo=1;passo<=8;passo++) expect(PROMPT_CONVERSA).toMatch(new RegExp('^'+passo+'\\. ', 'm'));
 });
+
+it('exemplo Tribe do prompt passa pela guarda real de introdução com dois balões',()=>{
+ const exemplo=PROMPT_CONVERSA.match(/^- "Tribe" .* -> (\{.*\})$/m);
+ expect(exemplo).not.toBeNull();
+ const decisao=JSON.parse(exemplo![1]);
+ expect(validarAcaoConversa(decisao,fatos,['pedir_link_agenda'],'Tribe',agora)).toBeNull();
+ expect(decisao.fala).toHaveLength(2);
+ expect(decisao.fala[1]).toMatch(/Aqui está o link seguro:$/);
+ for(const balao of decisao.fala) expect(balao.length).toBeLessThanOrEqual(500);
+});
