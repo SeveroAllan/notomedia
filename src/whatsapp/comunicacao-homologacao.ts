@@ -171,7 +171,7 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string; aoEnviar?: (mensagemId: string) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, chave, fala } = entrada;
     if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
     if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
@@ -186,6 +186,10 @@ export class ComunicacaoHomologacao {
           const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
             contatoTelefone: destino.telefone, texto });
           if (!resultado.sucesso) return false;
+          if (entrada.aoEnviar) {
+            if (!resultado.mensagemId) return false;
+            await entrada.aoEnviar(resultado.mensagemId);
+          }
         }
         return true;
       });

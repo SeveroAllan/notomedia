@@ -18,9 +18,10 @@ const processamentos = new Map<string, Promise<ProximaAcaoNoto>>();
 
 /** Ações fiscais seguem determinísticas; a IA só solicita as duas ferramentas restritas de agenda. */
 export async function processarComunicacaoMedico(
-  entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string; eventoAgenda?: { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean } },
+  entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string; chavePergunta?: string; eventoAgenda?: { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean } },
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
     conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
+    retroativo?: Pick<import('./lote-retroativo.js').ConversaLoteRetroativo, 'iniciar' | 'responder'>;
     aoReagir?: (reacao: import('../whatsapp/reagir-mensagem.js').ReacaoMedico) => Promise<void>;
     aoConversar?: (fala: string[], chave: string, falaMemoria?: string[]) => Promise<void>;
     memoriaConversa?: MemoriaConversa; extratorResposta?: ExtratorRespostaMedico; historico: HistoricoComunicacaoRepositorio;
@@ -91,6 +92,7 @@ export async function processarComunicacaoMedico(
           else resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora);
         }
         auditarFerramenta('listar_consultas_sem_notas', resultado);
+        if (entrada.eventoAgenda.conectado && resultado.ok && conversa && await deps.retroativo?.iniciar(entrada.medicoId, conversa, entrada.chaveProcessamento, entrada.agora)) return { tipo: 'nenhuma' };
         const resposta = await deps.conversador?.responder({ texto: '', mensagens: memoria && conversa ? await memoria.ler(entrada.medicoId, conversa) : [],
           resumo: memoria && conversa ? (await memoria.lerResumo(entrada.medicoId, conversa))?.resumo ?? null : null,
           estado: estado?.estado ?? {}, agora: entrada.agora, eventoAgenda: entrada.eventoAgenda, acoesPermitidas: [],
@@ -111,6 +113,12 @@ export async function processarComunicacaoMedico(
         deps.log('erro', registroErroNoto('COMUNICACAO_ENTRADA_PROTEGIDA', 'acionavel', { etapa: 'entrada' }));
         try { await enviarFala(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], entrada.chaveProcessamento); }
         catch { deps.log('erro', registroErroNoto('COMUNICACAO_RESPOSTA_PROTEGIDA_FALHOU', 'tecnico', { etapa: 'entrada' })); }
+        return { tipo: 'nenhuma' };
+      }
+      if (deps.conversaLivreAtiva && entrada.respostaMedico && entrada.chaveConversa &&
+        await deps.retroativo?.responder(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento,
+          entrada.respostaMedico.texto, entrada.agora, entrada.chavePergunta)) {
+        await deps.memoriaPersistida?.registrar(entrada.medicoId, entrada.chaveConversa, `medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico.texto));
         return { tipo: 'nenhuma' };
       }
       // Na conversa livre a interpretação usa o histórico completo; o classificador legado não o recebe.

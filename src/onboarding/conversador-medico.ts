@@ -1,3 +1,4 @@
+import { perguntaLote, type LoteRetroativo } from './lote-retroativo.js';
 import { podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
 import { REACOES_PERMITIDAS, type ReacaoMedico } from '../whatsapp/reagir-mensagem.js';
 import { MENSAGEM_INSTABILIDADE, registroErroNoto } from '../observabilidade/erros.js';
@@ -13,6 +14,11 @@ const falaListaSchema = falaSchema.extend({ fala: z.array(z.string().trim().min(
 const resumoSchema = z.object({ resumo: z.string().trim().min(1).max(600) }).strict();
 
 export class ConversadorMedico {
+  responderContagemRetroativa(lote: Pick<LoteRetroativo, 'desde' | 'totalConsultas' | 'totalCentavos'>) {
+    // O texto usa os números reais da ferramenta; a IA nunca altera escopo ou valor autorizado.
+    return { fala: [perguntaLote(lote)] };
+  }
+
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined,
     private readonly completar: typeof completarOpenAi) {}
 

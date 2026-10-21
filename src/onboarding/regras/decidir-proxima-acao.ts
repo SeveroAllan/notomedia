@@ -11,6 +11,7 @@ interface UltimaNotaConhecida {
   valorCentavos: number;
   diasDesdeEmissao: number;
 }
+export type EstadoConversaRetroativo = 'aguardando_data_inicio' | 'aguardando_confirmacao_lote' | 'confirmado' | 'processando' | 'simulado' | 'recusado';
 export interface EstadoMedicoAposOnboarding {
   agora?: Date;
   intervaloReperguntaDias?: number;

@@ -1,3 +1,7 @@
+import { ConversaLoteRetroativo, interpretarDataRetroativo } from './onboarding/lote-retroativo.js';
+import { PostgresLotesEmissao } from './io/postgres/postgres-lotes-emissao.js';
+import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
+import { PostgresEmissorDpsService } from './io/fiscal/postgres-emissor-dps-service.js';
 import { sincronizarAgenda } from './agenda/sincronizar-agenda.js';
 import { registroErroNoto } from './observabilidade/erros.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
@@ -197,11 +201,35 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   };
   app.locals.sincronizarAgendaHomologacao = sincronizarAgendaHomologacao;
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }) => {
+  const lotes = new PostgresLotesEmissao(pool, config.appPepper);
+  const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
+  const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
+    permitido: lotePermitido,
+    comporContagem: lote => conversador!.responderContagemRetroativa(lote),
+    contar: (id, desde, ate) => lotes.contarConsultasPeriodo(id, desde, ate),
+    interpretarData: (texto, agora) => interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
+    interpretarConfirmacao: (texto, pergunta) => interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
+    enviar: async (medicoId, conversa, chave, fala, aoEnviar) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, aoEnviar }); },
+    log: mensagem => console.info(mensagem)
+  }) : undefined;
+  if (retroativo) {
+    const simulador = new PostgresEmissorDpsService(pool, config.encryptionKey);
+    app.locals.processarLoteRetroativo = () => processarLoteRetroativo(lotes, {
+      permitido: lotePermitido,
+      faturada: (id, fonte, consulta) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consulta),
+      lerDetalhe: (id, consulta) => cofres.detalheAoVivo(id, consulta),
+      assinatura: (id, fonte, consulta, valor) => lotes.assinatura(id, fonte, consulta, valor),
+      simular: (id, dados) => simulador.simularConsultaAgenda(id, dados),
+      enviar: async (medicoId, chave, fala, conversa) => { await comunicacaoHomologacao.conversa({ medicoId, chave, fala, conversa }); },
+      log: mensagem => console.info(mensagem)
+    });
+  }
+
+  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string) => {
     const agora = new Date();
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda,
+    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
+    }, { retroativo, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
@@ -763,6 +791,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         comunicacaoMedicoAtiva: config.comunicacaoMedicoAtiva,
         aoReceberMensagemMedico: async contexto => {
           if (config.conversaLivreAtiva) await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp);
+          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
           if (emissaoComprovante && config.envioMedicoRealAtivo) {
             const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
             if (pendentes.length) {
@@ -788,7 +817,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               return;
             }
           }
-          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp);
+          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
         },
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
           historico: historicoComunicacao,
@@ -901,7 +930,7 @@ if (process.env['NODE_ENV'] !== 'test') {
   });
 
   // Inicia worker da fila em segundo plano no mesmo container
-  const worker = iniciarWorkerEmbutido(pool, config);
+  const worker = iniciarWorkerEmbutido(pool, config, app.locals.processarLoteRetroativo);
   console.log('[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
 
   registrarSinaisDeProcesso(process, criarEncerramentoGracioso({

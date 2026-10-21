@@ -289,3 +289,27 @@ it.each(['boas_vindas:unica', 'agenda:link:acesso', 'agenda:link', 'agenda:falha
   expect(resultados.filter(r => r === 'enviado')).toHaveLength(1); expect(resultados.filter(r => r === 'repetido')).toHaveLength(19);
   expect(banco.mensagens).toHaveLength(1); expect(enviarTexto).toHaveBeenCalledTimes(chave === 'boas_vindas:unica' ? 4 : 1);
 });
+
+it('pergunta do lote vincula o id Evolution apenas depois de envio protegido e não repete', async () => {
+  const reservas = new Set<string>();
+  const query = vi.fn(async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '5511999990000', ambiente: 'homologacao' }] };
+    if (sql.includes('conversa_mensagens')) return bancoMensagens.query(sql, p);
+    if (sql.includes('insert into')) { const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] }; reservas.add(chave); return { rows: [{ id: 'r' }] }; }
+    if (sql.includes('update ')) return { rows: [] }; throw Error('SQL_FORA_DO_CENARIO');
+  });
+  const enviarTexto = vi.fn(async () => ({ sucesso: true, mensagemId: 'evolution-pergunta' }));
+  const config = { ...carregarConfig({}), envioMedicoRealAtivo: true, envioRealAllowlist: ['11999990000'] };
+  const c = new ComunicacaoHomologacao({ query } as any, config, { enviarTexto }, vi.fn());
+  const aoEnviar = vi.fn(async () => { expect(enviarTexto).toHaveBeenCalledOnce(); });
+  const entrada = { medicoId: 'm', chave: 'lote:l:confirmacao', fala: ['Posso simular essas consultas?'], aoEnviar };
+  expect(await c.conversa(entrada)).toBe('enviado'); expect(await c.conversa(entrada)).toBe('repetido');
+  expect(aoEnviar).toHaveBeenCalledExactlyOnceWith('evolution-pergunta'); expect(enviarTexto).toHaveBeenCalledOnce();
+});
+it.each([[false, 'homologacao', ['11999990000']], [true, 'producao', ['11999990000']], [true, 'homologacao', []]] as const)('pergunta do lote não é vinculada quando gate bloqueia: %s/%s', async (ativo, ambiente, allowlist) => {
+  const query = vi.fn(async () => ({ rows: [{ telefone: '5511999990000', ambiente }] }));
+  const enviarTexto = vi.fn(), aoEnviar = vi.fn();
+  const c = new ComunicacaoHomologacao({ query } as any, { ...carregarConfig({}), envioMedicoRealAtivo: ativo, envioRealAllowlist: [...allowlist] }, { enviarTexto }, vi.fn());
+  expect(await c.conversa({ medicoId: 'm', chave: 'lote:l:confirmacao', fala: ['Posso simular?'], aoEnviar })).toBe('simulado');
+  expect(enviarTexto).not.toHaveBeenCalled(); expect(aoEnviar).not.toHaveBeenCalled();
+});

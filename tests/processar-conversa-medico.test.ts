@@ -503,3 +503,33 @@ it('duas recusas de novo link entregam minutos e resposta anterior à IA, manten
   expect(completar.mock.calls[3][2][0].content).toContain('Espera real para novo link (servidor): 6 minutos');
   expect(JSON.parse(completar.mock.calls[3][2][1].content).mensagens).toContain(falas[0][0][0]);
 });
+
+it('retroativo só pergunta a data depois da sincronização bem-sucedida', async () => {
+  const c = await cenario();
+  c.deps.lerEstado.mockResolvedValue({ estado: { agora, fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: 'tribemd', conectada: true }, ultimaNota: null } } as any);
+  let liberar!: () => void, iniciou!: () => void;
+  const trava = new Promise<void>(r => { liberar = r; }), inicio = new Promise<void>(r => { iniciou = r; });
+  const listarConsultasSemNota = vi.fn(async () => { iniciou(); await trava; return { ok: true, total: 3, consultas: [] }; });
+  const retroativo = { iniciar: vi.fn(async () => true), responder: vi.fn(async () => false) };
+  const trabalho = processarComunicacaoMedico({ ...entrada, respostaMedico: undefined, eventoAgenda: { agenda: 'tribemd', conectado: true } }, { ...c.deps, listarConsultasSemNota, retroativo });
+  await inicio; expect(retroativo.iniciar).not.toHaveBeenCalled(); liberar(); await trabalho;
+  expect(retroativo.iniciar).toHaveBeenCalledExactlyOnceWith('medico', 'conversa', 'mensagem', agora);
+  expect(c.completar).not.toHaveBeenCalled();
+});
+it('sync incompleta não inicia o lote e senha não chega ao classificador retroativo', async () => {
+  const c = await cenario();
+  c.deps.lerEstado.mockResolvedValue({ estado: { agora, fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: { nome: 'tribemd', conectada: true }, ultimaNota: null } } as any);
+  const retroativo = { iniciar: vi.fn(async () => true), responder: vi.fn(async () => true) };
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: undefined, eventoAgenda: { agenda: 'tribemd', conectado: true } }, { ...c.deps, retroativo, listarConsultasSemNota: async () => ({ ok: false, motivo: 'SINCRONIZACAO_INCOMPLETA' }) });
+  expect(retroativo.iniciar).not.toHaveBeenCalled();
+  await processarComunicacaoMedico({ ...entrada, chaveProcessamento: 'senha', respostaMedico: { texto: 'Minha senha é segredo-test', dataMensagem: '2026-10-20' } }, { ...c.deps, retroativo });
+  expect(retroativo.responder).not.toHaveBeenCalled(); expect(c.completar).not.toHaveBeenCalled();
+  expect(JSON.stringify(c.banco.mensagens)).not.toContain('segredo-test');
+});
+it('resposta de data/confirmacao é tratada pelo retroativo sem passar pelo extrator legado', async () => {
+  const c = await cenario(); const retroativo = { iniciar: vi.fn(async () => true), responder: vi.fn(async () => true) };
+  await processarComunicacaoMedico({ ...entrada, chavePergunta: 'evolution-pergunta' }, { ...c.deps, retroativo });
+  expect(retroativo.responder).toHaveBeenCalledExactlyOnceWith('medico', 'conversa', 'mensagem', 'Como funciona?', agora, 'evolution-pergunta');
+  expect(c.completar).not.toHaveBeenCalled(); expect(c.extrair).not.toHaveBeenCalled();
+  expect(await c.memoriaPersistida.ler('medico', 'conversa')).toContain('Como funciona?');
+});

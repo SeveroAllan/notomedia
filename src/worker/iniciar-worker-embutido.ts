@@ -22,7 +22,7 @@ import { SefinNacionalClient } from '../io/fiscal/sefin-nacional-client.js';
 import { processarItemFila } from './processar-item-fila.js';
 import { type NotificadorAlertas } from './notificar-erro-medico.js';
 
-export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
+export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processarLote?: () => Promise<boolean>) {
   const workerId = `embedded-${process.pid}-${randomUUID().slice(0, 6)}`;
   const filaRepo = new PostgresFilaRepositorio(pool, config.agenteFiscalAtivo, config.emissaoComprovanteHomologacaoAtiva);
   const meuDanfeClient = config.meuDanfeApiKey ? new MeuDanfeClient(config.meuDanfeApiKey) : undefined;
@@ -82,6 +82,7 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
   const loop = async () => {
     while (ativo) {
       try {
+        if (await processarLote?.()) continue;
         const item = await filaRepo.buscarETravarProximoItem(workerId);
         if (!item) {
           await new Promise((resolve) => setTimeout(resolve, 5000));

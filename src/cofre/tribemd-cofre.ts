@@ -182,6 +182,19 @@ export class CofreTribemd {
     async desconectar(id: string) { await this.alterar(id, false); }
     async excluir(id: string) { await this.alterar(id, true); }
     async consultar(id: string, janelaDias = 90, agora = new Date()) { return this.iniciar(id, undefined, true, { janelaDias, agora }); }
+    async detalheAoVivo(medicoId: string, atendimentoId: string) {
+        const status = await this.status(medicoId);
+        if (!status.salvo || !status.ativo) throw new ErroCofre('SEM_AGENDA_CONECTADA');
+        await this.consultar(medicoId);
+        try {
+            await this.trabalhos.get(medicoId)?.finalizada;
+            const consulta = this.resultado(medicoId)?.consultas.find(c => c.atendimentoId === atendimentoId);
+            if (!consulta?.dados || consulta.dados.codigo) throw new ErroCofre('DETALHES_NAO_CONCLUIDOS');
+            const valor = consulta.dados.valorCobrado;
+            return { nome: consulta.dados.nomeCompleto ?? consulta.nome ?? null, cpf: consulta.dados.cpf,
+                valorCobradoCentavos: valor && /^\d+\.\d{2}$/.test(valor) ? Number(valor.replace('.', '')) : null };
+        } finally { this.limparResultado(medicoId); }
+    }
     readonly fonteAgenda: FonteAgenda = { consultar: async ({ medicoId, janelaDias = 90, agora = new Date() }): Promise<ResultadoFonteAgenda> => {
         try {
             const status = await this.status(medicoId);

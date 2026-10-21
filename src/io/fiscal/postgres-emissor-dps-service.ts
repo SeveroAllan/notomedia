@@ -5,6 +5,7 @@
  */
 
 import type pg from 'pg';
+import { validarCpf } from '../../paciente/validar-cpf.js';
 import { dadosProfissionaisCompletos } from '../../conta/validar-dados-emissao.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
 import { carregarEvidenciasEmissao } from './carregar-evidencias-emissao.js';
@@ -32,6 +33,13 @@ import type { MeuDanfeClient } from '../meudanfe/meu-danfe-client.js';
 import type { ConsultaCpfProvider } from '../../paciente/consulta-cpf-provider.js';
 import { ehNomeCivilValido } from '../../paciente/regras/validar-nome-civil.js';
 
+export interface TomadorAoVivo { nome: string | null; cpf: string | null; valorCobradoCentavos: number | null }
+export function prepararTomadorAoVivo(dados: TomadorAoVivo) {
+  if (!ehNomeCivilValido(dados.nome) || !validarCpf(dados.cpf) || !Number.isSafeInteger(dados.valorCobradoCentavos) || dados.valorCobradoCentavos! <= 0)
+    return { ok: false as const };
+  return { ok: true as const, nome: dados.nome!.trim(), cpf: dados.cpf!.replace(/\D/g, ''), nomeValidado: true, valorCentavos: dados.valorCobradoCentavos! };
+}
+
 export type ConfigPrestadorCompleto = ConfigPrestador & {
   referenciaImportada?: boolean;
   serie: string;
@@ -54,6 +62,15 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly modoAgenteConservador = false,
     private readonly preparacaoFiscalAtiva = false
   ) {}
+
+  /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
+  async simularConsultaAgenda(medicoId: string, dados: TomadorAoVivo): Promise<{ ok: boolean }> {
+    if (!prepararTomadorAoVivo(dados).ok) return { ok: false };
+    const { rows } = await this.pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1', [medicoId]);
+    if (rows[0]?.ambiente !== 'homologacao') return { ok: false };
+    const perfil = await this.carregarPerfilFiscal(medicoId);
+    return { ok: perfil?.ambiente === 2 };
+  }
 
   emitir(item: SolicitacaoEmissaoItem & { emissaoComprovante?: never }): Promise<
     ResultadoEmissaoDps & ({ sucesso: false } | { pdfStoragePath: string })>;

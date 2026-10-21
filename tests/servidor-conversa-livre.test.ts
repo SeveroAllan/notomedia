@@ -1,3 +1,5 @@
+import { PostgresLotesEmissao } from '../src/io/postgres/postgres-lotes-emissao.js';
+import { PostgresEmissorDpsService } from '../src/io/fiscal/postgres-emissor-dps-service.js';
 import type pg from 'pg';
 import { PostgresMemoriaConversaMedico } from '../src/onboarding/conversa-repositorio.js';
 import { chaveConsulta } from '../src/atendimento/comprovante.js';
@@ -11,13 +13,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, encerrar: async () => {} }; } };
+  return { criarCofreContas: (deps: any) => { fronteiras.concluirAgenda = deps.aoConcluirAgenda; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -72,11 +74,11 @@ afterEach(() => {
   expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros.mock.calls).toEqual(Array.from({ length: errosEsperados }, () => ['COMUNICACAO_SEM_FALA']));
   Object.assign(config, anterior); vi.restoreAllMocks();
 });
-async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá', validar = true) {
+async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá', validar = true, pergunta?: string) {
   if (['inicio', 'pergunta'].includes(id) && !fronteiras.nomeMedico && config.conversaLivreAtiva && config.comunicacaoMedicoAtiva) errosEsperados++;
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/webhook/evolution').route.stack[0].handle;
   const body = { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: { messageTimestamp: 1792508400,
-    key: { id, remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, message: { conversation: texto } } };
+    key: { id, remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, message: pergunta ? { extendedTextMessage: { text: texto, contextInfo: { stanzaId: pergunta } } } : { conversation: texto } } };
   const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
   const hash = createHmac('sha256', config.appPepper).update(JSON.stringify([config.evolutionAssistantInstanceName, id])).digest('hex');
   const duplicada = recebidas.has(JSON.stringify(['medico', hash]));
@@ -335,4 +337,40 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
   expect(JSON.stringify(banco.mensagens)).not.toContain('Pessoa Apenas Ao Vivo'); expect(JSON.stringify(banco.mensagens)).toContain('[PACIENTE]');
   const auditoria = logs.mock.calls.filter(c => String(c[0]).startsWith('FERRAMENTA_AGENDA_RESULTADO'));
   expect(auditoria).toHaveLength(1); expect(String(auditoria[0][0])).toContain('"total":173'); expect(String(auditoria[0][0])).not.toContain('Pessoa Apenas Ao Vivo');
+});
+
+it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa apenas simulação sem PDF', async () => {
+  config.emissaoComprovanteHomologacaoAtiva = true; config.envioRealAllowlist = ['+5551993527271']; fronteiras.agenda = { nome: 'tribemd', conectada: true };
+  enviosEsperados = 6;
+  let atual: any;
+  vi.spyOn(PostgresLotesEmissao.prototype, 'abrir').mockImplementation(async (medicoId, conversa, _chave, agora) => atual = { id: 'lote-servidor', medicoId, conversa, ate: agora.toISOString(), desde: null, estado: 'aguardando_data_inicio', totalConsultas: 0, totalCentavos: 0, semValor: 0 });
+  vi.spyOn(PostgresLotesEmissao.prototype, 'ativo').mockImplementation(async () => atual);
+  const snapshot = [{ fonte: 'tribemd', idExterno: '12', chave: 'hmac', assinatura: 'hmac-valor' }, { fonte: 'tribemd', idExterno: '13', chave: 'semvalor', assinatura: null }];
+  vi.spyOn(PostgresLotesEmissao.prototype, 'contarConsultasPeriodo').mockResolvedValue({ consultas: snapshot, totalConsultas: 1, totalCentavos: 30000, semValor: 1 });
+  vi.spyOn(PostgresLotesEmissao.prototype, 'preparar').mockImplementation(async (_id, desde, c) => Object.assign(atual, { desde, estado: 'aguardando_confirmacao_lote', totalConsultas: c.totalConsultas, totalCentavos: c.totalCentavos, semValor: c.semValor }));
+  const registrar = vi.spyOn(PostgresLotesEmissao.prototype, 'registrarPergunta').mockImplementation(async (_id, id, agora) => { Object.assign(atual, { mensagemConfirmacaoId: id, perguntaEm: agora.toISOString() }); });
+  const confirmar = vi.spyOn(PostgresLotesEmissao.prototype, 'confirmar').mockImplementation(async () => { atual.estado = 'confirmado'; return true; });
+  enviar.mockImplementation(async () => ({ sucesso: true, mensagemId: `evo-${enviar.mock.calls.length}` }));
+  fronteiras.openai.mockImplementation(async (_key, _model, msgs) => msgs[0].content.startsWith('Interprete a data') ? '{"desde":"2026-10-01"}' : '{"intencao":"sim","confianca":0.99}');
+  const app = criarAppExpress();
+  await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'lote-evento' });
+  expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(enviar.mock.calls[1][0].texto).toContain('Desde que dia');
+  await receber(app, 'data-lote', 'desdi primeiru de otubro');
+  expect(enviar.mock.calls[2][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-3');
+  await receber(app, 'sim-lote', 'manda ver', true, 'evo-3'); await receber(app, 'sim-lote', 'manda ver', true, 'evo-3');
+  expect(confirmar).toHaveBeenCalledOnce(); expect(confirmar.mock.calls[0].slice(1, 4)).toEqual(['assistente:sim-lote', 'evo-3', { intencao: 'sim', confianca: .99 }]);
+  let reservado = false;
+  vi.spyOn(PostgresLotesEmissao.prototype, 'reservar').mockImplementation(async () => { if (reservado) return null; reservado = true; return { ...atual, itens: snapshot.map((x, i) => ({ ...x, id: String(i) })) }; });
+  vi.spyOn(PostgresLotesEmissao.prototype, 'reservarItem').mockResolvedValue(true);
+  const itens = vi.spyOn(PostgresLotesEmissao.prototype, 'concluirItem').mockResolvedValue(); vi.spyOn(PostgresLotesEmissao.prototype, 'finalizar').mockResolvedValue();
+  vi.spyOn(PostgresLotesEmissao.prototype, 'assinatura').mockReturnValue('hmac-valor');
+  const { PostgresEmissaoComprovante } = await import('../src/io/postgres/postgres-emissao-comprovante.js');
+  vi.spyOn(PostgresEmissaoComprovante.prototype, 'consultaJaFaturada').mockResolvedValue(false);
+  fronteiras.detalhe.mockResolvedValue({ nome: 'Pessoa Somente Ao Vivo', cpf: '52998224725', valorCobradoCentavos: 30000 });
+  const simular = vi.spyOn(PostgresEmissorDpsService.prototype, 'simularConsultaAgenda').mockResolvedValue({ ok: true });
+  const emitir = vi.spyOn(PostgresEmissorDpsService.prototype, 'emitir');
+  await app.locals.processarLoteRetroativo(); await app.locals.processarLoteRetroativo();
+  expect(simular).toHaveBeenCalledOnce(); expect(emitir).not.toHaveBeenCalled(); expect(itens.mock.calls.map(c => c[1])).toEqual(['simulada','sem_valor']);
+  expect(enviar.mock.calls[4][0].texto).toContain('Simulei 1 de 1'); expect(enviar.mock.calls[5][0].texto).toContain('valor');
+  expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });
