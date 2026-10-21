@@ -145,3 +145,13 @@ it('sem lote confirmado ou órfão antigo elegível não altera itens nem segura
   expect(query.mock.calls).toHaveLength(3);
   expect(release).toHaveBeenCalledOnce();
 });
+
+it('contagem informa consultas existentes já emitidas mesmo fora dos valores pendentes ao vivo, sem alterar seleção', async () => {
+  const query = vi.fn(async (sql: string) => ({ rows: sql.includes('from public.noto_consultas_sincronizadas')
+    ? [{ fonte:'tribemd', id_externo:'1' },{ fonte:'tribemd', id_externo:'2' },{ fonte:'tribemd', id_externo:'3' }]
+    : [{}] }));
+  const r = await new PostgresLotesEmissao({query} as any,'pepper').contarConsultasPeriodo('m','2026-10-05','2026-10-21T15:00Z',new Map());
+  expect(r).toEqual({ consultas: [], totalConsultas: 0, totalCentavos: 0, semValor: 0, totalNoPeriodo: 3, jaEmitidas: 3 });
+  expect(query.mock.calls.filter(([sql])=>sql.includes("estado='nota_gerada'"))).toHaveLength(3);
+  expect(query.mock.calls.every(([sql])=>! /insert|update|delete|nome|cpf/i.test(sql))).toBe(true);
+});

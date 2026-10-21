@@ -254,3 +254,65 @@ it('lote recuperado continua só os itens prontos e resume também as notas ante
   expect(deps.enviar.mock.calls[0][2]).toEqual(['Emiti 2 de 2 notas autorizadas.','1 notas entregues. 1 sem contato válido; corrija o contato na agenda e me peça o reenvio.']);
   expect(repo.liberarReserva).toHaveBeenCalledOnce();
 });
+
+it.each([
+  ['semana_retrasada', '2026-10-05'], ['semana_passada', '2026-10-12'],
+  ['mes_passado', '2026-09-01'], ['mes_retrasado', '2026-08-01']
+] as const)('período %s usa início do calendário de São Paulo, não o mesmo dia de semanas atrás', async (periodoRelativo, esperado) => {
+  const completar = vi.fn(async () => JSON.stringify({ desde: '2026-10-07', periodoRelativo }));
+  expect(await interpretarDataRetroativo('k', 'm', completar, 'Desde ' + periodoRelativo.replaceAll('_', ' '), new Date('2026-10-21T15:00Z'))).toBe(esperado);
+  expect(completar.mock.calls[0][2][0].content).toContain('segunda-feira');
+});
+it('fronteira UTC usa a data local de São Paulo para início da semana', async () => {
+  const completar = vi.fn(async () => '{"desde":null,"periodoRelativo":"semana_passada"}');
+  expect(await interpretarDataRetroativo('k','m',completar,'Desde semana passada',new Date('2026-10-19T01:00Z'))).toBe('2026-10-05'); // domingo local
+});
+it('período recente na conversa livre é reaproveitado depois da conexão sem perguntar de novo', async () => {
+  const c = cenario(); const inicioRecente = vi.fn(async () => '2026-10-05');
+  const listarPeriodo = vi.fn(async (_m,_c,_k,_d,_a,concluir,somenteContagem) => { expect(somenteContagem).toBe(true); await concluir(); });
+  const conversa = new ConversaLoteRetroativo(c.repo, { ...c.deps, inicioRecente, listarPeriodo });
+  await conversa.iniciar('m','c','conexao',agora,null);
+  expect(inicioRecente).toHaveBeenCalledWith('m','c',agora);
+  expect(c.falas).toHaveLength(1); expect(c.falas[0]).toContain('05/10/2026');
+  expect(c.falas[0]).not.toContain('Desde quando'); expect(c.deps.contar).toHaveBeenCalledOnce();
+});
+it('período salvo prevalece sobre interpretação de história e resultado do lote não envia lista redundante', async () => {
+  const c = cenario(); const inicioRecente = vi.fn(async () => '2026-10-05');
+  const listarPeriodo = vi.fn(async (_m,_c,_k,_d,_a,concluir,somenteContagem) => { expect(somenteContagem).toBe(true); await concluir(); });
+  await new ConversaLoteRetroativo(c.repo,{...c.deps,inicioRecente,listarPeriodo}).iniciar('m','c','conexao',agora,'2026-10-01');
+  expect(inicioRecente).not.toHaveBeenCalled(); expect(c.falas).toHaveLength(1); expect(c.falas[0]).toContain('01/10/2026');
+});
+it.each([0,3])('resultado único distingue %i consultas no período de consultas já emitidas', async totalNoPeriodo => {
+  const c = cenario();
+  c.deps.contar.mockResolvedValue({ consultas: [], totalConsultas: 0, totalCentavos: 0, semValor: 0, totalNoPeriodo, jaEmitidas: totalNoPeriodo } as ContagemPeriodo);
+  await c.conversa.iniciar('m','c','conexao',agora,'2026-10-05');
+  expect(c.falas).toEqual([totalNoPeriodo ? 'Vi 3 consultas desde 05/10/2026, mas todas já têm nota emitida.' : 'Não encontrei consultas desde 05/10/2026.']);
+  expect(c.falas.join(' ')).not.toMatch(/Não há nenhuma pendência|Não encontrei consultas com valor/);
+});
+it('aviso de homologação fica separado da pergunta e uma vez na conversa, conforme gate informado pelo servidor', async () => {
+  const c = cenario(); const informarHomologacao = vi.fn().mockResolvedValueOnce(true).mockResolvedValue(false);
+  const conversa = new ConversaLoteRetroativo(c.repo,{...c.deps,informarHomologacao});
+  await conversa.iniciar('m','c','conexao',agora); await conversa.iniciar('m','c','outra',agora);
+  expect(c.falas.filter(f=>f.includes('As notas deste teste'))).toHaveLength(1);
+  expect(c.falas).toContain('Desde quando você não emite notas?');
+  expect(c.falas.every(f=>!f.includes('Desde quando você não emite notas? As notas'))).toBe(true);
+});
+
+it('data relativa explícita corrige a candidata de mesmo dia mesmo quando a IA omite o rótulo de período', async () => {
+  const completar = vi.fn(async () => '{"desde":"2026-10-07"}');
+  expect(await interpretarDataRetroativo('k','m',completar,'Desde semana retrasada.',new Date('2026-10-21T15:00Z'))).toBe('2026-10-05');
+});
+
+it('período recente ambíguo é confirmado com referência ao que foi dito, sem reiniciar pergunta genérica', async () => {
+  const c = cenario();
+  await new ConversaLoteRetroativo(c.repo,{...c.deps,inicioRecente:async()=>({desde:null,referencia:'desde o começo das férias'})}).iniciar('m','c','conexao',agora);
+  expect(c.falas).toEqual(['Você falou “desde o começo das férias”. Pode confirmar o dia de início desse período?']);
+  expect(c.deps.contar).not.toHaveBeenCalled();
+});
+it('evidência de período para confirmação precisa existir na entrada; texto inventado pela IA não vira contexto', async () => {
+  const ambiguo = vi.fn();
+  const completar = vi.fn(async()=>'{"desde":null,"evidenciaPeriodo":"desde o começo das férias"}');
+  expect(await interpretarDataRetroativo('k','m',completar,'desde o começo das férias',agora,ambiguo)).toBeNull();
+  expect(ambiguo).toHaveBeenCalledWith('desde o começo das férias'); ambiguo.mockClear();
+  await interpretarDataRetroativo('k','m',completar,'oi',agora,ambiguo); expect(ambiguo).not.toHaveBeenCalled();
+});

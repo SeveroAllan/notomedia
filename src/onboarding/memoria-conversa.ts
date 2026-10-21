@@ -58,6 +58,13 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return rows.reverse().map(mensagem => sanitizarTextoMedico(mensagem.texto));
   }
 
+  async lerFalasMedicoRecentes(medicoId: string, conversa: string, agora: Date): Promise<string[]> {
+    const { rows } = await this.pool.query<{ texto: string }>(
+      "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and papel='medico' and mensagem_id not like 'contexto:%' and criada_em >= $3::timestamptz - interval '1 hour' order by id desc limit 8",
+      [medicoId, conversa, agora.toISOString()]);
+    return rows.reverse().map(m => sanitizarTextoMedico(m.texto));
+  }
+
   async lerFalasRecentes(medicoId: string, conversa: string): Promise<string[]> {
     const { rows } = await this.pool.query<{ texto: string }>(
       "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and papel='noto' and mensagem_id not like 'contexto:%' and criada_em > now() - interval '10 minutes' order by id desc", [medicoId, conversa]);

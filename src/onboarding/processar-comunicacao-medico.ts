@@ -1,7 +1,7 @@
 import { RASCUNHO_FALLBACK_CONVERSA, FALA_PROTECAO_CREDENCIAL_AGENDA } from './falas.js';
 import { formatarPendencias } from './pendencias-medico.js';
 import { contemCredencialAgenda, podeSolicitarLinkAgenda, type ContextoConexaoAgenda } from '../cofre/links.js';
-import { registroErroNoto } from '../observabilidade/erros.js';
+import { mensagemInstabilidade, registroErroNoto } from '../observabilidade/erros.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { montarPerguntaComunicacao } from './regras/decidir-proxima-acao.js';
 import { orquestrarComunicacao } from './orquestrar-comunicacao.js';
@@ -21,7 +21,7 @@ const processamentos = new Map<string, Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
   entrada: Pick<Entrada, 'medicoId' | 'chaveProcessamento' | 'respostaMedico'> & { agora: Date; chaveConversa?: string; chavePergunta?: string; eventoAgenda?: { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean } },
   deps: { ativo: boolean; conversaLivreAtiva?: boolean; memoriaPersistida?: PostgresMemoriaConversaMedico;
-    conversador?: Pick<ConversadorMedico, 'responder' | 'resumir'>;
+    conversador?: Pick<ConversadorMedico, 'responder' | 'resumir' | 'prepararIntroducaoLink'>;
     pendencias?: Pick<import('./pendencias-medico.js').PendenciasMedico, 'responder' | 'iniciar' | 'aposSyncIncompleta'>;
     lerInicioPendencias?: (medicoId: string) => Promise<string | null>;
     aguardaInicioRetroativo?: (medicoId: string) => Promise<boolean>;
@@ -33,7 +33,7 @@ export async function processarComunicacaoMedico(
     lerEstado: (medicoId: string, agora: Date) => Promise<EstadoComunicacaoMedico | null>;
     listarConsultasSemNota?: (medicoId: string, agenda: EstadoComunicacaoMedico['estado']['agenda'], agora: Date) => Promise<{
       ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; dataInicio?: string; janelaDias?: number }>;
-    enviarLinkCofreAgenda?: (medicoId: string, opcoes?: { reenvio?: boolean }) => Promise<{ ok: boolean; motivo: string }>;
+    enviarLinkCofreAgenda?: (medicoId: string, opcoes?: { reenvio?: boolean; introducao?: readonly string[] }) => Promise<{ ok: boolean; motivo: string }>;
     lerContextoConexao?: (medicoId: string, agora: Date) => Promise<ContextoConexaoAgenda>;
     tratarCofre?: (medicoId: string, texto: string) => Promise<boolean>;
     aoDecidir?: (acao: ProximaAcaoNoto, chave: string, contexto?: { nomeMedico?: string }) => Promise<void>;
@@ -239,10 +239,18 @@ export async function processarComunicacaoMedico(
             acoesPermitidas: conectar && !linkCofreJaSolicitado && deps.enviarLinkCofreAgenda ? ['enviar_link_cofre_agenda'] : [] });
         }
         if (resposta.acao === 'enviar_link_cofre_agenda' && podeSolicitarLinkAgenda(estado.estado.agenda.conectada, linkCofreJaSolicitado, resposta.intencaoConexao, contextoConexao) && deps.enviarLinkCofreAgenda) {
+          const renovacao = linkCofreJaSolicitado || !!contextoConexao?.link;
+          const introducao = renovacao ? null : await deps.conversador.prepararIntroducaoLink({ ...contexto, fala: resposta.fala });
+          if (!renovacao && !introducao) {
+            deps.log('erro', registroErroNoto('INTRODUCAO_LINK_INDISPONIVEL', 'validacao', { etapa: 'conversa' }));
+            if (conversa) await deps.memoriaPersistida?.registrarFala(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
+            await enviarFala([mensagemInstabilidade(await lerInstabilidades())], entrada.chaveProcessamento);
+            return acao;
+          }
           if (conversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrarMarca(entrada.medicoId, conversa, 'link_agenda_solicitado');
           let resultado;
-          try { resultado = linkCofreJaSolicitado || resposta.intencaoConexao === 'pedir_novo_link'
-            ? await deps.enviarLinkCofreAgenda(entrada.medicoId, { reenvio: true }) : await deps.enviarLinkCofreAgenda(entrada.medicoId); }
+          try { resultado = renovacao
+            ? await deps.enviarLinkCofreAgenda(entrada.medicoId, { reenvio: true }) : await deps.enviarLinkCofreAgenda(entrada.medicoId, { introducao: introducao! }); }
           catch { resultado = { ok: false, motivo: 'COFRE_INDISPONIVEL' }; }
           auditarFerramenta('enviar_link_cofre_agenda', resultado);
           resposta = await deps.conversador.responder({ ...contexto,

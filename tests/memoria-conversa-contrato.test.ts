@@ -63,3 +63,17 @@ it('documenta a exceção legada da marca de pedido de link sem alterar a leitur
   expect(contexto.historicoRecente).toEqual(await memoria.ler('m', 'c'));
   expect(contexto.historicoRecente).toEqual(['O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.']);
 });
+
+it('recuperação do período lê só falas reais do médico, recentes, da mesma conversa e médico', async () => {
+  const banco = new BancoConversaFalso(); const memoria = new PostgresMemoriaConversaMedico(banco as unknown as pg.Pool);
+  await memoria.registrarFala('m','c','noto:1','Desde quando você não emite notas?','noto');
+  await memoria.registrarFala('m','c','medico:1','Desde semana retrasada.');
+  await memoria.registrarFala('outro','c','medico:1','Desde ontem.');
+  await memoria.registrarFala('m','outra','medico:2','Desde janeiro.');
+  await memoria.registrarMarca('m','c','sem_agenda_digital');
+  const agora = new Date('2026-10-21T15:00Z');
+  expect(await memoria.lerFalasMedicoRecentes('m','c',agora)).toEqual(['Desde semana retrasada.']);
+  const consulta = banco.consultas.at(-1)!;
+  expect(consulta.sql).toContain("papel='medico'"); expect(consulta.sql).toContain("interval '1 hour'"); expect(consulta.sql).toContain('limit 8');
+  expect(consulta.parametros).toEqual(['m','c',agora.toISOString()]);
+});

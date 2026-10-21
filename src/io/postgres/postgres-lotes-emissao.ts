@@ -29,19 +29,19 @@ export class PostgresLotesEmissao implements RepositorioLotes {
     const { rows } = await this.pool.query<{ fonte: string; id_externo: string }>(`select fonte, id_externo
       from public.noto_consultas_sincronizadas where medico_id=$1 and fonte='tribemd' and status='realizada'
       and data_hora >= ($2::date::timestamp at time zone 'America/Sao_Paulo') and data_hora <= $3::timestamptz order by data_hora, id_externo`, [medicoId, desde, ate]);
-    const consultas: ConsultaLote[] = []; let totalCentavos = 0, totalConsultas = 0, semValor = 0;
+    const consultas: ConsultaLote[] = []; let totalCentavos = 0, totalConsultas = 0, semValor = 0, jaEmitidas = 0;
     for (const r of rows) {
-      if (!valoresAoVivo.has(r.id_externo)) continue;
       const chave = chaveConsulta(this.pepper, medicoId, r.fonte, r.id_externo);
       const { rows: emitidas } = await this.pool.query(`select 1 from public.noto_emissoes_comprovantes where medico_id=$1 and consulta_chave=$2 and estado='nota_gerada'`, [medicoId, chave]);
-      if (emitidas.length) continue;
+      if (emitidas.length) { jaEmitidas++; continue; }
+      if (!valoresAoVivo.has(r.id_externo)) continue;
       const valor = valoresAoVivo.get(r.id_externo) ?? null;
       const temValor = Number.isSafeInteger(valor) && valor! > 0;
       if (temValor) { totalConsultas++; totalCentavos += valor!; } else semValor++;
       if (!Number.isSafeInteger(totalCentavos)) throw Error('TOTAL_LOTE_INVALIDO');
       consultas.push({ fonte: r.fonte, idExterno: r.id_externo, chave, assinatura: temValor ? this.assinatura(medicoId, r.fonte, r.id_externo, valor!) : null });
     }
-    return { consultas, totalConsultas, totalCentavos, semValor };
+    return { consultas, totalConsultas, totalCentavos, semValor, totalNoPeriodo: rows.length, jaEmitidas };
   }
   async preparar(id: string, desde: string, contagem: ContagemPeriodo) {
     const client = await this.pool.connect();

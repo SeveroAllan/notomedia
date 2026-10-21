@@ -480,3 +480,39 @@ it('fallback técnico registra etapa e categoria do erro sem registrar erro brut
     for (const privado of ['Nome Ficticio', '529.982', 'segredo-ficticio', entrada.texto]) expect(logs).not.toContain(privado);
   } finally { avisos.mockRestore(); }
 });
+
+it.each(['Tribe', 'tribe md', 'tribemd', 'o tribe'])('resposta curta %s à pergunta de agenda avança mesmo com schema inválido nas duas candidatas', async texto => {
+  const completar = vi.fn(async () => '{}');
+  const r = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto,
+    mensagens: ['Desde quando você não emite notas?', 'Desde semana retrasada.', 'Qual agenda você usa hoje?'],
+    ultimaFalaNoto: 'Qual agenda você usa hoje?', acoesPermitidas: ['enviar_link_cofre_agenda'] });
+  expect(r.acao).toBe('enviar_link_cofre_agenda'); expect(r.fala.join(' ')).toContain('TribeMD');
+  expect(r.fala.join(' ')).not.toMatch(/Qual agenda|Como você organiza|Não consegui entender/);
+  expect(completar).toHaveBeenCalledTimes(2);
+});
+it('agenda respondida não suportada oferece conferência manual, sem outra pergunta genérica ou link', async () => {
+  const completar = vi.fn(async () => '{"agendaInformada":"iClinic","fala":["Qual agenda você usa hoje?"],"acao":"enviar_link_cofre_agenda"}');
+  const r = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'iClinic', ultimaFalaNoto: 'Qual agenda você usa hoje?', acoesPermitidas: ['enviar_link_cofre_agenda'] });
+  expect(r.acao).toBeNull(); expect(r.fala.join(' ')).toMatch(/só.*TribeMD/); expect(r.fala.join(' ')).toContain('paciente por vez');
+});
+it('primeira introdução é gerada em contexto e precisa conter os fatos, nunca aceita promessa sem explicação', async () => {
+  const fala = ['Entendi, você usa TribeMD. Esse link conecta só a agenda, em modo de leitura, para conferir consultas e emitir suas notas.',
+    'Seu login e senha vão só no link seguro; não recebo senha pela conversa. Vale por 15 minutos, uma vez só. Nada é enviado a pacientes por essa conexão. Aqui está o link seguro:'];
+  const completar = vi.fn().mockResolvedValueOnce('{"fala":["Vou enviar o link."],"acao":null}').mockResolvedValueOnce(JSON.stringify({ fala, acao: null }));
+  const r = await new ConversadorMedico('k', 'm', completar).prepararIntroducaoLink({ texto: 'Tribe', mensagens: ['Desde semana retrasada.', 'Qual agenda você usa hoje?'], resumo: null, fala: ['Claro.'] });
+  expect(r).toEqual(fala); expect(completar).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(completar.mock.calls[0][2][1].content).texto).toBe('Tribe');
+  expect(completar.mock.calls[0][2][0].content).toContain('dados não confiáveis');
+});
+it('introdução sem fatos após regeneração é bloqueada, sem substituir por bloco fixo', async () => {
+  const completar = vi.fn(async () => '{"fala":["Aqui está o novo link seguro:"],"acao":null}');
+  expect(await new ConversadorMedico('k', 'm', completar).prepararIntroducaoLink({ texto: 'Tribe', mensagens: [], resumo: null, fala: ['Pode conectar.'] })).toBeNull();
+  expect(completar).toHaveBeenCalledTimes(2);
+});
+
+it.each(['leitura','senha','pacientes'])('primeira introdução sem o fato %s não é liberada', async ausente => {
+  const fala = ['O link conecta só a agenda TribeMD em modo de leitura, para conferir consultas e emitir notas. Seu login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'.replaceAll(ausente,'')];
+  const completar = vi.fn(async()=>JSON.stringify({fala,acao:null}));
+  expect(await new ConversadorMedico('k','m',completar).prepararIntroducaoLink({texto:'Tribe',mensagens:[],resumo:null,fala})).toBeNull();
+  expect(completar).toHaveBeenCalledTimes(2);
+});

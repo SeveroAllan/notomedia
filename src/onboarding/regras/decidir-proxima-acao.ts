@@ -42,6 +42,13 @@ export type ProximaAcaoNoto =
   | { tipo: 'reperguntar'; pergunta: 'nota_pendente' | 'agenda' | 'problema_fiscal' }
   | { tipo: 'nenhuma' };
 
+/** Normaliza somente o nome informado; não interpreta intenção nem autoriza conexão. */
+export function normalizarNomeAgenda(nome: string | null): string | null {
+  if (!nome?.trim()) return null;
+  const alias = nome.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ');
+  return ['tribe', 'tribe md', 'tribemd', 'o tribe'].includes(alias) ? 'tribemd' : nome.trim();
+}
+
 /** Histórico precisa refletir comunicações confirmadas; decidir não grava nem marca envio. */
 export function decidirProximaAcao(
   estado: EstadoMedicoAposOnboarding,
@@ -59,7 +66,7 @@ export function decidirProximaAcao(
   if (!historico.perguntaNota.feitaEm) return { tipo: 'perguntar_nota_pendente' };
 
   const resposta = historico.perguntaNota.resposta;
-  const agenda = estado.agenda.nome?.trim() || null;
+  const agenda = normalizarNomeAgenda(estado.agenda.nome);
   const agendaAtendida = agenda?.toLowerCase() === 'tribemd';
   if (resposta?.temNota && !estado.agenda.conectada && !historico.perguntaAgenda.feitaEm && (!agenda || agendaAtendida)) {
     return { tipo: 'pedir_agenda', agendaInformada: agenda };

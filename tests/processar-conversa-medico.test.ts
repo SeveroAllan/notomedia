@@ -19,6 +19,7 @@ async function cenario(ativo = true) {
   const historico = new HistoricoComunicacaoEmMemoria(); const memoriaConversa = new MemoriaConversaMedico();
   const completar = vi.fn(async () => '{"fala":["Posso explicar como o Noto ajuda com notas fiscais."]}');
   const conversador = new ConversadorMedico('chave', 'modelo', completar);
+  vi.spyOn(conversador, 'prepararIntroducaoLink').mockResolvedValue(['Introdução validada na unidade do conversador.']);
   const aoConversar = vi.fn(async () => {}); const aoDecidir = vi.fn(async () => {}); const log = vi.fn();
   const extrair = vi.fn(async () => ({ temNota: 'fora_do_assunto' as 'fora_do_assunto' | 'sim', desde: null, confianca: 0.95 }));
   const lerEstado = vi.fn(async () => ({ estado: { agora, fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const },
@@ -201,7 +202,7 @@ it.each(['SEM_AGENDA_CONECTADA', 'AGENDA_NAO_SUPORTADA', 'SEM_CONSULTAS_SINCRONI
     .mockResolvedValueOnce('{"fala":["Não vejo sua agenda; enviei o link para conectar TribeMD."],"acao":"enviar_link_cofre_agenda"}');
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(entrada, deps);
-  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico');
+  expect(listarConsultasSemNota).toHaveBeenCalledOnce(); expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico', { introducao: ['Introdução validada na unidade do conversador.'] });
   expect(c.completar).toHaveBeenCalledTimes(2);
   expect(c.aoConversar).not.toHaveBeenCalled();
   await processarComunicacaoMedico(entrada, deps);
@@ -281,7 +282,7 @@ it('emissão pedida sem cofre passa pela ferramenta de link e só confirma o env
   const pedido = { ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Pode emitir minha primeira nota agora?' } };
   const deps = { ...c.deps, listarConsultasSemNota, enviarLinkCofreAgenda };
   await processarComunicacaoMedico(pedido, deps);
-  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico'); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico', { introducao: ['Introdução validada na unidade do conversador.'] }); expect(listarConsultasSemNota).not.toHaveBeenCalled();
   expect(c.aoConversar).not.toHaveBeenCalled();
   const chamadas = c.completar.mock.calls as unknown as Array<[string, string, Array<{ content: string }>] >;
   expect(chamadas[0][2][0].content).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
@@ -389,7 +390,7 @@ it('oferta anterior com typo continua no conversador mesmo se o extrator decidir
   const enviarLinkCofreAgenda = vi.fn(async () => ({ ok: true, motivo: 'enviado' }));
   await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Vê se tem uma das penentes' } },
     { ...c.deps, listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda });
-  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico');
+  expect(enviarLinkCofreAgenda).toHaveBeenCalledExactlyOnceWith('medico', { introducao: ['Introdução validada na unidade do conversador.'] });
   expect(c.aoConversar).not.toHaveBeenCalled(); // os três balões do link já respondem
   expect(c.extrair.mock.calls[0]?.[2]).toMatchObject({ pergunta: 'Quer que eu verifique se há notas pendentes?' });
 });
@@ -483,6 +484,7 @@ it.each(['minha senha é credencial-ficticia-987', 'credencial-ficticia-987', 'c
 
 it('duas recusas de novo link entregam minutos e resposta anterior à IA, mantendo dedup', async () => {
   const c = await cenario();
+  await c.memoriaPersistida.registrarMarca('medico','conversa','link_agenda_solicitado');
   const respostas = ['Você pode pedir outro link em sete minutos.', 'Faltam seis minutinhos para você pedir um novo link.'];
   const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => {
     const dados = JSON.parse(mensagens[1].content);
@@ -724,4 +726,18 @@ it('cinco falas do homolog avançam sem fallback quando revisão e regeneração
   for (const codigo of ['CONVERSA_GUARDA_REJEITOU', 'CONVERSA_REVISAO_FALHOU', 'CONVERSA_REGENERACAO_FALHOU', 'CONVERSA_ALTERNATIVA_USADA']) expect(logs).toContain(codigo);
   for (const texto of textos) expect(logs).not.toContain(texto);
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+});
+
+it('primeiro link sem introdução validada não cria pedido nem marca envio e mantém a fala do médico na memória', async () => {
+  const c = await cenario();
+  vi.mocked(c.deps.conversador.prepararIntroducaoLink).mockResolvedValue(null);
+  c.completar.mockResolvedValue('{"fala":["Vou pedir o link."],"acao":"enviar_link_cofre_agenda"}');
+  const enviarLinkCofreAgenda = vi.fn();
+  await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto: 'Tribe' } },
+    { ...c.deps, enviarLinkCofreAgenda, listarConsultasSemNota: vi.fn() });
+  expect(enviarLinkCofreAgenda).not.toHaveBeenCalled();
+  expect(await c.memoriaPersistida.temPedidoCofre('medico','conversa')).toBe(false);
+  expect(await c.memoriaPersistida.ler('medico','conversa')).toContain('Tribe');
+  expect(c.deps.log).toHaveBeenCalledWith('erro',expect.stringContaining('INTRODUCAO_LINK_INDISPONIVEL'));
+  expect(JSON.stringify(c.aoConversar.mock.calls)).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
 });

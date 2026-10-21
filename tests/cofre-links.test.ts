@@ -304,7 +304,7 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: unknown }>) => {
         const dados = JSON.parse(String(mensagens[1].content));
         if (dados.resultadoFerramenta) { return '{"fala":["Você pode pedir outro link em uma hora."],"acao":null}'; }
-        return '{"fala":["Peço o link"],"acao":"enviar_link_cofre_agenda"}';
+        return JSON.stringify({ fala: introducaoContextual, acao: 'enviar_link_cofre_agenda' });
     });
     const deps = { ativo: true, conversaLivreAtiva: true, historico, conversador: new ConversadorMedico('chave', 'modelo', completar),
         listarConsultasSemNota: vi.fn(), enviarLinkCofreAgenda: async (id: string) => { const r = await links.solicitarLinkCofre(id, 'tribemd'); resultados.push(r); return r; },
@@ -458,6 +458,9 @@ it('marca persistente de conclusão impede callback de outra tentativa do mesmo 
     await links.concluir(medicoId, true); expect(concluir).not.toHaveBeenCalled();
 });
 
+const introducaoContextual = ['Entendi, você usa TribeMD. O link conecta só a agenda em modo de leitura, para conferir consultas e emitir as notas.',
+    'Por segurança, não recebo senha pela conversa: seu login e senha vão só no link seguro. Vale por 15 minutos e uso único. Nada é enviado a pacientes por essa conexão. Aqui está o link seguro:'];
+
 async function conversaComLinkRealFalso() {
     const banco = new BancoConversaFalso();
     const memoria = new PostgresMemoriaConversaMedico(banco as unknown as pg.Pool);
@@ -467,8 +470,8 @@ async function conversaComLinkRealFalso() {
     }
     registrarTextoLink = async e => { await memoria.registrar(e.medicoId, 'conversa', `noto:agenda:link:${e.linkId}:${e.indice}`, e.texto, 'noto'); };
     const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Resuma')
-        ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : '{"fala":["Vou pedir o link."],"acao":"enviar_link_cofre_agenda"}');
-    const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
+        ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : mensagens[0].content.startsWith('Componha somente a introdução') ? JSON.stringify({ fala: introducaoContextual, acao: null }) : '{"fala":["Vou pedir o link."],"acao":"enviar_link_cofre_agenda"}');
+    const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean; introducao?: readonly string[] }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
     const aoConversar = vi.fn(async (_fala: string[]) => {});
     const deps = { ativo:true, conversaLivreAtiva:true, memoriaPersistida:memoria, memoriaConversa:new MemoriaConversaMedico(), historico,
         conversador:new ConversadorMedico('k','m',completar), aoConversar, enviarLinkCofreAgenda:enviarLink,
@@ -502,7 +505,7 @@ it('novo link depois de expirar é curto e não repete o motivo da conexão ou a
     await c.turno('novo','Me manda um novo link.');
     expect(c.enviarLink).toHaveBeenLastCalledWith(medicoId,{reenvio:true});expect(textos.slice(3)).toHaveLength(2);
     expect(textos[3]).toBe('Claro. Aqui está o novo link seguro:');expect(textos[4]).toMatch(/^https?:\/\/.+\/c\/[A-Za-z0-9_-]{43}$/);
-    expect(textos.filter(t=>t.startsWith('Para conseguir emitir'))).toHaveLength(1);expect(textos.filter(t=>t.startsWith('Por segurança'))).toHaveLength(1);
+    expect(textos.filter(t=>t.includes('modo de leitura'))).toHaveLength(1);expect(textos.filter(t=>t.startsWith('Por segurança'))).toHaveLength(1);
 });
 
 it.each(['simulado', 'erro'] as const)('histórico só recebe balões com envio real confirmado (%s)', async resultado => {
@@ -528,4 +531,42 @@ it('pedido de novo com link ativo informa validade, conserva a mesma URL e uma �
     expect(await salvos()).toHaveLength(1); expect(c.enviarLink).toHaveBeenCalledOnce();
     expect(textos).toHaveLength(3); expect(textos.at(-1)).toBe(url);
     expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua válido; pode usar o mesmo.'], 'de-novo');
+});
+
+it('boas-vindas → período → pergunta de agenda → Tribe: reconhece e entrega o primeiro link com introdução única', async () => {
+    const c = await conversaComLinkRealFalso();
+    await c.memoria.registrarFala(medicoId, 'conversa', 'noto:boas_vindas:unica', 'Desde quando você não emite notas?', 'noto');
+    c.completar.mockImplementation(async (_k, _m, msgs) => {
+        if (msgs[0].content.startsWith('Componha somente a introdução')) return JSON.stringify({ fala: introducaoContextual, acao: null });
+        const d = JSON.parse(msgs[1].content);
+        if (d.texto === 'Desde semana retrasada.') {
+            expect(msgs[0].content).toContain('introduza uma frase curta de contexto');
+            return JSON.stringify({ fala: ['Entendi. Para conferir suas consultas e emitir as notas, preciso ver sua agenda. Qual você usa?'], acao: null });
+        }
+        if (d.texto === 'Tribe') return '{}'; // reproduz rejeição de schema sem perder a resposta à pergunta
+        return JSON.stringify({ fala: ['O link anterior continua válido; pode usar o mesmo.'], acao: 'enviar_link_cofre_agenda', intencaoConexao: 'pedir_novo_link' });
+    });
+    await c.turno('periodo', 'Desde semana retrasada.'); await c.turno('agenda', 'Tribe');
+    expect(c.enviarLink).toHaveBeenCalledExactlyOnceWith(medicoId, { introducao: introducaoContextual });
+    expect(await salvos()).toHaveLength(1); expect(textos.slice(0,2)).toEqual(introducaoContextual);
+    expect(textos[2]).toMatch(/^https?:\/\/.+\/c\/[A-Za-z0-9_-]{43}$/);
+    expect(textos.join(' ')).not.toContain('novo link');
+    const primeiro = [...textos]; await c.turno('reenvio', 'me manda o link de novo');
+    expect(textos).toEqual(primeiro); expect(await salvos()).toHaveLength(1);
+    expect(c.aoConversar.mock.calls.at(-1)?.[0].join(' ')).toContain('continua válido');
+    expect(c.aoConversar.mock.calls.at(-1)?.[0].join(' ')).not.toMatch(/leitura|senha|pacientes/);
+});
+it.each(['Tribe','tribe md','tribemd','o tribe'])('classificação normaliza alias %s sem autorizar ação', async alias => {
+    const completar = vi.fn(async () => JSON.stringify({ agenda: alias }));
+    expect(await new ExtratorRespostaMedicoNvidia('k','m',completar).classificarAgenda(alias)).toBe('tribemd');
+});
+
+it('pedido de novo link sem entrega anterior continua sendo a primeira entrega, sem chamar o link de novo', async () => {
+    const c = await conversaComLinkRealFalso();
+    c.completar.mockImplementation(async (_k,_m,msgs)=>msgs[0].content.startsWith('Componha somente a introdução')
+        ? JSON.stringify({fala:introducaoContextual,acao:null})
+        : '{"fala":["Vou pedir um novo link."],"acao":"enviar_link_cofre_agenda","intencaoConexao":"pedir_novo_link"}');
+    await c.turno('primeiro','Me manda um novo link.');
+    expect(c.enviarLink).toHaveBeenCalledExactlyOnceWith(medicoId,{introducao:introducaoContextual});
+    expect(await salvos()).toHaveLength(1);expect(textos).toHaveLength(3);expect(textos.join(' ')).not.toContain('novo link');
 });
