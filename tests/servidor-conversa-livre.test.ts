@@ -143,14 +143,14 @@ it.each(['outro telefone', 'flag envio off', 'flag conversa off', 'flag comunica
   expect(config.envioPacienteRealAtivo).toBe(false);
 });
 
-it.each(['erro', 'quatro baloes', 'tres baloes'])('entrega %s com limite de três e fallback literal, sem reenviar evento', async caso => {
+it.each(['erro', 'quatro baloes', 'tres baloes'])('entrega %s com limite de três e recuperação segura, sem reenviar evento', async caso => {
   config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true });
   fronteiras.openai.mockImplementation(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => {
     if (mensagens[0].content.startsWith('Extraia')) return '{"temNota":"fora_do_assunto","desde":null,"confianca":0.95}';
     if (caso === 'erro') throw Error('IA_INDISPONIVEL');
     return JSON.stringify({ fala: caso === 'quatro baloes' ? ['1', '2', '3', '4'] : ['Primeiro.', 'Segundo.', 'Terceiro.'] });
   });
-  const textos = [RASCUNHO_FALLBACK_CONVERSA, RASCUNHO_FALLBACK_CONVERSA, ...(caso === 'tres baloes' ? ['Primeiro.', 'Segundo.', 'Terceiro.'] : [RASCUNHO_FALLBACK_CONVERSA])];
+  const textos = [RASCUNHO_FALLBACK_CONVERSA, RASCUNHO_FALLBACK_CONVERSA, ...(caso === 'tres baloes' ? ['Primeiro.', 'Segundo.', 'Terceiro.'] : [caso === 'quatro baloes' ? 'Qual agenda você usa hoje?' : RASCUNHO_FALLBACK_CONVERSA])];
   expect(RASCUNHO_FALLBACK_CONVERSA).toBe('Não consegui entender direito. Posso te ajudar com as notas fiscais. O que você precisa?');
   enviosEsperados = textos.length;
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta'); await receber(app, 'fora');

@@ -56,13 +56,15 @@ it('fora do assunto gera fala, persiste os dois papéis sanitizados e repetiçã
   const nova = new PostgresMemoriaConversaMedico(c.banco as unknown as pg.Pool);
   expect(await nova.ler('medico', 'conversa')).toEqual(['[OCULTO]', 'CPF [OCULTO]; [OCULTO]; [OCULTO]', 'Posso explicar como o Noto ajuda com notas fiscais.']);
 });
-it.each(['erro', 'JSON inválido', 'quatro balões'])('%s no conversador entrega fallback e grava a resposta', async caso => {
+it.each(['erro', 'JSON inválido', 'quatro balões'])('%s no conversador recupera resposta segura e grava o texto enviado', async caso => {
   const c = await cenario();
   if (caso === 'erro') c.completar.mockRejectedValueOnce(Error('INDISPONIVEL'));
   else c.completar.mockResolvedValueOnce(caso === 'JSON inválido' ? '{}' : '{"fala":["1","2","3","4"]}');
   await processarComunicacaoMedico(entrada, c.deps);
-  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
-  expect(c.banco.mensagens.at(-1)?.texto).toBe(RASCUNHO_FALLBACK_CONVERSA);
+  const esperada = caso === 'erro' ? RASCUNHO_FALLBACK_CONVERSA : 'Posso explicar como o Noto ajuda com notas fiscais.';
+  expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([esperada], 'mensagem');
+  expect(c.banco.mensagens.at(-1)?.texto).toBe(esperada);
+  expect(c.completar).toHaveBeenCalledTimes(caso === 'erro' ? 1 : 2);
 });
 it('injeção só produz fala, mantendo nenhuma como única ação decidida', async () => {
   const c = await cenario();
@@ -682,5 +684,44 @@ it('três turnos sobre papel não repetem lista nem orientação, mesmo com par�
   expect(enviadas.slice(1).join(' ')).not.toMatch(/histórico|comprovantes|confirmação|antes de emitir/);
   expect(await c.memoriaPersistida.semAgendaDigital('medico', 'conversa')).toBe(true);
   expect(c.banco.mensagens.filter(m => m.mensagemId === 'contexto:sem_agenda_digital')).toHaveLength(1);
+  expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
+});
+
+it('cinco falas do homolog avançam sem fallback quando revisão e regeneração rejeitam', async () => {
+  const c = await cenario(); const avisos = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  const textos = ['oi', 'quero emitir minhas notas', 'não tenho agenda digital, uso agenda de papel mesmo',
+    'minha agenda é de papel, não tem sistema. como eu emito a nota assim?', 'ok, e o que eu mando primeiro?'];
+  let turno = 0; const composicoes = [0, 0, 0, 0, 0];
+  c.completar.mockImplementation(async (_k, _m, mensagens) => {
+    if (mensagens[0].content.startsWith('Revise a continuidade manual')) {
+      if (turno === 4) return '{}'; // falha de validação da revisão, antes engolida pelo catch
+      return JSON.stringify({ semAgendaDigitalAtual: turno === 2 || turno === 3,
+        evidencia: turno === 2 || turno === 3 ? textos[turno] : null, confianca: 1, repeteOrientacao: turno === 3 });
+    }
+    composicoes[turno]++;
+    if (turno === 0) return '{"fala":["Oi! O que você precisa hoje?"],"acao":null}';
+    if (turno === 1) return '{"semAgendaDigital":true,"fala":["Entendi, você usa papel."],"acao":null}';
+    if (turno === 2) return JSON.stringify({ semAgendaDigital: true, acao: null, fala: [
+      'Entendi, você usa papel. Não vejo o histórico/comprovantes antigos do seu WhatsApp para emitir retroativas por esse histórico.',
+      'Me mande CPF, telefone do paciente, valor e data da consulta, um por vez; confiro e peço confirmação antes de emitir. Comprovantes novos continuam normais.'] });
+    if (turno === 4 && composicoes[turno] === 2) return 'JSON inválido';
+    return '{"fala":["Me mande CPF, telefone, valor e data. Não vejo o histórico, então peço sua confirmação."],"acao":null}';
+  });
+  const enviarLinkCofreAgenda = vi.fn(); const listarConsultasSemNota = vi.fn();
+  for (turno = 0; turno < textos.length; turno++) {
+    await processarComunicacaoMedico({ ...entrada, chaveProcessamento: `homolog:${turno}`, respostaMedico: { ...entrada.respostaMedico, texto: textos[turno] } },
+      { ...c.deps, enviarLinkCofreAgenda, listarConsultasSemNota });
+    expect(await c.memoriaPersistida.semAgendaDigital('medico', 'conversa')).toBe(turno >= 2);
+  }
+  const falas = c.aoConversar.mock.calls.map(c => c[0].join(' '));
+  expect(falas).toHaveLength(5); expect(falas.join(' ')).not.toContain(RASCUNHO_FALLBACK_CONVERSA);
+  expect(falas[0]).toBe('Oi! O que você precisa hoje?'); expect(falas[1]).toContain('Qual agenda');
+  expect(falas[2]).toContain('Comprovantes novos'); expect(falas[3]).toContain('CPF'); expect(falas[4]).toContain('CPF');
+  expect(new Set(falas).size).toBe(5); expect(composicoes).toEqual([1, 2, 1, 2, 2]);
+  expect(falas.filter(t => ['CPF', 'telefone', 'valor', 'data'].every(campo => t.includes(campo)))).toHaveLength(1);
+  expect(falas.slice(3).join(' ')).not.toMatch(/histórico|comprovantes|confirmação/);
+  const logs = JSON.stringify(avisos.mock.calls);
+  for (const codigo of ['CONVERSA_GUARDA_REJEITOU', 'CONVERSA_REVISAO_FALHOU', 'CONVERSA_REGENERACAO_FALHOU', 'CONVERSA_ALTERNATIVA_USADA']) expect(logs).toContain(codigo);
+  for (const texto of textos) expect(logs).not.toContain(texto);
   expect(enviarLinkCofreAgenda).not.toHaveBeenCalled(); expect(listarConsultasSemNota).not.toHaveBeenCalled();
 });
