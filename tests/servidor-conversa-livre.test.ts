@@ -1,5 +1,7 @@
+import type pg from 'pg';
+import { PostgresMemoriaConversaMedico } from '../src/onboarding/conversa-repositorio.js';
 import { chaveConsulta } from '../src/atendimento/comprovante.js';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { criarAppExpress } from '../src/server.js';
@@ -22,12 +24,12 @@ vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEst
 }) }));
 const anterior = { ...config }; let banco: BancoConversaFalso;
 let telefone: string, jid: string, ambiente: string | null, enviosEsperados: number; let errosEsperados = 0;
-let reservas: Set<string>;
+let reservas: Set<string>; let recebidas: Set<string>;
 let ler: ReturnType<typeof vi.spyOn>; let reagir: ReturnType<typeof vi.spyOn>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   errosEsperados = 0; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
-  telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set();
+  telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set(); recebidas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks();
   fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
@@ -43,6 +45,10 @@ beforeEach(() => {
     if (sql.includes('regexp_replace(u.telefone')) return { rows: (parametros[0] as string[]).includes(telefone.replace(/\D/g, ''))
       ? [{ id: 'medico', nome_completo: 'Medica Ficticia', telefone }] : [] };
     if (sql.includes('select u.telefone, pf.ambiente from medicos m')) return { rows: [{ telefone, ambiente }] };
+    if (sql.includes("values ($1, 'mensagem_recebida'")) {
+      const chave = JSON.stringify(parametros); if (recebidas.has(chave)) return { rows: [] };
+      recebidas.add(chave); return { rows: [{ id: 'entrada' }] };
+    }
     if (sql.includes('insert into public.noto_envios_homologacao')) {
       const chave = JSON.stringify(parametros); if (reservas.has(chave)) return { rows: [] };
       reservas.add(chave); return { rows: [{ id: 'reserva' }] };
@@ -65,14 +71,17 @@ afterEach(() => {
   expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros.mock.calls).toEqual(Array.from({ length: errosEsperados }, () => ['COMUNICACAO_SEM_FALA']));
   Object.assign(config, anterior); vi.restoreAllMocks();
 });
-async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá') {
+async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá', validar = true) {
   if (['inicio', 'pergunta'].includes(id) && !fronteiras.nomeMedico && config.conversaLivreAtiva && config.comunicacaoMedicoAtiva) errosEsperados++;
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/webhook/evolution').route.stack[0].handle;
   const body = { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: { messageTimestamp: 1792508400,
     key: { id, remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, message: { conversation: texto } } };
   const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
+  const hash = createHmac('sha256', config.appPepper).update(JSON.stringify([config.evolutionAssistantInstanceName, id])).digest('hex');
+  const duplicada = recebidas.has(JSON.stringify(['medico', hash]));
   await handler({ body, headers: { apikey: 'segredo-ficticio' }, query: {} }, res);
-  expect(res.json).toHaveBeenCalledWith({ ok: true, acao: 'descartada', motivoDescarte: 'gatilho_nao_reconhecido' });
+  if (validar) expect(res.json).toHaveBeenCalledWith({ ok: true, acao: 'descartada', motivoDescarte: duplicada ? 'mensagem_duplicada' : 'gatilho_nao_reconhecido' });
+  return res.json.mock.calls[0][0];
 }
 it('servidor reutiliza OpenAI, recupera memória em nova instância e bloqueia envio sem allowlist mesmo com flag real ativa', async () => {
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta');
@@ -125,7 +134,7 @@ it.each(['outro telefone', 'flag envio off', 'flag conversa off', 'flag comunica
   if (caso === 'allowlist vazia') config.envioRealAllowlist = [];
   const app = criarAppExpress(); await receber(app, 'inicio'); await receber(app, 'pergunta'); await receber(app, 'fora');
   expect(enviar).not.toHaveBeenCalled(); expect(ler).not.toHaveBeenCalled(); expect(reservas.size).toBe(0);
-  expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao'))).toEqual([]);
+  expect(fronteiras.query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao') && !sql.includes("'mensagem_recebida'"))).toEqual([]);
   expect(config.envioPacienteRealAtivo).toBe(false);
 });
 
@@ -155,7 +164,8 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
     instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
   })));
   const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, jid])).digest('hex');
-  const registro = banco.mensagens.find(m => m.conversa === chave && m.mensagemId === 'noto:boas_vindas:unica');
+  const registro = banco.mensagens.find(m => m.mensagemId === 'noto:boas_vindas:unica');
+  expect(await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', chave)).toContain(baloes.join('\n'));
   expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
   expect(baloes[3]).toBe('Tem alguma nota que você precise emitir com urgência, ou quer que eu verifique se há notas pendentes?');
   await receber(criarAppExpress(), 'resposta', 'quero');
@@ -165,9 +175,9 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
   expect(enviar.mock.calls.slice(4).map((args: unknown[]) => args[0])).toEqual([{
     instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto: 'Posso explicar o que o Noto faz hoje.'
   }]);
-  expect(banco.mensagens.filter(m => m.conversa === chave && m.mensagemId === 'noto:boas_vindas:unica')).toHaveLength(1);
+  expect(banco.mensagens.filter(m => m.mensagemId === 'noto:boas_vindas:unica')).toHaveLength(1);
 });
-it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas não entram na memória em %s', async caso => {
+it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas reservam memória antes do envio real em %s', async caso => {
   fronteiras.nomeMedico = 'ALICE CASTRO';
   if (caso !== 'simulado') config.envioRealAllowlist = ['+5551993527271'];
   if (caso === 'falha no segundo') {
@@ -175,8 +185,8 @@ it.each(['simulado', 'falha no segundo', 'livre off'])('boas-vindas não entram 
   }
   if (caso === 'livre off') { config.conversaLivreAtiva = false; enviar.mockResolvedValue({ sucesso: true }); enviosEsperados = 4; }
   await receber(criarAppExpress(), 'inicio');
-  expect(banco.mensagens.filter(m => m.mensagemId === 'noto:boas_vindas:unica')).toEqual([]);
-  expect(banco.consultas.filter(c => c.sql.startsWith('insert into conversa_mensagens') && c.parametros[2] === 'noto:boas_vindas:unica')).toEqual([]);
+  expect(banco.mensagens.filter(m => m.mensagemId === 'noto:boas_vindas:unica')).toHaveLength(caso === 'simulado' ? 0 : 1);
+  expect(banco.consultas.filter(c => c.sql.startsWith('insert into conversa_mensagens') && c.parametros[2] === 'noto:boas_vindas:unica')).toHaveLength(caso === 'simulado' ? 0 : 1);
 });
 
 it('servidor injeta a leitura real de pendências, exclui consulta faturada pelo critério do comprovante e entrega pela conversa protegida', async () => {
@@ -265,7 +275,7 @@ it('evento de conexão continua sozinho, verifica agenda e grava contexto nas va
   expect(banco.mensagens.every(m => m.papel === 'noto')).toBe(true);
   for (const numero of ['5551993527271', '555193527271']) {
     const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, numero])).digest('hex');
-    expect(banco.mensagens.filter(m => m.conversa === conversa).map(m => m.texto).join(' ')).toContain('Já recebi o seu acesso ao TribeMD');
+    expect((await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', conversa)).join(' ')).toContain('Já recebi o seu acesso ao TribeMD');
   }
   expect(JSON.stringify(enviar.mock.calls)).not.toMatch(/cofre|iClinic|FONTE_/i);
 });
@@ -278,4 +288,15 @@ it.each(['livre off', 'envio off', 'comunicação off', 'produção', 'fora da l
   if (caso === 'fora da lista') config.envioRealAllowlist = [];
   criarAppExpress(); await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'link-salvo' });
   expect(enviar).not.toHaveBeenCalled(); expect(fronteiras.fonte).not.toHaveBeenCalled(); expect(banco.mensagens).toEqual([]);
+});
+it('reentrega concorrente do mesmo id Evolution processa texto uma vez entre instâncias', async () => {
+  config.envioRealAllowlist = ['+5551993527271']; enviar.mockResolvedValue({ sucesso: true });
+  await receber(criarAppExpress(), 'inicio'); await receber(criarAppExpress(), 'pergunta');
+  enviosEsperados = 3;
+  const antes = fronteiras.openai.mock.calls.length;
+  const resultados = await Promise.all(Array.from({ length: 12 }, () => receber(criarAppExpress(), 'evolution-unico', 'Como funciona?', false)));
+  expect(resultados.filter(r => r.motivoDescarte === 'mensagem_duplicada')).toHaveLength(11);
+  expect(resultados.filter(r => r.motivoDescarte === 'gatilho_nao_reconhecido')).toHaveLength(1);
+  expect(fronteiras.openai.mock.calls.length - antes).toBe(2); // extrator + conversador, uma única vez
+  expect(banco.mensagens.filter(m => m.mensagemId === 'noto:assistente:evolution-unico')).toHaveLength(1);
 });

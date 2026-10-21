@@ -196,12 +196,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
     }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
-      aoConversar: async (fala, chave) => {
-        const resultado = await comunicacaoHomologacao.conversa({ medicoId, fala, chave });
-        if (resultado === 'enviado' && eventoAgenda && memoriaPersistida) for (const conversa of eventoAgenda.chavesConversa) {
-          await memoriaPersistida.registrar(medicoId, conversa, `noto:${chave}`, fala.join('\n'), 'noto');
-        }
-      },
+      aoConversar: async (fala, chave) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
       listarConsultasSemNota: async (id, agenda, instante) => {
         if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
@@ -218,15 +213,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
         if (acao.tipo === 'boas_vindas' && contexto?.nomeMedico) {
-          await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota,
-            aoEnviar: async (telefone, baloes) => {
-              if (!config.conversaLivreAtiva || !memoriaPersistida) return;
-              // O JID pode vir com ou sem nono dígito, como na busca do médico.
-              for (const variante of gerarVariantesTelefoneBrasileiro(telefone)) {
-                const conversa = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, variante])).digest('hex');
-                await memoriaPersistida.registrar(medicoId, conversa, 'noto:boas_vindas:unica', baloes.join('\n'), 'noto');
-              }
-            } });
+          await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota });
           return;
         }
         if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }
@@ -756,6 +743,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
       const resultado = await processarMensagemWebhook(req.body, tokenRecebido, {
         repositorio: atendimentoRepo,
+        reservarMensagemMedico: (medicoId, instancia, mensagemId) => comunicacaoHomologacao.reservarEntradaMedico(medicoId, instancia, mensagemId),
         segredoConfigurado: segredoEsperado,
         pepper: config.appPepper,
         consultaCpfProvider: hubCpfClient,

@@ -70,6 +70,10 @@ async function query(sql: string, valores: any[] = []): Promise<{ rows: any[] }>
         const l = { id: randomUUID(), medico_id: valores[0], agenda: valores[1], token_hash: valores[2], expira_em: new Date(new Date(valores[3] ?? Date.now()).getTime() + 900000), usado_em: null, criado_em: new Date(valores[3] ?? Date.now()) };
         registros.push(l); return { rows: [{ id: l.id }] };
     }
+    if (sql.includes("values ($1, 'concluido')")) {
+        if (auditoria.some(a => a.link_id === valores[0] && a.evento === 'concluido')) return { rows: [] };
+        auditoria.push({ link_id: valores[0], evento: 'concluido' }); return { rows: [{ link_id: valores[0] }] };
+    }
     if (sql.includes('insert into cofre_links_auditoria')) { auditoria.push({ link_id: valores[0], evento: valores[1] }); return { rows: [] }; }
     if (sql.includes('update cofre_links set usado_em')) {
         const l = registros.find(l => l.token_hash === valores[0] && !l.usado_em && l.expira_em.getTime() > Math.max(Date.now(), instanteBanco + 2));
@@ -432,4 +436,20 @@ it('log de origem recusada contém os cabeçalhos, sem token, senha, corpo ou ca
     const linha = JSON.stringify(logs);
     for (const valor of ['ORIGEM_RECUSADA', 'metodo=POST', 'origin=https://invalido.example', `referer=${base}`, 'secfetch=cross-site', 'host=', 'xfh=notomed.tech', 'xfp=https']) expect(linha).toContain(valor);
     for (const segredo of [token, dados.senha, dados.email, '/c/', 'consentimento']) expect(linha).not.toContain(segredo);
+});
+it.each([true, false])('conclusão concorrente por link persiste uma marca e dispara uma vez (conectado=%s)', async conectado => {
+    const concluir = vi.fn(async () => {});
+    links = new LinksCofre({ pool, origem: base, cofre: { status: async () => ({ salvo: false, estado: 'vazio', ativo: false, verificadoEm: null, codigo: null, consultasDisponiveis: null }), iniciar },
+        enviar: async (_id, texto) => { textos.push(texto); return 'enviado'; }, aoConcluir: concluir });
+    const { token } = await pedir(); await links.enviarCredencial(token, { ...dados });
+    await Promise.all(Array.from({ length: 20 }, () => links.concluir(medicoId, conectado)));
+    expect(concluir).toHaveBeenCalledOnce(); expect(auditoria.filter(a => a.evento === 'concluido')).toHaveLength(1);
+});
+it('marca persistente de conclusão impede callback de outra tentativa do mesmo link', async () => {
+    const concluir = vi.fn(async () => {});
+    links = new LinksCofre({ pool, origem: base, cofre: { status: async () => ({ salvo: false, estado: 'vazio', ativo: false, verificadoEm: null, codigo: null, consultasDisponiveis: null }), iniciar },
+        enviar: async (_id, texto) => { textos.push(texto); return 'enviado'; }, aoConcluir: concluir });
+    const { token } = await pedir(); await links.enviarCredencial(token, { ...dados });
+    auditoria.push({ link_id: (await salvos())[0].id, evento: 'concluido' });
+    await links.concluir(medicoId, true); expect(concluir).not.toHaveBeenCalled();
 });

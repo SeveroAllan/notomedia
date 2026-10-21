@@ -34,6 +34,12 @@ export async function processarComunicacaoMedico(
     log: (nivel: 'info' | 'erro', mensagem: string) => void }
 ): Promise<ProximaAcaoNoto> {
   if (!deps.ativo) return { tipo: 'nenhuma' };
+  const enviarFala = async (fala: string[], chave: string) => {
+    // O transporte real reserva a linha antes de enviar; o registro posterior é um no-op nesse caminho.
+    await deps.aoConversar?.(fala, chave);
+    if (entrada.chaveConversa && deps.memoriaPersistida) await deps.memoriaPersistida.registrar(
+      entrada.medicoId, entrada.chaveConversa, `noto:${chave}`, fala.join('\n'), 'noto');
+  };
   const fallback = async (motivo: string, erro?: unknown, verificarDuplicata = true) => {
     if (!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) return;
     const detalhe = erro instanceof Error ? erro.message : erro === undefined ? '' : String(erro);
@@ -41,14 +47,13 @@ export async function processarComunicacaoMedico(
     if (entrada.chaveConversa && deps.memoriaPersistida) {
       try { if (verificarDuplicata && await deps.memoriaPersistida.temResposta(entrada.medicoId, entrada.chaveConversa, entrada.chaveProcessamento)) return; }
       catch { /* A indisponibilidade da memória não impede a tentativa de resposta. */ }
-      for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico?.texto ?? ''), 'medico'],
-        [`noto:${entrada.chaveProcessamento}`, RASCUNHO_FALLBACK_CONVERSA, 'noto']] as const) {
-        if (papel === 'medico' && !entrada.respostaMedico) continue;
+      for (const [id, texto, papel] of [[`medico:${entrada.chaveProcessamento}`, sanitizarTextoMedico(entrada.respostaMedico?.texto ?? ''), 'medico']] as const) {
+        if (!entrada.respostaMedico) continue;
         try { await deps.memoriaPersistida.registrar(entrada.medicoId, entrada.chaveConversa, id, texto, papel); }
         catch (e) { deps.log('erro', `COMUNICACAO_MEMORIA_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
       }
     }
-    try { await deps.aoConversar?.([RASCUNHO_FALLBACK_CONVERSA], entrada.chaveProcessamento); }
+    try { await enviarFala([RASCUNHO_FALLBACK_CONVERSA], entrada.chaveProcessamento); }
     catch (e) { deps.log('erro', `COMUNICACAO_FALLBACK_FALHOU: ${sanitizarTextoMedico(e instanceof Error ? e.message : String(e)).slice(0, 500)}`); }
   };
   const anterior = processamentos.get(entrada.medicoId);
@@ -64,8 +69,7 @@ export async function processarComunicacaoMedico(
         let estado: EstadoComunicacaoMedico | null = null;
         if (entrada.eventoAgenda.conectado) {
           const aviso = 'Já recebi o seu acesso ao TribeMD. Vou verificar sua agenda.';
-          await deps.aoConversar?.([aviso], `${entrada.chaveProcessamento}:acesso`);
-          if (memoria && conversa) await memoria.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:acesso`, aviso, 'noto');
+          await enviarFala([aviso], `${entrada.chaveProcessamento}:acesso`);
           estado = await deps.lerEstado(entrada.medicoId, entrada.agora);
           if (!estado) { await fallback('COMUNICACAO_ESTADO_AUSENTE'); return { tipo: 'nenhuma' }; }
         }
@@ -81,8 +85,7 @@ export async function processarComunicacaoMedico(
         if (!resposta) { await fallback('COMUNICACAO_SEM_FALA'); return { tipo: 'nenhuma' }; }
         const restante = resposta.fala.slice(1).join('\n');
         const fala = resposta.fala.length > 2 ? [resposta.fala[0], restante.length <= 500 ? restante : `${restante.slice(0, 400)}\nResumo de ${resultado.total ?? 'várias'} consultas; lista abreviada.`] : resposta.fala;
-        if (memoria && conversa) await memoria.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, fala.join('\n'), 'noto');
-        await deps.aoConversar?.(fala, entrada.chaveProcessamento);
+        await enviarFala(fala, entrada.chaveProcessamento);
         return { tipo: 'nenhuma' };
       }
       if (deps.conversaLivreAtiva && deps.enviarLinkCofreAgenda && entrada.respostaMedico) {
@@ -93,7 +96,7 @@ export async function processarComunicacaoMedico(
       }
       if (entrada.respostaMedico && contemCredencialAgenda(entrada.respostaMedico.texto) && deps.conversaLivreAtiva) {
         deps.log('erro', registroErroNoto('COMUNICACAO_ENTRADA_PROTEGIDA', 'acionavel', { etapa: 'entrada' }));
-        try { await deps.aoConversar?.(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], entrada.chaveProcessamento); }
+        try { await enviarFala(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], entrada.chaveProcessamento); }
         catch { deps.log('erro', registroErroNoto('COMUNICACAO_RESPOSTA_PROTEGIDA_FALHOU', 'tecnico', { etapa: 'entrada' })); }
         return { tipo: 'nenhuma' };
       }
@@ -141,9 +144,8 @@ export async function processarComunicacaoMedico(
           if (resposta.acao !== 'enviar_link_cofre_agenda') {
             const aviso = resposta.fala.slice(0, 1);
             if (aviso.length) {
-              await deps.aoConversar?.(aviso, `${entrada.chaveProcessamento}:verificacao`);
+              await enviarFala(aviso, `${entrada.chaveProcessamento}:verificacao`);
               consultaAnunciada = true;
-              if (conversa && memoriaConversa) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:verificacao`, aviso.join('\n'), 'noto');
             }
             resposta = await deps.conversador.responder({ ...contexto, verificacaoConexao: true,
               acoesPermitidas: estado.estado.agenda.conectada ? ['listar_consultas_sem_notas'] : ['listar_consultas_sem_notas', 'enviar_link_cofre_agenda'] });
@@ -156,9 +158,8 @@ export async function processarComunicacaoMedico(
         if (resposta.acao === 'listar_consultas_sem_notas' && deps.listarConsultasSemNota) {
           if (estado.estado.agenda.conectada && !consultaAnunciada) {
             const aviso = 'Sua agenda já está conectada, deixa eu ver um minutinho.';
-            await deps.aoConversar?.([aviso], `${entrada.chaveProcessamento}:consulta`);
+            await enviarFala([aviso], `${entrada.chaveProcessamento}:consulta`);
             consultaAnunciada = true;
-            if (conversa && memoriaConversa) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}:consulta`, aviso, 'noto');
           }
           let resultado;
           try { resultado = await deps.listarConsultasSemNota(entrada.medicoId, estado.estado.agenda, entrada.agora); }
@@ -191,10 +192,10 @@ export async function processarComunicacaoMedico(
       }
       if (memoriaConversa && conversa) {
         if (respostaMedico) await memoriaConversa.registrar(entrada.medicoId, conversa, `medico:${entrada.chaveProcessamento}`, respostaMedico.texto);
-        const pergunta = fala ? fala.join('\n') : montarPerguntaComunicacao(acao);
+        const pergunta = fala ? null : montarPerguntaComunicacao(acao);
         if (pergunta) await memoriaConversa.registrar(entrada.medicoId, conversa, `noto:${entrada.chaveProcessamento}`, pergunta, 'noto');
       }
-      if (fala?.length) await deps.aoConversar?.(fala, entrada.chaveProcessamento);
+      if (fala?.length) await enviarFala(fala, entrada.chaveProcessamento);
       if (deps.conversaLivreAtiva === true && respostaMedico && conversa && deps.memoriaPersistida && deps.conversador) {
         await atualizarResumo(deps.memoriaPersistida, deps.conversador, entrada.medicoId, conversa);
       }

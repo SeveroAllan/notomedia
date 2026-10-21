@@ -4,7 +4,7 @@ import { LIMITE_MENSAGENS_CONTEXTO_MEDICO } from './regras/decidir-proxima-acao.
 
 export interface MemoriaConversa {
   ler(medicoId: string, conversa: string): string[] | Promise<string[]>;
-  registrar(medicoId: string, conversa: string, id: string, texto: string, papel?: 'medico' | 'noto'): void | Promise<void>;
+  registrar(medicoId: string, conversa: string, id: string, texto: string, papel?: 'medico' | 'noto'): void | boolean | Promise<void | boolean>;
 }
 export type ResumoConversa = { resumo: string; ateId: string };
 
@@ -13,37 +13,38 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
 
   async ler(medicoId: string, conversa: string): Promise<string[]> {
     const { rows } = await this.pool.query<{ texto: string }>(
-      'select texto from conversa_mensagens where medico_id=$1 and conversa=$2 order by id desc limit $3',
+      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or papel='noto' and (mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%')) order by id desc limit $3",
       [medicoId, conversa, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
     return rows.reverse().map(mensagem => sanitizarTextoMedico(mensagem.texto));
   }
 
   async lerUltimaFalaNoto(medicoId: string, conversa: string): Promise<string | undefined> {
     const { rows } = await this.pool.query<{ texto: string }>(
-      "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and papel='noto' order by id desc limit 1", [medicoId, conversa]);
+      "select texto from conversa_mensagens where medico_id=$1 and (conversa=$2 or mensagem_id='noto:boas_vindas:unica' or mensagem_id like 'noto:agenda:%') and papel='noto' order by id desc limit 1", [medicoId, conversa]);
     return rows[0] ? sanitizarTextoMedico(rows[0].texto) : undefined;
   }
 
-  async registrar(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<void> {
-    await this.pool.query(
-      'insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5) on conflict (medico_id, conversa, mensagem_id) do nothing',
+  async registrar(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      'insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5) on conflict do nothing returning id',
       [medicoId, conversa, id, sanitizarTextoMedico(texto), papel]);
+    return rows.length === 1;
   }
 
   async temResposta(medicoId: string, conversa: string, chave: string): Promise<boolean> {
-    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id=$3 limit 1',
+    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
       [medicoId, conversa, `noto:${chave}`]);
     return rows.length > 0;
   }
 
   async temPedidoCofre(medicoId: string, conversa: string): Promise<boolean> {
-    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id=$3 limit 1',
+    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
       [medicoId, conversa, 'noto:cofre_agenda:solicitado']);
     return rows.length > 0;
   }
 
   async temBoasVindas(medicoId: string, conversa: string): Promise<boolean> {
-    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id=$3 limit 1',
+    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
       [medicoId, conversa, 'noto:boas_vindas:unica']);
     return rows.length > 0;
   }

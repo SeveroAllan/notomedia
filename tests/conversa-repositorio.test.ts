@@ -12,6 +12,9 @@ it('persiste só texto sanitizado, deduplica e recupera quatro textos em ordem a
   await repo.registrar('medico', 'conversa', '4', 'não sobrescrever');
   await repo.registrar('outro', 'conversa', '4', 'outro médico');
   await repo.registrar('medico', 'outra', '4', 'outra conversa', 'noto');
+  expect(banco.mensagens).toHaveLength(6);
+  expect(banco.mensagens.find(m => m.medico === 'medico' && m.mensagemId === '4')?.texto).toBe('[OCULTO]');
+  await repo.registrar('medico', 'outra', 'outra-4', 'outra conversa', 'noto');
   expect(banco.mensagens).toHaveLength(7);
   expect(banco.mensagens.at(-1)?.papel).toBe('noto');
   expect(await new PostgresMemoriaConversaMedico(banco as unknown as pg.Pool).ler('medico', 'conversa'))
@@ -39,4 +42,19 @@ it('migration é idempotente e define os tipos, unicidade e índice pedidos, sem
   expect(sql).toContain("check (papel in ('medico', 'noto'))");
   expect(sql).toContain('unique (medico_id, conversa, mensagem_id)');
   expect(sql).toContain('(medico_id, conversa, id desc)');
+});
+
+it('reserva global por médico/mensagem é atômica entre conversas e instâncias', async () => {
+  const banco = new BancoConversaFalso();
+  const resultados = await Promise.all(Array.from({ length: 20 }, (_, i) =>
+    new PostgresMemoriaConversaMedico(banco as unknown as pg.Pool).registrar('medico', `jid-${i}`, 'noto:agenda:link:acesso', 'Acesso recebido.', 'noto')));
+  expect(resultados.filter(Boolean)).toHaveLength(1);
+  expect(banco.mensagens).toHaveLength(1);
+});
+it('migration limpa duplicatas antes da unicidade global e permite conclusão persistente', () => {
+  const sql = readFileSync('scripts/migrations/20261023-conversa-envio-idempotente.sql', 'utf8');
+  expect(sql).toContain('lock table public.conversa_mensagens');
+  expect(sql.indexOf('delete from')).toBeLessThan(sql.indexOf('unique (medico_id, mensagem_id)'));
+  expect(sql).toContain('duplicada.medico_id=primeira.medico_id'); expect(sql).toContain('duplicada.mensagem_id=primeira.mensagem_id');
+  expect(sql).toContain('duplicada.id>primeira.id'); expect(sql).toContain("'concluido'"); expect(sql).not.toMatch(/create table|create policy/i);
 });

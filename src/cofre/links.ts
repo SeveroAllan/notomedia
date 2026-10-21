@@ -137,6 +137,8 @@ export class LinksCofre {
         const link = this.aguardando.get(medicoId);
         if (!link || link.agenda !== 'tribemd') return;
         this.aguardando.delete(medicoId);
+        const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
+        if (!rows.length) return;
         const falhaAcesso = !conectado && (await this.deps.cofre.status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
         if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
         await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Estamos com uma instabilidade no sistema; já vou verificar e te retorno.');

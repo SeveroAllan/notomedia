@@ -91,7 +91,7 @@ it.each(['segredo', 'sem estado', 'estado falha', 'reserva ocupada', 'histórico
   if (caso === 'sem resposta') expect(c.aoConversar).not.toHaveBeenCalled();
   else if (caso === 'segredo') {
     expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Por segurança, não recebo senha pela conversa. Use somente o link seguro para conectar sua agenda.'], 'mensagem');
-    expect(c.banco.mensagens).toEqual([]);
+    expect(c.banco.mensagens).toHaveLength(1); expect(c.banco.mensagens[0].papel).toBe('noto');
   } else expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith([RASCUNHO_FALLBACK_CONVERSA], 'mensagem');
   expect(c.completar).not.toHaveBeenCalled();
 });
@@ -474,7 +474,8 @@ it.each(['minha senha é credencial-ficticia-987', 'credencial-ficticia-987', 'c
   const antes = JSON.stringify(c.banco.mensagens);
   await processarComunicacaoMedico({ ...entrada, respostaMedico: { ...entrada.respostaMedico, texto } }, c.deps);
   expect(c.completar).not.toHaveBeenCalled(); expect(c.extrair).not.toHaveBeenCalled();
-  expect(JSON.stringify(c.banco.mensagens)).toBe(antes); expect(JSON.stringify(c.deps.log.mock.calls)).not.toContain(texto);
+  expect(JSON.stringify(c.banco.mensagens.filter(m => m.mensagemId === 'noto:cofre_agenda:solicitado'))).toBe(antes);
+  expect(c.banco.mensagens.filter(m => m.papel === 'medico')).toEqual([]); expect(JSON.stringify(c.banco.mensagens)).not.toContain(texto); expect(JSON.stringify(c.deps.log.mock.calls)).not.toContain(texto);
   expect(c.aoConversar).toHaveBeenCalledOnce();
 });
 

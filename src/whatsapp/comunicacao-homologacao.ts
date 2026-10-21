@@ -1,9 +1,10 @@
+import { PostgresMemoriaConversaMedico } from '../onboarding/conversa-repositorio.js';
 import { REACOES_PERMITIDAS, type ReacaoMedico, type TransporteReacao } from './reagir-mensagem.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
 import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
 import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type pg from 'pg';
 import type { AppConfig } from '../config.js';
 import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
@@ -156,6 +157,7 @@ export class ComunicacaoHomologacao {
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
       const baloes = montarBoasVindas(nomeMedico, ultimaNota);
+      if (!await this.reservarMensagem(medicoId, destino.telefone, 'boas_vindas:unica', baloes)) return 'repetido';
       const resultado = await this.enviarUnico(medicoId, 'boas_vindas', 'unica', async () => {
         for (const texto of baloes) {
           const envio = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
@@ -169,7 +171,7 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async conversa(entrada: { medicoId: string; chave: string; fala: string[] }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; conversa?: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, chave, fala } = entrada;
     if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
     if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
@@ -178,6 +180,7 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
+      if (!await this.reservarMensagem(medicoId, destino.telefone, chave, fala, entrada.conversa)) return 'repetido';
       return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
         for (const texto of fala) {
           const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
@@ -242,6 +245,18 @@ export class ComunicacaoHomologacao {
     return /^\d{10,13}$/.test(telefone.replace(/\D/g, '')) && (this.config.envioRealAllowlist ?? []).some(t => gerarVariantesTelefoneBrasileiro(t).some(v => variantes.includes(v)));
   }
   private simular(acao: string): 'simulado' { this.log(`enviaria ${acao}`); return 'simulado'; }
+
+  private async reservarMensagem(medicoId: string, telefone: string, chave: string, fala: string[], conversa?: string): Promise<boolean> {
+    const chaveConversa = conversa ?? createHash('sha256').update(JSON.stringify([this.config.evolutionAssistantInstanceName, telefone.replace(/\D/g, '')])).digest('hex');
+    return new PostgresMemoriaConversaMedico(this.pool).registrar(medicoId, chaveConversa, `noto:${chave}`, fala.join('\n'), 'noto');
+  }
+
+  async reservarEntradaMedico(medicoId: string, instancia: string, mensagemId: string): Promise<boolean> {
+    const chave = createHmac('sha256', this.config.appPepper).update(JSON.stringify([instancia, mensagemId])).digest('hex');
+    const { rows } = await this.pool.query(`insert into public.noto_envios_homologacao (medico_id, acao, chave, estado)
+      values ($1, 'mensagem_recebida', $2, 'reservado') on conflict (medico_id, acao, chave) do nothing returning id`, [medicoId, chave]);
+    return rows.length === 1;
+  }
 
   private async enviarUnico(medicoId: string, acao: string, chave: string, enviar: () => Promise<boolean>): Promise<'enviado' | 'erro' | 'repetido'> {
     const hash = createHmac('sha256', this.config.appPepper).update(JSON.stringify([medicoId, acao, chave])).digest('hex');

@@ -1,10 +1,14 @@
+import { BancoConversaFalso } from './fakes/banco-conversa.js';
 import { createHmac } from 'node:crypto';
 import { montarBoasVindas } from '../src/onboarding/regras/decidir-proxima-acao.js';
-import { expect, it, vi } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 import type { EnviarMensagemPacienteParams } from '../src/whatsapp/enviar-mensagem-paciente.js';
 import { carregarConfig } from '../src/config.js';
 import { ComunicacaoHomologacao } from '../src/whatsapp/comunicacao-homologacao.js';
+
+let bancoMensagens: BancoConversaFalso;
+beforeEach(() => { bancoMensagens = new BancoConversaFalso(); });
 
 it('flags novas nascem desligadas e a allowlist nasce vazia', () => {
   expect(carregarConfig({})).toMatchObject({ envioMedicoRealAtivo: false, envioPacienteRealAtivo: false, envioRealAllowlist: [] });
@@ -77,6 +81,7 @@ it.each(['sucesso', 'falha', 'excecao', 'confirmacao falha'])('conversa reserva 
       if (caso === 'confirmacao falha') throw Error('CONFIRMACAO_INDISPONIVEL');
       return { rows: [] };
     }
+    if (sql.startsWith('insert into conversa_mensagens')) return bancoMensagens.query(sql, p);
     throw Error('SQL_NAO_MODELADO');
   });
   const enviarTexto = vi.fn(async (_p: EnviarMensagemPacienteParams) => {
@@ -94,10 +99,12 @@ it.each(['sucesso', 'falha', 'excecao', 'confirmacao falha'])('conversa reserva 
     instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: '+5551993527271', texto
   })));
   expect(reservas.size).toBe(1);
-  const inserts = query.mock.calls.filter(([sql]) => sql.includes('insert into'));
-  expect(inserts).toHaveLength(3);
+  const inserts = query.mock.calls.filter(([sql]) => sql.includes('insert into public.noto_envios_homologacao'));
+  expect(inserts).toHaveLength(1);
+  expect(bancoMensagens.mensagens).toHaveLength(1);
   expect(inserts[0][1]).toEqual(['m', 'conversa_livre', expect.stringMatching(/^[a-f0-9]{64}$/)]);
-  const banco = JSON.stringify(query.mock.calls);
+  const banco = JSON.stringify(query.mock.calls.filter(([sql]) => !sql.startsWith('insert into conversa_mensagens')));
+  expect(bancoMensagens.mensagens[0].texto).toBe(entrada.fala.join('\n'));
   for (const texto of entrada.fala) expect(banco).not.toContain(texto);
   expect(banco).not.toContain('+5551993527271');
 });
@@ -133,6 +140,7 @@ it.each([false, true])('boas-vindas enviam em ordem, uma única vez por médico,
       reservas.add(chave); return { rows: [{ id: 'r' }] };
     }
     if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] };
+    if (sql.startsWith('insert into conversa_mensagens')) return bancoMensagens.query(sql, p);
     throw Error('SQL_NAO_MODELADO');
   });
   const enviarTexto = vi.fn(async (_p: EnviarMensagemPacienteParams) => ({ sucesso: true }));
@@ -147,7 +155,7 @@ it.each([false, true])('boas-vindas enviam em ordem, uma única vez por médico,
     instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: '5511999990000', texto
   })));
   const hash = createHmac('sha256', config.appPepper).update(JSON.stringify(['m', 'boas_vindas', 'unica'])).digest('hex');
-  expect(query.mock.calls.find(([sql]) => sql.includes('insert into'))?.[1]).toEqual(['m', 'boas_vindas', hash]);
+  expect(query.mock.calls.find(([sql]) => sql.includes('insert into public.noto_envios_homologacao'))?.[1]).toEqual(['m', 'boas_vindas', hash]);
   expect(query).toHaveBeenCalledWith('update public.noto_envios_homologacao set estado = $2 where id = $1', ['r', falha ? 'erro' : 'enviado']);
   if (falha) expect(aoEnviar).not.toHaveBeenCalled();
   else expect(aoEnviar).toHaveBeenCalledExactlyOnceWith('5511999990000', baloes);
@@ -166,6 +174,7 @@ it.each([
     if (sql.includes('from medicos m')) return { rows: [{ telefone: '+5551993527271', ambiente }] };
     if (sql.includes('insert into public.noto_envios_homologacao')) { const chave = JSON.stringify(p); if (reservas.has(chave)) return { rows: [] }; reservas.add(chave); return { rows: [{ id: 'envio' }] }; }
     if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] };
+    if (sql.startsWith('insert into conversa_mensagens')) return bancoMensagens.query(sql, p);
     throw Error('SQL_NAO_MODELADO');
   });
   const enviarTexto = vi.fn(async () => ({ sucesso: true, mensagemId: 'pergunta-real-fixture' }));
@@ -260,4 +269,23 @@ it.each([
     expect(await new EvolutionApiClient('https://evolution.invalid', 'ficticia', 'notomed_assistente', 'notomed_oficial').obterTelefoneInstancia()).toBe(esperado);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://evolution.invalid/instance/fetchInstances?instanceName=notomed_assistente', expect.objectContaining({ redirect: 'error' }));
   } finally { fetcher.mockRestore(); }
+});
+
+it.each(['boas_vindas:unica', 'agenda:link:acesso', 'agenda:link', 'agenda:falha'])('20 transportes concorrentes de %s reservam uma linha antes do primeiro balão', async chave => {
+  const banco = new BancoConversaFalso(), reservas = new Set<string>();
+  const query = async (sql: string, p: any[] = []) => {
+    if (sql.includes('from medicos m')) return { rows: [{ telefone: '5551993527271', ambiente: 'homologacao' }] };
+    if (sql.startsWith('insert into conversa_mensagens')) return banco.query(sql, p);
+    if (sql.includes('insert into public.noto_envios_homologacao')) { const id = JSON.stringify(p); if (reservas.has(id)) return { rows: [] }; reservas.add(id); return { rows: [{ id: 'reserva' }] }; }
+    if (sql.startsWith('update public.noto_envios_homologacao')) return { rows: [] };
+    throw Error('SQL_NAO_MODELADO');
+  };
+  const enviarTexto = vi.fn(async () => { expect(banco.mensagens).toHaveLength(1); expect(banco.mensagens[0].mensagemId).toBe(`noto:${chave}`); return { sucesso: true }; });
+  const config = { ...carregarConfig({}), envioMedicoRealAtivo: true, envioRealAllowlist: ['+5551993527271'] };
+  const resultados = await Promise.all(Array.from({ length: 20 }, () => {
+    const c = new ComunicacaoHomologacao({ query } as unknown as pg.Pool, config, { enviarTexto }, vi.fn());
+    return chave === 'boas_vindas:unica' ? c.boasVindas({ medicoId: 'medico', nomeMedico: 'Alice', ultimaNota: null }) : c.conversa({ medicoId: 'medico', chave, fala: ['Mensagem automática.'] });
+  }));
+  expect(resultados.filter(r => r === 'enviado')).toHaveLength(1); expect(resultados.filter(r => r === 'repetido')).toHaveLength(19);
+  expect(banco.mensagens).toHaveLength(1); expect(enviarTexto).toHaveBeenCalledTimes(chave === 'boas_vindas:unica' ? 4 : 1);
 });

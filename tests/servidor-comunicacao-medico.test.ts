@@ -18,7 +18,12 @@ beforeEach(() => {
   fronteiras.completar.mockResolvedValue(JSON.stringify({ temNota: 'não', desde: null, confianca: 0.90 }));
   fronteiras.connect.mockImplementation(() => banco.connect()); fronteiras.agenda.mockResolvedValue({ nome: null, conectada: false });
   fronteiras.sincronizar.mockResolvedValue({});
-  fronteiras.query.mockImplementation(async (sql: string) => {
+  const entradas = new Set<string>();
+  fronteiras.query.mockImplementation(async (sql: string, parametros: unknown[] = []) => {
+    if (sql.includes("values ($1, 'mensagem_recebida'")) {
+      const chave = JSON.stringify(parametros); if (entradas.has(chave)) return { rows: [] };
+      entradas.add(chave); return { rows: [{ id: 'entrada' }] };
+    }
     if (sql.includes('as cert_ativos')) return { rows: [{ medico_id: medico, medico_nome: 'Medica Ficticia', crm: '12345/SC', rqe: null, confirmado_pelo_medico: true,
       cert_ativos: '1', whats_conectados: '1', whatsapp_vinculado: true,
       revisao_profissional: { estado: 'concluido', dados: { aprovacaoPainel: { confirmadoEm: '2026-10-17T15:00:00Z', nome: 'Medica Ficticia', crm: '12345/SC', rqe: null } } } }] };

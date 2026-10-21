@@ -32,6 +32,7 @@ export interface ProcessarWebhookDeps {
   instanciaOficialNome?: string;
   instanciaAssistenteNome?: string;
   comunicacaoMedicoAtiva?: boolean;
+  reservarMensagemMedico?: (medicoId: string, instancia: string, mensagemId: string) => Promise<boolean>;
   aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
@@ -96,6 +97,7 @@ export async function processarMensagemWebhook(
       try {
         const medico = await deps.repositorio.buscarMedicoPorTelefone(telefone);
         if (medico) {
+          if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medico.id, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
           const bruto = payload.data.messageTimestamp;
           const numero = typeof bruto === 'number' ? bruto : typeof bruto === 'string' && bruto.trim() ? Number(bruto) : NaN;
           const data = new Date(numero > 1e11 ? numero : numero * 1000);
