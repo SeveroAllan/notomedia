@@ -46,8 +46,8 @@ export function perguntaLote(lote: Pick<LoteRetroativo, 'desde' | 'totalConsulta
 export class ConversaLoteRetroativo {
   constructor(private readonly repo: RepositorioLotes, private readonly deps: {
     permitido: (medicoId: string) => Promise<boolean>;
-    contar: (medicoId: string, desde: string, ate: string) => Promise<ContagemPeriodo>;
-    listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: () => Promise<void>) => Promise<void>;
+    contar: (medicoId: string, desde: string, ate: string, valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<ContagemPeriodo>;
+    listarPeriodo?: (medicoId: string, conversa: string, chave: string, desde: string, agora: Date, aoConcluir: (valoresAoVivo?: ReadonlyMap<string, number | null>) => Promise<void>) => Promise<void>;
     comporContagem: (lote: LoteRetroativo) => { fala: string[] };
     interpretarData: (texto: string, agora: Date) => Promise<string | null>;
     interpretarConfirmacao: (texto: string, pergunta: string) => Promise<InterpretacaoConfirmacao>;
@@ -69,8 +69,8 @@ export class ConversaLoteRetroativo {
     if (lote.estado === 'aguardando_data_inicio') {
       const desde = validarInicioRetroativo(await this.deps.interpretarData(texto, agora), agora);
       if (!desde) { await enviar(['Pode confirmar o dia, mês e ano do início? Preciso de uma data dos últimos 90 dias, até hoje.']); return true; }
-      const propor = async () => {
-        const contagem = await this.deps.contar(medicoId, desde, lote.ate);
+      const propor = async (valoresAoVivo?: ReadonlyMap<string, number | null>) => {
+        const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, lote.ate, valoresAoVivo) : await this.deps.contar(medicoId, desde, lote.ate);
         this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
           totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
         const preparado = await this.repo.preparar(lote.id, desde, contagem);
@@ -82,15 +82,22 @@ export class ConversaLoteRetroativo {
       else await propor();
       return true;
     }
-    // A resposta deve citar a pergunta enviada; um "sim" solto nunca libera um lote.
-    if (!perguntaId || perguntaId !== lote.mensagemConfirmacaoId || !lote.perguntaEm || agora.getTime() - Date.parse(lote.perguntaEm) >= 48 * 3600000) {
-      await enviar(['Para confirmar com segurança, responda citando a mensagem com o período e o total da simulação. Se ela tiver mais de dois dias, precisamos conferir o período novamente.']); return true;
+    // Sem citação, o único lote ativo vincula a resposta à sua pergunta ainda válida.
+    const perguntaPendente = lote.mensagemConfirmacaoId;
+    const pergunta = perguntaId?.trim() || perguntaPendente;
+    const perguntadaEm = Date.parse(lote.perguntaEm ?? '');
+    const idade = agora.getTime() - perguntadaEm;
+    if (!perguntaPendente || !Number.isFinite(perguntadaEm) || idade < 0 || idade >= 48 * 3600000) {
+      await enviar(['Não há uma pergunta de confirmação válida neste momento. Precisamos conferir o período e o total novamente antes de seguir.']); return true;
+    }
+    if (pergunta !== perguntaPendente) {
+      await enviar(['Essa resposta se refere a outra pergunta. A confirmação pendente é do período e total que acabei de apresentar.']); return true;
     }
     const interpretacao = await this.deps.interpretarConfirmacao(texto, perguntaLote(lote));
-    const confirmou = await this.repo.confirmar(lote.id, mensagemId, perguntaId, interpretacao, agora);
+    const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));
     await enviar([confirmou ? 'Autorização registrada para simular somente essas consultas. Nenhuma nota será emitida nem enviada ao paciente.'
-      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não consegui confirmar com segurança. Você autoriza a simulação desse período e total? Responda à mensagem com o resumo.']);
+      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não consegui confirmar com segurança. Você autoriza simular todas as consultas desse período e total?']);
     return true;
   }
 }

@@ -36,7 +36,7 @@ describe('retroativo com escopo e confirmação vinculados', () => {
     expect(c.repo.confirmar).toHaveBeenCalledOnce(); expect(c.lote().estado).toBe('confirmado');
     expect(c.deps.contar).toHaveBeenCalledOnce(); // não amplia o escopo no sim
   });
-  it.each([undefined, 'outra-pergunta'])('sim sem referência correta não autoriza (%s)', async pergunta => {
+  it.each(['outra-pergunta'])('sim com referência divergente não autoriza (%s)', async pergunta => {
     const c = cenario(); await c.conversa.iniciar('m', 'c', 'evento', agora); await c.conversa.responder('m', 'c', 'd', 'ontem', agora);
     await c.conversa.responder('m', 'c', 's', 'sim', agora, pergunta);
     expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.lote().estado).toBe('aguardando_confirmacao_lote');
@@ -138,4 +138,29 @@ it.each(['homologacao', 'producao', null])('adaptador fiscal simula tomador tran
   expect(transmitirDps).not.toHaveBeenCalled();
   const consultas = JSON.stringify(query.mock.calls);
   expect(consultas).not.toMatch(/insert |update |from pacientes|notas_fiscais|52998224725|Pessoa Ao Vivo/i);
+});
+
+it('8b: sim sem citação usa a pergunta pendente exata e confirma só uma vez', async () => {
+  const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
+  await c.conversa.responder('m','c','s','manda ver',agora);
+  expect(c.deps.interpretarConfirmacao).toHaveBeenCalledExactlyOnceWith('manda ver', perguntaLote(c.lote()));
+  expect(c.repo.confirmar).toHaveBeenCalledWith('lote','s','pergunta-evolution',{ intencao: 'sim', confianca: .99 },agora);
+  expect(c.lote().estado).toBe('confirmado');
+  await c.conversa.responder('m','c','s','manda ver',agora);
+  expect(c.repo.confirmar).toHaveBeenCalledOnce(); expect(c.falas.join(' ')).not.toContain('responda citando');
+});
+it('8b: resposta com citação antiga não confirma nova pergunta; sem citação usa a pergunta atual', async () => {
+  const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
+  c.lote().mensagemConfirmacaoId = 'nova-pergunta'; c.lote().totalCentavos = 40000;
+  await c.conversa.responder('m','c','antiga','sim',agora,'pergunta-evolution');
+  expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.deps.interpretarConfirmacao).not.toHaveBeenCalled();
+  await c.conversa.responder('m','c','nova','pode',agora);
+  expect(c.repo.confirmar).toHaveBeenCalledWith('lote','nova','nova-pergunta',{ intencao: 'sim', confianca: .99 },agora);
+  expect(c.deps.interpretarConfirmacao.mock.calls[0][1]).toContain('400,00');
+});
+it('8b: pergunta inexistente não torna um sim solto autorização', async () => {
+  const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
+  c.lote().mensagemConfirmacaoId = null;
+  await c.conversa.responder('m','c','s','sim',agora);
+  expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.deps.interpretarConfirmacao).not.toHaveBeenCalled();
 });

@@ -34,7 +34,7 @@ beforeEach(() => {
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set(); recebidas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks();
-  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', nomeAoVivo: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
+  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', valorCobradoAoVivoCentavos: 30000, nomeAoVivo: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
   banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
   config.comunicacaoMedicoAtiva = true; config.conversaLivreAtiva = true; config.envioMedicoRealAtivo = true;
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
@@ -338,7 +338,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   vi.spyOn(PostgresLotesEmissao.prototype, 'abrir').mockImplementation(async (medicoId, conversa, _chave, agora) => atual = { id: 'lote-servidor', medicoId, conversa, ate: agora.toISOString(), desde: null, estado: 'aguardando_data_inicio', totalConsultas: 0, totalCentavos: 0, semValor: 0 });
   vi.spyOn(PostgresLotesEmissao.prototype, 'ativo').mockImplementation(async () => atual);
   const snapshot = [{ fonte: 'tribemd', idExterno: '12', chave: 'hmac', assinatura: 'hmac-valor' }, { fonte: 'tribemd', idExterno: '13', chave: 'semvalor', assinatura: null }];
-  vi.spyOn(PostgresLotesEmissao.prototype, 'contarConsultasPeriodo').mockResolvedValue({ consultas: snapshot, totalConsultas: 1, totalCentavos: 30000, semValor: 1 });
+  const contar = vi.spyOn(PostgresLotesEmissao.prototype, 'contarConsultasPeriodo').mockResolvedValue({ consultas: snapshot, totalConsultas: 1, totalCentavos: 30000, semValor: 1 });
   vi.spyOn(PostgresLotesEmissao.prototype, 'preparar').mockImplementation(async (_id, desde, c) => Object.assign(atual, { desde, estado: 'aguardando_confirmacao_lote', totalConsultas: c.totalConsultas, totalCentavos: c.totalCentavos, semValor: c.semValor }));
   const registrar = vi.spyOn(PostgresLotesEmissao.prototype, 'registrarPergunta').mockImplementation(async (_id, id, agora) => { Object.assign(atual, { mensagemConfirmacaoId: id, perguntaEm: agora.toISOString() }); });
   const confirmar = vi.spyOn(PostgresLotesEmissao.prototype, 'confirmar').mockImplementation(async () => { atual.estado = 'confirmado'; return true; });
@@ -348,6 +348,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   await fronteiras.concluirAgenda!('medico', { agenda: 'tribemd', conectado: true, chave: 'lote-evento' });
   expect(fronteiras.fonte).toHaveBeenCalledOnce(); expect(enviar.mock.calls[1][0].texto).toContain('Desde que dia');
   await receber(app, 'data-lote', 'desdi primeiru de otubro');
+  expect(contar.mock.calls[0][3]).toEqual(new Map([['pendente', 30000]]));
   expect(enviar.mock.calls[2][0].texto).toContain('desde 01/10/2026'); expect(enviar.mock.calls[3][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-4');
   await receber(app, 'sim-lote', 'manda ver', true, 'evo-4'); await receber(app, 'sim-lote', 'manda ver', true, 'evo-4');
   expect(confirmar).toHaveBeenCalledOnce(); expect(confirmar.mock.calls[0].slice(1, 4)).toEqual(['assistente:sim-lote', 'evo-4', { intencao: 'sim', confianca: .99 }]);

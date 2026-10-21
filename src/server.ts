@@ -210,16 +210,21 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     dataInicio ??= (await contextoPendencias.ler(id)).dataInicio ?? undefined;
     if (!dataInicio) return { ok: false, motivo: 'DATA_INICIO_NECESSARIA' };
     const nomesAoVivo = new Map<string, string | null>();
+    const valoresAoVivo = new Map<string, number | null>();
     let sincronizacaoConcluida = false;
     if (agenda.conectada && agenda.nome?.toLowerCase() === 'tribemd') {
       const sincronizada = await sincronizarAgendaHomologacao(id, instante);
       if (sincronizada.tipo === 'erro') return { ok: false, motivo: sincronizada.codigo };
       sincronizacaoConcluida = true;
-      for (const consulta of sincronizada.consultas) nomesAoVivo.set(consulta.idExterno, consulta.nomeAoVivo ?? null);
+      for (const consulta of sincronizada.consultas) {
+        nomesAoVivo.set(consulta.idExterno, consulta.nomeAoVivo ?? null);
+        if (consulta.status === 'realizada') valoresAoVivo.set(consulta.idExterno, consulta.valorCobradoAoVivoCentavos ?? null);
+      }
     }
-    return new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
+    const resultado = await new PostgresConsultasSincronizadas(pool).listarConsultasSemNota(id, agenda, instante,
       (fonte, consultaId) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consultaId),
       consultaId => nomesAoVivo.get(consultaId) ?? null, sincronizacaoConcluida, dataInicio);
+    return { ...resultado, valoresAoVivo };
   };
   const pendencias = config.conversaLivreAtiva ? new PendenciasMedico(contextoPendencias, {
     permitido: pendenciasPermitidas,
@@ -235,9 +240,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
   const retroativo = config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
-    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, aoConcluir); },
+    listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir) => { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo)); },
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
-    contar: (id, desde, ate) => lotes.contarConsultasPeriodo(id, desde, ate),
+    contar: (id, desde, ate, valoresAoVivo) => {
+      if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');
+      return lotes.contarConsultasPeriodo(id, desde, ate, valoresAoVivo);
+    },
     interpretarData: (texto, agora) => interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
     interpretarConfirmacao: (texto, pergunta) => interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
     enviar: async (medicoId, conversa, chave, fala, aoEnviar) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, aoEnviar }); },

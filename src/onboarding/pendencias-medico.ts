@@ -3,7 +3,7 @@ import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { validarInicioRetroativo } from './lote-retroativo.js';
 import { MENSAGEM_INSTABILIDADE } from '../observabilidade/erros.js';
-export interface ResultadoPendencias { ok: boolean; motivo?: string; total?: number; consultas?: unknown[] }
+export interface ResultadoPendencias { ok: boolean; motivo?: string; total?: number; consultas?: unknown[]; valoresAoVivo?: ReadonlyMap<string, number | null> }
 export interface ContextoPendencias { dataInicio: string | null; aguardandoData: boolean; ultimoAviso?: string | null; syncAtiva?: boolean }
 export interface RepositorioContextoPendencias {
   ler(medicoId: string): Promise<ContextoPendencias>;
@@ -105,7 +105,7 @@ export class PendenciasMedico {
     await this.consultar(entrada.medicoId, entrada.conversa, entrada.chave, desde, entrada.agora, i.moldura);
     return true;
   }
-  async consultar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, moldura = '', maxBaloes = 3, aoConcluir?: () => Promise<void>) {
+  async consultar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, moldura = '', maxBaloes = 3, aoConcluir?: (resultado: ResultadoPendencias) => Promise<void>) {
     if (!await this.deps.permitido(medicoId)) return;
     await this.repo.definirInicio(medicoId, desde);
     let aviso: Promise<void> | undefined;
@@ -118,7 +118,7 @@ export class PendenciasMedico {
       }
       const r = formatarPendencias(resultado, desde, moldura, aviso ? Math.max(1, maxBaloes - 1) : maxBaloes);
       await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lista`, r.fala, r.falaMemoria);
-      await aoConcluir?.();
+      await aoConcluir?.(resultado);
     } catch { await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:erro`, [MENSAGEM_INSTABILIDADE]); }
     finally { clearTimeout(timer); }
   }
@@ -136,7 +136,7 @@ export class PendenciasMedico {
     await this.repo.registrarAviso?.(medicoId, texto);
     await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:espera`, [texto]);
   }
-  private async continuar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, avisou: boolean, aoConcluir?: () => Promise<void>) {
+  private async continuar(medicoId: string, conversa: string, chave: string, desde: string, agora: Date, avisou: boolean, aoConcluir?: (resultado: ResultadoPendencias) => Promise<void>) {
     if (!await this.repo.reservarSync(medicoId, chave)) {
       const estado = await this.repo.ler(medicoId);
       if (estado.syncAtiva) await this.avisarDemora(medicoId, conversa, chave);
@@ -151,11 +151,12 @@ export class PendenciasMedico {
       try {
         await Promise.resolve();
         if (!avisou && !terminou) await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:lendo`, ['Ainda estou lendo sua agenda. Assim que terminar, trago o resultado desse período por aqui.']);
-        const r = formatarPendencias(await leitura, desde, '', aoConcluir ? 1 : 2);
+        const resultado = await leitura;
+        const r = formatarPendencias(resultado, desde, '', aoConcluir ? 1 : 2);
         if (!await this.deps.permitido(medicoId)) { await this.repo.concluirSync(medicoId, chave, false); return; }
         await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:concluida`, r.fala, r.falaMemoria);
         await this.repo.concluirSync(medicoId, chave, true);
-        await aoConcluir?.();
+        await aoConcluir?.(resultado);
       } catch {
         await this.repo.concluirSync(medicoId, chave, false);
         await this.deps.enviar(medicoId, conversa, `pendencias:${chave}:falhou`, [MENSAGEM_INSTABILIDADE]);

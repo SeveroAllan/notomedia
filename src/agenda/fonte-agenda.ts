@@ -4,6 +4,7 @@ import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone
 const consultaSchema = z.object({
   pacienteId: z.string().min(1), telefonePaciente: z.string().min(1).optional(), idExterno: z.string().min(1), dataHora: z.string().min(1),
   status: z.enum(['realizada', 'cancelada', 'faltou', 'agendada']),
+  valorCobradoAoVivoCentavos: z.number().int().nullable().optional(),
   nomeAoVivo: z.string().trim().min(1).max(200).nullable().optional(),
   valorConsultaCentavos: z.number().int().nullable().optional()
 }).strict();

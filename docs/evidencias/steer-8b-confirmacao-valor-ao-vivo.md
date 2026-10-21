@@ -1,0 +1,17 @@
+# STEER 8b — aceite implícito da pergunta pendente e assinatura consistente
+
+Base `1717e6a`. Baseline desse commit: typecheck limpo; **1116 passaram, 3 ignorados, zero falhas**. Os testes novos reproduziram os defeitos antes da correção: **4 falharam, 32 passaram** (`work/steer8b-red.log`).
+
+Sem citação, o controlador usa `lote.mensagemConfirmacaoId` da pergunta pendente. Com citação explícita, ela precisa coincidir. Pergunta ausente, inválida, futura ou com 48h completas não autoriza. Intenção e confiança continuam interpretadas apenas pela IA contra `perguntaLote`, o mesmo texto exato enviado com período e total; só `sim` >=0,9 chega à confirmação determinística. O CAS com id da pergunta/estado/TTL, uma única linha ativa por médico e unicidade da resposta permanecem. Recontagem/pergunta diferente invalida uma citação antiga. Auditoria continua sem texto livre ou dados pessoais.
+
+A contagem deixou de ler `valor_consulta_centavos` do banco para formar total/assinatura. A fonte entrega `valorCobradoAoVivoCentavos` transitório do detalhe já carregado na sync. O servidor passa esse mapa em memória, do resultado da leitura diretamente ao callback que prepara a proposta. Não existe ida extra ao portal por item na contagem. Na execução, o detalhe é relido como antes e a assinatura usa o mesmo campo `valorCobrado`. A assinatura só diverge se esse valor mudar de verdade. Sem mapa, a contagem falha fechada; sem valor ao vivo, fica de fora para conferir valor. Registro do banco que não aparece na leitura ao vivo não entra no escopo.
+
+Não se persiste o mapa nem o valorCobrado individual. A sync continua serializando exclusivamente seus campos anteriores; lote guarda somente ids, HMAC, total agregado e estado. Nome e CPF continuam transitórios. Nenhuma migration adicional é necessária para o 8b; as migrations dos steers 7/8 continuam somente preparadas e dependem de aplicação manual.
+
+Testes alterados: o cenário antigo que rejeitava ausência de citação foi substituído por aceite sem citação e foi mantida a rejeição da citação divergente. Novos testes comprovam pergunta atual versus antiga, texto exato de classificação e re-sim sem segunda confirmação. Contrato de contagem agora exige mapa ao vivo, preservando médico/período/realizada/faturamento por HMAC. Fonte/cofre comprova consulta R$200 versus cobrado R$150 e ausência desses dados no envelope. Sync comprova que nome/cobrado transitórios não entram no INSERT. Wiring do servidor comprova passagem do mapa ao callback da contagem.
+
+Regressão integrada: banco contém valorConsulta R$300, contagem congela valorCobrado R$250; execução ao vivo R$250 simula uma vez e não marca divergência. Se mudar para R$260, não simula e marca dados divergentes. Também testados valor ausente e consulta não corroborada pela agenda. Gates, ambiente homologação, envio a paciente desligado, idempotência e nenhuma emissão real permanecem.
+
+Bateria relacionada: **137 passaram**, zero falhas. Gate final: `npx tsc --noEmit` limpo; `npx vitest run --maxWorkers=1` — **65 arquivos, 1124 passaram, 3 ignorados, zero falhas**, 61,98s (`work/steer8b-full.log`). `git diff --check` limpo.
+
+Verificado somente com fixtures locais, portal/IA/banco/transportes falsos. Não executados banco real, migration, OpenAI real, SEFIN, envios, merge ou deploy. O STEER 9 (trilha real em homologação) é trabalho subsequente e não está incluído neste commit.
