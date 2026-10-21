@@ -100,10 +100,10 @@ it('prompt estabelece identidade, primeira pessoa, contexto e limites honestos s
   expect(sistema.content).toContain('Dado na conversa não é cadastro real nem emissão');
   expect(sistema.content).toContain('Para "já ficou emitida?", responda à pergunta de status, sem voltar a perguntar data');
   expect(sistema.content).toContain('Contexto temporal confiável do servidor: null');
-  expect(sistema.content).toContain('Para "pode emitir uma nota agora?", sem agenda conectada explique por que precisa conectar a agenda para cruzar consultas e pagamentos');
+  expect(sistema.content).toContain('Para "pode emitir uma nota agora?", se usa agenda digital mas está sem conexão, explique por que precisa conectar a agenda para cruzar consultas e pagamentos');
   expect(sistema.content).toContain('Para "Manda a nota dele", responda "Ainda não envio nota por aqui."');
   expect(sistema.content).toContain('não repita a função do produto nesse pedido');
-  expect(sistema.content).toContain('Não peça data, valor ou dados de paciente manualmente para emitir');
+  expect(sistema.content).toContain('No fluxo automático com agenda digital, não peça data, valor ou dados de paciente manualmente para emitir');
   expect(sistema.content).toContain('Para "O que falta?", diga objetivamente o que já foi informado e só o que de fato falta na conversa');
   expect(sistema.content).toContain('sem especular sobre convênio ou paciente');
   expect(sistema.content).toContain('Não diga "Vou organizar" nem prometa ações futuras');
@@ -158,7 +158,7 @@ it('pedido de emissão sem cofre orienta conexão para cruzar consultas e pagame
   expect(resposta).toEqual({ fala: ['Preciso conectar sua agenda para cruzar consultas e pagamentos.'], acao: 'enviar_link_cofre_agenda' });
   const chamada = completar.mock.calls[0] as unknown as [string, string, Array<{ content: string }>];
   const prompt = chamada[2][0].content;
-  expect(prompt).toContain('A emissão depende da agenda conectada pelo link seguro e do cruzamento das consultas com comprovantes de pagamento');
+  expect(prompt).toContain('No fluxo automático com agenda digital, a emissão depende da agenda conectada pelo link seguro e do cruzamento das consultas com comprovantes de pagamento');
   expect(prompt).toContain('não existe primeira nota sem conectar a agenda');
   expect(prompt).toContain('Solicite enviar_link_cofre_agenda (enviarLinkCofreAgenda no backend), se permitida neste passo');
   expect(prompt).toContain('não prometa emissão imediata nem peça dados de paciente manualmente');
@@ -380,4 +380,29 @@ it('link já solicitado usa o histórico para uma resposta natural sem alegar no
   expect(resposta.acao).toBeNull();
   expect(resposta.fala.join(' ')).toContain('agenda de papel');
   expect(resposta.fala.join(' ')).not.toMatch(/enviei|O link já foi solicitado/);
+});
+
+it('pedido explícito com link ativo informa validade sem prometer envio que foi bloqueado', async () => {
+  const completar = vi.fn(async () => JSON.stringify({ fala: ['Vou enviar o link seguro.'], acao: 'enviar_link_cofre_agenda', intencaoConexao: 'pedir_novo_link' }));
+  const resposta = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'me manda o link de novo',
+    contextoConexao: { agendaConectada: false, aguardandoConexao: true, link: { enviado: true, minutosDesdeEnvio: 2, usado: false, expirado: false, rejeitado: null } },
+    acoesPermitidas: ['enviar_link_cofre_agenda'] });
+  expect(resposta.acao).toBeNull(); expect(resposta.fala.join(' ')).toContain('continua válido');
+  expect(resposta.fala.join(' ')).not.toMatch(/vou enviar|enviei|novo link/i);
+});
+it('agenda de papel permite apenas coleta na conversa e bloqueia ações mesmo se o modelo as pedir', async () => {
+  const completar = vi.fn(async () => JSON.stringify({ fala: ['Você pode mandar os dados de um paciente por vez.'], semAgendaDigital: true, acao: 'enviar_link_cofre_agenda' }));
+  const resposta = await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'Uso agenda de papel', acoesPermitidas: ['enviar_link_cofre_agenda'] });
+  expect(resposta.acao).toBeNull(); expect(resposta.semAgendaDigital).toBe(true);
+  const prompt = completar.mock.calls[0][2][0].content;
+  for (const regra of ['qual agenda', 'TribeMD', 'iClinic', 'telefone do paciente', 'CPF', 'Posso emitir?', 'comprovantes novos', 'somente na conversa', 'não vê o histórico']) expect(prompt).toContain(regra);
+});
+it('agenda ainda desconhecida pergunta qual usa antes do link, sem presumir suporte a iClinic', async () => {
+  const completar = vi.fn(async (_k, _m, mensagens) => {
+    expect(mensagens[0].content).toContain('pergunte qual agenda o médico usa (TribeMD, iClinic ou outra)');
+    expect(mensagens[0].content).toContain('não prometa conectar iClinic ou outra');
+    return '{"fala":["Qual agenda você usa hoje?"],"acao":null}';
+  });
+  expect(await new ConversadorMedico('k', 'm', completar).responder({ ...entrada, texto: 'Quero emitir uma nota', acoesPermitidas: ['enviar_link_cofre_agenda'] }))
+    .toEqual({ fala: ['Qual agenda você usa hoje?'], acao: null });
 });

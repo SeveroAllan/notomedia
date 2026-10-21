@@ -49,6 +49,12 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return rows.length > 0;
   }
 
+  async semAgendaDigital(medicoId: string, conversa: string): Promise<boolean> {
+    const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
+      [medicoId, conversa, 'contexto:sem_agenda_digital']);
+    return rows.length > 0;
+  }
+
   async temBoasVindas(medicoId: string, conversa: string): Promise<boolean> {
     const { rows } = await this.pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$3 and $2::text is not null limit 1',
       [medicoId, conversa, 'noto:boas_vindas:unica']);

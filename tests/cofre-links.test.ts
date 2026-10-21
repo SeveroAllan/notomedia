@@ -488,10 +488,10 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
         const contexto=JSON.parse(msgs[1].content);expect(contexto.texto).toBe('não tenho agenda digital, uso agenda de papel mesmo');
         expect(contexto.mensagens.join(' ')).toContain(textos[0]);expect(contexto.mensagens.join(' ')).toContain(textos[1]);
         expect(msgs[0].content).toContain('não repetir');
-        return '{"fala":["Entendi, você usa agenda de papel. Ainda não consigo seguir com a emissão nesse formato."],"acao":null}';
+        return '{"fala":["Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta."],"semAgendaDigital":true,"acao":null}';
     });
     await c.turno('papel','não tenho agenda digital, uso agenda de papel mesmo');
-    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Entendi, você usa agenda de papel. Ainda não consigo seguir com a emissão nesse formato.'],'papel');
+    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta.'],'papel');
     expect(c.enviarLink).toHaveBeenCalledOnce();expect(await salvos()).toHaveLength(1);expect(textos).toHaveLength(3);
 });
 it('novo link depois de expirar é curto e não repete o motivo da conexão ou a explicação de segurança',async()=>{
@@ -516,4 +516,15 @@ it.each(['simulado', 'erro'] as const)('histórico só recebe balões com envio 
     if (resultado === 'erro') expect(registrar.mock.calls[0][0]).toMatchObject({ medicoId, indice: 0,
         texto: 'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.' });
     expect(auditoria.filter(a => a.evento === 'enviado')).toHaveLength(0);
+});
+
+it('pedido de novo com link ativo informa validade, conserva a mesma URL e uma única linha de link', async () => {
+    const c = await conversaComLinkRealFalso();
+    await c.turno('inicial', 'Uso TribeMD e preciso emitir uma nota.');
+    const url = textos[2];
+    c.completar.mockResolvedValue('{"fala":["Vou enviar o link seguro."],"acao":"enviar_link_cofre_agenda","intencaoConexao":"pedir_novo_link"}');
+    await c.turno('de-novo', 'me manda o link de novo');
+    expect(await salvos()).toHaveLength(1); expect(c.enviarLink).toHaveBeenCalledOnce();
+    expect(textos).toHaveLength(3); expect(textos.at(-1)).toBe(url);
+    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua válido; pode usar o mesmo.'], 'de-novo');
 });
