@@ -35,6 +35,17 @@ interface Dependencias {
   aoDecidir?:(acao:ProximaAcaoNoto,chave:string,contexto?:{nomeMedico?:string})=>Promise<void>;
   log:(nivel:'info'|'erro',mensagem:string)=>void;
 }
+// Mensagem que é só um CPF válido, telefone, data ou valor (modo sem agenda digital) não é credencial.
+export function dadoCadastralIsolado(texto:string):boolean {
+  const t=texto.trim();
+  const cpf=t.match(/^(\d{3})\.?(\d{3})\.?(\d{3})-?(\d{2})$/);
+  if(cpf) {
+    const d=(cpf[1]+cpf[2]+cpf[3]+cpf[4]).split('').map(Number);
+    const dv=(n:number)=>{const r=d.slice(0,n).reduce((a,x,i)=>a+x*(n+1-i),0)*10%11;return r===10?0:r;};
+    if(!d.every(n=>n===d[0]) && dv(9)===d[9] && dv(10)===d[10]) return true;
+  }
+  return /^(?:\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}$/.test(t) || /^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(t) || /^R\$\s?\d[\d.]*(?:,\d{2})?$/.test(t);
+}
 const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
@@ -71,7 +82,7 @@ export async function processarComunicacaoMedico(
       const reserva=entrada.eventoAgenda ? `agenda:conclusao:${chave}` : `conversa:agenda:${chave}`;
       if(!await deps.historico.reservar(medicoId,'simulado',reserva)) return {tipo:'nenhuma'};
       await deps.historico.liberar(medicoId,'simulado',reserva);
-      if(entrada.respostaMedico && contemCredencialAgenda(entrada.respostaMedico.texto)) {
+      if(entrada.respostaMedico && contemCredencialAgenda(entrada.respostaMedico.texto) && !dadoCadastralIsolado(entrada.respostaMedico.texto)) {
         deps.log('erro','COMUNICACAO_ENTRADA_PROTEGIDA');
         await enviar([FALA_PROTECAO_CREDENCIAL_AGENDA]); return {tipo:'nenhuma'};
       }

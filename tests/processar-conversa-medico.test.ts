@@ -262,3 +262,9 @@ it('falha da ferramenta após correção não abre terceira chamada nem promete 
  c.executar.mockResolvedValue({dados:{ok:false,motivo:'LIMITE_PEDIDOS'}});await c.turno('link','Uso o tribemd');
  expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar).toHaveBeenCalledOnce();expect(JSON.stringify(c.enviar.mock.calls)).not.toMatch(/enviei|vou enviar|permiss[aã]o|LIMITE_PEDIDOS/i);
 });
+
+it('dadoCadastralIsolado aceita só CPF válido, telefone, data e valor; nunca texto com senha', async () => {
+  const { dadoCadastralIsolado } = await import('../src/onboarding/processar-comunicacao-medico.js');
+  for (const t of ['123.456.789-09', '12345678909', '(51) 99352-7271', '51993527271', '21/10', '05/10/2026', 'R$ 150,00']) expect(dadoCadastralIsolado(t), t).toBe(true);
+  for (const t of ['111.111.111-11', 'senha 123.456.789-09', 'abc12345678901', 'Xk9#mP2$vL8@qR']) expect(dadoCadastralIsolado(t), t).toBe(false);
+});
