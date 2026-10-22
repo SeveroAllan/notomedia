@@ -354,3 +354,23 @@ it.each([0,1,2])('STEER 20: confirmação pendente com %i omissões não envia a
  if(omissoes) expect(JSON.parse(c.completar.mock.calls[1][2][1].content).correcao.motivo).toBe('preencha parametros.confirmacao sobre a pergunta pendente');
  expect(JSON.stringify([c.enviar.mock.calls,c.banco.mensagens])).not.toContain(inventada);
 });
+it('estado do lote vira fatos para o decisor: tarefa em curso e proposta pendente',async()=>{
+ const c=cenario(); const vistos:Array<Record<string,unknown>>=[];
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{vistos.push(JSON.parse(msgs[1].content).fatos);return '{"fala":["Estou emitindo as notas; aviso quando terminar."],"acao":null}';});
+ c.fatos.lote={estado:'processando'}; await c.turno('t1','E aí?');
+ c.fatos.lote={estado:'aguardando_confirmacao_lote',pergunta:'Posso emitir todas?',perguntaId:'p1'};
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{vistos.push(JSON.parse(msgs[1].content).fatos);return '{"fala":["Retomando a pergunta."],"acao":null,"parametros":{"confirmacao":{"intencao":"duvida","confianca":0.9}}}';});
+ await c.turno('t2','Hm');
+ expect(vistos[0]).toMatchObject({tarefaEmCurso:true,propostaPendente:null});
+ expect(vistos[1]).toMatchObject({tarefaEmCurso:false,propostaPendente:{tipo:'lote',pergunta:'Posso emitir todas?'}});
+});
+it('tarefa já confirmada: novo "Pode" e novo iniciar_lote não executam nada nem duplicam o lote',async()=>{
+ const c=cenario(); c.fatos.agenda={nome:'TribeMD',conectada:true}; c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ c.deps.ferramentas.permitidas=()=>['nenhuma'];
+ c.fatos.lote={estado:'confirmado'};
+ c.completar.mockResolvedValue('{"fala":["Já estou emitindo."],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}');
+ await c.turno('p1','Pode');
+ c.completar.mockResolvedValue('{"fala":["Vou iniciar."],"acao":"iniciar_lote","parametros":{"desde":"2026-10-05"}}');
+ await c.turno('p2','Pode emitir de novo');
+ expect(c.executar).not.toHaveBeenCalled();
+});

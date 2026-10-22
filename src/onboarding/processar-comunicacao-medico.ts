@@ -108,6 +108,8 @@ export async function processarComunicacaoMedico(
       if(entrada.eventoAgenda) fatos.eventoAgenda=entrada.eventoAgenda;
       fatos.falasRecentesNoto=(await memoria.lerUltimasFalasNoto(medicoId,conversa)).filter(falaSemMarcaLegada);
       fatos.listaRecente=(fatos.falasRecentesNoto as string[]).slice(-6).some(t=>/^\d+ consultas? sem nota desde \d{2}\/\d{2}\/\d{4}/i.test(t));
+      fatos.tarefaEmCurso=['confirmado','processando'].includes(fatos.lote?.estado??'');
+      fatos.propostaPendente=fatos.lote?.estado==='aguardando_confirmacao_lote'?{tipo:'lote',pergunta:fatos.lote.pergunta??null}:null;
       fatos.homologacaoInformada=[...contexto.historicoRecente,contexto.resumo?.resumo??'',...(fatos.falasRecentesNoto as string[])]
         .some(t=>/homologa[cç][aã]o.*sem valor fiscal/i.test(t));
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
