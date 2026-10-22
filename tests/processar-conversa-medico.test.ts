@@ -374,3 +374,34 @@ it('tarefa já confirmada: novo "Pode" e novo iniciar_lote não executam nada ne
  await c.turno('p2','Pode emitir de novo');
  expect(c.executar).not.toHaveBeenCalled();
 });
+it('webhook duplicado (mesma chave) responde uma vez só e não chama o modelo de novo',async()=>{
+ const c=cenario(); c.completar.mockResolvedValue('{"fala":["Certo, anotei."],"acao":null}');
+ await c.turno('mesma','Oi'); await c.turno('mesma','Oi');
+ expect(c.completar).toHaveBeenCalledOnce(); expect(c.enviar).toHaveBeenCalledOnce();
+});
+it('duas mensagens simultâneas do mesmo médico são atendidas em ordem, sem executar ferramenta em paralelo',async()=>{
+ const c=cenario(); let emAndamento=0,maximo=0;
+ c.completar.mockImplementation(async()=>{emAndamento++;maximo=Math.max(maximo,emAndamento);await new Promise(r=>setTimeout(r,5));emAndamento--;return '{"fala":["Ok."],"acao":null}';});
+ await Promise.all([c.turno('a','Oi'),c.turno('b','Tudo bem?')]);
+ expect(maximo).toBe(1); expect(c.enviar).toHaveBeenCalledTimes(2);
+});
+it('retomada: falha do modelo no turno não perde a mensagem; nova tentativa com outra chave responde',async()=>{
+ const c=cenario(); c.completar.mockRejectedValueOnce(Error('timeout')).mockResolvedValue('{"fala":["Voltei. Pode repetir?"],"acao":null}');
+ await c.turno('f1','Oi').catch(()=>undefined); await c.turno('f2','Oi de novo');
+ expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(['Voltei. Pode repetir?']);
+});
+it('mudança de valor depois da proposta: sem confirmação válida nada executa',async()=>{
+ const c=cenario(); c.fatos.agenda={nome:'TribeMD',conectada:true}; c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ c.deps.ferramentas.permitidas=()=>['nenhuma'];
+ c.completar.mockResolvedValue('{"fala":["Então o valor muda. Vou conferir e te digo o novo total."],"acao":null,"parametros":{"confirmacao":{"intencao":"nao","confianca":0.9}}}');
+ await c.turno('v1','Na verdade o valor é R$ 600');
+ expect(c.executar).not.toHaveBeenCalled();
+});
+it('isolamento: médicos diferentes não compartilham fila nem histórico; falas e fatos de um não aparecem no outro',async()=>{
+ const c=cenario(); const vistos:string[]=[];
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(msgs[1].content);vistos.push(JSON.stringify(d));return '{"fala":["Ok."],"acao":null}';});
+ const turnoDe=(id:string,chave:string,texto:string)=>processarComunicacaoMedico({medicoId:id,chaveProcessamento:chave,chaveConversa:'c-'+id,agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},c.deps);
+ await Promise.all([turnoDe('m1','k1','paciente Joao Exclusivo'),turnoDe('m2','k2','pergunta do segundo')]);
+ expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(vistos.find(v=>v.includes('pergunta do segundo'))).not.toContain('paciente Joao Exclusivo');
+});
