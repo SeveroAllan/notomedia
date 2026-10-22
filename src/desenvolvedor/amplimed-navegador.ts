@@ -54,7 +54,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       const r = route.request();
       let ok = false;
       try { ok = permitirRequisicaoAmplimed(r.url(), r.method(), r.resourceType(), envio); } catch { /* bloqueia */ }
-      if (ok && r.method().toUpperCase() === 'POST') envio = false;
+      if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url())) envio = false;
       if (!ok) { if (r.method().toUpperCase() !== 'GET') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
