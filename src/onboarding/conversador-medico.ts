@@ -44,13 +44,15 @@ Se receber "correcao", corrija o motivo com os fatos de faltou, preservando evid
 
 SAÍDA: JSON estrito {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji}, até 3 balões de 500 caracteres. Ações só de acoesPermitidas. Após ferramenta: acao=null; só resultado real, sem códigos; zero pendências só com total=0; falha técnica sem prometer retorno automático.`;
 const parametrosSchema = z.object({ agenda: z.string().trim().max(80).optional(), desde: z.string().optional(),
-  periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional(),
+  periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
   pedidoExplicito: z.object({evidencia:z.string().trim().min(1).max(300),confianca:z.number().min(0).max(1)}).strict().optional(),
   confirmacao: z.object({ intencao: z.enum(['sim','nao','duvida','outro_assunto']), confianca: z.number().min(0).max(1) }).strict().optional()
-}).strict();
+}).strip();
+// Campos nulos viram ausentes: o modelo costuma devolver null onde não há valor.
+const parametrosTolerante = z.preprocess(v => v && typeof v==='object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([,x])=>x!==null)) : v, parametrosSchema);
 const respostaSchema = z.object({ fala: z.array(z.string().trim().max(500)).max(3).default([]),
-  acao: z.string().max(80).nullable().optional(), parametros: parametrosSchema.optional(),
+  acao: z.string().max(80).nullable().optional(), parametros: parametrosTolerante.optional(),
   reacao: z.enum(REACOES_PERMITIDAS).optional().catch(undefined) }).strict();
 export type DecisaoConversa = z.infer<typeof respostaSchema>;
 export function confirmacaoDaDecisao(d:DecisaoConversa) {
@@ -148,7 +150,7 @@ export class ConversadorMedico {
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
     } catch (erro) {
       const motivo=erro instanceof z.ZodError?'SCHEMA_INVALIDO':erro instanceof SyntaxError?'JSON_INVALIDO':erro instanceof Error&&erro.message==='IA_NAO_CONFIGURADA'?'IA_NAO_CONFIGURADA':'RESPOSTA_IA_RECUSADA';
-      console.warn(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo}));
+      console.warn(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo,...(erro instanceof z.ZodError?{campos:erro.issues.slice(0,5).map(i=>`${i.path.join('.')}:${i.code}`)}:{})}));
       return {fala:[ERRO_CONVERSA],acao:null};
     }
   }
