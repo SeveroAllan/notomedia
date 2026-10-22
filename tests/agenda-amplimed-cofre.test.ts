@@ -34,3 +34,28 @@ describe('Amplimed como agenda suportada', () => {
     await expect(amp.iniciar(id)).rejects.toMatchObject({ codigo: 'CREDENCIAL_AUSENTE' });
   });
 });
+
+describe('verificação em segundo plano do Amplimed', () => {
+  it.each([['CONECTADO', true, 'conectado'], ['SENHA_RECUSADA', false, 'atencao'], ['PRECISA_VERIFICACAO', false, 'atencao']] as const)('%s', async (codigo, conectado, estado) => {
+    const dir = await mkdtemp(join(tmpdir(), 'cofre-'));
+    let concluiu: boolean | undefined;
+    const fim = new Promise<void>(r => { /* resolvido no aoConcluir */ (globalThis as any).__r = r; });
+    const amp = new CofreAmplimed({ diretorio: dir, chave, verificar: async () => codigo, aoConcluir: async (_m, c) => { concluiu = c; (globalThis as any).__r(); } });
+    await amp.iniciar(id, { email: 'a@b.com', senha: 'x' });
+    await fim;
+    const st = await amp.status(id);
+    expect(concluiu).toBe(conectado); expect(st.estado).toBe(estado); expect(st.ativo).toBe(conectado);
+    if (codigo === 'PRECISA_VERIFICACAO') expect(st.codigo).toBe('ACESSO_PRECISA_VERIFICACAO');
+  });
+});
+
+it('reverificar usa a credencial guardada e não a devolve', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cofre-'));
+  let recebido = '';
+  const amp = new CofreAmplimed({ diretorio: dir, chave, verificar: async c => { recebido = c.email; return 'CONECTADO'; } });
+  await expect(amp.reverificar(id)).rejects.toMatchObject({ codigo: 'CREDENCIAL_AUSENTE' });
+  const sem = new CofreAmplimed({ diretorio: dir, chave });
+  await sem.iniciar(id, { email: 'a@b.com', senha: 'x' });
+  const r = await amp.reverificar(id);
+  expect(recebido).toBe('a@b.com'); expect(r.estado).toBe('conectado'); expect(JSON.stringify(r)).not.toMatch(/a@b|"x"/);
+});

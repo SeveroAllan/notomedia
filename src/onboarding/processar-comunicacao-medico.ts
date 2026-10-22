@@ -87,7 +87,7 @@ export async function processarComunicacaoMedico(
         deps.log('erro','COMUNICACAO_ENTRADA_PROTEGIDA');
         await enviar([FALA_PROTECAO_CREDENCIAL_AGENDA]); return {tipo:'nenhuma'};
       }
-      if(entrada.eventoAgenda && entrada.eventoAgenda.agenda!=='tribemd') throw Error('AGENDA_NAO_SUPORTADA');
+      if(entrada.eventoAgenda && !['tribemd','amplimed'].includes(entrada.eventoAgenda.agenda)) throw Error('AGENDA_NAO_SUPORTADA');
       if(!conversa || !memoria || !deps.conversador || !deps.ferramentas) throw Error('CONVERSA_NAO_CONFIGURADA');
       const texto=sanitizarTextoMedico(entrada.respostaMedico?.texto??'');
       const estado=await deps.lerEstado(medicoId,agora);

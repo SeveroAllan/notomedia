@@ -4,6 +4,7 @@ import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { join } from 'node:path';
+import { verificarLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 import { CofreAmplimed } from './amplimed-cofre.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
@@ -40,7 +41,9 @@ export function criarCofreContas(deps: {
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
         cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
-        cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '' });
+        const chromiumAmplimed = env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
+        cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
+            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
         if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
