@@ -67,11 +67,12 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     const campoEmail = page.locator('input:not([type=password]):not([type=hidden]):not([type=checkbox]):visible').first();
     if (!await campoEmail.count()) { console.warn('AMPLIMED_LOGIN etapa=sem_campo_email'); return 'FORMULARIO_NAO_RECONHECIDO'; }
     const botao = page.locator('button[type=submit], input[type=submit]').or(page.getByRole('button', { name: /^(entrar|acessar)$/i })).first();
-    try { await botao.waitFor({ state: 'visible', timeout: 8000 }); } catch { console.warn('AMPLIMED_LOGIN etapa=sem_botao'); return 'FORMULARIO_NAO_RECONHECIDO'; }
+    let usarEnter = false;
+    try { await botao.waitFor({ state: 'visible', timeout: 4000 }); } catch { usarEnter = true; console.warn('AMPLIMED_LOGIN etapa=botao_invisivel_usa_enter'); }
     await campoEmail.fill(email); await campoSenha.fill(senha);
     email = ''; senha = '';
     envio = true;
-    await botao.click();
+    if (usarEnter) await campoSenha.press('Enter'); else await botao.click();
     while (Date.now() < limite) {
       signal?.throwIfAborted();
       await page.waitForTimeout(1500);
