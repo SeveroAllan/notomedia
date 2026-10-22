@@ -26,7 +26,7 @@ export interface FerramentasConversa {
   executar: (decisao:DecisaoConversa, contexto:ContextoAcaoConversa) => Promise<ResultadoAcaoConversa>;
 }
 interface Dependencias {
-  ativo:boolean; conversaLivreAtiva?:boolean; memoriaPersistida?:PostgresMemoriaConversaMedico;
+  ativo:boolean; conversaLivreAtiva?:boolean; orcamentoChamadas?:number; memoriaPersistida?:PostgresMemoriaConversaMedico;
   conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa;
   aoReagir?:(reacao:ReacaoMedico)=>Promise<void>; aoConversar?:(fala:string[],chave:string,falaMemoria?:string[])=>Promise<void>;
   memoriaConversa?:MemoriaConversa; extratorResposta?:ExtratorRespostaMedico; historico:HistoricoComunicacaoRepositorio;
@@ -114,12 +114,12 @@ export async function processarComunicacaoMedico(
         .some(t=>/homologa[cç][aã]o.*sem valor fiscal/i.test(t));
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
-      let chamadas=0;
+      let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]}) => {
-        if(++chamadas>2) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
+        if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
         return deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora,acoesPermitidas,resultadoFerramenta,correcao});
       };
-      const narrar=async (resultado:unknown) => chamadas>=2 ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
+      const narrar=async (resultado:unknown) => chamadas>=orcamento ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
       const permitidas=deps.ferramentas.permitidas(fatos);
       let decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
@@ -133,12 +133,12 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
-      if(chamadas<2 && motivo==='anuncie a acao com suas palavras') {
+      if(chamadas<orcamento && motivo==='anuncie a acao com suas palavras') {
         deps.log('info','CONVERSA_ANUNCIO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo,faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      const corrigirIntroducao=chamadas<2 && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
+      const corrigirIntroducao=chamadas<orcamento && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
       if(corrigirIntroducao) {
         deps.log('info',`CONVERSA_INTRODUCAO_CORRIGIR ${motivo}`);
         decisao=await decidir(['pedir_link_agenda'],undefined,{motivo:motivo!,faltou:faltasIntroducaoLink(decisao.fala)});

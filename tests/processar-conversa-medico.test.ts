@@ -405,3 +405,15 @@ it('isolamento: médicos diferentes não compartilham fila nem histórico; falas
  expect(c.completar).toHaveBeenCalledTimes(2);
  expect(vistos.find(v=>v.includes('pergunta do segundo'))).not.toContain('paciente Joao Exclusivo');
 });
+it('flag do agente: orçamento padrão de 2 chamadas continua; com orcamentoChamadas=3 a terceira é permitida',async()=>{
+ const rodar=async(orc?:number)=>{
+  const c=cenario(); if(orc) (c.deps as {orcamentoChamadas?:number}).orcamentoChamadas=orc;
+  c.fatos.agenda={nome:'TribeMD',conectada:true}; c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+  c.completar.mockResolvedValueOnce('{"fala":[],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":[],"acao":"listar_pendencias"}')
+   .mockResolvedValue('{"fala":["Vou olhar sua agenda agora."],"acao":"listar_pendencias"}');
+  c.executar.mockResolvedValue({dados:{ok:true}} as never);
+  await c.turno('o','Quais notas faltam?'); return c;
+ };
+ const padrao=await rodar(); expect(padrao.completar.mock.calls.length).toBe(2); expect(padrao.executar).not.toHaveBeenCalled();
+ const agente=await rodar(3); expect(agente.completar.mock.calls.length).toBe(3); expect(agente.executar).not.toHaveBeenCalled(); expect(agente.enviar.mock.calls.at(-1)?.[0]).toEqual(['Vou olhar sua agenda agora.']); expect(padrao.enviar.mock.calls.at(-1)?.[0]).not.toEqual(['Vou olhar sua agenda agora.']);
+});
