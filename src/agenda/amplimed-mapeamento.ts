@@ -26,10 +26,26 @@ export function cobrancaAmplimed(convenio: string | null | undefined): ConsultaA
   return 'convenio';
 }
 
-/**
- * Status pela cor do compromisso na agenda (fc-event, background-color). Só o que foi observado na conta teste:
- * as 3 consultas FINALIZADO aparecem em "green". Qualquer outra cor é desconhecida: nunca presumir atendimento.
- */
+/** Legenda de cores da agenda (conta teste, 22/10): hex exato -> nome do status. */
+const CORES_STATUS_AMPLIMED: Record<string, string> = {
+  '6c757d': 'agendado', '1fbed9': 'confirmado', 'e3a62c': 'esperando', 'd75353': 'cancelado', 'f76397': 'nao compareceu',
+  '840000': 'reagendado', '343a40': 'em atendimento', '008000': 'finalizado', '800080': 'bloqueado'
+};
+const NOMES_CSS: Record<string, string> = { green: '008000', purple: '800080', maroon: '800000' };
+
+/** Normaliza o que o navegador devolve (#rrggbb, rgb(r, g, b) ou nome CSS) para 6 dígitos hex, ou null. */
+export function corParaHex(cor: string | null | undefined): string | null {
+  const c = (cor ?? '').trim().toLowerCase();
+  if (NOMES_CSS[c]) return NOMES_CSS[c]!;
+  const h = /^#([0-9a-f]{6})$/.exec(c); if (h) return h[1]!;
+  const r = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/.exec(c);
+  if (r) return [r[1], r[2], r[3]].map(n => Math.min(255, Number(n)).toString(16).padStart(2, '0')).join('');
+  return null;
+}
+
+/** Status pela cor do compromisso. Cor fora da legenda, e BLOQUEADO, são desconhecidos: nunca presumir atendimento. */
 export function statusAmplimedPorCor(cor: string | null | undefined): ConsultaAdaptador['status'] | 'desconhecido' {
-  return (cor ?? '').trim().toLowerCase() === 'green' ? 'realizada' : 'desconhecido';
+  const hex = corParaHex(cor);
+  const nome = hex ? CORES_STATUS_AMPLIMED[hex] : undefined;
+  return nome ? statusAmplimed(nome) : 'desconhecido';
 }
