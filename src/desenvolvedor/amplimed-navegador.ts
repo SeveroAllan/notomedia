@@ -95,7 +95,10 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     while (Date.now() < limite) {
       signal?.throwIfAborted();
       await page.waitForTimeout(1500);
-      const tela: TelaAmplimed = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
+      let tela: TelaAmplimed;
+      try {
+        tela = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
+      } catch { continue; } // navegação em andamento: lê de novo na próxima volta
       if (convitePulado < 2 && conviteDoisFatoresAmplimed(tela)) {
         convitePulado++;
         const rotulos = await page.evaluate(`[...document.querySelectorAll('a,button')].map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40)).filter(Boolean).slice(0, 12)`) as string[];
