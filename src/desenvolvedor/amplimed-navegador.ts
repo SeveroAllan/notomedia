@@ -50,11 +50,12 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     await context.routeWebSocket('**/*', ws => { void ws.close(); });
     let envio = false;
     const bloqueados: string[] = [];
+    let postsLogin = 0;
     await context.route('**/*', async route => {
       const r = route.request();
       let ok = false;
       try { ok = permitirRequisicaoAmplimed(r.url(), r.method(), r.resourceType(), envio); } catch { /* bloqueia */ }
-      if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url())) envio = false;
+      if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url()) && ++postsLogin > 10) envio = false;
       if (!ok) { if (r.method().toUpperCase() !== 'GET') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
@@ -72,9 +73,10 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     const botao = page.locator('button[type=submit], input[type=submit]').or(page.getByRole('button', { name: /^(entrar|acessar)$/i })).first();
     let usarEnter = false;
     try { await botao.waitFor({ state: 'visible', timeout: 4000 }); } catch { usarEnter = true; console.warn('AMPLIMED_LOGIN etapa=botao_invisivel_usa_enter'); }
+    // O formulário Livewire sincroniza os campos com POSTs ao preencher: liberar durante o login, com teto.
+    envio = true;
     await campoEmail.fill(email); await campoSenha.fill(senha);
     email = ''; senha = '';
-    envio = true;
     if (usarEnter) await campoSenha.press('Enter'); else await botao.click();
     while (Date.now() < limite) {
       signal?.throwIfAborted();
