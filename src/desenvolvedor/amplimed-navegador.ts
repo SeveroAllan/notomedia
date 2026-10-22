@@ -13,6 +13,8 @@ export function permitirRequisicaoAmplimed(url: string, metodo: string, tipo: st
   if (u.protocol !== 'https:' || tipo === 'websocket') return false;
   const aprovado = dominioAprovado('amplimed', url);
   const m = metodo.toUpperCase();
+  // reCAPTCHA do formulário de login precisa trocar token; não leva credencial.
+  if (m === 'POST' && u.hostname === 'www.google.com' && u.pathname.startsWith('/recaptcha/')) return true;
   if (m === 'POST') return aprovado && envioLoginLiberado && !acaoNoCaminho.test(u.pathname);
   if (!['GET', 'HEAD', 'OPTIONS'].includes(m)) return false;
   if (aprovado && acaoNoCaminho.test(u.pathname) && tipo === 'document') return false;
@@ -47,12 +49,13 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: false, serviceWorkers: 'block' });
     await context.routeWebSocket('**/*', ws => { void ws.close(); });
     let envio = false;
+    const bloqueados: string[] = [];
     await context.route('**/*', async route => {
       const r = route.request();
       let ok = false;
       try { ok = permitirRequisicaoAmplimed(r.url(), r.method(), r.resourceType(), envio); } catch { /* bloqueia */ }
       if (ok && r.method().toUpperCase() === 'POST') envio = false;
-      if (!ok) { await route.abort('blockedbyclient'); return; }
+      if (!ok) { if (r.method().toUpperCase() !== 'GET') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
     const page: Page = await context.newPage();
@@ -80,6 +83,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       const c = classificarTelaAmplimed(tela);
       if (c !== 'AGUARDANDO') return c;
     }
+    console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname; } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
     return 'TEMPO_ESGOTADO';
   } catch { return 'TEMPO_ESGOTADO'; }
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }

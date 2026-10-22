@@ -30,3 +30,8 @@ describe('estado da tela de login do Amplimed', () => {
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/agenda', 'x', 1))).toBe('AGUARDANDO');
   });
 });
+
+it('libera só o POST do reCAPTCHA além do login', () => {
+  expect(permitirRequisicaoAmplimed('https://www.google.com/recaptcha/api2/reload?k=x', 'POST', 'fetch', false)).toBe(true);
+  expect(permitirRequisicaoAmplimed('https://www.google.com/g/collect', 'POST', 'fetch', true)).toBe(false);
+});
