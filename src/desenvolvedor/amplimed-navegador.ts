@@ -50,6 +50,7 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
  * Login de observação: abre o login, envia uma vez, devolve só o estado. Não lê agenda, não grava sessão.
  * A credencial vive só nesta função e é descartada ao sair.
  */
+const ultimosBloqueadosAmplimed: string[] = [];
 export async function verificarLoginAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; aoConectar?: (page: Page) => Promise<void> }, signal?: AbortSignal): Promise<CodigoLoginAmplimed> {
   let browser: Browser | undefined;
   let { email, senha } = opcoes;
@@ -61,7 +62,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: false, serviceWorkers: 'block' });
     await context.routeWebSocket('**/*', ws => { void ws.close(); });
     let envio = false;
-    const bloqueados: string[] = [];
+    const bloqueados: string[] = ultimosBloqueadosAmplimed; bloqueados.length = 0;
     let postsLogin = 0;
     await context.route('**/*', async route => {
       const r = route.request();
@@ -144,14 +145,14 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     await page.waitForTimeout(2500);
     profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
     let data: string | null = await cabecalho(page);
-    if (!data) return;
+    if (!data) { console.warn('AMPLIMED_PERIODO cabecalho_ilegivel texto=' + JSON.stringify(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 120)`))); return; }
     dias.push({ data, eventos: await eventosDaTela(page) });
     for (let i = 0; i < total; i++) {
       const anterior: string = data;
       await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
       let atual: string = anterior;
       for (let t = 0; t < 8 && atual === anterior; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? anterior; }
-      if (atual === anterior) return; // não navegou: não afirma o que não leu
+      if (atual === anterior) { console.warn('AMPLIMED_PERIODO nao_navegou passo=' + i + ' data=' + anterior + ' bloqueados=' + JSON.stringify(ultimosBloqueadosAmplimed.slice(-4))); return; } // não navegou: não afirma o que não leu
       await page.waitForTimeout(1200);
       data = atual;
       dias.push({ data: atual, eventos: await eventosDaTela(page) });
