@@ -115,6 +115,6 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     }
     console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname.split('/').slice(0, 2).join('/'); } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
     return 'TEMPO_ESGOTADO';
-  } catch { return 'TEMPO_ESGOTADO'; }
+  } catch (erro) { console.warn('AMPLIMED_LOGIN etapa=excecao msg=' + String((erro as Error)?.message ?? erro).split('\n')[0]!.slice(0, 160)); return 'TEMPO_ESGOTADO'; }
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }
 }
