@@ -11,7 +11,9 @@ describe('guarda de rede do Amplimed', () => {
   it('bloqueia PUT/DELETE, http, websocket e navegação para ação', () => {
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/a', 'PUT', 'fetch', true)).toBe(false);
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/a', 'DELETE', 'fetch', true)).toBe(false);
-    expect(permitirRequisicaoAmplimed('http://app.amplimed.com.br/a', 'GET', 'document', false)).toBe(false);
+    expect(permitirRequisicaoAmplimed('http://app.amplimed.com.br/a', 'GET', 'document', false)).toBe(true);
+    expect(permitirRequisicaoAmplimed('http://app.amplimed.com.br/a', 'POST', 'fetch', true)).toBe(false);
+    expect(permitirRequisicaoAmplimed('http://evil.com/a', 'GET', 'document', false)).toBe(false);
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/a', 'GET', 'websocket', false)).toBe(false);
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/logout', 'GET', 'document', false)).toBe(false);
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/agenda', 'GET', 'document', false)).toBe(true);
@@ -22,6 +24,7 @@ describe('estado da tela de login do Amplimed', () => {
   it('reconhece conectado, verificação, captcha e senha recusada', () => {
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/agenda', 'Agenda'))).toBe('CONECTADO');
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Digite o código de verificação enviado por SMS', 0))).toBe('PRECISA_VERIFICACAO');
+    expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Verificação', 1))).toBe('PRECISA_VERIFICACAO');
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Não sou um robô reCAPTCHA', 1))).toBe('CAPTCHA');
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Senha inválida', 1))).toBe('SENHA_RECUSADA');
   });

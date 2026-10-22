@@ -10,8 +10,11 @@ const acaoNoCaminho = /(?:^|\/)(?:logout|sair|delete|remove|update|create|save|e
 export function permitirRequisicaoAmplimed(url: string, metodo: string, tipo: string, envioLoginLiberado: boolean): boolean {
   let u: URL;
   try { u = new URL(url); } catch { return false; }
-  if (u.protocol !== 'https:' || tipo === 'websocket') return false;
-  const aprovado = dominioAprovado('amplimed', url);
+  if (tipo === 'websocket') return false;
+  // O login redireciona para http:// do próprio domínio e o servidor sobe para https: GET/HEAD sem corpo.
+  const httpDoDominio = u.protocol === 'http:' && ['GET', 'HEAD'].includes(metodo.toUpperCase()) && dominioAprovado('amplimed', 'https://' + u.host + u.pathname);
+  if (u.protocol !== 'https:' && !httpDoDominio) return false;
+  const aprovado = u.protocol === 'https:' && dominioAprovado('amplimed', url) || httpDoDominio;
   const m = metodo.toUpperCase();
   // reCAPTCHA do formulário de login precisa trocar token; não leva credencial.
   if (m === 'POST' && u.hostname === 'www.google.com' && u.pathname.startsWith('/recaptcha/')) return true;
@@ -29,6 +32,7 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
   const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   let caminho = '';
   try { caminho = new URL(t.url).pathname; } catch { /* sem caminho */ }
+  if (/^\/2fa(\/|$)/.test(caminho)) return 'PRECISA_VERIFICACAO';
   if (/recaptcha|nao sou (um )?robo|i'm not a robot/.test(texto) && t.senhasVisiveis > 0) return 'CAPTCHA';
   if (/codigo de (verificacao|seguranca|acesso)|verificacao em (duas|2) etapas|enviamos (um )?codigo|digite o codigo/.test(texto)) return 'PRECISA_VERIFICACAO';
   if (t.senhasVisiveis === 0 && /^\/(agenda|painel|consultas|buscapac)/.test(caminho)) return 'CONECTADO';
