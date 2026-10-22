@@ -52,7 +52,7 @@ export function criarCofreContas(deps: {
         cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
         const chromiumAmplimed = env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
-            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: c => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
+            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
         if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
@@ -136,6 +136,6 @@ export function criarCofreContas(deps: {
             }
             return mapearStatusAgenda(status);
         },
-        lerAgendaAmplimed: async (medicoId: string, data: string) => cofreAmplimed ? cofreAmplimed.lerAgendaDoDia(medicoId, data) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' }
+        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string) => cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(medicoId, desde, hoje) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' }
     };
 }

@@ -1,4 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
+import { dataDoCabecalhoAmplimed } from '../agenda/amplimed-leitor.js';
 import { dominioAprovado } from '../agenda/agendas-suportadas.js';
 
 export const loginAmplimed = 'https://app.amplimed.com.br/';
@@ -124,19 +125,38 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
 }
 
 export interface EventoAgendaAmplimed { texto: string; cor: string }
+export interface DiaAgendaAmplimed { data: string; eventos: EventoAgendaAmplimed[] }
 /**
- * Leitura de observação da agenda do dia (somente GET, nada vira nota). Faz login com a credencial recebida,
- * abre /agenda e devolve o texto e a cor de cada compromisso. O parser puro e as checagens ficam fora daqui.
+ * Leitura de observação da agenda (somente leitura, nada vira nota). Faz login com a credencial recebida, abre /agenda
+ * e lê o dia de hoje e, se pedido, `diasAtras` dias anteriores clicando em "prev" (navegação do calendário).
+ * Em cada passo confere a data do cabeçalho; se não bater, para e devolve só o que foi confirmado.
  */
-export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; eventos: EventoAgendaAmplimed[]; profissional: string | null }> {
-  let eventos: EventoAgendaAmplimed[] = [];
+export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; diasAtras?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; dias: DiaAgendaAmplimed[]; profissional: string | null; completo: boolean }> {
+  const dias: DiaAgendaAmplimed[] = [];
   let profissional: string | null = null;
-  const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
+  let completo = false;
+  const cabecalho = async (page: Page) => dataDoCabecalhoAmplimed(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 300)`) as string);
+  const eventosDaTela = async (page: Page) => await page.evaluate(`[...document.querySelectorAll('.fc-time-grid-event')].map(e => ({ texto: (e.innerText || '').trim().slice(0, 400), cor: e.style.backgroundColor || '' }))`) as EventoAgendaAmplimed[];
+  const total = Math.max(0, Math.min(31, opcoes.diasAtras ?? 0));
+  const codigo = await verificarLoginAmplimed({ ...opcoes, tempoMs: opcoes.tempoMs ?? 40000 + total * 6000, aoConectar: async page => {
     if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(2500);
     profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
-    eventos = await page.evaluate(`[...document.querySelectorAll('.fc-time-grid-event')].map(e => ({ texto: (e.innerText || '').trim().slice(0, 400), cor: e.style.backgroundColor || '' }))`) as EventoAgendaAmplimed[];
+    let data: string | null = await cabecalho(page);
+    if (!data) return;
+    dias.push({ data, eventos: await eventosDaTela(page) });
+    for (let i = 0; i < total; i++) {
+      const anterior: string = data;
+      await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
+      let atual: string = anterior;
+      for (let t = 0; t < 8 && atual === anterior; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? anterior; }
+      if (atual === anterior) return; // não navegou: não afirma o que não leu
+      await page.waitForTimeout(1200);
+      data = atual;
+      dias.push({ data: atual, eventos: await eventosDaTela(page) });
+    }
+    completo = true;
   } }, signal);
-  return { codigo, eventos, profissional };
+  return { codigo, dias, profissional, completo: completo || total === 0 && dias.length === 1 };
 }

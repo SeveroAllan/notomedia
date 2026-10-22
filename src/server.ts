@@ -341,17 +341,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
       if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
-        // Amplimed v1: modo observação, só o dia de hoje; nada vira nota.
+        // Amplimed v1: modo observação, dia a dia até 31 dias; nada vira nota.
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
-        const a=await cofres.lerAgendaAmplimed(c.medicoId,hoje);
-        console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,total:a.ok?a.elegiveis.length:undefined}));
+        const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje);
+        console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,dias:a.ok?a.dias.length:undefined,total:a.ok?a.dias.reduce((n,d)=>n+d.elegiveis.length,0):undefined}));
         if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo}};
-        const dia=hoje.split('-').reverse().join('/');
-        const nomes=a.elegiveis.map(e=>e.paciente);
-        const fala=a.elegiveis.length
-          ? [`Hoje (${dia}) vi ${a.elegiveis.length} atendimento${a.elegiveis.length>1?'s':''} finalizado${a.elegiveis.length>1?'s':''} com cobrança particular: ${nomes.join(', ')}. Por enquanto só leio o dia de hoje na sua agenda Amplimed e ainda não emito nada.`]
-          : [`Hoje (${dia}) não vi atendimento finalizado com cobrança particular na sua agenda Amplimed. Por enquanto só leio o dia de hoje e ainda não emito nada.`];
-        return {dados:{ferramenta:'listar_pendencias',ok:true,total:a.elegiveis.length,desde:hoje},falaAssinada:fala,falaMemoria:fala};
+        const br=(d:string)=>d.split('-').reverse().join('/');
+        const total=a.dias.reduce((n,d)=>n+d.elegiveis.length,0);
+        const porDia=[...a.dias].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
+        const fala=total
+          ? [`De ${br(desde)} a ${br(hoje)} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Por enquanto só leio e não emito nada.`]
+          : [`De ${br(desde)} a ${br(hoje)} não vi atendimento finalizado com cobrança particular na sua agenda Amplimed. Por enquanto só leio e não emito nada.`];
+        return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
         await criarRetroativo(c.narrar,decisao,c.medicoId)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);

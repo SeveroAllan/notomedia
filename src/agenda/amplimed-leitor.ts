@@ -54,3 +54,16 @@ export function montarLeituraAmplimed(eventos: { texto: string; cor: string }[],
   const problemas = [...problemasCor, ...r.problemas];
   return { consultas: r.consultas, problemas, confiavel: problemas.length === 0 && r.confiavel, lidos: eventos.length };
 }
+
+const MESES: Record<string, string> = { jan: '01', fev: '02', mar: '03', abr: '04', mai: '05', jun: '06', jul: '07', ago: '08', set: '09', out: '10', nov: '11', dez: '12' };
+/** "quarta-feira, 21 de out de 2026" (cabeçalho da agenda do Amplimed) -> "2026-10-21". Nulo se não reconhecer. */
+export function dataDoCabecalhoAmplimed(texto: string): string | null {
+  const m = /(\d{1,2}) de ([a-zç]{3})[a-z]* de (\d{4})/i.exec(texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase());
+  const mes = m ? MESES[m[2]!] : undefined;
+  return m && mes ? `${m[3]}-${mes}-${m[1]!.padStart(2, '0')}` : null;
+}
+/** Dias de hoje até `desde`, do mais recente para o mais antigo, com teto. */
+export function diasAtrasAmplimed(hoje: string, desde: string, teto = 31): number | null {
+  const n = Math.round((Date.parse(hoje) - Date.parse(desde)) / 86400000);
+  return Number.isFinite(n) && n >= 0 && n <= teto ? n : null;
+}
