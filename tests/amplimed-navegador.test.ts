@@ -35,3 +35,9 @@ it('libera só o POST do reCAPTCHA além do login', () => {
   expect(permitirRequisicaoAmplimed('https://www.google.com/recaptcha/api2/reload?k=x', 'POST', 'fetch', false)).toBe(true);
   expect(permitirRequisicaoAmplimed('https://www.google.com/g/collect', 'POST', 'fetch', true)).toBe(false);
 });
+
+it('libera só o POST livewire do login, mesmo antes do envio, e nenhum outro caminho', () => {
+  expect(permitirRequisicaoAmplimed('https://auth.amplimed.com.br/livewire/update', 'POST', 'fetch', false)).toBe(true);
+  expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/livewire/update', 'POST', 'fetch', false)).toBe(false);
+  expect(permitirRequisicaoAmplimed('https://auth.amplimed.com.br/outro', 'POST', 'fetch', false)).toBe(false);
+});

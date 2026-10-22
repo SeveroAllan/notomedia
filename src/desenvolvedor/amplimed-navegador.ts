@@ -15,6 +15,8 @@ export function permitirRequisicaoAmplimed(url: string, metodo: string, tipo: st
   const m = metodo.toUpperCase();
   // reCAPTCHA do formulário de login precisa trocar token; não leva credencial.
   if (m === 'POST' && u.hostname === 'www.google.com' && u.pathname.startsWith('/recaptcha/')) return true;
+  // Formulário Livewire do login: sincroniza campos e envia pelo mesmo caminho. O teto de POSTs fica na rota.
+  if (m === 'POST' && u.hostname === 'auth.amplimed.com.br' && u.pathname === '/livewire/update') return true;
   if (m === 'POST') return aprovado && envioLoginLiberado && !acaoNoCaminho.test(u.pathname);
   if (!['GET', 'HEAD', 'OPTIONS'].includes(m)) return false;
   if (aprovado && acaoNoCaminho.test(u.pathname) && tipo === 'document') return false;
@@ -55,7 +57,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       const r = route.request();
       let ok = false;
       try { ok = permitirRequisicaoAmplimed(r.url(), r.method(), r.resourceType(), envio); } catch { /* bloqueia */ }
-      if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url()) && ++postsLogin > 10) envio = false;
+      if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url()) && ++postsLogin > 10) { envio = false; await route.abort('blockedbyclient'); return; }
       if (!ok) { if (r.method().toUpperCase() !== 'GET') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
