@@ -417,3 +417,9 @@ it('flag do agente: orçamento padrão de 2 chamadas continua; com orcamentoCham
  const padrao=await rodar(); expect(padrao.completar.mock.calls.length).toBe(2); expect(padrao.executar).not.toHaveBeenCalled();
  const agente=await rodar(3); expect(agente.completar.mock.calls.length).toBe(3); expect(agente.executar).not.toHaveBeenCalled(); expect(agente.enviar.mock.calls.at(-1)?.[0]).toEqual(['Vou olhar sua agenda agora.']); expect(padrao.enviar.mock.calls.at(-1)?.[0]).not.toEqual(['Vou olhar sua agenda agora.']);
 });
+it('observação: registra só metadados da conversa, sem texto do médico nem da Noto',async()=>{
+ const c=cenario(); c.completar.mockResolvedValue('{"fala":["Resposta confidencial da Noto."],"acao":null}');
+ await c.turno('obs','Texto privado do médico');
+ const linhas=c.deps.log.mock.calls.map(x=>String(x[1])).filter(t=>t.startsWith('CONVERSA_OBSERVACAO'));
+ expect(linhas).toHaveLength(1); expect(linhas[0]).toContain('"chamadas":1'); expect(linhas[0]).not.toMatch(/privado|confidencial/);
+});

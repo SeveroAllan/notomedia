@@ -180,6 +180,8 @@ export async function processarComunicacaoMedico(
         }
       } catch {deps.log('erro','CONVERSA_RESUMO_FALHOU');}
       deps.log('info',`CONVERSA_CHAMADAS ${chamadas}`);
+      // Observação (passo 4): só metadados, sem texto do médico, para achar padrões de erro depois. Não altera a resposta.
+      deps.log('info','CONVERSA_OBSERVACAO '+JSON.stringify({chamadas,acao:decisao.acao??'nenhuma',recusa:motivo??null,loteEstado:fatos.lote?.estado??null,listaRecente:fatos.listaRecente===true,tarefaEmCurso:fatos.tarefaEmCurso===true}));
       return {tipo:'nenhuma'};
     } catch (erro) {
       if(!deps.conversaLivreAtiva) {deps.log('erro','COMUNICACAO_ESTADO_FALHOU');return {tipo:'nenhuma'};}
