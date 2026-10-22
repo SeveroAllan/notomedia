@@ -70,3 +70,11 @@ describe('painel Amplimed', () => {
     expect((await c.excluir(id)).salvo).toBe(false);
   });
 });
+
+import { statusAmplimedPorCor } from '../src/agenda/amplimed-mapeamento.js';
+describe('cor vermelha do cancelado na conta teste', () => {
+  it('red não é atendimento e verde continua sendo', () => {
+    expect(statusAmplimedPorCor('red')).not.toBe('realizada'); expect(statusAmplimedPorCor('red')).not.toBe('desconhecido');
+    expect(statusAmplimedPorCor('rgb(255, 0, 0)')).toBe(statusAmplimedPorCor('red')); expect(statusAmplimedPorCor('green')).toBe('realizada');
+  });
+});

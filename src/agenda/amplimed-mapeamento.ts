@@ -29,9 +29,11 @@ export function cobrancaAmplimed(convenio: string | null | undefined): ConsultaA
 /** Legenda de cores da agenda (conta teste, 22/10): hex exato -> nome do status. */
 const CORES_STATUS_AMPLIMED: Record<string, string> = {
   '6c757d': 'agendado', '1fbed9': 'confirmado', 'e3a62c': 'esperando', 'd75353': 'cancelado', 'f76397': 'nao compareceu',
-  '840000': 'reagendado', '343a40': 'em atendimento', '008000': 'finalizado', '800080': 'bloqueado'
+  '840000': 'reagendado', '343a40': 'em atendimento', '008000': 'finalizado', '800080': 'bloqueado',
+  // observado na conta teste (22/10): o compromisso Cancelado sai como "red" (#ff0000). Nunca é atendimento.
+  'ff0000': 'cancelado'
 };
-const NOMES_CSS: Record<string, string> = { green: '008000', purple: '800080', maroon: '800000' };
+const NOMES_CSS: Record<string, string> = { red: 'ff0000', green: '008000', purple: '800080', maroon: '800000' };
 
 /** Normaliza o que o navegador devolve (#rrggbb, rgb(r, g, b) ou nome CSS) para 6 dígitos hex, ou null. */
 export function corParaHex(cor: string | null | undefined): string | null {
