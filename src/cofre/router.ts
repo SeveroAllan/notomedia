@@ -10,6 +10,15 @@ import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js'
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
+export interface EstadoAgendaCofre { salvo: boolean; conectada: boolean; consentimentoEm: string | null }
+/** Com as duas agendas conectadas vale a que o médico conectou por último; sem nenhuma conectada, a salva. */
+export function escolherAgendaAtiva(tribe: EstadoAgendaCofre, amplimed: EstadoAgendaCofre): 'tribemd' | 'amplimed' {
+    if (!amplimed.salvo) return 'tribemd';
+    if (!tribe.salvo) return 'amplimed';
+    if (amplimed.conectada && !tribe.conectada) return 'amplimed';
+    if (tribe.conectada && !amplimed.conectada) return 'tribemd';
+    return (amplimed.consentimentoEm ?? '') > (tribe.consentimentoEm ?? '') ? 'amplimed' : 'tribemd';
+}
 export function mapearStatusAgenda(status: Awaited<ReturnType<CofreTribemd['status']>>) {
     return { nome: status.salvo ? 'tribemd' : null, conectada: status.ativo && conectadoPorEstado[status.estado] };
 }
@@ -118,9 +127,12 @@ export function criarCofreContas(deps: {
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
             const status = await cofre.status(medicoId);
-            if (!(status.salvo && status.ativo) && cofreAmplimed) {
+            if (cofreAmplimed) {
                 const a = await cofreAmplimed.status(medicoId);
-                if (a.salvo) return { nome: 'amplimed' as string | null, conectada: a.ativo && a.estado === 'conectado' };
+                const escolha = escolherAgendaAtiva(
+                    { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(medicoId) },
+                    { salvo: a.salvo, conectada: a.salvo && a.ativo && a.estado === 'conectado', consentimentoEm: a.consentimentoEm });
+                if (escolha === 'amplimed') return { nome: 'amplimed' as string | null, conectada: a.salvo && a.ativo && a.estado === 'conectado' };
             }
             return mapearStatusAgenda(status);
         },

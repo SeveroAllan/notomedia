@@ -23,7 +23,7 @@ export class CofreAmplimed {
         const p = await this.perfis.ler(this.chave(id));
         try {
             return { salvo: !!p.senha, estado: (p.cofre?.estado ?? (p.senha ? 'salvo' : 'vazio')) as NonNullable<PerfilTribemd['cofre']>['estado'] | 'vazio',
-                ativo: p.cofre?.ativo ?? false, verificadoEm: p.cofre?.verificadoEm ?? null, codigo: p.cofre?.codigo ?? null, consultasDisponiveis: null };
+                ativo: p.cofre?.ativo ?? false, verificadoEm: p.cofre?.verificadoEm ?? null, codigo: p.cofre?.codigo ?? null, consentimentoEm: p.cofre?.consentimentoEm ?? null, consultasDisponiveis: null };
         } finally { p.email = ''; p.senha = ''; }
     }
     async iniciar(id: string, credencial?: { email: string; senha: string }) {

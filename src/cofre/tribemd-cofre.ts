@@ -34,6 +34,11 @@ export class CofreTribemd {
     private limparCredencial(p: PerfilTribemd) { p.email = ''; p.senha = ''; }
     private limparResultado(id: string) { const anterior = this.resultados.get(id); if (anterior)
         clearTimeout(anterior.timer); this.resultados.delete(id); }
+    /** Quando o médico consentiu a conexão (para escolher a agenda mais recente). Não faz parte do status público. */
+    async consentimentoEm(id: string): Promise<string | null> {
+        const p = await this.perfis.ler(id);
+        try { return p.cofre?.consentimentoEm ?? null; } finally { this.limparCredencial(p); }
+    }
     async status(id: string) {
         const p = await this.perfis.ler(id);
         try {
