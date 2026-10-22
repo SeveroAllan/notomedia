@@ -1,6 +1,23 @@
 import type { Page, Request, Response } from 'playwright-core';
 import type { ObservadorRedeLoginTribemd } from './tribemd-rede.js';
 import { dataISOTribemd, type ConsultaTribemd } from './tribemd-leitura.js';
+const CHAVES_PROFISSIONAL=['profissional','profissionais','medico','medicos','usuario','usuarios','responsavel'] as const;
+/** Só o nome do profissional, se o portal trouxer. Chaves não confirmadas: ausente vira undefined. */
+export function nomeProfissionalTribemd(item:Record<string,unknown>):string|undefined{
+ for(const k of CHAVES_PROFISSIONAL){
+  const v=item[k];const o=Array.isArray(v)?v[0]:v;
+  const nome=typeof o==='string'?o:objeto(o)&&typeof o.nome==='string'?o.nome:'';
+  const limpo=nome.trim().replace(/\s+/g,' ').slice(0,120);
+  if(limpo)return limpo;
+ }
+ return undefined;
+}
+/** Descoberta: nomes distintos de profissionais (sem paciente, horário ou valor). */
+export function descobrirProfissionais(consultas:ReadonlyArray<{profissional?:string}>):string[]{
+ const mapa=new Map<string,string>();
+ for(const c of consultas){if(!c.profissional)continue;const chave=c.profissional.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();if(!mapa.has(chave))mapa.set(chave,c.profissional);}
+ return [...mapa.values()].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}
 export class ErroAgendaTribemd extends Error { constructor(public codigo:string){super(codigo);} }
 export interface RecorteAgendaTribemd {
  consultas:ConsultaTribemd[];totalAtendimentos:number;limitado:boolean;
@@ -21,7 +38,7 @@ export function extrairAgendaTribemd(dados:unknown,hoje:string):Omit<RecorteAgen
   const valor=item[campo],data=typeof valor==='string'?dataISOTribemd(valor):null;
   if(!nome||!data||data>hoje)continue;
   const id=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0?String(v):typeof v==='string'&&/^[1-9]\d{0,15}$/.test(v)?v:undefined;
-  consultas.push({atendimentoId:id(item.id),pacienteId:id(item.paciente_id)??id(paciente?.id),situacao:Number(item.status)===10?'finalizado':'atendido',nome,ultimaConsulta:null,dataConsultaObservada:data,evidencia:'consulta_realizada_observada',origemData:campo});
+  consultas.push({atendimentoId:id(item.id),pacienteId:id(item.paciente_id)??id(paciente?.id),situacao:Number(item.status)===10?'finalizado':'atendido',nome,ultimaConsulta:null,dataConsultaObservada:data,evidencia:'consulta_realizada_observada',origemData:campo,profissional:nomeProfissionalTribemd(item)});
  }
  return {consultas,totalAtendimentos:corpo.atendimentos.length,limitado:corpo.atendimentos.length>100};
 }
