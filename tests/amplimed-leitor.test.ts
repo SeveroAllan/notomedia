@@ -28,3 +28,15 @@ describe('leitor da agenda Amplimed (fixture da conta teste)', () => {
     expect(lerAgendaAmplimedTexto(tela, { data: '2026-10-22', profissional: 'x' }).every(c => c.status === 'agendada')).toBe(true);
   });
 });
+
+import { montarLeituraAmplimed } from '../src/agenda/amplimed-leitor.js';
+describe('montarLeituraAmplimed', () => {
+  const ev = (h: string, cor: string) => ({ texto: `${h} - 08:30\nPaciente Teste Um | Avaliação | Particular | R$ 250,00 | 51990000001`, cor });
+  const o = { data: '2026-10-22', profissional: 'Allan Severo (teste Noto)' };
+  it('verde entra; cor desconhecida vira problema e não entra', () => {
+    const ok = montarLeituraAmplimed([ev('08:00', 'green')], o);
+    expect(ok.confiavel).toBe(true); expect(ok.consultas).toHaveLength(1); expect(ok.consultas[0]!.status).toBe('realizada');
+    const dv = montarLeituraAmplimed([ev('08:00', 'green'), ev('09:00', 'orange')], o);
+    expect(dv.confiavel).toBe(false); expect(dv.consultas).toHaveLength(1); expect(dv.problemas.map(p => p.codigo)).toContain('STATUS_DESCONHECIDO');
+  });
+});

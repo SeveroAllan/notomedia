@@ -49,7 +49,7 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
  * Login de observação: abre o login, envia uma vez, devolve só o estado. Não lê agenda, não grava sessão.
  * A credencial vive só nesta função e é descartada ao sair.
  */
-export async function verificarLoginAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<CodigoLoginAmplimed> {
+export async function verificarLoginAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; aoConectar?: (page: Page) => Promise<void> }, signal?: AbortSignal): Promise<CodigoLoginAmplimed> {
   let browser: Browser | undefined;
   let { email, senha } = opcoes;
   try {
@@ -114,10 +114,27 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       }
       const c = classificarTelaAmplimed(tela);
       if (c === 'PRECISA_VERIFICACAO') console.warn('AMPLIMED_2FA tela=' + JSON.stringify(tela.texto.replace(/\s+/g, ' ').replace(/\d{6,}/g, '#').slice(0, 350)));
+      if (c === 'CONECTADO' && opcoes.aoConectar) { try { await opcoes.aoConectar(page); } catch { console.warn('AMPLIMED_LEITURA etapa=falha'); } }
       if (c !== 'AGUARDANDO') return c;
     }
     console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname.split('/').slice(0, 2).join('/'); } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
     return 'TEMPO_ESGOTADO';
   } catch (erro) { console.warn('AMPLIMED_LOGIN etapa=excecao msg=' + String((erro as Error)?.message ?? erro).split('\n')[0]!.slice(0, 160)); return 'TEMPO_ESGOTADO'; }
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }
+}
+
+export interface EventoAgendaAmplimed { texto: string; cor: string }
+/**
+ * Leitura de observação da agenda do dia (somente GET, nada vira nota). Faz login com a credencial recebida,
+ * abre /agenda e devolve o texto e a cor de cada compromisso. O parser puro e as checagens ficam fora daqui.
+ */
+export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; eventos: EventoAgendaAmplimed[] }> {
+  let eventos: EventoAgendaAmplimed[] = [];
+  const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
+    if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+    eventos = await page.evaluate(`[...document.querySelectorAll('.fc-time-grid-event')].map(e => ({ texto: (e.innerText || '').trim().slice(0, 400), cor: e.style.backgroundColor || '' }))`) as EventoAgendaAmplimed[];
+  } }, signal);
+  return { codigo, eventos };
 }

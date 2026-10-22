@@ -33,3 +33,24 @@ export function lerAgendaAmplimedTexto(texto: string, opcoes: { data: string; pr
   }
   return saida;
 }
+
+import { statusAmplimedPorCor } from './amplimed-mapeamento.js';
+import { checarLeitura, type Problema } from './leitura-adaptativa.js';
+
+/**
+ * Junta texto + cor dos compromissos do dia, aplica as checagens e devolve só o que é confiável.
+ * Cor desconhecida vira problema (nunca presume atendimento). Modo observação: não gera nota.
+ */
+export function montarLeituraAmplimed(eventos: { texto: string; cor: string }[], opcoes: { data: string; profissional: string }) {
+  const problemasCor: Problema[] = [];
+  const consultas: ConsultaAdaptador[] = [];
+  for (const ev of eventos) {
+    const st = statusAmplimedPorCor(ev.cor);
+    for (const c of lerAgendaAmplimedTexto(ev.texto, { ...opcoes, status: st === 'desconhecido' ? 'agendada' : st })) {
+      if (st === 'desconhecido') problemasCor.push({ codigo: 'STATUS_DESCONHECIDO', idExterno: c.idExterno }); else consultas.push(c);
+    }
+  }
+  const r = checarLeitura({ consultas, janela: { inicio: opcoes.data, fim: opcoes.data } }, [opcoes.profissional]);
+  const problemas = [...problemasCor, ...r.problemas];
+  return { consultas: r.consultas, problemas, confiavel: problemas.length === 0 && r.confiavel, lidos: eventos.length };
+}
