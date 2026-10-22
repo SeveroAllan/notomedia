@@ -157,3 +157,17 @@ it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('ação %s sem
   expect(validarAcaoConversa(decisao,fatos,[acao],'Tribe',agora)).toBe('anuncie a acao com suas palavras');
  }
 });
+
+it('STEER 20: confirmação estruturada permite fala vazia somente com pergunta pendente',async()=>{
+ const completar=vi.fn(async()=>JSON.stringify({fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.98}}}));
+ const c=new ConversadorMedico('k','m',completar);
+ const r=await c.responder({...entrada,fatos:{...fatos,lote:{estado:'aguardando_confirmacao_lote',pergunta:'Posso emitir essas consultas?'}}});
+ expect(r.fala).toEqual([]);expect(r.parametros?.confirmacao).toEqual({intencao:'sim',confianca:.98});
+ expect((await c.responder(entrada)).fala).toEqual([ERRO_CONVERSA]);
+});
+it('STEER 20: prompt exige interpretar a confirmação em vez de inventar falta de permissão',()=>{
+ expect(PROMPT_CONVERSA).toContain('DEVE preencher parametros.confirmacao');
+ expect(PROMPT_CONVERSA).not.toContain('Nenhuma acao disponivel emite nota');
+ expect(PROMPT_CONVERSA).not.toContain('Nenhuma ação disponível emite nota');
+ expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
+});

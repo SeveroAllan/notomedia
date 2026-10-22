@@ -531,3 +531,22 @@ it('não reutiliza o sim se a pergunta do lote mudar durante a decisão, mesmo s
  expect(fronteiras.openai).toHaveBeenCalledOnce();expect(confirmar).not.toHaveBeenCalled();
  expect(enviar.mock.calls[0][0].texto).toContain('outra pergunta');
 });
+
+it.each([0,1,2])('STEER 20: Pode com %i omissões confirma pelo lote existente ou repete só a pergunta',async omissoes=>{
+ config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};enviosEsperados=1;
+ const lote:any={id:'lote-pode',medicoId:'medico',conversa:'conversa',desde:'2026-10-05',ate:new Date().toISOString(),estado:'aguardando_confirmacao_lote',totalConsultas:10,totalCentavos:770000,semValor:0,mensagemConfirmacaoId:'pergunta-pode',perguntaEm:new Date().toISOString()};
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>({...lote}));
+ const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockImplementation(async()=>{lote.estado='confirmado';return true;});
+ const {ConversaLoteRetroativo,perguntaLote}=await import('../src/onboarding/lote-retroativo.js');
+ const responder=vi.spyOn(ConversaLoteRetroativo.prototype,'responder');const pergunta=perguntaLote(lote);
+ const inventada='Beleza, recebi sua confirmação; aguardo liberação fiscal.';
+ fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>{
+  expect(JSON.parse(msgs[1].content).acoesPermitidas).toEqual(['nenhuma']);
+  return JSON.stringify(fronteiras.openai.mock.calls.length<=omissoes?{fala:[inventada],acao:null}:{fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.98}}});
+ });
+ enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'pode-pendente','Pode.');
+ expect(fronteiras.openai).toHaveBeenCalledTimes(omissoes===0?1:2);
+ if(omissoes===2) {expect(responder).not.toHaveBeenCalled();expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toBe(pergunta);expect(lote.estado).toBe('aguardando_confirmacao_lote');}
+ else {expect(responder).toHaveBeenCalledOnce();expect(confirmar).toHaveBeenCalledExactlyOnceWith('lote-pode','assistente:pode-pendente','pergunta-pode',{intencao:'sim',confianca:.98},expect.any(Date));expect(lote.estado).toBe('confirmado');}
+ expect(JSON.stringify([enviar.mock.calls,banco.mensagens])).not.toContain(inventada);
+});

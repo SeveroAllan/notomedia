@@ -338,3 +338,19 @@ it('anúncio vem antes da leitura, tem chave própria e reentrega não repete ne
  expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.map(([,chave])=>chave)).toEqual(['ordem:anuncio','ordem']);
  expect(c.banco.mensagens.filter(m=>m.papel==='noto').map(m=>m.mensagemId)).toEqual(['noto:ordem:anuncio','noto:ordem']);
 });
+
+it.each([0,1,2])('STEER 20: confirmação pendente com %i omissões não envia afirmação não assinada',async omissoes=>{
+ const c=cenario();const pergunta='Posso emitir todas as 10 consultas (R$ 7.700,00) em homologação, sem valor fiscal?';
+ c.fatos.lote={estado:'aguardando_confirmacao_lote',pergunta,perguntaId:'pergunta-pendente'};
+ c.deps.ferramentas.permitidas=()=>['nenhuma'];
+ const inventada='Recebi sua confirmação e vou aguardar a liberação.';
+ c.completar.mockImplementation(async()=>JSON.stringify(c.completar.mock.calls.length<=omissoes
+  ?{fala:[inventada],acao:null}:{fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.98}}}));
+ c.executar.mockResolvedValue({jaRespondida:true});
+ await c.turno('pode','Pode.');
+ expect(c.completar).toHaveBeenCalledTimes(omissoes===0?1:2);
+ if(omissoes===2) {expect(c.executar).not.toHaveBeenCalled();expect(c.enviar).toHaveBeenCalledExactlyOnceWith([pergunta],'pode');}
+ else {expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0][0].parametros.confirmacao).toEqual({intencao:'sim',confianca:.98});expect(c.enviar).not.toHaveBeenCalled();}
+ if(omissoes) expect(JSON.parse(c.completar.mock.calls[1][2][1].content).correcao.motivo).toBe('preencha parametros.confirmacao sobre a pergunta pendente');
+ expect(JSON.stringify([c.enviar.mock.calls,c.banco.mensagens])).not.toContain(inventada);
+});

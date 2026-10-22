@@ -121,8 +121,17 @@ export async function processarComunicacaoMedico(
       const permitidas=deps.ferramentas.permitidas(fatos);
       let decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
+      if(entrada.respostaMedico && fatos.lote?.estado==='aguardando_confirmacao_lote' && !decisao.parametros?.confirmacao) {
+        deps.log('info','CONVERSA_CONFIRMACAO_CORRIGIR');
+        decisao=await decidir(permitidas,undefined,{motivo:'preencha parametros.confirmacao sobre a pergunta pendente',faltou:[]});
+        if(!decisao.parametros?.confirmacao) {
+          deps.log('info','CONVERSA_CONFIRMACAO_AUSENTE');
+          await enviar([fatos.lote.pergunta??ERRO_CONVERSA]);
+          return {tipo:'nenhuma'};
+        }
+      }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
-      if(motivo==='anuncie a acao com suas palavras') {
+      if(chamadas<2 && motivo==='anuncie a acao com suas palavras') {
         deps.log('info','CONVERSA_ANUNCIO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo,faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
