@@ -1,3 +1,4 @@
+import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
 import { contemCredencialAgenda } from './cofre/links.js';
 import { PendenciasMedico, classificarPendencias, formatarPendencias } from './onboarding/pendencias-medico.js';
 import { PostgresContextoPendencias } from './io/postgres/postgres-contexto-pendencias.js';
@@ -325,10 +326,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         homologacaoInformada:false};
     },
-    permitidas: fatos => fatos.ambiente!=='homologacao'?[]:['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??'')?['nenhuma']:
-      ['nenhuma',...(!fatos.agenda.conectada?['registrar_modo_sem_agenda']:[]),
-        ...(!fatos.agenda.conectada&&!fatos.link.ativo&&!fatos.semAgendaDigital?['pedir_link_agenda']:[]),
-        ...(fatos.agenda.conectada&&!fatos.semAgendaDigital?['listar_pendencias',...(retroativo?['iniciar_lote']:[])]:[])],
+    permitidas: fatos => ferramentasLiberadas(fatos,{lote:!!retroativo}),
     guardarPeriodo:(id,desde)=>contextoPendencias.definirInicio(id,desde),
     executar:async (decisao,c) => {
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
