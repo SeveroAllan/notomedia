@@ -3,8 +3,8 @@ import type { ConsultaAdaptador } from './leitura-adaptativa.js';
 const norm = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 
 /**
- * Legenda de status da agenda do Amplimed (conta de teste). "Atendido" = FINALIZADO é inferência
- * ainda não confirmada com a clínica: sem confirmação o leitor segue em modo observação.
+ * Legenda de status da agenda do Amplimed (conta de teste). "Atendido" = FINALIZADO, confirmado pelo Allan em 22/10 18:26.
+ * Regra confirmada junto: Cortesia/R$0 e convênio não geram nota na v1. O leitor segue em modo observação.
  * Status de faturamento TISS é outra lista e não entra aqui.
  */
 export function statusAmplimed(texto: string): ConsultaAdaptador['status'] | 'desconhecido' {

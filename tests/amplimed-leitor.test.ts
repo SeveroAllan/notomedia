@@ -40,3 +40,13 @@ describe('montarLeituraAmplimed', () => {
     expect(dv.confiavel).toBe(false); expect(dv.consultas).toHaveLength(1); expect(dv.problemas.map(p => p.codigo)).toContain('STATUS_DESCONHECIDO');
   });
 });
+
+import { separarElegiveis } from '../src/agenda/leitura-adaptativa.js';
+describe('regra confirmada pelo Allan (22/10): atendido = finalizado; cortesia/R$0 e convênio não geram nota', () => {
+  it('das 3 consultas finalizadas da conta teste só a particular com valor é elegível', () => {
+    const c = lerAgendaAmplimedTexto(tela, { data: '2026-10-22', profissional: 'x', status: 'realizada' });
+    const r = separarElegiveis(c);
+    expect(r.elegiveis.map(x => x.pacienteNome)).toEqual(['Paciente Teste Um']);
+    expect(r.foraCortesia).toBe(2);
+  });
+});
