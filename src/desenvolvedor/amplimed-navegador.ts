@@ -103,6 +103,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
           if (saida && convitePulado === 1) await page.getByText(saida, { exact: false }).first().click({ timeout: 5000 });
           else await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
         } catch { /* a próxima volta classifica */ }
+        await page.waitForTimeout(5000);
         continue;
       }
       const c = classificarTelaAmplimed(tela);
