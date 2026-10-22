@@ -20,7 +20,7 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'iniciar_lote',tipo:'escrita',exigeConfirmacaoDoMedico:true,descricao:'Preparar o lote de notas; só emite depois do "pode" sobre a proposta.',
-    liberada:(f,d)=>d.lote&&f.agenda.conectada&&!f.semAgendaDigital},
+    liberada:(f,d)=>d.lote&&f.agenda.conectada&&f.agenda.nome?.toLowerCase()==='tribemd'&&!f.semAgendaDigital},
 ];
 export function ferramentasLiberadas(fatos:FatosConversa,disponibilidade:{lote:boolean}):readonly NomeFerramenta[] {
   if(fatos.ambiente!=='homologacao') return [];

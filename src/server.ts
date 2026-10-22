@@ -340,6 +340,19 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
       const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
+      if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
+        // Amplimed v1: modo observação, só o dia de hoje; nada vira nota.
+        const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+        const a=await cofres.lerAgendaAmplimed(c.medicoId,hoje);
+        console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,total:a.ok?a.elegiveis.length:undefined}));
+        if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo}};
+        const dia=hoje.split('-').reverse().join('/');
+        const nomes=a.elegiveis.map(e=>e.paciente);
+        const fala=a.elegiveis.length
+          ? [`Hoje (${dia}) vi ${a.elegiveis.length} atendimento${a.elegiveis.length>1?'s':''} finalizado${a.elegiveis.length>1?'s':''} com cobrança particular: ${nomes.join(', ')}. Por enquanto só leio o dia de hoje na sua agenda Amplimed e ainda não emito nada.`]
+          : [`Hoje (${dia}) não vi atendimento finalizado com cobrança particular na sua agenda Amplimed. Por enquanto só leio o dia de hoje e ainda não emito nada.`];
+        return {dados:{ferramenta:'listar_pendencias',ok:true,total:a.elegiveis.length,desde:hoje},falaAssinada:fala,falaMemoria:fala};
+      }
       if(decisao.acao==='iniciar_lote') {
         await criarRetroativo(c.narrar,decisao,c.medicoId)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);
         return {jaRespondida:true};

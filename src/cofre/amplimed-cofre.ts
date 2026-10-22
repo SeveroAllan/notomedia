@@ -1,5 +1,7 @@
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { ErroCofre } from './tribemd-cofre.js';
+import { montarLeituraAmplimed } from '../agenda/amplimed-leitor.js';
+import { separarElegiveis } from '../agenda/leitura-adaptativa.js';
 import type { CodigoLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 
 /**
@@ -11,7 +13,9 @@ export class CofreAmplimed {
     constructor(private opcoes: { diretorio: string; chave: string; aoAlterarAcesso?: (medicoId: string) => void;
         /** Login de observação; sem ele a credencial só é guardada. */
         verificar?: (credencial: { email: string; senha: string }) => Promise<CodigoLoginAmplimed>;
-        aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void> }) {
+        aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
+        /** Leitura de observação da agenda do dia; sem ele a leitura fica indisponível. */
+        lerEventos?: (credencial: { email: string; senha: string }) => Promise<{ codigo: CodigoLoginAmplimed; eventos: { texto: string; cor: string }[]; profissional: string | null }> }) {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
@@ -40,6 +44,23 @@ export class CofreAmplimed {
         p.email = ''; p.senha = '';
         await this.verificarEmSegundoPlano(id, credencial);
         return this.status(id);
+    }
+    /** Lê a agenda do dia em modo observação. Devolve só consultas já checadas; nunca a credencial. */
+    async lerAgendaDoDia(id: string, data: string) {
+        if (!this.opcoes.lerEventos) return { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+        const p = await this.perfis.ler(this.chave(id));
+        if (!p.senha || !p.email) return { ok: false as const, motivo: 'CREDENCIAL_AUSENTE' };
+        const credencial = { email: p.email, senha: p.senha };
+        p.email = ''; p.senha = '';
+        let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.lerEventos>>>;
+        try { r = await this.opcoes.lerEventos(credencial); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        finally { credencial.email = ''; credencial.senha = ''; }
+        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
+        if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
+        const leitura = montarLeituraAmplimed(r.eventos, { data, profissional: r.profissional });
+        if (!leitura.confiavel) return { ok: false as const, motivo: 'LEITURA_NAO_CONFIAVEL', problemas: leitura.problemas.map(x => x.codigo) };
+        const { elegiveis } = separarElegiveis(leitura.consultas);
+        return { ok: true as const, lidos: leitura.lidos, elegiveis: elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora })) };
     }
     private async verificarEmSegundoPlano(id: string, credencial: { email: string; senha: string }) {
         let codigo: CodigoLoginAmplimed = 'TEMPO_ESGOTADO';

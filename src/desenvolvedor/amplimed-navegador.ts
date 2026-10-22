@@ -128,13 +128,15 @@ export interface EventoAgendaAmplimed { texto: string; cor: string }
  * Leitura de observação da agenda do dia (somente GET, nada vira nota). Faz login com a credencial recebida,
  * abre /agenda e devolve o texto e a cor de cada compromisso. O parser puro e as checagens ficam fora daqui.
  */
-export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; eventos: EventoAgendaAmplimed[] }> {
+export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; eventos: EventoAgendaAmplimed[]; profissional: string | null }> {
   let eventos: EventoAgendaAmplimed[] = [];
+  let profissional: string | null = null;
   const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
     if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(2500);
+    profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
     eventos = await page.evaluate(`[...document.querySelectorAll('.fc-time-grid-event')].map(e => ({ texto: (e.innerText || '').trim().slice(0, 400), cor: e.style.backgroundColor || '' }))`) as EventoAgendaAmplimed[];
   } }, signal);
-  return { codigo, eventos };
+  return { codigo, eventos, profissional };
 }
