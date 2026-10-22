@@ -70,7 +70,9 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       if (!ok) { if (r.method().toUpperCase() !== 'GET' || r.resourceType() === 'document') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
+    const respostas: string[] = [];
     const page: Page = await context.newPage();
+    page.on('response', r => { try { const u = new URL(r.url()); if (r.request().resourceType() === 'document' || r.request().method() !== 'GET') respostas.push(r.request().method() + ' ' + u.host + u.pathname.split('/').slice(0, 3).join('/') + ' ' + r.status()); } catch { /* ignora */ } });
     page.setDefaultTimeout(12000);
     context.on('page', p => { if (p !== page) void p.close().catch(() => {}); });
     const limite = Date.now() + (opcoes.tempoMs ?? 40000);
@@ -104,6 +106,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
           else await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
         } catch { /* a próxima volta classifica */ }
         await page.waitForTimeout(5000);
+        console.warn('AMPLIMED_2FA_APOS_CLIQUE posts=' + postsLogin + ' respostas=' + JSON.stringify(respostas.slice(-8)) + ' bloqueados=' + JSON.stringify(bloqueados.slice(-4)));
         continue;
       }
       const c = classificarTelaAmplimed(tela);
