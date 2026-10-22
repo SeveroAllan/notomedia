@@ -16,3 +16,12 @@ describe('mapeamento Amplimed', () => {
     expect(cobrancaAmplimed(null)).toBe('desconhecido');
   });
 });
+
+import { statusAmplimedPorCor } from '../src/agenda/amplimed-mapeamento.js';
+describe('status pela cor (observado na conta teste)', () => {
+  it('verde = finalizado; outras cores nao presumem atendimento', () => {
+    expect(statusAmplimedPorCor('green')).toBe('realizada');
+    expect(statusAmplimedPorCor('orange')).toBe('desconhecido');
+    expect(statusAmplimedPorCor(null)).toBe('desconhecido');
+  });
+});

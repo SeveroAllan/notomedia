@@ -25,3 +25,11 @@ export function cobrancaAmplimed(convenio: string | null | undefined): ConsultaA
   if (c === 'cortesia') return 'cortesia';
   return 'convenio';
 }
+
+/**
+ * Status pela cor do compromisso na agenda (fc-event, background-color). Só o que foi observado na conta teste:
+ * as 3 consultas FINALIZADO aparecem em "green". Qualquer outra cor é desconhecida: nunca presumir atendimento.
+ */
+export function statusAmplimedPorCor(cor: string | null | undefined): ConsultaAdaptador['status'] | 'desconhecido' {
+  return (cor ?? '').trim().toLowerCase() === 'green' ? 'realizada' : 'desconhecido';
+}
