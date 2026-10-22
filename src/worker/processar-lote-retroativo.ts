@@ -51,9 +51,11 @@ export async function processarLoteRetroativo(repo: RepositorioExecucaoLote, dep
       }
     }
     await repo.finalizar(lote.id);
-    const fala = [`Pronto, emiti ${emitidas} de ${lote.totalConsultas} notas em homologação (teste, sem valor fiscal).${faturadas ? ` ${faturadas} já tinham nota e ficaram de fora.` : ''}${divergentes ? ` ${divergentes} precisam ser conferidas antes de seguir.` : ''}`];
-    fala.push(`${entregues ? `${entregues} notas entregues.` : 'Nada foi enviado aos pacientes nos testes.'}${semContato ? ` ${semContato} pacientes estão sem contato válido na agenda; corrija e me peça o reenvio.` : ''}${emitidas - entregues - semContato > 0 ? ` ${emitidas - entregues - semContato} notas ficaram sem envio.` : ''}${!semContato && !semValor && !divergentes ? ' Não precisa fazer nada agora.' : ''}`);
-    if (semValor) fala.push(`${semValor} consultas ficaram de fora por falta de valor. Pode conferir os valores na sua agenda?`);
+    const pl = (n: number, um: string, varios: string) => `${n} ${n === 1 ? um : varios}`;
+    const faltaEnvio = emitidas - entregues - semContato;
+    const fala = [`Pronto, emiti ${pl(emitidas, 'nota', 'notas')} de teste${emitidas !== lote.totalConsultas ? `, de ${lote.totalConsultas} consultas` : ''}.${faturadas ? ` ${pl(faturadas, 'já tinha nota e ficou', 'já tinham nota e ficaram')} de fora.` : ''}${divergentes ? ` ${pl(divergentes, 'precisa ser conferida', 'precisam ser conferidas')} antes de seguir.` : ''}`];
+    fala.push(`${entregues ? `${pl(entregues, 'nota entregue', 'notas entregues')}.` : 'Nada foi enviado aos pacientes, porque é teste.'}${semContato ? ` ${pl(semContato, 'paciente está', 'pacientes estão')} sem contato válido na agenda; corrija lá e me peça o reenvio.` : ''}${faltaEnvio > 0 ? ` ${pl(faltaEnvio, 'nota ficou', 'notas ficaram')} sem envio.` : ''}${!semContato && !semValor && !divergentes ? ' Não precisa fazer nada agora.' : ''}`);
+    if (semValor) fala.push(`${pl(semValor, 'consulta ficou', 'consultas ficaram')} de fora por falta de valor. Pode conferir os valores na sua agenda?`);
     await deps.enviar(lote.medicoId, `lote:${lote.id}:resumo`, fala, lote.conversa);
     deps.log(JSON.stringify({ evento: 'LOTE_EMITIDO', loteId: lote.id, emitidas, entregues, semContato, semValor, faturadas, divergentes }));
     return true;

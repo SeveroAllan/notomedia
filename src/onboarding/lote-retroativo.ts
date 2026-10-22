@@ -44,7 +44,7 @@ export async function interpretarDataRetroativo(apiKey: string | undefined, mode
 export function perguntaLote(lote: Pick<LoteRetroativo, 'desde' | 'totalConsultas' | 'totalCentavos'>): string {
   const data = lote.desde!.split('-').reverse().join('/');
   const valor = (lote.totalCentavos / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `Encontrei ${lote.totalConsultas} consultas com valor desde ${data}. Não vejo comprovantes do passado, só os novos. Total: R$ ${valor}. Posso emitir todas no ambiente de homologação, sem valor fiscal?`;
+  return `Desde ${data} achei ${lote.totalConsultas} ${lote.totalConsultas === 1 ? 'consulta' : 'consultas'} com valor, somando R$ ${valor}. Posso emitir ${lote.totalConsultas === 1 ? 'a nota dela' : 'as notas de todas'}?`;
 }
 export class ConversaLoteRetroativo {
   constructor(private readonly repo: RepositorioLotes, private readonly deps: {
@@ -69,7 +69,7 @@ export class ConversaLoteRetroativo {
       await this.propor(lote, desde, conversa, chave, agora, true);
       return true;
     }
-    if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde quando você não emite notas? As notas deste teste serão emitidas em homologação, sem valor fiscal.']);
+    if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde quando você não emite notas?']);
     else if (lote?.estado === 'aguardando_data_inicio') {
       const pergunta = 'Preciso saber desde que dia você quer emitir as notas. Qual é a data de início?';
       await this.deps.enviar(medicoId, conversa, `lote:resposta:${chave}`, [await this.deps.ultimaFala?.(medicoId, conversa) === pergunta
@@ -126,8 +126,8 @@ export class ConversaLoteRetroativo {
     const interpretacao = await this.deps.interpretarConfirmacao(texto, perguntaLote(lote));
     const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));
-    await enviar([confirmou ? `Pronto, vou emitir as ${lote.totalConsultas} notas agora, em homologação (teste, sem valor fiscal). Nada é enviado a pacientes nos testes. Aviso por aqui quando terminar.`
-      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não consegui confirmar com segurança. Você autoriza emitir todas as consultas desse período e total em homologação?']);
+    await enviar([confirmou ? `Pronto, já estou emitindo ${lote.totalConsultas === 1 ? 'a nota' : `as ${lote.totalConsultas} notas`}. Te aviso por aqui quando terminar.`
+      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não tenho certeza se você quer seguir. Posso emitir as notas de todas essas consultas?']);
     return true;
   }
 }

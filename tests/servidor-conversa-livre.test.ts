@@ -364,7 +364,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   await receber(app, 'data-lote', 'desdi primeiru de otubro');
   expect(contar.mock.calls[0][3]).toEqual(new Map([['pendente', 30000]]));
   expect(enviar.mock.calls[1][0].texto).toBe('Conferindo o período.');
-  expect(enviar.mock.calls[2][0].texto).toContain('desde 01/10/2026'); expect(enviar.mock.calls[2][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-3');
+  expect(enviar.mock.calls[2][0].texto).toContain('Desde 01/10/2026'); expect(enviar.mock.calls[2][0].texto).toContain('300,00'); expect(registrar.mock.calls[0][1]).toBe('evo-3');
   await receber(app, 'sim-lote', 'manda ver', true, 'evo-3'); await receber(app, 'sim-lote', 'manda ver', true, 'evo-3');
   expect(confirmar).toHaveBeenCalledOnce(); expect(confirmar.mock.calls[0].slice(1, 4)).toEqual(['assistente:sim-lote', 'evo-3', { intencao: 'sim', confianca: .99 }]);
   let reservado = false;
@@ -381,7 +381,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   const executor={emissorDps:{emitir:vi.fn()},entregar:vi.fn()};
   await app.locals.processarLoteRetroativo(executor); await app.locals.processarLoteRetroativo(executor);
   expect(simular).not.toHaveBeenCalled(); expect(emitir).toHaveBeenCalledOnce(); expect(emitir.mock.calls[0][1]).toBe(executor); expect(itens.mock.calls.map(c => c[1])).toEqual(['emitida','sem_valor']);
-  expect(enviar.mock.calls[4][0].texto).toContain('emiti 1 de 1'); expect(enviar.mock.calls[5][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[6][0].texto).toContain('valor');
+  expect(enviar.mock.calls[4][0].texto).toMatch(/emiti 1 nota de teste/); expect(enviar.mock.calls[5][0].texto).toContain('sem contato válido'); expect(enviar.mock.calls[6][0].texto).toContain('valor');
   expect(JSON.stringify(banco.mensagens)).not.toMatch(/Pessoa Somente Ao Vivo|52998224725/);
 });
 it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as notaas'])('após listar pendências, pedido atual abre lote pelo período e sim simples não relista: %s',async pedido=>{
