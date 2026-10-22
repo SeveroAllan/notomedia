@@ -1,10 +1,10 @@
 import { MENSAGEM_INSTABILIDADE, registroErroNoto } from '../observabilidade/erros.js';
 import express, { type Request } from 'express';
 import { z } from 'zod';
-import { consentimentoCofre } from './tribemd-cofre.js';
+import { AGENDAS_SUPORTADAS } from '../agenda/agendas-suportadas.js';
 import type { LinksCofre } from './links.js';
 
-const credencial = z.object({ email: z.string().trim().email().max(254), senha: z.string().min(1).max(256), consentimento: z.literal(consentimentoCofre) }).strict();
+const credencial = z.object({ email: z.string().trim().email().max(254), senha: z.string().min(1).max(256), consentimento: z.enum([AGENDAS_SUPORTADAS.tribemd.consentimento, AGENDAS_SUPORTADAS.amplimed.consentimento]) }).strict();
 const apagar = (req: Request) => { if (Buffer.isBuffer((req as any).rawBody)) (req as any).rawBody.fill(0); delete (req as any).rawBody; req.body = {}; };
 
 const estilo = `<style>:root{--bg:#F4F4F5;--text:#121C22;--text-secondary:rgba(18,28,34,0.72);--primary:#000000;--primary-hover:#202020;--font-family:"Geist",sans-serif;--headline-md-size:21.48px;--headline-md-line:31.15px;--body-lg-size:15px;--body-lg-line:21.75px}
@@ -68,11 +68,12 @@ export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: str
         try {
             if (!await links!.validar(req.params.token)) { res.status(410).type('html').send(expirado); return; }
             // A ação relativa conserva o token só na URL, sem copiá-lo para a resposta.
-            res.type('html').send(pagina('Conectar agenda', `<h1>Conectar agenda TribeMD</h1><p>Digite o e-mail e a senha da sua agenda. A senha é digitada somente nesta página.</p>
+            const ag = AGENDAS_SUPORTADAS[await links!.agendaDoLink(req.params.token) ?? 'tribemd'];
+            res.type('html').send(pagina('Conectar agenda', `<h1>Conectar agenda ${ag.nome}</h1><p>Digite o e-mail e a senha da sua agenda. A senha é digitada somente nesta página.</p>
 <form method="post" onsubmit="this.action=location.pathname+'/enviar'">
 <label class="campo"><span>E-mail</span><input name="email" type="email" maxlength="254" required autocomplete="username"></label>
 <label class="campo"><span>Senha</span><input name="senha" type="password" maxlength="256" required autocomplete="current-password"></label>
-<label class="autoriza"><input name="consentimento" type="checkbox" value="${consentimentoCofre}" required> <span>Autorizo o Noto a ler a minha agenda TribeMD.</span></label>
+<label class="autoriza"><input name="consentimento" type="checkbox" value="${ag.consentimento}" required> <span>Autorizo o Noto a ler a minha agenda ${ag.nome}.</span></label>
 <button class="btn-action">Conectar</button></form>`));
         } catch { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); }
     });

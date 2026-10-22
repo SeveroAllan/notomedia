@@ -47,7 +47,7 @@ import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
-import { ConversadorMedico, periodoDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
+import { ConversadorMedico, normalizarAgenda, periodoDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -336,7 +336,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='pedir_link_agenda') {
         await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
-        const r=await cofres.links?.solicitarLinkCofre(c.medicoId,'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
+        const r=await cofres.links?.solicitarLinkCofre(c.medicoId,normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined)??'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
       const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;

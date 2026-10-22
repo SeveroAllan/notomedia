@@ -1,7 +1,7 @@
 import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, FALA_NOVO_LINK_AGENDA } from '../onboarding/falas.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
-import type { CofreTribemd } from './tribemd-cofre.js';
+import { AGENDAS_SUPORTADAS, agendaSuportada, type AgendaSuportada } from '../agenda/agendas-suportadas.js';
 
 export interface ContextoConexaoAgenda {
     aguardandoConexao: boolean;
@@ -16,7 +16,8 @@ export function contemCredencialAgenda(texto: string): boolean {
         /^\S{12,}$/.test(texto.trim()) && /[0-9@#$_-]/.test(texto);
 }
 
-export interface ConclusaoAgenda { agenda: 'tribemd'; conectado: boolean; falhaAcesso?: boolean; chave: string }
+export interface CofreAgenda { status(id: string): Promise<{ estado: string; ativo?: boolean; codigo?: string | null }>; iniciar(id: string, credencial?: { email: string; senha: string }): Promise<unknown> }
+export interface ConclusaoAgenda { agenda: AgendaSuportada; conectado: boolean; falhaAcesso?: boolean; chave: string }
 
 export interface TextoLinkAgendaEnviado { medicoId: string; telefoneMedico: string; linkId: string; indice: number; texto: string }
 
@@ -25,14 +26,28 @@ export class LinksCofre {
     constructor(private deps: {
         pool: pg.Pool;
         origem: string;
-        cofre: Pick<CofreTribemd, 'status' | 'iniciar'>;
+        cofre: CofreAgenda;
+        /** Cofres de outras agendas; a chave é a agenda do link. */
+        cofres?: Partial<Record<AgendaSuportada, CofreAgenda>>;
         aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
         registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
 
+    private cofreDe(agenda: string): CofreAgenda | null {
+        const a = agendaSuportada(agenda);
+        if (!a) return null;
+        return a === 'tribemd' ? this.deps.cofre : this.deps.cofres?.[a] ?? null;
+    }
+    async agendaDoLink(token: string): Promise<AgendaSuportada | null> {
+        if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+        const l = (await this.deps.pool.query('select agenda from cofre_links where token_hash=$1', [this.hash(token)])).rows[0];
+        return agendaSuportada(l?.agenda);
+    }
+
     async solicitarLinkCofre(medicoId: string, agenda: string, opcoes: { reenvio?: boolean; fala?: readonly string[] } = {}) {
-        if (agenda !== 'tribemd') return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
+        const cofreAgenda = this.cofreDe(agenda);
+        if (!cofreAgenda) return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
         const cliente = await this.deps.pool.connect();
         let link: { id: string };
         let token = '', telefoneMedico = '', confirmado = false;
@@ -45,7 +60,7 @@ export class LinksCofre {
             if (!medico.ativo) return { ok: false, motivo: 'MEDICO_INATIVO' };
             if (!medico.telefone?.trim()) return { ok: false, motivo: 'SEM_TELEFONE' };
             telefoneMedico = medico.telefone;
-            const status = await this.deps.cofre.status(medicoId);
+            const status = await cofreAgenda.status(medicoId);
             if (!['vazio', 'desconectado', 'atencao'].includes(status.estado)) return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
             const limite = (await cliente.query(`with referencia as (select clock_timestamp() as agora), pedidos_contados as (
                 select pedido.criado_em from cofre_links pedido cross join referencia
@@ -106,7 +121,7 @@ export class LinksCofre {
         const link = (await this.deps.pool.query(`select l.usado_em, l.expira_em,
             (select a.criado_em from cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado' limit 1) as enviado_em
             from cofre_links l where l.medico_id=$1 and l.agenda='tribemd' order by l.criado_em desc limit 1`, [medicoId])).rows[0];
-        const agendaConectada = status.estado === 'conectado' && status.ativo;
+        const agendaConectada = status.estado === 'conectado' && !!status.ativo;
         return { agendaConectada, aguardandoConexao: !agendaConectada && !!link, link: link ? {
             enviado: !!link.enviado_em,
             minutosDesdeEnvio: link.enviado_em ? Math.max(0, Math.floor((agora.getTime() - new Date(link.enviado_em).getTime()) / 60000)) : null,
@@ -135,19 +150,23 @@ export class LinksCofre {
             where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id, id, agenda`, [this.hash(token)])).rows[0];
         if (!link) { await this.validar(token); return false; }
         this.aguardando.set(link.medico_id, { id: link.id, agenda: link.agenda });
-        try { await this.deps.cofre.iniciar(link.medico_id, dados); }
+        try {
+            const c = this.cofreDe(link.agenda);
+            if (!c || dados.consentimento !== AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].consentimento) throw Error();
+            await c.iniciar(link.medico_id, dados);
+        }
         catch { await this.concluir(link.medico_id, false); throw Error('COFRE_INDISPONIVEL'); }
         return true;
     }
     async concluir(medicoId: string, conectado: boolean) {
         const link = this.aguardando.get(medicoId);
-        if (!link || link.agenda !== 'tribemd') return;
+        if (!link || !agendaSuportada(link.agenda)) return;
         this.aguardando.delete(medicoId);
         const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
         if (!rows.length) return;
-        const falhaAcesso = !conectado && (await this.deps.cofre.status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
-        if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
-        await this.deps.enviar(medicoId, conectado ? 'Já recebi o seu acesso ao TribeMD.' : falhaAcesso ? 'Não consegui conectar sua agenda TribeMD. Confira seu login, senha e permissão de acesso na área segura da sua conta.' : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.');
+        const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
+        if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
+        await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}. Confira seu login, senha e permissão de acesso na área segura da sua conta.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.');
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
         const credencial = contemCredencialAgenda(texto);

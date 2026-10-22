@@ -49,7 +49,7 @@ export function dadoCadastralIsolado(texto:string):boolean {
 const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
-  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;eventoAgenda?:{agenda:'tribemd';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
+  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
 ):Promise<ProximaAcaoNoto> {
   if(!deps.ativo) return {tipo:'nenhuma'};
   const executar = async ():Promise<ProximaAcaoNoto> => {

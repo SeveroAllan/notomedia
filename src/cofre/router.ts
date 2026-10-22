@@ -4,6 +4,7 @@ import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { join } from 'node:path';
+import { CofreAmplimed } from './amplimed-cofre.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
@@ -28,7 +29,7 @@ export function criarCofreContas(deps: {
     const env = deps.env ?? process.env, app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
-    let origem = '', cofre: CofreTribemd | undefined, links: LinksCofre | undefined;
+    let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, links: LinksCofre | undefined;
     try {
         const u = new URL(env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '');
         if (u.pathname !== '/' || u.search || u.hash || u.username || u.password || u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))
@@ -39,7 +40,8 @@ export function criarCofreContas(deps: {
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
         cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
-        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
+        cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '' });
+        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
     app.use(async (req, res, next) => {

@@ -1,3 +1,4 @@
+import { agendaSuportada } from '../agenda/agendas-suportadas.js';
 import { ERRO_CONVERSA } from './falas.js';
 import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
@@ -19,7 +20,7 @@ COMO DECIDIR (siga na ordem)
 1. Se a última fala do médico responde à última pergunta do Noto, reconheça a resposta e avance. Nunca repita a pergunta.
 2. Agenda conectada (fatos.agenda.conectada=true): não peça link; ofereça conferir as consultas (acao "listar_pendencias" se permitida).
 2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Se ele so reagiu, proponha o proximo passo: emitir as notas dessas consultas (voce mostra quantidade e total antes de confirmar) ou ver os valores primeiro; acao null. Quando disser que quer emitir (sim, pode, vamos, emite), use iniciar_lote se permitida. So liste de novo se ele pedir explicitamente, com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
-3. O médico citou a agenda que usa: "Tribe", "tribe md", "TribeMD", "o tribe", "pelo tribemd" = TribeMD. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD","evidencia":"<trecho literal da fala atual>"}.
+3. O médico citou a agenda que usa: "Tribe", "tribe md", "o tribe" = TribeMD; "Amplimed" = Amplimed. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD" ou "Amplimed","evidencia":"<trecho literal da fala atual>"}.
    Primeiro link (fatos.link.enviados=0): no máximo 2 balões (explicação + "Aqui está o link seguro:"): o link é para conectar a agenda; o Noto só lê as consultas para conferir com os comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
    Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Nunca chame o primeiro link de "novo". Link ativo: informe que vale, não gere outro.
 4. O médico disse que NÃO usa agenda digital (papel, caderno, WhatsApp, de cabeça): acao "registrar_modo_sem_agenda" com parametros {"evidencia":"<trecho literal>","confianca":0..1}. Explique uma vez que sem agenda você não vê histórico antigo e precisa conferir os dados dele; peça CPF, telefone, valor e data, UM paciente e UM dado por vez. Isso não emite nada. "[OCULTO]" é dado já enviado e protegido pelo sistema: reconheça e avance, sem pedir de novo (telefone, valor, data).
@@ -84,6 +85,7 @@ export function calendarioConversa(agora: Date) {
 export function normalizarAgenda(nome: string | undefined): string | null {
   if (!nome) return null;
   const n = nome.trim().toLocaleLowerCase('pt-BR').replace(/\s+/g,' ');
+  if (/(?:^|[^a-z0-9])ampli\s*-?\s*med(?:[^a-z0-9]|$)/.test(n)) return 'amplimed';
   return /(?:^|[^a-z0-9])tribe\s*-?\s*md(?:[^a-z0-9]|$)|(?:^|[^a-z0-9])tribe(?:[^a-z0-9]|$)/.test(n) ? 'tribemd' : n;
 }
 export function periodoDecisao(d: DecisaoConversa, agora: Date, texto?: string): string | null {
@@ -115,8 +117,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'pedir_link_agenda') {
     if(d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
     if (fatos.agenda.conectada || fatos.link.ativo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
-    if (normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? undefined) !== 'tribemd') return 'AGENDA_NAO_SUPORTADA';
-    if (!fatos.agenda.nome && (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) || normalizarAgenda(d.parametros.evidencia)!=='tribemd')) return 'AGENDA_NAO_INFORMADA';
+    if (!agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? undefined))) return 'AGENDA_NAO_SUPORTADA';
+    if (!fatos.agenda.nome && (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) || !agendaSuportada(normalizarAgenda(d.parametros.evidencia)))) return 'AGENDA_NAO_INFORMADA';
     if (!fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
