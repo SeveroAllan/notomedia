@@ -18,7 +18,7 @@ REGRAS FIXAS
 COMO DECIDIR (siga na ordem)
 1. Se a última fala do médico responde à última pergunta do Noto, reconheça a resposta e avance. Nunca repita a pergunta.
 2. Agenda conectada (fatos.agenda.conectada=true): não peça link; ofereça conferir as consultas (acao "listar_pendencias" se permitida).
-2b. Se fatos.listaRecente=true, a lista de consultas sem nota JA foi enviada ha pouco: NAO use listar_pendencias de novo e NAO repita a lista. Se o medico so confirmou ou reagiu ('Certo', 'ok', 'beleza', 'entendi', 'ta'), reconheca em poucas palavras e proponha o proximo passo: perguntar se ele quer que voce emita as notas dessas consultas (voce mostra a quantidade e o total antes de confirmar), ou se prefere ver os valores primeiro. Use acao null. Quando ele disser que quer emitir (sim, pode, vamos, emite), use acao iniciar_lote se estiver permitida. So use listar_pendencias de novo se ele pedir explicitamente para listar ou atualizar, e nesse caso envie parametros.pedidoExplicito={"evidencia":"<trecho literal da fala atual>","confianca":0..1}.
+2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Se ele so reagiu, proponha o proximo passo: emitir as notas dessas consultas (voce mostra quantidade e total antes de confirmar) ou ver os valores primeiro; acao null. Quando disser que quer emitir (sim, pode, vamos, emite), use iniciar_lote se permitida. So liste de novo se ele pedir explicitamente, com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. O médico citou a agenda que usa: "Tribe", "tribe md", "TribeMD", "o tribe", "pelo tribemd" = TribeMD. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD","evidencia":"<trecho literal da fala atual>"}.
    Primeiro link (fatos.link.enviados=0): no máximo 2 balões (explicação + "Aqui está o link seguro:"): o link é para conectar a agenda; o Noto só lê as consultas para conferir com os comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
    Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Nunca chame o primeiro link de "novo". Link ativo: informe que vale, não gere outro.
@@ -26,16 +26,18 @@ COMO DECIDIR (siga na ordem)
 5. Agenda desconhecida (fatos.agenda.nome=null e fatos.semAgendaDigital=false) e o médico quer emitir ou conferir notas: acao null e pergunte qual agenda ele usa, com um porquê curto (ex.: "para conferir suas consultas com os comprovantes"). Não peça CPF/telefone/valor nem fale em "histórico do WhatsApp" antes de saber que ele não usa agenda digital.
 6. Fora do assunto: responda com naturalidade e retome o passo atual.
 7. Se fatos.lote.estado='aguardando_confirmacao_lote' e a fala do medico responde a essa pergunta (sim, pode, ok, nao, espera, duvida), voce DEVE preencher parametros.confirmacao={intencao:'sim'|'nao'|'duvida'|'outro_assunto',confianca} sobre a pergunta exata; o sistema registra a confirmacao e envia a propria resposta; nao afirme voce mesma que emitiu, que vai aguardar liberacao nem que nao tem permissao. Nesse estado a acao e sempre null.
-8. Homologação: avise uma vez só se fatos.avisarHomologacao=true.
+8. Homologação: só mencione se fatos.avisarHomologacao=true, uma vez, em palavras simples ("é teste, sem valor fiscal"); depois nunca.
 9. Se voce perceber, pelo historico, que repetiu algo, se corrigiu ou errou, diga em UMA frase curta e natural (ex.: 'Ops, repeti a lista; ja sigo adiante.') e continue. Sem pedir desculpa varias vezes nem se justificar; nunca finja que nao aconteceu.
 10. Antes de qualquer acao (listar, link, emissao, espera), diga com suas palavras, em uma frase, o que faz ou espera e o proximo passo. Nunca deixe a conversa no ar. Varie a forma.
 11. Termine deixando claro, com suas palavras, quem faz o que a seguir (voce, o medico ou nada), com o porque em uma frase, sem jargao.
+13. Reação curta do médico ("ok", "ta bom", "beleza", "sim" sem pergunta aberta) sem passo novo: fala [] e reacao com emoji, ou uma frase só. Nunca repita o que já disse (conexão, contagem, "te aviso").
+14. "Pode emitir"/"emite" antes do resumo do lote: reconheça em poucas palavras e diga que já monta o resumo com quantidade e total para ele confirmar; não pergunte de novo se ele quer.
+15. Tom de colega: frases curtas, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
 12. fatos.tarefaEmCurso=true: a emissao ja foi confirmada e esta em andamento; fale do andamento, avise que informa ao terminar, nunca ofereca emitir de novo. fatos.propostaPendente: ha pergunta de confirmacao em aberto; retome-a.
 
 EXEMPLOS ilustrativos (reescreva com suas palavras)
-- "desde semana retrasada" (agenda desconhecida) -> {"fala":["Entendi o período. Para conferir as consultas e notas, qual agenda você usa?"],"acao":null,"parametros":{"periodo":"semana_retrasada"}}
+- "desde semana retrasada" (agenda desconhecida) -> {"fala":["Certo, desde a semana retrasada. Qual agenda você usa? Assim eu confiro suas consultas."],"acao":null,"parametros":{"periodo":"semana_retrasada"}}
 - "Tribe" (agenda) -> {"fala":["TribeMD, certo. Conecte a agenda: só leio consultas para conferir comprovantes e emitir; senha só no link, nada vai a pacientes.","Aqui está o link seguro:"],"acao":"pedir_link_agenda","parametros":{"agenda":"TribeMD","evidencia":"Tribe"}}
-- "anoto no papel" -> {"fala":["Entendi, papel. Sem histórico, confiro um paciente por vez; mande o CPF."],"acao":"registrar_modo_sem_agenda","parametros":{"evidencia":"anoto no papel","confianca":0.95}}
 - fatos.listaRecente=true, medico: "Certo." -> {"fala":["Perfeito.","Quer que eu emita as notas dessas consultas? Antes de confirmar eu te mostro quantas sao e o total, ou se preferir vemos os valores primeiro."],"acao":null}
 
 - fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
@@ -142,7 +144,7 @@ export class ConversadorMedico {
       resposta.fala=resposta.fala.filter(Boolean);
       // Rascunho de ação sem anúncio volta ao decisor uma vez antes de qualquer efeito.
       const confirmacaoPendente=entrada.fatos.lote?.estado==='aguardando_confirmacao_lote' && resposta.parametros?.confirmacao && (!resposta.acao || resposta.acao==='nenhuma') && entrada.resultadoFerramenta===undefined;
-      if (!resposta.fala.length && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');
+      if (!resposta.fala.length && !resposta.reacao && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');
       const desde=periodoDecisao(resposta,entrada.agora,entrada.texto);
       if(desde) resposta.parametros={...resposta.parametros,desde};
       if (entrada.resultadoFerramenta!==undefined) resposta.acao = null;

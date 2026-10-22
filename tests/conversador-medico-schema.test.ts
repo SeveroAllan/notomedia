@@ -12,3 +12,9 @@ describe('decisao tolerante a campos extras ou nulos', () => {
     expect(r.fala[0]).toContain('Não consegui');
   });
 });
+describe('reação curta sem fala', () => {
+  it('aceita só reação quando não há nada novo a dizer', async () => {
+    const r = await com({ fala: [], acao: null, reacao: '👍' }).responder({ ...(base as object), texto: 'Ta bom' } as never);
+    expect(r.fala).toEqual([]); expect(r.reacao).toBe('👍');
+  });
+});

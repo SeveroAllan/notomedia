@@ -111,7 +111,7 @@ export async function processarComunicacaoMedico(
       fatos.tarefaEmCurso=['confirmado','processando'].includes(fatos.lote?.estado??'');
       fatos.propostaPendente=fatos.lote?.estado==='aguardando_confirmacao_lote'?{tipo:'lote',pergunta:fatos.lote.pergunta??null}:null;
       fatos.homologacaoInformada=[...contexto.historicoRecente,contexto.resumo?.resumo??'',...(fatos.falasRecentesNoto as string[])]
-        .some(t=>/homologa[cç][aã]o.*sem valor fiscal/i.test(t));
+        .some(t=>/homologa[cç][aã]o|[eé] teste/i.test(t));
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
