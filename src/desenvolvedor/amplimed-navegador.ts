@@ -89,6 +89,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       await page.waitForTimeout(1500);
       const tela: TelaAmplimed = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
       const c = classificarTelaAmplimed(tela);
+      if (c === 'PRECISA_VERIFICACAO') console.warn('AMPLIMED_2FA tela=' + JSON.stringify(tela.texto.replace(/\s+/g, ' ').replace(/\d{6,}/g, '#').slice(0, 350)));
       if (c !== 'AGUARDANDO') return c;
     }
     console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname; } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
