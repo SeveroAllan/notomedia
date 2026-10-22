@@ -62,11 +62,12 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     signal?.throwIfAborted();
     await page.goto(loginAmplimed, { waitUntil: 'domcontentloaded', timeout: 30000 });
     const campoSenha = page.locator('input[type=password]:visible').first();
-    try { await campoSenha.waitFor({ state: 'visible', timeout: 15000 }); } catch { return 'FORMULARIO_NAO_RECONHECIDO'; }
-    const campoEmail = page.locator('input[type=email]:visible, input[name*=login i]:visible, input[name*=email i]:visible, input[name*=user i]:visible, input[type=text]:visible').first();
-    if (!await campoEmail.count()) return 'FORMULARIO_NAO_RECONHECIDO';
-    const botao = page.locator('button[type=submit]:visible, input[type=submit]:visible').or(page.getByRole('button', { name: /^(entrar|login|acessar|continuar)$/i })).first();
-    if (!await botao.count()) return 'FORMULARIO_NAO_RECONHECIDO';
+    try { await campoSenha.waitFor({ state: 'visible', timeout: 15000 }); } catch { console.warn('AMPLIMED_LOGIN etapa=senha_nao_apareceu'); return 'FORMULARIO_NAO_RECONHECIDO'; }
+    // Formulário atual (auth.amplimed.com.br/login): um campo de texto, um de senha e o botão "Entrar".
+    const campoEmail = page.locator('input:not([type=password]):not([type=hidden]):not([type=checkbox]):visible').first();
+    if (!await campoEmail.count()) { console.warn('AMPLIMED_LOGIN etapa=sem_campo_email'); return 'FORMULARIO_NAO_RECONHECIDO'; }
+    const botao = page.locator('button[type=submit]:visible, input[type=submit]:visible').first();
+    if (!await botao.count()) { console.warn('AMPLIMED_LOGIN etapa=sem_botao'); return 'FORMULARIO_NAO_RECONHECIDO'; }
     await campoEmail.fill(email); await campoSenha.fill(senha);
     email = ''; senha = '';
     envio = true;
