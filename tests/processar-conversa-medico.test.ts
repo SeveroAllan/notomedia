@@ -423,3 +423,30 @@ it('observação: registra só metadados da conversa, sem texto do médico nem d
  const linhas=c.deps.log.mock.calls.map(x=>String(x[1])).filter(t=>t.startsWith('CONVERSA_OBSERVACAO'));
  expect(linhas).toHaveLength(1); expect(linhas[0]).toContain('"chamadas":1'); expect(linhas[0]).not.toMatch(/privado|confidencial/);
 });
+it('Amplimed conectado: afirmar "nenhuma consulta" sem consultar volta ao decisor, que chama a ferramenta e a fala assinada vence (turno real de 22/10 19:53)',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-20',origem:'contexto_salvo'};
+ c.completar
+  .mockResolvedValueOnce(JSON.stringify({fala:['Hoje não teve nenhuma consulta com valor registrada na agenda.','Se quiser conferir outro período, é só me avisar.'],acao:null}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Vou olhar a agenda de hoje.'],acao:'listar_pendencias'}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Pronto.'],acao:null}));
+ const assinada=['Hoje (21/10) vi 1 atendimento finalizado com cobrança particular: Paciente Teste Um.'];
+ c.executar.mockResolvedValue({dados:{ferramenta:'listar_pendencias',ok:true,total:1},falaAssinada:assinada,falaMemoria:assinada} as never);
+ await c.turno('hoje','Quaus consultas realizadas eu tenho hoje?');
+ expect(c.executar).toHaveBeenCalledOnce();
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');
+ expect(falas).not.toMatch(/nenhuma consulta/);expect(falas).toContain('Paciente Teste Um');
+ expect(c.deps.log).toHaveBeenCalledWith('info','CONVERSA_FATO_SEM_FERRAMENTA');
+});
+it('Amplimed conectado: se o decisor insiste em afirmar sem consultar, nada é afirmado',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-20',origem:'contexto_salvo'};
+ c.completar.mockResolvedValue(JSON.stringify({fala:['Hoje não teve nenhuma consulta.'],acao:null}));
+ await c.turno('hoje','Quais consultas eu tenho hoje?');
+ expect(c.executar).not.toHaveBeenCalled();
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');expect(falas).not.toMatch(/nenhuma consulta/);expect(falas).toMatch(/consultar a agenda/);
+});
+it('conversa comum sobre agenda sem afirmar fato não é barrada',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};
+ c.completar.mockResolvedValue(JSON.stringify({fala:['Quer que eu confira a agenda de hoje?'],acao:null}));
+ await c.turno('papo','Você consegue ver minha agenda?');
+ expect(c.completar).toHaveBeenCalledOnce();expect(c.executar).not.toHaveBeenCalled();
+});

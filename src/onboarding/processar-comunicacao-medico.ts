@@ -1,3 +1,4 @@
+import {afirmaFatoDaAgendaSemFerramenta} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
 import { FALA_PROTECAO_CREDENCIAL_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
@@ -129,6 +130,15 @@ export async function processarComunicacaoMedico(
         if(!decisao.parametros?.confirmacao) {
           deps.log('info','CONVERSA_CONFIRMACAO_AUSENTE');
           await enviar([fatos.lote.pergunta??ERRO_CONVERSA]);
+          return {tipo:'nenhuma'};
+        }
+      }
+      if(chamadas<orcamento && afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
+        deps.log('info','CONVERSA_FATO_SEM_FERRAMENTA');
+        decisao=await decidir(permitidas,undefined,{motivo:'a resposta afirma fatos da agenda sem consultar: use a acao listar_pendencias (anuncie) ou nao afirme numero nem ausencia',faltou:[]});
+        if(afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
+          deps.log('erro','CONVERSA_FATO_SEM_FERRAMENTA_PERSISTE');
+          await enviar(['Não vou chutar: preciso consultar a agenda para te responder isso. Pode repetir o pedido?']);
           return {tipo:'nenhuma'};
         }
       }

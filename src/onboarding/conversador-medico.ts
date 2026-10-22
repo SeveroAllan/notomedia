@@ -173,3 +173,14 @@ export class ConversadorMedico {
     return this.completar(this.apiKey,this.modelo,[{role:'system',content:sistema},{role:'user',content:JSON.stringify(seguro)}],{formatoJson:true,temperature:.1,tentativasMax:1});
   }
 }
+
+/**
+ * Trava de fato: pergunta sobre consultas/agenda, agenda conectada, ferramenta de leitura disponível e a resposta
+ * afirma número ou ausência sem ter consultado. A IA decide como falar; o fato só vem da ferramenta.
+ */
+export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<DecisaoConversa, 'fala' | 'acao'>, fatos: Pick<FatosConversa, 'agenda'>, permitidas: readonly string[]): boolean {
+  if (decisao.acao && decisao.acao !== 'nenhuma') return false;
+  if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
+  if (!/consult|atendiment|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
+  return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)/i.test(decisao.fala.join(' '));
+}
