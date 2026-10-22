@@ -58,7 +58,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       let ok = false;
       try { ok = permitirRequisicaoAmplimed(r.url(), r.method(), r.resourceType(), envio); } catch { /* bloqueia */ }
       if (ok && r.method().toUpperCase() === 'POST' && dominioAprovado('amplimed', r.url()) && ++postsLogin > 10) { envio = false; await route.abort('blockedbyclient'); return; }
-      if (!ok) { if (r.method().toUpperCase() !== 'GET') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
+      if (!ok) { if (r.method().toUpperCase() !== 'GET' || r.resourceType() === 'document') { try { const u = new URL(r.url()); bloqueados.push(r.method() + ' ' + u.host + u.pathname.slice(0, 40)); } catch { /* ignora */ } } await route.abort('blockedbyclient'); return; }
       await route.fallback();
     });
     const page: Page = await context.newPage();
