@@ -89,18 +89,18 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     await campoEmail.fill(email); await campoSenha.fill(senha);
     email = ''; senha = '';
     if (usarEnter) await campoSenha.press('Enter'); else await botao.click();
-    let convitePulado = false;
+    let convitePulado = 0;
     while (Date.now() < limite) {
       signal?.throwIfAborted();
       await page.waitForTimeout(1500);
       const tela: TelaAmplimed = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
-      if (!convitePulado && conviteDoisFatoresAmplimed(tela)) {
-        convitePulado = true;
+      if (convitePulado < 2 && conviteDoisFatoresAmplimed(tela)) {
+        convitePulado++;
         const rotulos = await page.evaluate(`[...document.querySelectorAll('a,button')].map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40)).filter(Boolean).slice(0, 12)`) as string[];
         console.warn('AMPLIMED_2FA_CONVITE controles=' + JSON.stringify(rotulos));
         const saida = rotulos.find(r => /^(agora nao|agora não|depois|mais tarde|pular|lembrar depois|continuar sem)/i.test(r));
         try {
-          if (saida) await page.getByText(saida, { exact: false }).first().click({ timeout: 5000 });
+          if (saida && convitePulado === 1) await page.getByText(saida, { exact: false }).first().click({ timeout: 5000 });
           else await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
         } catch { /* a próxima volta classifica */ }
         continue;
@@ -109,7 +109,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       if (c === 'PRECISA_VERIFICACAO') console.warn('AMPLIMED_2FA tela=' + JSON.stringify(tela.texto.replace(/\s+/g, ' ').replace(/\d{6,}/g, '#').slice(0, 350)));
       if (c !== 'AGUARDANDO') return c;
     }
-    console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname; } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
+    console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname.split('/').slice(0, 2).join('/'); } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
     return 'TEMPO_ESGOTADO';
   } catch { return 'TEMPO_ESGOTADO'; }
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }
