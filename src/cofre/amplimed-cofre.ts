@@ -68,6 +68,8 @@ export class CofreAmplimed {
         }
         return { ok: true as const, dias };
     }
+    /** Apaga a credencial e o estado do Amplimed deste médico. */
+    async excluir(id: string) { this.opcoes.aoAlterarAcesso?.(id); await this.perfis.esquecer(this.chave(id)); return this.status(id); }
     private async verificarEmSegundoPlano(id: string, credencial: { email: string; senha: string }) {
         let codigo: CodigoLoginAmplimed = 'TEMPO_ESGOTADO';
         try { codigo = await this.opcoes.verificar!(credencial); } catch { /* estado de instabilidade */ }

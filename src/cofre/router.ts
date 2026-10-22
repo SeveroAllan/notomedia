@@ -118,6 +118,21 @@ export function criarCofreContas(deps: {
     app.delete('/tribemd', rota(async (req, res) => { vazio.parse(req.body); await cofre!.excluir(res.locals.dono); res.json({ ok: true, cofre: await cofre!.status(res.locals.dono) }); }));
     app.post('/tribemd/consultas', rota(async (req, res) => { vazio.parse(req.body); res.status(202).json({ ok: true, cofre: await cofre!.consultar(res.locals.dono) }); }));
     app.get('/tribemd/consultas', rota(async (_req, res) => { res.json({ ok: true, cofre: await cofre!.status(res.locals.dono), resultado: cofre!.resultado(res.locals.dono) }); }));
+    // Amplimed: espelho do painel do TribeMD. Leitura apenas; a conexão sempre passa pela verificação em modo observação.
+    const credencialAmplimed = z.object({ email: z.string().trim().max(254).min(3), senha: z.string().min(1).max(256), consentimento: z.literal('amplimed-leitura-v1') }).strict();
+    app.get('/amplimed', rota(async (_req, res) => { if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL'); res.json({ ok: true, cofre: await cofreAmplimed.status(res.locals.dono) }); }));
+    app.post('/amplimed', rota(async (req, res) => {
+        if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL');
+        let d: z.infer<typeof credencialAmplimed> | undefined;
+        try {
+            d = credencialAmplimed.parse(req.body);
+            apagar(req);
+            res.status(202).json({ ok: true, cofre: await cofreAmplimed.iniciar(res.locals.dono, { email: d.email, senha: d.senha }) });
+        }
+        finally { if (d) { d.email = ''; d.senha = ''; } }
+    }));
+    app.post('/amplimed/reconectar', rota(async (req, res) => { vazio.parse(req.body); if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL'); res.status(202).json({ ok: true, cofre: await cofreAmplimed.reverificar(res.locals.dono) }); }));
+    app.delete('/amplimed', rota(async (req, res) => { vazio.parse(req.body); if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL'); res.json({ ok: true, cofre: await cofreAmplimed.excluir(res.locals.dono) }); }));
     app.use((_req, res) => res.status(404).json({ ok: false, codigo: 'COFRE_ROTA_INVALIDA' }));
     app.use((_erro: unknown, req: Request, res: Response, _next: unknown) => { apagar(req); res.status(400).json({ ok: false, codigo: 'ENTRADA_INVALIDA' }); });
     return { app, links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {

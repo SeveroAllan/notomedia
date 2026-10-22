@@ -1070,7 +1070,7 @@
     .cofre-dialog input.input-data-field { box-sizing:border-box;width:100%; }
     .cofre-autorizacao { display:flex;align-items:flex-start;gap:10px;margin-top:18px; }
     .cofre-autorizacao input { flex-shrink:0;margin-top:4px; }
-    #cofreMensagem,#cofreCardMensagem { color:#b42318; }
+    #cofreMensagem,#cofreCardMensagem,#cofreAmplimedMensagem { color:#b42318; }
   </style>
 </head>
 <body class="onboarding-active">
@@ -1317,6 +1317,20 @@
                 <button type="button" class="sheets-btn-conectar" id="btnCofreConectar">Conectar</button>
               </div>
               <p id="cofreCardMensagem" role="status" aria-live="polite"></p>
+            </div>
+
+            <div id="cardCofreAmplimed" class="sheets-card">
+              <div class="sheets-card-main">
+                <div class="sheets-card-left">
+                  <div class="sheets-info-wrapper">
+                    <span class="sheets-title">Amplimed</span>
+                    <span class="sheets-subtitle" id="cofreAmplimedDescricao">Conecte sua agenda para o Noto conferir suas consultas. Só leitura.</span>
+                  </div>
+                </div>
+                <button type="button" class="sheets-btn-conectar" id="btnCofreAmplimed">Conectar</button>
+              </div>
+              <p><button type="button" class="btn-link" id="btnCofreAmplimedReverificar" hidden>Verificar de novo</button> <button type="button" class="btn-link" id="btnCofreAmplimedExcluir" hidden>Excluir acesso</button></p>
+              <p id="cofreAmplimedMensagem" role="status" aria-live="polite"></p>
             </div>
 
             <!-- SEÇÕES INTERNAS (ABERTAS A PARTIR DO MENU, COM BOTÃO VOLTAR PARA O PAINEL) -->
@@ -1591,7 +1605,20 @@
     <p>O acesso será interrompido e o e-mail, a senha e a sessão salvos serão apagados. Para conectar novamente, você precisará informar as credenciais.</p>
     <div class="cofre-acoes"><button id="confirmarExcluirCofre" class="btn-action" type="button">Excluir acesso</button><button id="cancelarExcluirCofre" class="btn-link" type="button">Cancelar</button></div>
   </dialog>
+  <dialog id="modalCofreAmplimed" class="cofre-dialog" aria-labelledby="tituloModalCofreAmplimed">
+    <div class="cofre-provedor"><h2 id="tituloModalCofreAmplimed">Conectar Amplimed</h2></div>
+    <p>Informe seu acesso ao Amplimed. Ao salvar, seu e-mail e sua senha serão criptografados.</p>
+    <p>O Noto só lê sua agenda para conferir consultas. Esse acesso não altera nada no Amplimed nem emite notas por si só.</p>
+    <form id="formCofreAmplimed">
+      <label for="cofreAmplimedEmail">E-mail ou usuário do Amplimed</label><input id="cofreAmplimedEmail" name="email" class="input-data-field" type="text" autocomplete="off" maxlength="254" required>
+      <label for="cofreAmplimedSenha">Senha do Amplimed</label><input id="cofreAmplimedSenha" name="senha" class="input-data-field" type="password" autocomplete="new-password" maxlength="256" required>
+      <label class="cofre-autorizacao"><input name="autorizacao" type="checkbox" required>Autorizo o Noto a consultar minha agenda no Amplimed, somente leitura.</label>
+      <p id="cofreAmplimedModalMensagem" role="status"></p>
+      <div class="cofre-acoes"><button class="btn-action" type="submit">Salvar e conectar</button><button id="fecharModalCofreAmplimed" class="btn-link" type="button">Cancelar</button></div>
+    </form>
+  </dialog>
   <script src="/assets/cofre.js"></script>
+  <script src="/assets/cofre-amplimed.js"></script>
   <script>
     // Gerenciador de estado local
     let sessaoAtual = null;

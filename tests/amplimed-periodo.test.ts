@@ -55,3 +55,18 @@ describe('leitura de período do Amplimed (observação)', () => {
     expect(abriu).toBe(false);
   });
 });
+
+import { readFileSync } from 'node:fs';
+describe('painel Amplimed', () => {
+  const html = readFileSync(new URL('../src/ui/index.html', import.meta.url), 'utf8');
+  const js = readFileSync(new URL('../src/assets/cofre-amplimed.js', import.meta.url), 'utf8');
+  it('card, modal e script existem; o consentimento é o do Amplimed e só fala com a rota do Amplimed', () => {
+    expect(html).toContain('id="cardCofreAmplimed"'); expect(html).toContain('id="modalCofreAmplimed"'); expect(html).toContain('/assets/cofre-amplimed.js');
+    expect(js).toContain("'amplimed-leitura-v1'"); expect(js).toContain('/api/conta/cofre/amplimed'); expect(js).not.toContain('/tribemd');
+  });
+  it('excluir apaga a credencial', async () => {
+    const c = await (async () => { const x = new CofreAmplimed({ diretorio: await mkdtemp(join(tmpdir(), 'ampl-')), chave }); await x.iniciar(id, { email: 'a@b.co', senha: 'x' }); return x; })();
+    expect((await c.status(id)).salvo).toBe(true);
+    expect((await c.excluir(id)).salvo).toBe(false);
+  });
+});
