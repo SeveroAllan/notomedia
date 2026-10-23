@@ -10,6 +10,7 @@ import { sincronizarAgenda, CacheAgendaProcesso } from './agenda/sincronizar-age
 import { registroErroNoto } from './observabilidade/erros.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
+import { ehIdAmplimed, prepararLoteAmplimed } from './agenda/amplimed-lote.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { chaveComprovante } from './atendimento/comprovante.js';
@@ -260,19 +261,31 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     for(const r of rows) if(await new PostgresEmissaoComprovante(pool,'',config.appPepper).consultaJaFaturada(medicoId,'tribemd',r.id_externo)) jaEmitidas++;
     return {totalNoPeriodo:rows.length,jaEmitidas};
   };
-  const criarRetroativo = (narrar?: ContextoAcaoConversa['narrar'], decisao?: DecisaoConversa, medicoId?: string, perguntaInterpretada?: string) => config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
+  const detalheLote = (id: string, consulta: string) => ehIdAmplimed(consulta) ? cofres.detalheAmplimedAoVivo(id, consulta) : cofres.detalheAoVivo(id, consulta);
+  const criarRetroativo = (narrar?: ContextoAcaoConversa['narrar'], decisao?: DecisaoConversa, medicoId?: string, perguntaInterpretada?: string, fonteAgenda: 'tribemd' | 'amplimed' = 'tribemd') => config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
     ultimaFala: (id, conversa) => memoriaPersistida!.lerUltimaFalaNoto(id, conversa),
     reenviar: narrar ? undefined : async (medicoId,conversa,chave,texto) => {
       const candidatos=await emissaoLote.pendentesReenvio(medicoId);
       if(!candidatos.length || !await interpretarReenvioLote(iaApiKey,iaModeloTexto,completarIa,texto)) return false;
-      const r=await emissaoLote.reenviarSemContato(medicoId,chave,candidatos,(id,consulta)=>cofres.detalheAoVivo(id,consulta),
+      const r=await emissaoLote.reenviarSemContato(medicoId,chave,candidatos,(id,consulta)=>detalheLote(id,consulta),
         (id,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId:id,solicitacaoId},evolutionClient));
       await comunicacaoHomologacao.conversa({medicoId,conversa,chave:`lote:reenvio:${chave}`,
         fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido; confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas; vou verificar o que impediu a entrega.' : ''}`]});
       console.info(JSON.stringify({evento:'LOTE_REENVIO',medicoId,...r}));return true;
     },
     listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir, somenteContagem = false) => {
+      if (fonteAgenda === 'amplimed') {
+        // Amplimed: lê finalizados particulares com o tomador, grava como consultas sincronizadas (fonte amplimed) e entrega os valores ao vivo.
+        const hoje = agora.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+        const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true);
+        console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
+        if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
+        const p = prepararLoteAmplimed(a.dias);
+        await new PostgresConsultasSincronizadas(pool).salvar(id, 'amplimed', p.consultas);
+        await aoConcluir(p.valoresAoVivo);
+        return;
+      }
       if (!narrar) { await pendencias!.consultar(id, conversa, chave, inicio, agora, '', 2, resultado => aoConcluir(resultado.valoresAoVivo), !somenteContagem); return; }
       const resultado = await listarPendencias(id, {nome:'tribemd',conectada:true}, agora, inicio);
       if (resultado.ok && 'valoresAoVivo' in resultado) await aoConcluir(resultado.valoresAoVivo);
@@ -290,7 +303,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     comporContagem: lote => conversador!.responderContagemRetroativa(lote),
     contar: (id, desde, ate, valoresAoVivo) => {
       if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');
-      return lotes.contarConsultasPeriodo(id, desde, ate, valoresAoVivo);
+      return lotes.contarConsultasPeriodo(id, desde, ate, valoresAoVivo, fonteAgenda);
     },
     interpretarData: (texto, agora) => decisao ? Promise.resolve(periodoDecisao(decisao,agora,texto)) : interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
     interpretarConfirmacao: (texto, pergunta) => decisao ? Promise.resolve(pergunta === perguntaInterpretada ? confirmacaoDaDecisao(decisao) : {intencao:'duvida' as const,confianca:0}) : interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
@@ -302,7 +315,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     app.locals.processarLoteRetroativo = async (executor?: ExecutorFiscalLote) => executor ? processarLoteRetroativo(lotes, {
       permitido: lotePermitido,
       faturada: (id, fonte, consulta) => new PostgresEmissaoComprovante(pool, '', config.appPepper).consultaJaFaturada(id, fonte, consulta),
-      lerDetalhe: (id, consulta) => cofres.detalheAoVivo(id, consulta),
+      lerDetalhe: (id, consulta) => detalheLote(id, consulta),
       assinatura: (id, fonte, consulta, valor) => lotes.assinatura(id, fonte, consulta, valor),
       emitir: entrada => emissaoLote.emitir(entrada, executor),
       enviar: async (medicoId, chave, fala, conversa) => { await comunicacaoHomologacao.conversa({ medicoId, chave, fala, conversa }); },
@@ -355,7 +368,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
-        await criarRetroativo(c.narrar,decisao,c.medicoId)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);
         return {jaRespondida:true};
       }
       const r=await listarPendencias(c.medicoId,c.fatos.agenda,c.agora,desde);

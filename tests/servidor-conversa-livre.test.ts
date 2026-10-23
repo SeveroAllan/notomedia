@@ -415,7 +415,7 @@ it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as
  const app=criarAppExpress();await receber(app,'listar-periodo','Tem pendências de nota?');
  expect(abrir).not.toHaveBeenCalled();expect(fronteiras.fonte).toHaveBeenCalledOnce();
  await receber(app,'emitir-periodo',pedido);
- expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-09-03',atual.ate,new Map(Array.from({length:173},(_,i)=>[String(i),30000])));
+ expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-09-03',atual.ate,new Map(Array.from({length:173},(_,i)=>[String(i),30000])),'tribemd');
  expect(enviar.mock.calls[0][0].texto).toBe('Conferindo.');expect(enviar.mock.calls[baloesLista+1][0].texto).toBe('Conferindo.');
  const pergunta=enviar.mock.calls[baloesLista+2][0].texto;expect(pergunta).toContain('173 consultas');expect(pergunta).toContain('03/09/2026');expect(pergunta).toContain('51.900,00');expect(pergunta).toContain('Posso emitir');expect(pergunta).not.toContain('Desde que dia');
  expect(enviar.mock.calls.slice(baloesLista+1).every(([p])=>!p.texto.includes('consultas sem nota desde'))).toBe(true);

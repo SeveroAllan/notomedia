@@ -19,7 +19,7 @@ const casos:C[]=[
  {nome:'lote sem período conhecido pede o período',fatos:f=>{f.periodo={desde:null,origem:null};},d:dec('iniciar_lote'),esperado:'PERIODO_NECESSARIO'},
  {nome:'período absurdo no futuro é recusado',d:dec('iniciar_lote',{parametros:{desde:'2030-01-01'}}),esperado:'PERIODO_INVALIDO'},
  {nome:'Amplimed conectado: listar pendências passa (observação)',fatos:f=>{f.agenda.nome='Amplimed';},d:dec('listar_pendencias'),esperado:null},
- {nome:'Amplimed conectado: lote continua recusado (fora da v1)',fatos:f=>{f.agenda.nome='Amplimed';},d:dec('iniciar_lote'),esperado:'AGENDA_NAO_CONECTADA'},
+ {nome:'Amplimed conectado: lote passa (emissão em homologação, com confirmação do médico)',fatos:f=>{f.agenda.nome='Amplimed';},d:dec('iniciar_lote'),esperado:null},
  {nome:'listar pendências sem agenda é recusado',fatos:f=>{f.agenda.conectada=false;},d:dec('listar_pendencias'),esperado:'AGENDA_NAO_CONECTADA'},
  {nome:'lista repetida sem pedido explícito é recusada',fatos:f=>{f.listaRecente=true;},d:dec('listar_pendencias'),esperado:'LISTA_JA_ENVIADA'},
  {nome:'lista repetida com evidência fraca é recusada',fatos:f=>{f.listaRecente=true;},texto:'ta bom',d:dec('listar_pendencias',{parametros:{pedidoExplicito:{evidencia:'ta bom',confianca:.5}}}),esperado:'LISTA_JA_ENVIADA'},

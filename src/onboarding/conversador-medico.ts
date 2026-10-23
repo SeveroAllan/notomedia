@@ -123,7 +123,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
-      if (!fatos.agenda.conectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed' && acao === 'listar_pendencias')) return 'AGENDA_NAO_CONECTADA'; }
+      if (!fatos.agenda.conectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed')) return 'AGENDA_NAO_CONECTADA'; }
     if ((d.parametros?.desde || d.parametros?.periodo) && !periodoDecisao(d,agora,texto)) return 'PERIODO_INVALIDO';
     if (!periodoDecisao(d, agora,texto) && !validarInicioRetroativo(fatos.periodo.desde, agora)) return 'PERIODO_NECESSARIO';
   }
