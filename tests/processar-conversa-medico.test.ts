@@ -491,3 +491,44 @@ it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do
  expect(c.executar.mock.calls[0][0].parametros.agenda).toBe('Amplimed');
  expect(c.enviar.mock.calls[0][0].join(' ')).not.toMatch(/http|LINK_SEGURO/);
 });
+
+it('Feito com acesso em verificação: não dispara permissões nem link; confirma e aguarda conclusão',async()=>{
+ const c=cenario();
+ c.fatos.link={ativo:false,enviados:1,agenda:'amplimed',usado:true,expirado:false,minutosDesdeEnvio:1};
+ c.fatos.permissoes={emitirAutonomo:null,entregarPaciente:null,pendentes:true};
+ c.deps.ferramentas!.permitidas=()=>['nenhuma','pedir_link_agenda','pedir_link_permissoes'];
+ let chamadas=0;
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  chamadas++;const d=JSON.parse(msgs[1].content);
+  if(!d.correcao) return '{"fala":["Você já pediu para mudar as permissões. Vou abrir o link seguro para você escolher."],"acao":"pedir_link_permissoes"}';
+  expect(d.correcao.motivo).toContain('verificação');
+  return '{"fala":["Certo, assim que a conexão concluir eu te aviso."],"acao":null}';
+ });
+ await c.turno('feito','Feito');
+ expect(c.executar).not.toHaveBeenCalled();expect(chamadas).toBe(2);
+ expect(c.enviar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls[0][0].join(' ')).not.toMatch(/permiss|link seguro para/i);
+});
+it('conclusão de link chega ao modelo como fatos.eventoAgenda e a fala vai sem ação',async()=>{
+ const c=cenario();
+ c.fatos.link={ativo:false,enviados:1,agenda:'amplimed',usado:true,expirado:false,minutosDesdeEnvio:1};
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+  const d=JSON.parse(msgs[1].content);
+  expect(d.fatos.eventoAgenda).toEqual({agenda:'amplimed',conectado:false,falhaAcesso:true});
+  return '{"fala":["Não consegui conectar sua agenda Amplimed: confira login, senha e permissão de acesso na área segura da sua conta. Se quiser, mando um novo link seguro."],"acao":null}';
+ });
+ await processarComunicacaoMedico({medicoId:'m',chaveProcessamento:'agenda:xyz',agora,chaveConversa:'c',eventoAgenda:{agenda:'amplimed',conectado:false,falhaAcesso:true}},c.deps);
+ expect(c.executar).not.toHaveBeenCalled();
+ expect(c.enviar.mock.calls[0][0].join(' ')).toMatch(/Não consegui conectar/);
+});
+
+it('conclusão com modelo insistindo em ação cai no texto determinístico da conclusão',async()=>{
+ const c=cenario();
+ c.fatos.link={ativo:false,enviados:1,agenda:'amplimed',usado:true,expirado:false,minutosDesdeEnvio:1};
+ c.completar.mockResolvedValue('{"fala":["O acesso falhou. Vou gerar um novo link seguro:","Aqui está o link seguro:"],"acao":"pedir_link_agenda","parametros":{"agenda":"Amplimed"}}');
+ await processarComunicacaoMedico({medicoId:'m',chaveProcessamento:'agenda:abc',agora,chaveConversa:'c',eventoAgenda:{agenda:'amplimed',conectado:false,falhaAcesso:true}},c.deps);
+ expect(c.executar).not.toHaveBeenCalled();
+ const enviada=c.enviar.mock.calls[0][0].join(' ');
+ expect(enviada).toMatch(/Não consegui conectar sua agenda Amplimed/);
+ expect(enviada).toMatch(/login, senha e permissão de acesso na área segura/);
+ expect(enviada).not.toMatch(/Aqui está o link/);
+});

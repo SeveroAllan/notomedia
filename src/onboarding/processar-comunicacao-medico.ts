@@ -1,6 +1,6 @@
 import {afirmaFatoDaAgendaSemFerramenta} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
-import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
+import { FALA_CONCLUSAO_AGENDA_CONECTADA, FALA_CONCLUSAO_AGENDA_FALHA_ACESSO, FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL, FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
 import { sanitizarErroFiscal } from '../observabilidade/erros.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
@@ -157,6 +157,23 @@ export async function processarComunicacaoMedico(
       if(chamadas<orcamento && motivo==='PERIODO_NECESSARIO') {
         deps.log('info','CONVERSA_PERIODO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo:'a acao precisa de parametros.desde ISO (use calendario com o periodo que o medico disse)',faltou:['parametros.desde']});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
+      if(chamadas<orcamento && motivo==='CONCLUSAO_SEM_ACAO') {
+        deps.log('info','CONVERSA_CONCLUSAO_SEM_ACAO');
+        decisao=await decidir([],undefined,{motivo:'o turno de conclusão só anuncia o resultado: conectado → avise que conectou e proponha o próximo passo; falha → explique o impedimento real e ofereça novo link; acao null',faltou:[]});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
+      if (motivo==='CONCLUSAO_SEM_ACAO' && fatos.eventoAgenda) {
+        // Recusa persistente no turno de conclusão: texto determinístico no lugar de ação ou erro genérico.
+        const ev=fatos.eventoAgenda, nome=ev.agenda==='amplimed'?'Amplimed':'TribeMD';
+        deps.log('info','CONVERSA_CONCLUSAO_TEMPLATE');
+        decisao={fala:[ev.conectado?FALA_CONCLUSAO_AGENDA_CONECTADA(nome):ev.falhaAcesso?FALA_CONCLUSAO_AGENDA_FALHA_ACESSO(nome):FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL(nome)],acao:null};
+        motivo=null;
+      }
+      if(chamadas<orcamento && motivo==='CONEXAO_EM_VERIFICACAO') {
+        deps.log('info','CONVERSA_CONEXAO_EM_VERIFICACAO');
+        decisao=await decidir(permitidas.filter(a=>a!=='pedir_link_agenda'&&a!=='pedir_link_permissoes'),undefined,{motivo:'o acesso da agenda está em verificação; confirme em 1 frase que você avisa assim que concluir, sem nova ação nem novo link',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
       const corrigirIntroducao=chamadas<orcamento && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');

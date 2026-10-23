@@ -201,3 +201,24 @@ it('renovação preserva a agenda do último link sem evidência nova; agenda di
  expect(validarAcaoConversa(d,fatos,['pedir_link_agenda'],'O link expirou.',agora)).toBe('AGENDA_NAO_INFORMADA');
  expect(validarAcaoConversa({...d,parametros:{agenda:'TribeMD'}},{...reenvio,link:{ativo:false,enviados:1,agenda:'tribemd',expirado:true}},['pedir_link_agenda'],'O link expirou.',agora)).toBeNull();
 });
+
+it('acesso em verificação (link usado, agenda não conectada): ação nova é recusada, pedido explícito passa',()=>{
+ const verificando={...fatos,link:{ativo:false,enviados:1,agenda:'amplimed',usado:true,expirado:false,minutosDesdeEnvio:1}};
+ const link={fala:['Aqui está o link:'],acao:'pedir_link_agenda' as const,parametros:{agenda:'Amplimed'}};
+ const perm={fala:['Escolha no link seguro:'],acao:'pedir_link_permissoes' as const};
+ expect(validarAcaoConversa(link,verificando,['pedir_link_agenda'],'Feito',agora)).toBe('CONEXAO_EM_VERIFICACAO');
+ expect(validarAcaoConversa(perm,verificando,['pedir_link_permissoes'],'Feito',agora)).toBe('CONEXAO_EM_VERIFICACAO');
+ expect(validarAcaoConversa(link,verificando,['pedir_link_agenda'],'Pode mandar o link de novo?',agora)).toBeNull();
+ expect(validarAcaoConversa(perm,verificando,['pedir_link_permissoes'],'Quero mudar minhas permissões',agora)).toBeNull();
+ expect(validarAcaoConversa(link,{...verificando,eventoAgenda:{agenda:'amplimed',conectado:false,falhaAcesso:true}},['pedir_link_agenda'],'',agora)).toBe('CONCLUSAO_SEM_ACAO');
+ expect(validarAcaoConversa(link,{...verificando,link:{...verificando.link,minutosDesdeEnvio:20}},['pedir_link_agenda'],'Feito',agora)).toBeNull();
+ expect(validarAcaoConversa(link,{...verificando,agenda:{nome:'amplimed',conectada:true}},['pedir_link_agenda'],'Feito',agora)).toBe('CONEXAO_NAO_NECESSARIA');
+});
+
+it('turno de conclusão de conexão bloqueia só link novo; continuidade executa normal',()=>{
+ const concluido={...fatos,eventoAgenda:{agenda:'amplimed',conectado:false,falhaAcesso:true},link:{ativo:false,enviados:1,agenda:'amplimed',usado:true,expirado:false,minutosDesdeEnvio:1}};
+ expect(validarAcaoConversa({fala:['Aqui está o link:'],acao:'pedir_link_agenda',parametros:{agenda:'Amplimed'}},concluido,['pedir_link_agenda'],'',agora)).toBe('CONCLUSAO_SEM_ACAO');
+ expect(validarAcaoConversa({fala:['Escolha:'],acao:'pedir_link_permissoes'},concluido,['pedir_link_permissoes'],'',agora)).toBe('CONCLUSAO_SEM_ACAO');
+ expect(validarAcaoConversa({fala:['Vou listar.'],acao:'listar_pendencias'},{...concluido,agenda:{nome:'amplimed',conectada:true},eventoAgenda:{agenda:'amplimed',conectado:true}},['listar_pendencias'],'',agora)).not.toBe('CONCLUSAO_SEM_ACAO');
+ expect(validarAcaoConversa({fala:['Não consegui conectar: confira login e senha na área segura. Se quiser, mando outro link.'],acao:null},concluido,['pedir_link_agenda'],'',agora)).toBeNull();
+});
