@@ -363,8 +363,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const total=a.dias.reduce((n,d)=>n+d.elegiveis.length,0);
         const porDia=[...a.dias].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
         const fala=total
-          ? [`De ${br(desde)} a ${br(hoje)} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Por enquanto só leio e não emito nada.`]
-          : [`De ${br(desde)} a ${br(hoje)} não vi atendimento finalizado com cobrança particular na sua agenda Amplimed. Por enquanto só leio e não emito nada.`];
+          ? [`De ${br(desde)} a ${br(hoje)} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
+          : [`De ${br(desde)} a ${br(hoje)} não vi atendimento finalizado com cobrança particular na sua agenda Amplimed, então não há nota para emitir nesse período.`];
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {

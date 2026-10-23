@@ -2,7 +2,7 @@ import {MemoriaConversaMedico} from '../src/onboarding/contexto-conversa-medico.
 import type pg from 'pg';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import {processarComunicacaoMedico,type FerramentasConversa} from '../src/onboarding/processar-comunicacao-medico.js';
-import {ConversadorMedico,type FatosConversa} from '../src/onboarding/conversador-medico.js';
+import {ConversadorMedico,PROMPT_CONVERSA,type FatosConversa} from '../src/onboarding/conversador-medico.js';
 import {PostgresMemoriaConversaMedico} from '../src/onboarding/memoria-conversa.js';
 import {HistoricoComunicacaoEmMemoria} from '../src/onboarding/historico-comunicacao-repositorio.js';
 import {BancoConversaFalso} from './fakes/banco-conversa.js';
@@ -449,4 +449,11 @@ it('conversa comum sobre agenda sem afirmar fato não é barrada',async()=>{
  c.completar.mockResolvedValue(JSON.stringify({fala:['Quer que eu confira a agenda de hoje?'],acao:null}));
  await c.turno('papo','Você consegue ver minha agenda?');
  expect(c.completar).toHaveBeenCalledOnce();expect(c.executar).not.toHaveBeenCalled();
+});
+it('Amplimed: "quero emitir as notas dos últimos 7 dias" abre o lote (iniciar_lote), não a lista de leitura',async()=>{
+ const c=cenario(); c.fatos.agenda={nome:'Amplimed',conectada:true};
+ c.completar.mockImplementation(async()=>JSON.stringify({fala:['Certo, vou montar o resumo dos últimos 7 dias para você confirmar.'],acao:'iniciar_lote',parametros:{desde:'2026-10-14'}}));
+ await c.turno('emitir','quero emitir as notas dos últimos 7 dias');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'iniciar_lote'});
+ expect(PROMPT_CONVERSA).toMatch(/EMITIR notas[\s\S]*iniciar_lote[\s\S]*listar_pendencias só se pedir para ver/);
 });
