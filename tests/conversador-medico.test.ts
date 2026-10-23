@@ -55,6 +55,20 @@ it('URL ocupa o último balão: introdução de três balões é recusada antes 
  expect(validarAcaoConversa({fala:['a','b','c'],acao:'pedir_link_agenda'},{...fatos,agenda:{nome:'tribemd',conectada:false}},['pedir_link_agenda'],'Tribe',agora)).toBe('BALOES_LINK_EXCEDIDOS');
 });
 
+it('template verificado passa na introdução e mantém os demais gates',async()=>{
+ const {FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA}=await import('../src/onboarding/falas.js');
+ const template=[FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA];
+ const d={fala:template,acao:'pedir_link_agenda' as const,parametros:{agenda:'Amplimed',evidencia:'Amplimed'}};
+ // Sem a marcação, o template (texto aprovado) não precisa satisfazer a checklist da fala gerada; com ela, passa.
+ expect(validarAcaoConversa(d,fatos,['pedir_link_agenda'],'Amplimed',agora)).toBe('INTRODUCAO_INCOMPLETA');
+ expect(validarAcaoConversa(d,fatos,['pedir_link_agenda'],'Amplimed',agora,{introducaoVerificada:true})).toBeNull();
+ // Gates não-introdutórios continuam valendo com a marcação.
+ expect(validarAcaoConversa(d,{...fatos,agenda:{nome:'tribemd',conectada:true}},['pedir_link_agenda'],'Amplimed',agora,{introducaoVerificada:true})).toBe('CONEXAO_NAO_NECESSARIA');
+ expect(validarAcaoConversa(d,{...fatos,ambiente:'producao'},['pedir_link_agenda'],'Amplimed',agora,{introducaoVerificada:true})).toBe('ACAO_NAO_PERMITIDA');
+ expect(validarAcaoConversa({...d,parametros:{agenda:'agenda x',evidencia:'Amplimed'}},fatos,['pedir_link_agenda'],'Amplimed',agora,{introducaoVerificada:true})).toBe('AGENDA_NAO_SUPORTADA');
+ expect(validarAcaoConversa({...d,parametros:{agenda:'Amplimed',evidencia:'TribeMD'}},fatos,['pedir_link_agenda'],'Amplimed',agora,{introducaoVerificada:true})).toBe('AGENDA_NAO_INFORMADA');
+});
+
 it('ação fiscal inválida não fornece interpretação utilizável para liberar confirmação',async()=>{
  const {confirmacaoDaDecisao}=await import('../src/onboarding/conversador-medico.js');
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'emitir_nota',parametros:{confirmacao:{intencao:'sim',confianca:1}}})).toEqual({intencao:'duvida',confianca:0});

@@ -113,18 +113,18 @@ export function faltasIntroducaoLink(fala:readonly string[]):string[] {
     ...(fala.length>2?['no maximo dois baloes']:[])
   ];
 }
-export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, permitidas: readonly string[], texto: string, agora: Date): string | null {
+export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, permitidas: readonly string[], texto: string, agora: Date, opcoes?: { introducaoVerificada?: boolean }): string | null {
   const acao = d.acao ?? 'nenhuma';
   if (!ACOES_CONVERSA.includes(acao as typeof ACOES_CONVERSA[number])) return 'ACAO_INVALIDA';
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
   if (!d.fala.some(t=>t.trim())) return 'anuncie a acao com suas palavras';
   if (acao === 'pedir_link_agenda') {
-    if(d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
+    if(!opcoes?.introducaoVerificada && d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
     if (fatos.agenda.conectada || fatos.link.ativo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
     if (!agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? undefined))) return 'AGENDA_NAO_SUPORTADA';
     if (!fatos.agenda.nome && (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) || !agendaSuportada(normalizarAgenda(d.parametros.evidencia)))) return 'AGENDA_NAO_INFORMADA';
-    if (!fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
+    if (!opcoes?.introducaoVerificada && !fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);

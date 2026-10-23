@@ -250,13 +250,35 @@ it('catch registra nome e mensagem sanitizados, sem identificadores nem detalhes
 });
 
 it.each([
- {fala:['a','b','c'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}},
  {fala:['Senha só no link, eu só leio a agenda, nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'TribeMD'}},
  {fala:['Agora vou emitir.'],acao:'emitir_nota'},
  {fala:['Não tenho permissão para enviar o link. Eu só leio, senha só no link e nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}
-])('correção continua sujeita ao limite, à evidência literal e à lista fechada: %j',async corrigida=>{
+])('correção continua sujeita à evidência literal e à lista fechada: %j',async corrigida=>{
+
  const c=cenario();c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}})).mockResolvedValueOnce(JSON.stringify(corrigida));
  await c.turno('link','Uso o tribemd');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).not.toHaveBeenCalled();expect(c.enviar).toHaveBeenCalledOnce();
+});
+it('introdução recusada após a correção cai no template verificado e o link é executado',async()=>{
+ const {FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA}=await import('../src/onboarding/falas.js');
+ const c=cenario();c.deps.orcamentoChamadas=3;
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['a','b','c'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Só leio a agenda. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Link seguro enviado. Ele vale por 15 minutos.'],acao:null}));
+ await c.turno('link','Uso o tribemd');
+ expect(c.completar).toHaveBeenCalledTimes(3);expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0][0].fala).toEqual([FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA]);
+ expect(JSON.stringify(c.enviar.mock.calls)).not.toContain('Não consegui concluir agora');
+ expect(c.deps.log.mock.calls.some(([_n,t])=>String(t).startsWith('CONVERSA_INTRODUCAO_TEMPLATE'))).toBe(true);
+});
+it('template não contorna gates de agenda: recusa não-introdutória segue sem executar',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'agenda x',conectada:false};
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['a','b','c'],acao:'pedir_link_agenda',parametros:{agenda:'agenda x',evidencia:'agenda x'}}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Só leio a agenda. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'agenda x',evidencia:'agenda x'}}))
+  .mockResolvedValueOnce(JSON.stringify({fala:['Não consegui concluir agora. Pode tentar de novo em instantes?'],acao:null}));
+ await c.turno('link','Uso agenda x');
+ expect(c.executar).not.toHaveBeenCalled();
+ expect(c.deps.log.mock.calls.some(([_n,t])=>String(t).startsWith('CONVERSA_ACAO_RECUSADA'))).toBe(true);
+ expect(c.deps.log.mock.calls.some(([_n,t])=>String(t).startsWith('CONVERSA_INTRODUCAO_TEMPLATE'))).toBe(false);
 });
 it('falha da ferramenta após correção não abre terceira chamada nem promete envio',async()=>{
  const c=cenario();c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}})).mockResolvedValueOnce(JSON.stringify({fala:['Eu só leio a agenda. Senha apenas no link e nada vai a pacientes.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}));

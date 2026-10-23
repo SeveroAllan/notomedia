@@ -1,6 +1,6 @@
 import {afirmaFatoDaAgendaSemFerramenta} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
-import { FALA_PROTECAO_CREDENCIAL_AGENDA } from './falas.js';
+import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
 import { sanitizarErroFiscal } from '../observabilidade/erros.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
@@ -165,6 +165,14 @@ export async function processarComunicacaoMedico(
         decisao=await decidir(['pedir_link_agenda'],undefined,{motivo:motivo!,faltou:faltasIntroducaoLink(decisao.fala)});
         const permissaoInventada=/n[aã]o (?:tenho|temos|possuo|h[aá])[^.!?]*permiss[aã]o/i.test(decisao.fala.join(' '));
         motivo=decisao.acao==='pedir_link_agenda' && !permissaoInventada ? validarAcaoConversa(decisao,fatos,permitidas,texto,agora) : 'INTRODUCAO_NAO_CORRIGIDA';
+      }
+      // Fallback determinístico: introdução recusada após a correção usa o template verificado;
+      // os demais gates (conexão, agenda, evidência, permissão) são revalidados antes de executar.
+      const motivoIntroducao = motivo==='INTRODUCAO_INCOMPLETA' || motivo==='BALOES_LINK_EXCEDIDOS';
+      if (motivoIntroducao && decisao.acao==='pedir_link_agenda') {
+        const comTemplate: DecisaoConversa = { ...decisao, fala: [FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA] };
+        const motivoRestante = validarAcaoConversa(comTemplate, fatos, permitidas, texto, agora, { introducaoVerificada: true });
+        if (!motivoRestante) { deps.log('info', `CONVERSA_INTRODUCAO_TEMPLATE ${motivo}`); decisao = comTemplate; motivo = null; }
       }
       let fala=decisao.fala, falaMemoria:string[]|undefined;
       if(motivo) {
