@@ -14,8 +14,10 @@ it('classifica destino da consulta com emissão existente', () => {
   expect(classificarRetomadaEmissao({ estado: 'emitindo', recusaDefinitiva: true, notaFiscalId: null })).toBe('repetida');
 });
 
-it('status da consulta DPS: TUDO indeterminado até confirmação empírica (inclusive 200/404)', () => {
-  for (const s of [0, 200, 204, 400, 401, 403, 404, 408, 429, 500, 503]) expect(classificarStatusConsultaDps(s)).toBe('indeterminado');
+it('status da consulta DPS: 200=gerada e 404=nao_gerada (confirmado empiricamente 2026-10-22); resto indeterminado', () => {
+  expect(classificarStatusConsultaDps(200)).toBe('gerada');
+  expect(classificarStatusConsultaDps(404)).toBe('nao_gerada');
+  for (const s of [0, 204, 400, 401, 403, 408, 429, 500, 503]) expect(classificarStatusConsultaDps(s)).toBe('indeterminado');
 });
 
 it('recusa definitiva exige resposta estruturada do provedor com código E####', () => {

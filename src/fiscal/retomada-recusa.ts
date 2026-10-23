@@ -27,15 +27,15 @@ export type ResultadoConsultaDps = 'gerada' | 'nao_gerada' | 'indeterminado';
 /**
  * Semântica do HEAD /dps/{id} (Manual dos Contribuintes - Sistema Nacional NFS-e, v1.2 out/2025,
  * seção 1.4.2: informa se uma NFS-e foi gerada ou não a partir do identificador da DPS).
- * ATENÇÃO: os códigos HTTP exatos de "gerada"/"não gerada" PRECISAM ser confirmados
- * empiricamente no ambiente de produção restrita antes de ativar a retomada; o swagger oficial
- * (https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index) é inacessível da
- * nossa infra. Qualquer status fora destas listas é "indeterminado" e mantém a trava.
+ * Qualquer status fora destas listas é "indeterminado" e mantém a trava.
  */
-// VAZIAS por segurança: um status mal interpretado pode liberar duplicidade. Preencher SOMENTE
-// após confirmação empírica em produção restrita (HEAD em DPS autorizada e em DPS sem NFS-e).
-export const STATUS_DPS_GERADA: readonly number[] = [];
-export const STATUS_DPS_NAO_GERADA: readonly number[] = [];
+// Confirmação empírica 2026-10-22 em produção restrita (certificado da médica-teste, ambiente 2):
+// HEAD /dps/{id} em DPS autorizada (id lido do XML de uma NFS-e autorizada) devolveu 200;
+// HEAD em id bem-formado jamais transmitido (mesma série/codMun/inscrFederal, nDPS inexistente)
+// devolveu 404. Mesmo resultado nas bases /SefinNacional e /API/SefinNacional.
+// 401/403/408/429/5xx e qualquer outro status continuam "indeterminado" e travados.
+export const STATUS_DPS_GERADA: readonly number[] = [200];
+export const STATUS_DPS_NAO_GERADA: readonly number[] = [404];
 
 export function classificarStatusConsultaDps(status: number): ResultadoConsultaDps {
   if (STATUS_DPS_GERADA.includes(status)) return 'gerada';
