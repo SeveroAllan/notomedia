@@ -4,6 +4,7 @@ import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { join } from 'node:path';
+import { dataDoIdAmplimed, tomadorAmplimedAoVivo } from '../agenda/amplimed-lote.js';
 import { lerEventosAgendaAmplimed, verificarLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 import { CofreAmplimed } from './amplimed-cofre.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
@@ -151,6 +152,14 @@ export function criarCofreContas(deps: {
             }
             return mapearStatusAgenda(status);
         },
-        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string) => cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(medicoId, desde, hoje) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' }
+        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false) => cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(medicoId, desde, hoje, comDetalhes) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' },
+        detalheAmplimedAoVivo: async (medicoId: string, idExterno: string) => {
+            const data = dataDoIdAmplimed(idExterno);
+            if (!cofreAmplimed || !data) throw new ErroCofre('SEM_AGENDA_CONECTADA');
+            const hoje = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+            const r = await cofreAmplimed.lerAgendaPeriodo(medicoId, data, hoje, true);
+            if (!r.ok) throw new ErroCofre('DETALHES_NAO_CONCLUIDOS');
+            return tomadorAmplimedAoVivo(r.dias, idExterno);
+        }
     };
 }
