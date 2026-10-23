@@ -35,11 +35,16 @@ export function conviteDoisFatoresAmplimed(t: TelaAmplimed): boolean {
   const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   return /ativar agora|proteja sua conta/.test(texto) && !/digite o codigo|enviamos (um )?codigo|codigo de (verificacao|seguranca)/.test(texto);
 }
+/** Convite de 2FA que a conta não pode mais dispensar ("passa a ser obrigatória"): é impedimento real, não espera. */
+export function conviteDoisFatoresObrigatorio(t: TelaAmplimed): boolean {
+  const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return conviteDoisFatoresAmplimed(t) && /obrigat/.test(texto);
+}
 export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 'AGUARDANDO' {
   const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   let caminho = '';
   try { caminho = new URL(t.url).pathname; } catch { /* sem caminho */ }
-  if (/^\/2fa(\/|$)/.test(caminho)) return conviteDoisFatoresAmplimed(t) ? 'AGUARDANDO' : 'PRECISA_VERIFICACAO';
+  if (/^\/2fa(\/|$)/.test(caminho)) return conviteDoisFatoresAmplimed(t) ? (conviteDoisFatoresObrigatorio(t) ? 'PRECISA_VERIFICACAO' : 'AGUARDANDO') : 'PRECISA_VERIFICACAO';
   if (/recaptcha|nao sou (um )?robo|i'm not a robot/.test(texto) && t.senhasVisiveis > 0) return 'CAPTCHA';
   if (/codigo de (verificacao|seguranca|acesso)|verificacao em (duas|2) etapas|enviamos (um )?codigo|digite o codigo/.test(texto)) return 'PRECISA_VERIFICACAO';
   if (t.senhasVisiveis === 0 && /^\/(agenda|painel|consultas|buscapac)/.test(caminho)) return 'CONECTADO';
@@ -102,6 +107,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       try {
         tela = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
       } catch { continue; } // navegação em andamento: lê de novo na próxima volta
+      if (conviteDoisFatoresObrigatorio(tela)) { console.warn('AMPLIMED_2FA_OBRIGATORIO'); return 'PRECISA_VERIFICACAO'; }
       if (convitePulado < 2 && conviteDoisFatoresAmplimed(tela)) {
         convitePulado++;
         const rotulos = await page.evaluate(`[...document.querySelectorAll('a,button')].map(e => (e.innerText || '').trim().replace(/\\s+/g, ' ').slice(0, 40)).filter(Boolean).slice(0, 12)`) as string[];

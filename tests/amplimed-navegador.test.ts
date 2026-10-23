@@ -26,6 +26,7 @@ describe('estado da tela de login do Amplimed', () => {
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Digite o código de verificação enviado por SMS', 0))).toBe('PRECISA_VERIFICACAO');
     expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Verificação', 1))).toBe('PRECISA_VERIFICACAO');
     expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Proteja sua conta com 2FA. Clique em Ativar agora', 0))).toBe('AGUARDANDO');
+    expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Proteja sua conta com autenticação em 2 fatores! A ativação do 2FA passa a ser obrigatória a partir de hoje. Clique em Ativar agora para configurar.', 0))).toBe('PRECISA_VERIFICACAO');
     expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Digite o código enviado', 0))).toBe('PRECISA_VERIFICACAO');
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Não sou um robô reCAPTCHA', 1))).toBe('CAPTCHA');
     expect(classificarTelaAmplimed(t('https://app.amplimed.com.br/login', 'Senha inválida', 1))).toBe('SENHA_RECUSADA');
