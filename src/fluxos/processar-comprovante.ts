@@ -33,13 +33,14 @@ export async function orquestrarComprovante(
   contexto: Parameters<NonNullable<ProcessarWebhookDeps['aoReceberComprovante']>>[0],
   deps: OrquestrarComprovanteDeps
 ): Promise<DecisaoPedidoComprovante> {
-  let estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
+  const estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
   let buscaCpf: BuscaCpfConversa | null = null;
   if (deps.buscarCpfConversa && (!estado.paciente.cpf || !validarCpf(estado.paciente.cpf))) {
-    try {
-      buscaCpf = await deps.buscarCpfConversa(contexto.medicoId, contexto.pacienteId);
-      if (buscaCpf.tipo === 'cpf') estado = { ...estado, paciente: { ...estado.paciente, cpf: buscaCpf.cpf } };
-    } catch { deps.log('erro', 'BUSCA_CPF_CONVERSA_FALHOU'); }
+    try { buscaCpf = await deps.buscarCpfConversa(contexto.medicoId, contexto.pacienteId); }
+    catch { deps.log('erro', 'BUSCA_CPF_CONVERSA_FALHOU'); }
+    // Um CPF único na conversa é CANDIDATO, não identidade: pode ser de familiar/terceiro.
+    // Nunca preenche o documento fiscal por unicidade/dígitos; segue para conferência.
+    if (buscaCpf?.tipo === 'cpf') deps.log('info', 'CPF_CANDIDATO_CONVERSA');
   }
   const decisao = await processarComprovante(contexto.mensagem, estado, deps);
   if (decisao.tipo === 'perguntar_medico' && decisao.motivo === 'CADASTRO_INCOMPLETO' && deps.aoCpfAusente &&

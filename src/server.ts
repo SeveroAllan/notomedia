@@ -1027,9 +1027,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             if (await permissoesNoto!.linkJaCriado(medicoId, 'solicitar_cpf').catch(() => true)) return;
             const r = await permissoesNoto!.criarLink(medicoId, 'solicitar_cpf').catch(() => null);
             if (!r || 'erro' in r) return;
-            const ausencia = busca?.tipo === 'sem_cpf' ? 'não encontrei o CPF do paciente na agenda nem na conversa recente dele aqui no WhatsApp'
-              : busca?.tipo === 'sem_conversa' ? 'não encontrei o CPF do paciente na agenda, e não há conversa recente dele aqui para eu procurar'
-              : busca?.tipo === 'ambiguos' ? 'encontrei mais de um CPF na conversa recente com o paciente e não sei qual é o dele'
+            const ausencia = busca?.tipo === 'sem_cpf' ? 'não encontrei o CPF do paciente na agenda nem nas mensagens que ele te enviou nos últimos 90 dias'
+              : busca?.tipo === 'sem_conversa' ? 'não encontrei o CPF do paciente na agenda, e não há conversa dele aqui para eu procurar'
+              : busca?.tipo === 'ambiguos' ? 'encontrei mais de um CPF nas mensagens que ele te enviou nos últimos 90 dias e não sei qual é o dele'
+              : busca?.tipo === 'cpf' ? 'encontrei um CPF nas mensagens que ele te enviou nos últimos 90 dias, mas não tenho como confirmar sozinho que é o dele'
               : 'não encontrei o CPF do paciente na agenda';
             const fala = [`Doutor(a), ${ausencia}. Para emitir, preciso dele. Quando isso acontecer, prefere que eu pergunte sempre a você ou direto ao paciente? Escolha no link seguro a seguir.`, r.url];
             await comunicacaoHomologacao.conversa({ medicoId, chave: `link_permissoes:solicitar_cpf:${r.url.slice(-12)}`,
