@@ -147,9 +147,10 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
       try {
         await page.locator('.fc-time-grid-event').nth(i).click({ timeout: 5000 });
         await page.waitForTimeout(2500);
-        const painel = await page.evaluate(`(() => { const m = [...document.querySelectorAll('.modal.show,.modal.in')].find(x => /Visualizar Agendamento/.test(x.innerText || '')); return m ? m.innerText.slice(0, 1500) : ''; })()`) as string;
+        const painel = await page.evaluate(`(() => { const m = [...document.querySelectorAll('.modal.show,.modal.in,.popover,[role=dialog],.swal2-popup,.offcanvas.show')].find(x => /Visualizar Agendamento/.test(x.innerText || '')); return m ? m.innerText.slice(0, 1500) : ''; })()`) as string;
         const nome = (e.texto.split('\n').map(x => x.trim()).find(x => x.includes('|')) ?? '').split('|')[0]!.trim();
         e.detalhe = painel ? lerDetalheAmplimedTexto(painel, nome) : null;
+        if (!e.detalhe) console.warn('AMPLIMED_DETALHE ' + (painel ? 'painel_sem_tomador valido' : 'sem_painel') + ' nome_len=' + nome.length);
         await page.keyboard.press('Escape'); await page.waitForTimeout(800);
         await page.evaluate(`(() => { const x = document.querySelector('.modal.show .close, .modal.in .close'); if (x) x.click(); })()`);
         await page.waitForTimeout(500);
