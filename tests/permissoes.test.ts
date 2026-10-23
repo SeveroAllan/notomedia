@@ -8,10 +8,11 @@ import { ComunicacaoHomologacao } from '../src/whatsapp/comunicacao-homologacao.
 import { carregarConfig } from '../src/config.js';
 
 const medicoId = '11111111-1111-4111-8111-111111111111';
-const contaId = '33333333-3333-4333-8333-333333333333';
+const contaDoMedico = () => vinculos.find(v => v.medico_id === medicoId)!.conta;
 
-interface LinkFalso { id: string; conta: string; permissao: string; token_hash: string; expira_em: Date; usado_em: Date | null }
-let contas: { id: string; medico_id: string; numero_whatsapp: string; operador: string | null }[];
+interface LinkFalso { id: string; conta: string; permissao: string; criado_por: string; token_hash: string; expira_em: Date; usado_em: Date | null }
+let contas: { id: string; numero_whatsapp: string; operador: string | null }[];
+let vinculos: { conta: string; medico_id: string }[];
 let links: LinkFalso[];
 let escolhas: { conta: string; permissao: string; valor: string; escolhido_por: string | null; link_id: string }[];
 let auditoria: { conta: string; permissao: string; valor: string }[];
@@ -21,17 +22,22 @@ let sequencia = 0;
 
 function queryFalsa(sql: string, valores: any[] = []): Promise<{ rows: any[] }> {
     if (sql === 'begin' || sql === 'commit' || sql === 'rollback') return Promise.resolve({ rows: [] });
-    if (sql.includes('from noto_whatsapps_conectados where medico_id=')) {
-        return Promise.resolve({ rows: contas.filter(c => c.medico_id === valores[0]).map(c => ({ id: c.id, numero_whatsapp: c.numero_whatsapp, operador: c.operador })) });
+    if (sql.includes('from noto_whatsapps_medicos m join noto_whatsapps_conectados')) {
+        const v = vinculos.find(v => v.medico_id === valores[0]);
+        const c = v && contas.find(c => c.id === v.conta);
+        return Promise.resolve({ rows: c ? [{ id: c.id, numero_whatsapp: c.numero_whatsapp, operador: c.operador }] : [] });
     }
     if (sql.includes('select u.telefone from medicos')) {
         return Promise.resolve({ rows: medicoTelefone ? [{ telefone: medicoTelefone }] : [] });
     }
     if (sql.includes('insert into noto_whatsapps_conectados')) {
-        const existente = contas.find(c => c.medico_id === valores[0]);
-        if (!existente) { contas.push({ id: contaId, medico_id: valores[0], numero_whatsapp: valores[1], operador: null }); }
-        const c = contas.find(c => c.medico_id === valores[0])!;
+        let c = contas.find(c => c.numero_whatsapp === valores[0]);
+        if (!c) { c = { id: `conta-${++sequencia}`, numero_whatsapp: valores[0], operador: null }; contas.push(c); }
         return Promise.resolve({ rows: [{ id: c.id, numero_whatsapp: c.numero_whatsapp, operador: c.operador }] });
+    }
+    if (sql.includes('insert into noto_whatsapps_medicos')) {
+        if (!vinculos.some(v => v.medico_id === valores[1])) vinculos.push({ conta: valores[0], medico_id: valores[1] });
+        return Promise.resolve({ rows: [] });
     }
     if (sql.includes('select valor, escolhido_por, atualizado_em::text from noto_permissoes')) {
         const e = escolhas.find(e => e.conta === valores[0] && e.permissao === valores[1]);
@@ -48,7 +54,7 @@ function queryFalsa(sql: string, valores: any[] = []): Promise<{ rows: any[] }> 
         return Promise.resolve({ rows: [] });
     }
     if (sql.includes('insert into noto_permissoes_links (')) {
-        const link: LinkFalso = { id: `link-${++sequencia}`, conta: valores[0], permissao: valores[1], token_hash: valores[2],
+        const link: LinkFalso = { id: `link-${++sequencia}`, conta: valores[0], permissao: valores[1], criado_por: valores[2], token_hash: valores[3],
             expira_em: new Date(Date.now() + 15 * 60000), usado_em: null };
         links.push(link);
         return Promise.resolve({ rows: [{ id: link.id }] });
@@ -65,7 +71,7 @@ function queryFalsa(sql: string, valores: any[] = []): Promise<{ rows: any[] }> 
         const l = links.find(l => l.token_hash === valores[0]);
         if (!l || l.usado_em || l.expira_em.getTime() <= Date.now()) return Promise.resolve({ rows: [] });
         l.usado_em = new Date();
-        return Promise.resolve({ rows: [{ id: l.id, whatsapp_conectado_id: l.conta, permissao: l.permissao }] });
+        return Promise.resolve({ rows: [{ id: l.id, whatsapp_conectado_id: l.conta, permissao: l.permissao, criado_por_medico_id: l.criado_por }] });
     }
     if (sql.includes('select operador from noto_whatsapps_conectados where id=')) {
         return Promise.resolve({ rows: [{ operador: contas.find(c => c.id === valores[0])?.operador ?? null }] });
@@ -80,16 +86,33 @@ function queryFalsa(sql: string, valores: any[] = []): Promise<{ rows: any[] }> 
         auditoria.push({ conta: valores[0], permissao: valores[1], valor: valores[2] });
         return Promise.resolve({ rows: [] });
     }
-    if (sql.includes('select medico_id from noto_whatsapps_conectados where id=')) {
-        return Promise.resolve({ rows: [{ medico_id: contas.find(c => c.id === valores[0])?.medico_id ?? null }] });
-    }
     throw new Error('SQL não mapeado no fake: ' + sql.slice(0, 90));
 }
 const poolFalso = () => ({ query: queryFalsa, connect: async () => ({ query: queryFalsa, release: () => {} }) }) as unknown as pg.Pool;
 
 beforeEach(() => {
-    contas = []; links = []; escolhas = []; auditoria = []; linksAuditoria = []; sequencia = 0;
+    contas = []; vinculos = []; links = []; escolhas = []; auditoria = []; linksAuditoria = []; sequencia = 0;
     medicoTelefone = '5551993527271';
+});
+
+describe('Permissoes: escopo por WhatsApp conectado', () => {
+    it('a escolha da conta vale para outro médico da mesma conta e nunca para outra conta', async () => {
+        const p = new Permissoes({ pool: poolFalso(), origem: '' });
+        const medicoB = '22222222-2222-4222-8222-222222222222';
+        const medicoC = '33333333-3333-4333-8333-333333333333';
+        // conta da clínica provisionada pelo médico A; médico B é vinculado à mesma conta
+        const a = await p.criarLink(medicoId, 'emitir_autonomo');
+        expect('url' in a).toBe(true);
+        const contaA = vinculos.find(v => v.medico_id === medicoId)!.conta;
+        vinculos.push({ conta: contaA, medico_id: medicoB });
+        const r = await p.escolher((a as { url: string }).url.split('/p/')[1], 'autonomo');
+        expect(r).toMatchObject({ ok: true, medicoId });
+        // B (mesma conta) herda a escolha; C (outra conta, outro telefone) não
+        expect(await p.permite(medicoB, 'emitir_autonomo')).toBe(true);
+        medicoTelefone = '5551988887777';
+        expect(await p.permite(medicoC, 'emitir_autonomo')).toBe(false);
+        expect(vinculos.find(v => v.medico_id === medicoC)!.conta).not.toBe(contaA);
+    });
 });
 
 describe('Permissoes: ausência nunca autoriza', () => {
@@ -107,15 +130,15 @@ describe('Permissoes: ausência nunca autoriza', () => {
         const hash1 = (await import('node:crypto')).createHash('sha256').update(token1).digest('hex');
         // grava direto o valor conservador, como a página faria
         const l = links.find(l => l.token_hash === hash1)!; l.usado_em = null;
-        escolhas.push({ conta: contaId, permissao: 'emitir_autonomo', valor: 'sempre_perguntar', escolhido_por: null, link_id: l.id });
+        escolhas.push({ conta: contaDoMedico(), permissao: 'emitir_autonomo', valor: 'sempre_perguntar', escolhido_por: null, link_id: l.id });
         expect(await p.permite(medicoId, 'emitir_autonomo')).toBe(false);
-        escolhas.push({ conta: contaId, permissao: 'entregar_paciente', valor: 'so_medico', escolhido_por: null, link_id: l.id });
+        escolhas.push({ conta: contaDoMedico(), permissao: 'entregar_paciente', valor: 'so_medico', escolhido_por: null, link_id: l.id });
         expect(await p.permite(medicoId, 'entregar_paciente')).toBe(false);
     });
     it('só o valor que libera, gravado, libera', async () => {
         const p = new Permissoes({ pool: poolFalso(), origem: 'https://notomed.tech' });
         await p.criarLink(medicoId, 'emitir_autonomo');
-        escolhas.push({ conta: contaId, permissao: 'emitir_autonomo', valor: 'autonomo', escolhido_por: null, link_id: 'x' });
+        escolhas.push({ conta: contaDoMedico(), permissao: 'emitir_autonomo', valor: 'autonomo', escolhido_por: null, link_id: 'x' });
         expect(await p.permite(medicoId, 'emitir_autonomo')).toBe(true);
         expect(await p.permite(medicoId, 'entregar_paciente')).toBe(false);
     });
@@ -141,7 +164,7 @@ describe('Permissoes: link de escolha', () => {
         const r = await p.escolher(token, 'paciente');
         expect(r).toMatchObject({ ok: true, permissao: 'entregar_paciente', valor: 'paciente', medicoId });
         expect(escolhas).toHaveLength(1);
-        expect(auditoria).toEqual([{ conta: contaId, permissao: 'entregar_paciente', valor: 'paciente' }]);
+        expect(auditoria).toEqual([{ conta: contaDoMedico(), permissao: 'entregar_paciente', valor: 'paciente' }]);
         expect(await p.permite(medicoId, 'entregar_paciente')).toBe(true);
         // uso único: o mesmo token não grava de novo
         expect(await p.escolher(token, 'so_medico')).toEqual({ ok: false, motivo: 'INVALIDO' });

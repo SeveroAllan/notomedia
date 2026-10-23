@@ -6,16 +6,25 @@
 -- Efeitos: 5 tabelas novas; nenhuma tabela existente é alterada. Aditivo: ausente = bloqueado.
 begin;
 
--- Vínculo médico ↔ WhatsApp conectado (identidade do operador/conta). Uma conta pode ter vários
--- médicos (clínica); as permissões são da conta, não do médico isolado.
+-- Conta = um WhatsApp conectado (de médico único, consultório ou clínica; indiferente).
+-- As permissões são da conta: quem mexe no WhatsApp autoriza, e a escolha vale para
+-- TODOS os médicos da conta (desenho aprovado 22/10). Uma escolha nunca atravessa contas.
 create table if not exists public.noto_whatsapps_conectados (
   id uuid primary key default gen_random_uuid(),
-  medico_id uuid not null references public.medicos(id) on delete cascade,
-  numero_whatsapp text not null check (numero_whatsapp ~ '^\d{10,15}$'),
+  numero_whatsapp text not null unique check (numero_whatsapp ~ '^\d{10,15}$'),
   operador text check (operador in ('medico','secretaria','outro')),
   instancia text,
   criado_em timestamptz not null default now(),
-  atualizado_em timestamptz not null default now(),
+  atualizado_em timestamptz not null default now()
+);
+
+-- Médicos cobertos por uma conta. Cada médico pertence a no máximo UMA conta
+-- (unique em medico_id: nenhum médico herda escolhas de duas contas ao mesmo tempo).
+create table if not exists public.noto_whatsapps_medicos (
+  whatsapp_conectado_id uuid not null references public.noto_whatsapps_conectados(id) on delete cascade,
+  medico_id uuid not null references public.medicos(id) on delete cascade,
+  criado_em timestamptz not null default now(),
+  primary key (whatsapp_conectado_id, medico_id),
   unique (medico_id)
 );
 
@@ -37,6 +46,7 @@ create table if not exists public.noto_permissoes_links (
   id uuid primary key default gen_random_uuid(),
   whatsapp_conectado_id uuid not null references public.noto_whatsapps_conectados(id) on delete cascade,
   permissao text not null check (permissao in ('emitir_autonomo','entregar_paciente')),
+  criado_por_medico_id uuid not null references public.medicos(id),
   token_hash text not null unique check (token_hash ~ '^[a-f0-9]{64}$'),
   expira_em timestamptz not null,
   usado_em timestamptz,
@@ -63,6 +73,7 @@ create table if not exists public.noto_permissoes_auditoria (
 );
 
 alter table public.noto_whatsapps_conectados enable row level security;
+alter table public.noto_whatsapps_medicos enable row level security;
 alter table public.noto_permissoes enable row level security;
 alter table public.noto_permissoes_links enable row level security;
 alter table public.noto_permissoes_links_auditoria enable row level security;

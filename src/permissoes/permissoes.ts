@@ -32,20 +32,30 @@ export class Permissoes {
 
     private hash(token: string) { return createHash('sha256').update(token).digest('hex'); }
 
-    /** Identidade da conta (WhatsApp conectado) de um médico. Cria na primeira passagem. */
+    /** Conta (WhatsApp conectado) de um médico, via vínculo conta↔médicos. Provisiona 1 médico = 1 conta
+     * na primeira passagem; contas com vários médicos entram por vínculo explícito. A escolha é da conta:
+     * vale para todos os médicos dela e nunca atravessa para outra conta. */
     private async contaDo(medicoId: string): Promise<{ id: string; numero_whatsapp: string; operador: string | null } | null> {
-        const existente = (await this.deps.pool.query(
-            'select id, numero_whatsapp, operador from noto_whatsapps_conectados where medico_id=$1', [medicoId])).rows[0];
+        const porVinculo = `select c.id, c.numero_whatsapp, c.operador
+            from noto_whatsapps_medicos m join noto_whatsapps_conectados c on c.id=m.whatsapp_conectado_id
+            where m.medico_id=$1`;
+        const existente = (await this.deps.pool.query(porVinculo, [medicoId])).rows[0];
         if (existente) return existente;
         const medico = (await this.deps.pool.query(
             'select u.telefone from medicos m join usuarios u on u.id=m.usuario_id where m.id=$1 and u.ativo=true and u.telefone is not null', [medicoId])).rows[0];
         if (!medico?.telefone?.trim()) return null;
         const numero = medico.telefone.replace(/\D/g, '');
-        const criada = (await this.deps.pool.query(
-            `insert into noto_whatsapps_conectados (medico_id, numero_whatsapp) values ($1,$2)
-             on conflict (medico_id) do update set medico_id=excluded.medico_id
-             returning id, numero_whatsapp, operador`, [medicoId, numero])).rows[0];
-        return criada ?? null;
+        const conta = (await this.deps.pool.query(
+            `insert into noto_whatsapps_conectados (numero_whatsapp) values ($1)
+             on conflict (numero_whatsapp) do update set numero_whatsapp=excluded.numero_whatsapp
+             returning id, numero_whatsapp, operador`, [numero])).rows[0];
+        if (!conta) return null;
+        // do nothing: se outra transação vinculou este médico a outra conta, o vínculo existente vence.
+        await this.deps.pool.query(
+            'insert into noto_whatsapps_medicos (whatsapp_conectado_id, medico_id) values ($1,$2) on conflict (medico_id) do nothing',
+            [conta.id, medicoId]);
+        // Re-resolve pelo vínculo: a conta autoritativa é a do vínculo, não a recém-criada.
+        return (await this.deps.pool.query(porVinculo, [medicoId])).rows[0] ?? null;
     }
 
     /** Escolha vigente. null = nunca escolhida (bloqueia autonomia/envio). */
@@ -86,9 +96,9 @@ export class Permissoes {
                 [conta.id, permissao]);
             token = randomBytes(32).toString('base64url');
             const link = (await cliente.query(
-                `insert into noto_permissoes_links (whatsapp_conectado_id, permissao, token_hash, expira_em, criado_em)
-                 values ($1,$2,$3, clock_timestamp()+interval '15 minutes', clock_timestamp()) returning id`,
-                [conta.id, permissao, this.hash(token)])).rows[0];
+                `insert into noto_permissoes_links (whatsapp_conectado_id, permissao, criado_por_medico_id, token_hash, expira_em, criado_em)
+                 values ($1,$2,$3,$4, clock_timestamp()+interval '15 minutes', clock_timestamp()) returning id`,
+                [conta.id, permissao, medicoId, this.hash(token)])).rows[0];
             await cliente.query(`insert into noto_permissoes_links_auditoria (link_id, evento) values ($1,'criado') on conflict do nothing`, [link.id]);
             await cliente.query('commit');
         } catch (e) {
@@ -137,7 +147,7 @@ export class Permissoes {
             const link = (await cliente.query(
                 `update noto_permissoes_links set usado_em=clock_timestamp()
                  where token_hash=$1 and usado_em is null and expira_em>clock_timestamp()
-                 returning id, whatsapp_conectado_id, permissao`, [this.hash(token)])).rows[0];
+                 returning id, whatsapp_conectado_id, permissao, criado_por_medico_id`, [this.hash(token)])).rows[0];
             if (!link) { await cliente.query('rollback'); return { ok: false, motivo: 'INVALIDO' }; }
             const permissao = link.permissao as Permissao;
             if (!PERMISSOES.includes(permissao) || !VALORES[permissao].includes(valor)) {
@@ -158,8 +168,8 @@ export class Permissoes {
                  values ($1,$2,$3,$4,$5)`, [link.whatsapp_conectado_id, permissao, valor, conta?.operador ?? null, link.id]);
             await this.auditarLink(cliente, link.id, 'usado');
             await cliente.query('commit');
-            const dono = (await cliente.query('select medico_id from noto_whatsapps_conectados where id=$1', [link.whatsapp_conectado_id])).rows[0];
-            return { ok: true, permissao, valor, medicoId: dono?.medico_id ?? '', linkId: link.id };
+            // Confirmação vai para a conversa de quem pediu o link, mesmo em conta com vários médicos.
+            return { ok: true, permissao, valor, medicoId: link.criado_por_medico_id ?? '', linkId: link.id };
         } catch (e) {
             try { await cliente.query('rollback'); } finally { cliente.release(); }
             throw e;
