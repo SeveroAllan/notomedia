@@ -48,7 +48,7 @@ Ao receber "correcao", corrija o motivo com os fatos de faltou. Não narre valid
 
 SAÍDA: JSON estrito {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji}, até 3 balões de 500 caracteres. Ações só de acoesPermitidas. Após ferramenta: acao=null; só resultado real, sem códigos; zero pendências só com total=0; falha técnica sem prometer retorno automático.`;
 const parametrosSchema = z.object({ agenda: z.string().trim().max(80).optional(), desde: z.string().optional(),
-  permissao: z.enum(['emitir_autonomo','entregar_paciente']).optional().catch(undefined),
+  permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
   pedidoExplicito: z.object({evidencia:z.string().trim().min(1).max(300),confianca:z.number().min(0).max(1)}).strict().optional(),

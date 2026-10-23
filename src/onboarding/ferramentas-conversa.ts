@@ -19,7 +19,7 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
     liberada:f=>!f.agenda.conectada&&!f.link.ativo&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
-  {nome:'pedir_link_permissoes',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para o médico escolher permissões com botões (emissão autônoma; entrega ao paciente).',
+  {nome:'pedir_link_permissoes',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para o médico escolher permissões com botões (emissão autônoma; entrega ao paciente; a quem pedir CPF ausente).',
     liberada:f=>f.permissoes?.pendentes===true},
   {nome:'iniciar_lote',tipo:'escrita',exigeConfirmacaoDoMedico:true,descricao:'Preparar o lote de notas; só emite depois do "pode" sobre a proposta.',
     liberada:(f,d)=>d.lote&&f.agenda.conectada&&['tribemd','amplimed'].includes(f.agenda.nome?.toLowerCase()??'')&&!f.semAgendaDigital},

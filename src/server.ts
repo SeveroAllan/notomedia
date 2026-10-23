@@ -148,6 +148,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     // Escolha gravada: confirma na conversa. Falha aqui não desfaz a gravação (já commitada).
     const rotulo = ROTULOS[r.permissao as keyof typeof ROTULOS];
     if (!r.medicoId || !rotulo) return;
+    if (r.permissao === 'solicitar_cpf') await pool.query(
+      `update medicos m set solicitar_cpf_direto_paciente=$2, atualizado_em=now()
+       from noto_whatsapps_medicos wm join noto_whatsapps_conectados c on c.id=wm.whatsapp_conectado_id
+       where wm.medico_id=m.id and c.id=(select wm2.whatsapp_conectado_id from noto_whatsapps_medicos wm2 where wm2.medico_id=$1)`,
+      [r.medicoId, r.valor === 'paciente']).catch(() => {});
     await comunicacaoHomologacao.conversa({ medicoId: r.medicoId,
       chave: `permissao_escolhida:${r.linkId}`,
       fala: [`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Se quiser mudar depois, é só me pedir.`] });
@@ -359,7 +364,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
         permissoes:permissoesNoto?{emitirAutonomo:(await permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null))?.valor??null,
           entregarPaciente:(await permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null))?.valor??null,
-          pendentes:(await permissoesNoto.faltantes(medicoId).catch(()=>[])).length>0}:null,
+          pendentes:(await permissoesNoto.faltantes(medicoId,['emitir_autonomo','entregar_paciente']).catch(()=>[])).length>0}:null,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
         homologacaoInformada:false};
@@ -381,7 +386,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(!permissoesNoto) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:'PERMISSOES_INDISPONIVEIS'}};
         const faltantes=await permissoesNoto.faltantes(c.medicoId).catch(()=>[] as const);
         const pedida=decisao.parametros?.permissao;
-        const alvo=(pedida==='emitir_autonomo'||pedida==='entregar_paciente')?pedida:faltantes[0];
+        const alvo=(pedida==='emitir_autonomo'||pedida==='entregar_paciente'||pedida==='solicitar_cpf')?pedida:faltantes[0];
         if(!alvo) return {dados:{ferramenta:'pedir_link_permissoes',ok:true,motivo:'TODAS_ESCOLHIDAS'}};
         const r=await permissoesNoto.criarLink(c.medicoId,alvo).catch(()=>null);
         if(!r||'erro' in r) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:r&&'erro' in r?r.erro:'FALHA'}};
@@ -1006,6 +1011,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
         },
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
+          aoCpfAusente: !permissoesNoto ? undefined : async medicoId => {
+            // CPF ausente na agenda e na conversa: pergunta ao médico a quem recorrer, uma única vez, por link.
+            if (await permissoesNoto.ler(medicoId, 'solicitar_cpf').catch(() => null)) return;
+            if (await permissoesNoto.linkJaCriado(medicoId, 'solicitar_cpf').catch(() => true)) return;
+            const r = await permissoesNoto.criarLink(medicoId, 'solicitar_cpf').catch(() => null);
+            if (!r || 'erro' in r) return;
+            const fala = ['Doutor(a), não encontrei o CPF do paciente na agenda nem na conversa recente. Para emitir, preciso dele. Quando isso acontecer, prefere que eu pergunte sempre a você ou direto ao paciente? Escolha no link seguro a seguir.', r.url];
+            await comunicacaoHomologacao.conversa({ medicoId, chave: `link_permissoes:solicitar_cpf:${r.url.slice(-12)}`,
+              fala, falaMemoria: [fala[0], '[LINK_SEGURO]'] });
+          },
           historico: historicoComunicacao,
           fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? { consultar: async entrada =>
             (await cofres.statusAgenda(entrada.medicoId)).nome?.toLowerCase() === 'tribemd'

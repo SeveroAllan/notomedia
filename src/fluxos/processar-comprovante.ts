@@ -3,6 +3,7 @@ import { normalizarResultadoAgenda, selecionarConsultaComprovante, type FonteAge
 import type { DadosMensagemEvolution } from '../whatsapp/payload-webhook-schema.js';
 import type { ExtratorComprovante, EstadoPedidoComprovante, ResultadoExtracaoComprovante,
   DecisaoPedidoComprovante } from '../atendimento/comprovante.js';
+import { validarCpf } from '../paciente/validar-cpf.js';
 import type { HistoricoComunicacaoRepositorio } from '../onboarding/historico-comunicacao-repositorio.js';
 import type { ProcessarWebhookDeps } from './processar-mensagem-webhook.js';
 
@@ -21,6 +22,8 @@ interface ProcessarComprovanteDeps {
 interface OrquestrarComprovanteDeps extends Omit<ProcessarComprovanteDeps, 'log'> {
   lerEstado: (medicoId: string, pacienteId: string) => Promise<EstadoPedidoComprovante>;
   log: (nivel: 'info' | 'erro', mensagem: string) => void;
+  // CPF ausente na agenda e na conversa: o Noto pergunta ao médico a quem recorrer (permissão solicitar_cpf).
+  aoCpfAusente?: (medicoId: string) => Promise<void>;
 }
 
 export async function orquestrarComprovante(
@@ -29,6 +32,11 @@ export async function orquestrarComprovante(
 ): Promise<DecisaoPedidoComprovante> {
   const estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
   const decisao = await processarComprovante(contexto.mensagem, estado, deps);
+  if (decisao.tipo === 'perguntar_medico' && decisao.motivo === 'CADASTRO_INCOMPLETO' && deps.aoCpfAusente &&
+      (!estado.paciente.cpf || !validarCpf(estado.paciente.cpf))) {
+    try { await deps.aoCpfAusente(estado.medicoId); }
+    catch { deps.log('erro', 'OFERTA_CPF_FALHOU'); }
+  }
   if (decisao.tipo === 'pedido_nota_pronto' && !deps.aoDecidir) deps.log('info', `pediria nota ${decisao.tipo}`);
   if (!deps.aoComunicar && (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda')) deps.log('info', `enviaria ${decisao.tipo}`);
   return decisao;

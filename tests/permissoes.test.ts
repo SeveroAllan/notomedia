@@ -121,7 +121,7 @@ describe('Permissoes: ausência nunca autoriza', () => {
         expect(await p.ler(medicoId, 'emitir_autonomo')).toBeNull();
         expect(await p.permite(medicoId, 'emitir_autonomo')).toBe(false);
         expect(await p.permite(medicoId, 'entregar_paciente')).toBe(false);
-        expect(await p.faltantes(medicoId)).toEqual(['emitir_autonomo', 'entregar_paciente']);
+        expect(await p.faltantes(medicoId)).toEqual(['emitir_autonomo', 'entregar_paciente', 'solicitar_cpf']);
     });
     it('valores conservadores gravados também não liberam', async () => {
         const p = new Permissoes({ pool: poolFalso(), origem: 'https://notomed.tech' });
@@ -253,7 +253,7 @@ describe('portão de entrega ao paciente', () => {
         } } as unknown as pg.Pool;
         const config = carregarConfig({ DATABASE_URL: 'postgres://x', ENCRYPTION_KEY: 'k', APP_PEPPER: 'p',
             ENVIO_MEDICO_REAL_ATIVO: 'true', ENVIO_PACIENTE_REAL_ATIVO: 'true', ENVIO_REAL_ALLOWLIST: '5551993527271,5551999990000' });
-        const permissoes = { permite: async () => false } as unknown as Permissoes;
+        const permissoes = { permite: async () => false, linkJaCriado: async () => true, criarLink: async () => ({ url: 'https://x/p/t' }) } as unknown as Permissoes;
         const com = new ComunicacaoHomologacao(pool, config, { enviarTexto: async () => ({ sucesso: true, mensagemId: 'm1' }) } as any, console.info, permissoes);
         const r = await com.paciente({ medicoId, solicitacaoId: 'sol-1' }, { enviarPdf: async () => { envios.push('pdf'); return { sucesso: true }; } } as any);
         expect(r).toBe('sem_permissao');
@@ -272,7 +272,7 @@ describe('portão de entrega ao paciente', () => {
         } } as unknown as pg.Pool;
         const config = carregarConfig({ DATABASE_URL: 'postgres://x', ENCRYPTION_KEY: 'k', APP_PEPPER: 'p',
             ENVIO_MEDICO_REAL_ATIVO: 'true', ENVIO_PACIENTE_REAL_ATIVO: 'true', ENVIO_REAL_ALLOWLIST: '5551993527271,5551999990000' });
-        const permissoes = { permite: async (_id: string, p: string) => p === 'entregar_paciente' } as unknown as Permissoes;
+        const permissoes = { permite: async (_id: string, p: string) => p === 'entregar_paciente', linkJaCriado: async () => true, criarLink: async () => ({ url: 'https://x/p/t' }) } as unknown as Permissoes;
         const com = new ComunicacaoHomologacao(pool, config, { enviarTexto: async () => ({ sucesso: true, mensagemId: 'm1' }) } as any, console.info, permissoes);
         const r = await com.paciente({ medicoId, solicitacaoId: 'sol-1' }, { enviarPdf: async () => { envios.push('pdf'); return { sucesso: true }; } } as any);
         expect(r).toBe('enviado');

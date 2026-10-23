@@ -3,11 +3,12 @@ import type pg from 'pg';
 
 // Permissões do Noto: escolhas do operador do WhatsApp conectado, feitas por link com botões.
 // Regra central: AUSÊNCIA de escolha NUNCA autoriza. "autonomo"/"paciente" só valem se gravados.
-export const PERMISSOES = ['emitir_autonomo', 'entregar_paciente'] as const;
+export const PERMISSOES = ['emitir_autonomo', 'entregar_paciente', 'solicitar_cpf'] as const;
 export type Permissao = typeof PERMISSOES[number];
 export const VALORES: Record<Permissao, readonly string[]> = {
     emitir_autonomo: ['autonomo', 'sempre_perguntar'],
     entregar_paciente: ['paciente', 'so_medico'],
+    solicitar_cpf: ['medico', 'paciente'],
 };
 export const ROTULOS: Record<Permissao, { titulo: string; descricao: string; botoes: Record<string, string>; valorQueLibera: string }> = {
     emitir_autonomo: {
@@ -20,6 +21,12 @@ export const ROTULOS: Record<Permissao, { titulo: string; descricao: string; bot
         titulo: 'Entrega da nota',
         descricao: 'Depois de emitida, a nota pode ser entregue:',
         botoes: { paciente: 'Direto ao paciente pelo meu WhatsApp', so_medico: 'Só para mim; eu repasso' },
+        valorQueLibera: 'paciente',
+    },
+    solicitar_cpf: {
+        titulo: 'CPF ausente',
+        descricao: 'Quando o CPF do paciente não está na agenda nem na conversa recente, o Noto pergunta:',
+        botoes: { medico: 'Sempre perguntar para mim', paciente: 'Perguntar direto ao paciente' },
         valorQueLibera: 'paciente',
     },
 };
@@ -73,9 +80,9 @@ export class Permissoes {
         return escolha?.valor === ROTULOS[permissao].valorQueLibera;
     }
 
-    async faltantes(medicoId: string): Promise<Permissao[]> {
+    async faltantes(medicoId: string, escopo: readonly Permissao[] = PERMISSOES): Promise<Permissao[]> {
         const faltantes: Permissao[] = [];
-        for (const p of PERMISSOES) if (!(await this.ler(medicoId, p))) faltantes.push(p);
+        for (const p of escopo) if (!(await this.ler(medicoId, p))) faltantes.push(p);
         return faltantes;
     }
 

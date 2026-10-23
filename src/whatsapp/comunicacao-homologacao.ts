@@ -11,14 +11,15 @@ import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
 import type { EnviarMensagemPaciente } from './enviar-mensagem-paciente.js';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
 
-type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega' | 'entrega_sem_permissao';
+type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega' | 'entrega_sem_permissao' | 'entrega_sem_permissao_link';
 const textos: Record<AcaoMedico, string> = {
   perguntar_medico: 'Doutor(a), preciso que confira este comprovante e me oriente antes de emitir a nota.',
   perguntar_pacote: 'Doutor(a), o valor do comprovante corresponde a mais de uma consulta. É um pacote? Preciso da sua confirmação antes de emitir.',
   pedir_agenda: 'Doutor(a), preciso de acesso à sua agenda para conferir a consulta deste comprovante. Pode me orientar?',
   falha_emissao: traduzirFalhaEmissao(undefined),
   nota_gerada: 'Doutor(a), a nota de teste foi autorizada em homologação e não tem valor fiscal.',
-  entrega_sem_permissao: 'Doutor(a), a nota foi gerada e está guardada. Para eu entregar direto ao paciente pelo seu WhatsApp, preciso da sua escolha de entrega. Me peça o link de permissões por aqui.',
+  entrega_sem_permissao: 'Doutor(a), a primeira nota está pronta para envio. Preciso saber para quem enviar: direto ao paciente pelo seu WhatsApp ou só para você. Envio o link seguro de escolha a seguir.',
+  entrega_sem_permissao_link: '',
   instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
   falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
 };
@@ -72,7 +73,7 @@ export class ComunicacaoHomologacao {
     private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao>, private readonly log: (texto: string) => void = console.info,
     private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
-  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string;
+  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string;
     detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
     detalheNota?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null } }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, acao, chave, motivo, detalhe, detalheNota } = entrada;
@@ -82,11 +83,11 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
-      const texto = acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
+      const texto = entrada.texto ?? (acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
         ? montarPerguntaMultiplasConsultas(detalhe)
         : acao === 'perguntar_medico' && motivo === 'NOTA_FASE_INICIAL' && detalheNota
           ? montarAvisoNotaFaseInicial(detalheNota)
-          : acao === 'perguntar_medico' && motivo && Object.hasOwn(duvidas, motivo) ? `Doutor(a), ${duvidas[motivo]}` : textos[acao];
+          : acao === 'perguntar_medico' && motivo && Object.hasOwn(duvidas, motivo) ? `Doutor(a), ${duvidas[motivo]}` : textos[acao]);
       return await this.enviarUnico(medicoId, acao, chave, async () => (await this.transporte.enviarTexto({
         instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: destino.telefone, texto
       })).sucesso);
@@ -213,7 +214,6 @@ export class ComunicacaoHomologacao {
   }
 
   async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
-    if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
     const { medicoId, solicitacaoId } = entrada;
     try {
       const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, sn.origem,
@@ -235,13 +235,20 @@ export class ComunicacaoHomologacao {
         if (!/^\d{10,13}$/.test(telefone)) return 'sem_contato';
         nota.contato_telefone = telefone;
       }
-      if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
-      // Permissão entregar_paciente: só a escolha gravada 'paciente' libera o envio. Ausente ou 'so_medico' bloqueia e avisa o médico.
-      if (this.permissoes && !await this.permissoes.permite(medicoId, 'entregar_paciente')) {
+      // Permissão entregar_paciente: só a escolha gravada 'paciente' libera o envio. Ausente ou 'so_medico' bloqueia.
+      // O gatilho é a primeira nota pronta: o Noto avisa o médico e oferece o link de escolha uma única vez,
+      // antes de qualquer simulação de envio — em homologação a pergunta também precisa acontecer.
+      if (this.permissoes && nota && !await this.permissoes.permite(medicoId, 'entregar_paciente')) {
         this.log(registroErroNoto('ENTREGA_SEM_PERMISSAO', 'tecnico', { medicoId, solicitacaoId }));
         await this.medico({ medicoId, acao: 'entrega_sem_permissao', chave: nota.nota_fiscal_id }).catch(() => 'erro');
+        if (!await this.permissoes.linkJaCriado(medicoId, 'entregar_paciente').catch(() => true)) {
+          const link = await this.permissoes.criarLink(medicoId, 'entregar_paciente').catch(() => null);
+          if (link && 'url' in link) await this.medico({ medicoId, acao: 'entrega_sem_permissao_link', chave: nota.nota_fiscal_id, texto: link.url }).catch(() => 'erro');
+        }
         return 'sem_permissao';
       }
+      if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
+      if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
       const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {
