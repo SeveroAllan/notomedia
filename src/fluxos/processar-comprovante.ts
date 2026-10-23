@@ -86,7 +86,7 @@ export async function processarComprovante(
   return decisao;
 }
 
-async function consultarEstadoAgenda(mensagem: DadosMensagemEvolution, estado: EstadoPedidoComprovante, deps: ProcessarComprovanteDeps, lido: ResultadoExtracaoComprovante | null) {
+export async function consultarEstadoAgenda(mensagem: DadosMensagemEvolution, estado: EstadoPedidoComprovante, deps: Pick<ProcessarComprovanteDeps, 'agenda' | 'fonteAgenda' | 'consultaJaFaturada'>, lido: ResultadoExtracaoComprovante | null) {
   if (!deps.fonteAgenda) return { estado, agenda: deps.agenda };
   const semConsulta = { ...estado, ultimaConsulta: null, consulta: undefined };
   try {

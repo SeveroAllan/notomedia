@@ -36,6 +36,7 @@ export interface ProcessarWebhookDeps {
   aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null }) => Promise<unknown>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
+  aoReceberRespostaCpf?: (contexto: { medicoId: string; pacienteId: string; texto: string }) => Promise<unknown>;
 }
 
 export type ResultadoProcessarWebhook =
@@ -142,6 +143,10 @@ export async function processarMensagemWebhook(
       conteudo: texto,
       payloadBruto: payload.data
     });
+  }
+  if (deps.aoReceberRespostaCpf && !payload.data.key.fromMe && tipo === 'texto' && conversa.medicoId && conversa.pacienteId) {
+    try { await deps.aoReceberRespostaCpf({ medicoId: conversa.medicoId, pacienteId: conversa.pacienteId, texto }); }
+    catch { console.error('RESPOSTA_CPF_CICLO_FALHOU'); }
   }
   const midiaComprovante = !!payload.data.message?.imageMessage || payload.data.message?.documentMessage?.mimetype === 'application/pdf';
   if (deps.aoReceberComprovante && !payload.data.key.fromMe && midiaComprovante && conversa.medicoId && conversa.pacienteId) {
