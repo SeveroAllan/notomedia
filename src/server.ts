@@ -17,6 +17,7 @@ import { chaveComprovante } from './atendimento/comprovante.js';
 import { validarCpf } from './paciente/validar-cpf.js';
 import { buscarCpfConversa } from './permissoes/buscar-cpf-conversa.js';
 import { registrarPerguntaCpf, processarRespostaCpfPaciente, processarRespostaMedicoCpf, type RetomadaDeps } from './fluxos/processar-resposta-cpf.js';
+import { aposEnfileirarComprovante } from './fluxos/apos-enfileirar-comprovante.js';
 import { extrairTelefoneJid } from './whatsapp/extrair-telefone-jid.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
@@ -485,32 +486,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     ? new PostgresEmissaoComprovante(pool, config.encryptionKey, config.appPepper) : null;
 
   // Pós-enfileiramento compartilhado: fluxo direto do comprovante e retomada após conferência de CPF.
-  const aposEnfileirarComprovante = async (medicoId: string, resultado: { solicitacaoId?: string | null }) => {
-    if (!emissaoComprovante || !resultado.solicitacaoId) return;
-    // Permissão emitir_autonomo='autonomo' gravada: libera sem pergunta, com auditoria.
-    const autonomo = permissoesNoto ? await permissoesNoto.permite(medicoId, 'emitir_autonomo').catch(() => false) : false;
-    if (autonomo && await emissaoComprovante.liberarPorPreferencia(medicoId, resultado.solicitacaoId, new Date())) {
-      await comunicacaoHomologacao.conversa({ medicoId, chave: `emissao_autonoma:${resultado.solicitacaoId}`,
-        fala: ['Comprovante conferido com a sua agenda. Estou emitindo a nota agora, como você preferiu, e te aviso quando terminar.'] });
-      return;
-    }
-    const pendentes = await emissaoComprovante.buscarConfirmacoes(medicoId);
-    const c = pendentes.find(p => p.id === resultado.solicitacaoId)?.confirmacao;
-    if (c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
-      const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId, solicitacaoId: resultado.solicitacaoId,
-        paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
-      await emissaoComprovante.registrarPergunta(medicoId, resultado.solicitacaoId, envio.resultado, envio.chaveMensagem, new Date());
-    }
-    // Sem escolha e sem link anterior: oferece a escolha UMA vez, junto da pergunta normal.
-    if (permissoesNoto
-      && !await permissoesNoto.ler(medicoId, 'emitir_autonomo').catch(() => ({ valor: 'erro' }) as any)
-      && !await permissoesNoto.linkJaCriado(medicoId, 'emitir_autonomo').catch(() => true)) {
-      const link = await permissoesNoto.criarLink(medicoId, 'emitir_autonomo').catch(() => null);
-      if (link && 'url' in link) await comunicacaoHomologacao.conversa({ medicoId, chave: 'link_permissoes:emitir_autonomo:primeiro',
-        fala: ['Nas próximas, posso emitir sozinho quando o comprovante bater com a agenda, sem perguntar a cada nota. Se quiser, escolha aqui:', link.url] });
-    }
-    console.info('Solicitação de comprovante aguardando confirmação do médico.');
-  };
+  const aposEnfileirar = (medicoId: string, resultado: { solicitacaoId?: string | null }) =>
+    aposEnfileirarComprovante({ permissoes: permissoesNoto, emissao: emissaoComprovante, comunicacao: comunicacaoHomologacao,
+      log: mensagem => console.info(mensagem) }, medicoId, resultado.solicitacaoId);
   const routerNfse = criarRouterNfse({
     repositorio: emissaoApiRepo,
     autenticar: async token => {
@@ -1022,7 +1000,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                   ? sincronizarAgendaHomologacao(entrada.medicoId, entrada.agora, entrada.janelaDias)
                   : cofres.fonteAgenda.consultar(entrada) },
               consultaJaFaturada: (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id),
-              aposEnfileirar: aposEnfileirarComprovante,
+              aposEnfileirar,
             };
             if (await processarRespostaMedicoCpf(retomadaDeps,
               { medicoId: contexto.medicoId, texto: contexto.texto, chavePergunta: contexto.chavePergunta }) === 'consumida') return;
@@ -1130,7 +1108,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               dataEnvioPagamento: bruto > 0 && Number.isFinite(instanteEnvio.getTime()) ? instanteEnvio.toISOString() : null });
             if (resultado.tipo === 'perguntar_medico') await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: 'perguntar_medico', motivo: resultado.motivo,
               chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
-            if (resultado.tipo === 'enfileirada') await aposEnfileirarComprovante(contexto.medicoId, resultado);
+            if (resultado.tipo === 'enfileirada') await aposEnfileirar(contexto.medicoId, resultado);
           } : undefined,
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
           extrator: new ExtratorComprovanteNvidia(iaApiKey, iaModeloVisao,
