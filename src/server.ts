@@ -282,7 +282,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
         if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
         const p = prepararLoteAmplimed(a.dias);
-        await new PostgresConsultasSincronizadas(pool).salvar(id, 'amplimed', p.consultas);
+        // paciente_id é FK de pacientes: vincula/cria o cadastro mínimo pelo celular do cadastro Amplimed (mesmo caminho do TribeMD).
+        const repoConsultas = new PostgresConsultasSincronizadas(pool); const prontas: typeof p.consultas = [];
+        for (const consulta of p.consultas) {
+          try { prontas.push({ ...consulta, pacienteId: await repoConsultas.resolverPaciente(id, consulta) }); }
+          catch { p.valoresAoVivo.delete(consulta.idExterno); }
+        }
+        await repoConsultas.salvar(id, 'amplimed', prontas);
         await aoConcluir(p.valoresAoVivo);
         return;
       }
