@@ -33,6 +33,7 @@ export interface AppConfig {
   openaiTextoModel?: string;
   agenteFiscalAtivo?: boolean;
   retomadaRecusaSefinAtiva?: boolean;
+  permissoesAtiva?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
   conversaLivreAtiva?: boolean;
@@ -76,6 +77,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
+    permissoesAtiva: env['PERMISSOES_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
     conversaLivreAtiva: env['CONVERSA_LIVRE_ATIVA'] === 'true',

@@ -11,7 +11,7 @@ const estilo = `<style>:root{--bg:#F4F4F5;--text:#121C22;--text-secondary:rgba(1
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font-family);font-size:var(--body-lg-size);line-height:var(--body-lg-line);min-height:100dvh;display:grid;place-items:center;padding:24px}main{width:100%;max-width:400px;text-align:center}header{font-weight:600;letter-spacing:-1px;font-size:30.77px;margin-bottom:48px}.marca{width:48px;height:48px;margin:0 auto 20px;border:1px solid rgba(18,28,34,.15);border-radius:50%;display:grid;place-items:center}h1{font-size:var(--headline-md-size);line-height:var(--headline-md-line);font-weight:500;margin:0 0 12px}p{color:var(--text-secondary);margin:0 0 28px}.btn-action{display:block;text-decoration:none;background:var(--primary);color:white;border-radius:12px;padding:16px 20px;font:inherit;font-weight:500;transition:background .15s;border:none;width:100%;cursor:pointer}.btn-action:hover{background:var(--primary-hover)}.btn-action:focus-visible{outline:2px solid var(--text);outline-offset:4px}.nota{font-size:12.99px;margin:20px 0 0}
 form{text-align:left;margin-top:8px}.campo{display:block;margin-bottom:20px}.campo span{display:block;font-weight:500;margin-bottom:8px}.campo input{width:100%;padding:16px;font:inherit;font-size:16px;border:1px solid rgba(18,28,34,.2);border-radius:12px;background:#fff;color:var(--text)}.campo input:focus-visible{outline:2px solid var(--text);outline-offset:2px}.autoriza{display:flex;gap:12px;align-items:flex-start;margin:0 0 28px;color:var(--text-secondary)}.autoriza input{width:20px;height:20px;margin-top:2px;flex:none;accent-color:var(--primary)}</style>`;
 const marca = `<div class="marca" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="m6 12 4 4 8-8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></div>`;
-const pagina = (titulo: string, corpo: string) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${titulo} | Noto</title>
+export const pagina = (titulo: string, corpo: string) => `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${titulo} | Noto</title>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap" rel="stylesheet">${estilo}</head>
 <body><main><header aria-label="Noto">noto</header>${marca}${corpo}</main></body></html>`;
 
@@ -19,13 +19,9 @@ const expirado = pagina('Link seguro', `<h1>Link expirado</h1><p>Este link deixo
 const origemRecusada = pagina('Link seguro', `<h1>Não consegui abrir este link</h1><p>Volte para a conversa com o Noto no WhatsApp e abra o link mais recente que eu te enviei.</p><a class="btn-action" href="whatsapp://">Voltar para o WhatsApp</a><p class="nota">Se o link mais recente também não abrir, me peça um novo por lá.</p>`);
 const entradaRecusada = pagina('Conectar agenda', `<h1>Não consegui ler os dados</h1><p>Confira o e-mail, preencha a senha e marque a autorização. Depois toque em Conectar de novo.</p>`);
 
-export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: string, obterWhatsappAssistente?: () => Promise<string | null>) {
-    const app = express();
-    app.disable('x-powered-by');
-    app.set('trust proxy', 1);
-    app.use((req, res, next) => {
-        res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
-        if (!links || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
+/** Guarda de origem/host compartilhada pelos links seguros (/c e /p). */
+export function guardaOrigem(origem: string, paginaRecusada: string) {
+    return (req: Request, res: express.Response, next: () => void) => {
         const url = new URL(origem);
         const semWww = url.host.replace(/^www\./, '');
         const hostsPublicos = new Set([url.host, semWww, 'www.' + semWww,
@@ -60,9 +56,20 @@ export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: str
                 return v.split(',').map(h => /^[a-z0-9.[\]:-]+$/i.test(h.trim()) ? h.trim().replace(/[A-Za-z0-9_-]{43,}/g, '[OCULTO]') : 'invalido').join(',');
             };
             console.warn(registroErroNoto('ORIGEM_RECUSADA', 'tecnico', { detalhe: 'metodo=' + req.method + ' origin=' + valor('origin') + ' referer=' + valor('referer') + ' secfetch=' + valor('sec-fetch-site') + ' host=' + valor('host') + ' xfh=' + valor('x-forwarded-host') + ' xfp=' + valor('x-forwarded-proto') }));
-            res.status(403).type('html').send(origemRecusada); return;
+            res.status(403).type('html').send(paginaRecusada); return;
         }
         next();
+    };
+}
+
+export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: string, obterWhatsappAssistente?: () => Promise<string | null>) {
+    const app = express();
+    app.disable('x-powered-by');
+    app.set('trust proxy', 1);
+    app.use((req, res, next) => {
+        res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
+        if (!links || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
+        guardaOrigem(origem, origemRecusada)(req, res, next);
     });
     app.get('/:token', async (req, res) => {
         try {

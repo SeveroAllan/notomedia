@@ -1,6 +1,7 @@
 import { categoriaFalhaEmissao } from './notificar-erro-medico.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { ComunicacaoHomologacao } from '../whatsapp/comunicacao-homologacao.js';
+import { Permissoes } from '../permissoes/permissoes.js';
 import { iniciarAvisosPendenciasProfissionais } from './avisar-pendencias-profissionais.js';
 import { PostgresDadosProfissionaisService } from '../io/postgres/postgres-dados-profissionais-service.js';
 /**
@@ -60,7 +61,9 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processa
     config.evolutionAssistantInstanceName,
     config.evolutionOfficialInstanceName
   );
-  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient);
+  const origemLinksSeguros = process.env['COFRE_ORIGEM'] || '';
+  const permissoesNoto = config.permissoesAtiva && origemLinksSeguros ? new Permissoes({ pool, origem: origemLinksSeguros }) : undefined;
+  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient, console.info, permissoesNoto);
   const notificadorAlertas: NotificadorAlertas = {
     async notificarMedicoWhatsApp(params) {
       console.warn(registroErroNoto(params.codigoErro ?? 'EMISSAO_FALHOU', categoriaFalhaEmissao(params.codigoErro), { medicoId: params.medicoId, solicitacaoId: params.solicitacaoId, etapa: 'emissao', detalhe: params.motivoErro }));

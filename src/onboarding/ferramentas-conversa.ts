@@ -1,7 +1,7 @@
 import type {FatosConversa} from './conversador-medico.js';
 // Catálogo único das ferramentas que o decisor da conversa pode pedir.
 // O modelo escolhe; esta camada diz o que está liberado agora e o que exige confirmação do médico.
-export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'listar_pendencias'|'iniciar_lote';
+export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'listar_pendencias'|'iniciar_lote'|'pedir_link_permissoes';
 export interface DescricaoFerramenta {
   nome:NomeFerramenta;
   tipo:'sem_efeito'|'leitura'|'escrita';
@@ -19,6 +19,8 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
     liberada:f=>!f.agenda.conectada&&!f.link.ativo&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
+  {nome:'pedir_link_permissoes',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para o médico escolher permissões com botões (emissão autônoma; entrega ao paciente).',
+    liberada:f=>f.permissoes?.pendentes===true},
   {nome:'iniciar_lote',tipo:'escrita',exigeConfirmacaoDoMedico:true,descricao:'Preparar o lote de notas; só emite depois do "pode" sobre a proposta.',
     liberada:(f,d)=>d.lote&&f.agenda.conectada&&['tribemd','amplimed'].includes(f.agenda.nome?.toLowerCase()??'')&&!f.semAgendaDigital},
 ];

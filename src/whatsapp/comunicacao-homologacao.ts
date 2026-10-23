@@ -11,13 +11,14 @@ import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
 import type { EnviarMensagemPaciente } from './enviar-mensagem-paciente.js';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
 
-type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega';
+type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega' | 'entrega_sem_permissao';
 const textos: Record<AcaoMedico, string> = {
   perguntar_medico: 'Doutor(a), preciso que confira este comprovante e me oriente antes de emitir a nota.',
   perguntar_pacote: 'Doutor(a), o valor do comprovante corresponde a mais de uma consulta. É um pacote? Preciso da sua confirmação antes de emitir.',
   pedir_agenda: 'Doutor(a), preciso de acesso à sua agenda para conferir a consulta deste comprovante. Pode me orientar?',
   falha_emissao: traduzirFalhaEmissao(undefined),
   nota_gerada: 'Doutor(a), a nota de teste foi autorizada em homologação e não tem valor fiscal.',
+  entrega_sem_permissao: 'Doutor(a), a nota foi gerada e está guardada. Para eu entregar direto ao paciente pelo seu WhatsApp, preciso da sua escolha de entrega. Me peça o link de permissões por aqui.',
   instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
   falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
 };
@@ -68,7 +69,8 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao>, private readonly log: (texto: string) => void = console.info) {}
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao>, private readonly log: (texto: string) => void = console.info,
+    private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string;
     detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
@@ -210,7 +212,7 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COFRE_ENVIO_FALHOU'); return 'erro'; }
   }
 
-  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato'> {
+  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
     if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
     const { medicoId, solicitacaoId } = entrada;
     try {
@@ -234,6 +236,12 @@ export class ComunicacaoHomologacao {
         nota.contato_telefone = telefone;
       }
       if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
+      // Permissão entregar_paciente: só a escolha gravada 'paciente' libera o envio. Ausente ou 'so_medico' bloqueia e avisa o médico.
+      if (this.permissoes && !await this.permissoes.permite(medicoId, 'entregar_paciente')) {
+        this.log(registroErroNoto('ENTREGA_SEM_PERMISSAO', 'tecnico', { medicoId, solicitacaoId }));
+        await this.medico({ medicoId, acao: 'entrega_sem_permissao', chave: nota.nota_fiscal_id }).catch(() => 'erro');
+        return 'sem_permissao';
+      }
       const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {

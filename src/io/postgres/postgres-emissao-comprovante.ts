@@ -82,6 +82,25 @@ export class PostgresEmissaoComprovante {
     return rows;
   }
 
+  /** Libera sem pergunta quando a permissão gravada emitir_autonomo='autonomo' autoriza. Fica na auditoria. */
+  async liberarPorPreferencia(medicoId: string, solicitacaoId: string, agora: Date): Promise<boolean> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('begin');
+      await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [medicoId]);
+      const liberada = await client.query(`update solicitacoes_nota set aguardando_confirmacao_medico=false, atualizado_em=now()
+        where id=$1 and medico_id=$2 and aguardando_confirmacao_medico=true returning id`, [solicitacaoId, medicoId]);
+      if (liberada.rows.length !== 1) { await client.query('rollback'); return false; }
+      await client.query(`update public.noto_auditoria_comprovantes a set estado = jsonb_set(a.estado, '{confirmacaoMedico}',
+        jsonb_build_object('eventos', coalesce(a.estado#>'{confirmacaoMedico,eventos}', '[]'::jsonb) || $3::jsonb))
+        from public.noto_emissoes_comprovantes e where e.auditoria_comprovante_id=a.id and e.medico_id=$1 and e.solicitacao_id=$2`,
+        [medicoId, solicitacaoId, JSON.stringify([{ tipo: 'preferencia_autonoma', origem: 'noto_permissoes:emitir_autonomo=autonomo', em: agora.toISOString() }])]);
+      await client.query('commit');
+      return true;
+    } catch { await client.query('rollback'); return false; }
+    finally { client.release(); }
+  }
+
   async registrarPergunta(medicoId: string, solicitacaoId: string, resultado: string, chaveMensagem: string | undefined, agora: Date) {
     await this.pool.query(`update public.noto_auditoria_comprovantes a set estado = jsonb_set(a.estado, '{confirmacaoMedico}',
       (a.estado->'confirmacaoMedico') || $3::jsonb || jsonb_build_object('eventos', coalesce(a.estado#>'{confirmacaoMedico,eventos}', '[]'::jsonb) || $4::jsonb))

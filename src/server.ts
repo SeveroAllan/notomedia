@@ -16,6 +16,8 @@ import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { chaveComprovante } from './atendimento/comprovante.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
+import { Permissoes, ROTULOS } from './permissoes/permissoes.js';
+import { criarRouterPermissoes } from './permissoes/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
 import { CadastroCertificado } from './cadastro/cadastro-certificado.js';
 import { criarConsultaEmpresa, PesquisaRegistroIndisponivel } from './cadastro/consultas.js';
@@ -103,7 +105,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   );
   const evolutionAssistantClient = new EvolutionApiClient(
     config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName);
-  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient);
+  const origemLinksSeguros = process.env['COFRE_ORIGEM'] || '';
+  const permissoesNoto = config.permissoesAtiva && origemLinksSeguros ? new Permissoes({ pool, origem: origemLinksSeguros }) : undefined;
+  const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient, console.info, permissoesNoto);
   const dadosProfissionais = new PostgresDadosProfissionaisService(pool);
   const authAdminService = new SupabaseAuthAdminService(
     config.supabaseUrl,
@@ -140,6 +144,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Credenciais do cofre não passam pelo parser geral que conserva rawBody.
   app.use('/api/conta/cofre', cofres.app);
   if (cofres.appLinks) app.use('/c', cofres.appLinks);
+  if (permissoesNoto) app.use('/p', criarRouterPermissoes(permissoesNoto, origemLinksSeguros, async r => {
+    // Escolha gravada: confirma na conversa. Falha aqui não desfaz a gravação (já commitada).
+    const rotulo = ROTULOS[r.permissao as keyof typeof ROTULOS];
+    if (!r.medicoId || !rotulo) return;
+    await comunicacaoHomologacao.conversa({ medicoId: r.medicoId,
+      chave: `permissao_escolhida:${r.linkId}`,
+      fala: [`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Se quiser mudar depois, é só me pedir.`] });
+  }));
   app.locals.encerrarCofres = cofres.encerrar;
   app.use(
     express.json({
@@ -345,6 +357,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
+        permissoes:permissoesNoto?{emitirAutonomo:(await permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null))?.valor??null,
+          entregarPaciente:(await permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null))?.valor??null,
+          pendentes:(await permissoesNoto.faltantes(medicoId).catch(()=>[])).length>0}:null,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
         homologacaoInformada:false};
@@ -361,6 +376,19 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
         const r=await cofres.links?.solicitarLinkCofre(c.medicoId,normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined)??'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
+      }
+      if(decisao.acao==='pedir_link_permissoes') {
+        if(!permissoesNoto) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:'PERMISSOES_INDISPONIVEIS'}};
+        const faltantes=await permissoesNoto.faltantes(c.medicoId).catch(()=>[] as const);
+        const pedida=decisao.parametros?.permissao;
+        const alvo=(pedida==='emitir_autonomo'||pedida==='entregar_paciente')?pedida:faltantes[0];
+        if(!alvo) return {dados:{ferramenta:'pedir_link_permissoes',ok:true,motivo:'TODAS_ESCOLHIDAS'}};
+        const r=await permissoesNoto.criarLink(c.medicoId,alvo).catch(()=>null);
+        if(!r||'erro' in r) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:r&&'erro' in r?r.erro:'FALHA'}};
+        const fala=[...decisao.fala.filter(t=>t.trim()).slice(0,2), r.url];
+        const envio=await comunicacaoHomologacao.conversa({medicoId:c.medicoId,chave:`link_permissoes:${alvo}:${r.url.slice(-12)}`,fala,conversa:c.conversa,falaMemoria:fala.map((t,i)=>i===fala.length-1?'[LINK_SEGURO]':t)});
+        for(const [indice,texto] of fala.entries()) await memoriaPersistida?.registrarFala(c.medicoId,c.conversa,`noto:permissoes:link:${alvo}:${r.url.slice(-12)}:${indice}`,indice===fala.length-1?`${origemLinksSeguros}/p/[LINK_SEGURO]`:texto,'noto').catch(()=>{});
+        return {jaRespondida:envio==='enviado'||envio==='simulado',dados:{ferramenta:'pedir_link_permissoes',ok:envio!=='erro',motivo:envio}};
       }
       const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
       if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
@@ -1004,14 +1032,29 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             if (resultado.tipo === 'perguntar_medico') await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: 'perguntar_medico', motivo: resultado.motivo,
               chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
             if (resultado.tipo === 'enfileirada') {
-              const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
-              const c = pendentes.find(p => p.id === resultado.solicitacaoId)?.confirmacao;
-              if (c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
-                const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: resultado.solicitacaoId,
-                  paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
-                await emissaoComprovante.registrarPergunta(contexto.medicoId, resultado.solicitacaoId, envio.resultado, envio.chaveMensagem, new Date());
+              // Permissão emitir_autonomo='autonomo' gravada: libera sem pergunta, com auditoria.
+              const autonomo = permissoesNoto ? await permissoesNoto.permite(contexto.medicoId, 'emitir_autonomo').catch(() => false) : false;
+              if (autonomo && await emissaoComprovante.liberarPorPreferencia(contexto.medicoId, resultado.solicitacaoId, new Date())) {
+                await comunicacaoHomologacao.conversa({ medicoId: contexto.medicoId, chave: `emissao_autonoma:${resultado.solicitacaoId}`,
+                  fala: ['Comprovante conferido com a sua agenda. Estou emitindo a nota agora, como você preferiu, e te aviso quando terminar.'] });
+              } else {
+                const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
+                const c = pendentes.find(p => p.id === resultado.solicitacaoId)?.confirmacao;
+                if (c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
+                  const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: resultado.solicitacaoId,
+                    paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
+                  await emissaoComprovante.registrarPergunta(contexto.medicoId, resultado.solicitacaoId, envio.resultado, envio.chaveMensagem, new Date());
+                }
+                // Sem escolha e sem link anterior: oferece a escolha UMA vez, junto da pergunta normal.
+                if (permissoesNoto
+                  && !await permissoesNoto.ler(contexto.medicoId, 'emitir_autonomo').catch(() => ({ valor: 'erro' }) as any)
+                  && !await permissoesNoto.linkJaCriado(contexto.medicoId, 'emitir_autonomo').catch(() => true)) {
+                  const link = await permissoesNoto.criarLink(contexto.medicoId, 'emitir_autonomo').catch(() => null);
+                  if (link && 'url' in link) await comunicacaoHomologacao.conversa({ medicoId: contexto.medicoId, chave: 'link_permissoes:emitir_autonomo:primeiro',
+                    fala: ['Nas próximas, posso emitir sozinho quando o comprovante bater com a agenda, sem perguntar a cada nota. Se quiser, escolha aqui:', link.url] });
+                }
+                console.info('Solicitação de comprovante aguardando confirmação do médico.');
               }
-              console.info('Solicitação de comprovante aguardando confirmação do médico.');
             }
           } : undefined,
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
