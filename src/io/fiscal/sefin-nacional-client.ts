@@ -9,6 +9,7 @@ import { rootCertificates } from 'node:tls';
 import zlib from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { classificarStatusConsultaDps, type ResultadoConsultaDps } from '../../fiscal/retomada-recusa.js';
 
 export interface EnviarDpsSefinInput {
   xmlAssinado: string;
@@ -198,12 +199,34 @@ export class SefinNacionalClient {
     };
   }
 
+  /**
+   * Reconciliação somente-leitura (Manual dos Contribuintes v1.2 out/2025, seção 1.4.2):
+   * HEAD /dps/{id} informa se uma NFS-e foi gerada a partir do identificador da DPS.
+   * Usada para provar recusa definitiva antes de qualquer retomada. Nunca transmite nada.
+   */
+  async consultarDpsGerada(
+    dpsId: string,
+    input: { pfxBuffer: Buffer; senhaCertificado: string; ambiente: 1 | 2 }
+  ): Promise<{ resultado: ResultadoConsultaDps; httpStatus?: number }> {
+    if (!/^DPS\d{42}$/.test(dpsId)) return { resultado: 'indeterminado' };
+    const base = input.ambiente === 1
+      ? 'https://sefin.nfse.gov.br'
+      : 'https://sefin.producaorestrita.nfse.gov.br';
+    try {
+      const resp = await this.executarRequisicaoMtls(`${base}/SefinNacional/dps/${dpsId}`, '', input.pfxBuffer, input.senhaCertificado, this.defaultCaBundle, 'HEAD');
+      return { resultado: classificarStatusConsultaDps(resp.status), httpStatus: resp.status };
+    } catch {
+      return { resultado: 'indeterminado' };
+    }
+  }
+
   private executarRequisicaoMtls(
     urlStr: string,
     body: string,
     pfx: Buffer,
     passphrase: string,
-    caBundle?: Buffer
+    caBundle?: Buffer,
+    metodo: 'POST' | 'HEAD' = 'POST'
   ): Promise<{ status: number; corpo: string }> {
     return new Promise((resolve, reject) => {
       const url = new URL(urlStr);
@@ -211,7 +234,7 @@ export class SefinNacionalClient {
         hostname: url.hostname,
         port: url.port || 443,
         path: url.pathname + url.search,
-        method: 'POST',
+        method: metodo,
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),

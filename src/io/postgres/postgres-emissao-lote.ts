@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { classificarRetomadaEmissao } from '../../fiscal/retomada-recusa.js';
 import { createHash } from 'node:crypto';
 import { registroErroNoto, sanitizarErroFiscal } from '../../observabilidade/erros.js';
 import { chaveConsulta } from '../../atendimento/comprovante.js';
@@ -27,7 +28,8 @@ export type ResultadoEmissaoLote = {estado: 'emitida'; entrega: string; semConta
 export class PostgresEmissaoLote extends PostgresFilaRepositorio {
   private readonly solicitacoes: PostgresEmissaoApiRepositorio;
   constructor(private readonly banco: pg.Pool, chave: string, private readonly pepper: string,
-    private readonly permitido: (medicoId: string) => Promise<boolean>) {
+    private readonly permitido: (medicoId: string) => Promise<boolean>,
+    private readonly retomadaRecusaAtiva = false) {
     super(banco, true, true);
     this.solicitacoes = new PostgresEmissaoApiRepositorio(banco, chave, pepper);
   }
@@ -73,8 +75,25 @@ export class PostgresEmissaoLote extends PostgresFilaRepositorio {
           c.assinatura !== new PostgresLotesEmissao(this.banco,this.pepper).assinatura(e.medicoId,e.item.fonte,e.item.idExterno,valor) || !await this.permitido(e.medicoId)) {
         await client.query('rollback'); return {estado:'erro'};
       }
-      const {rows: existentes} = await client.query(`select estado from public.noto_emissoes_comprovantes where medico_id=$1 and consulta_chave=$2 for update`,[e.medicoId,e.item.chave]);
-      if (existentes.length) {await client.query('commit');return {estado:existentes[0].estado==='nota_gerada'?'ja_faturada':'repetida'};}
+      // Reabertura só vale com a retomada ativa (migração aplicada); sem ela, comportamento intacto.
+      const {rows: existentes} = this.retomadaRecusaAtiva
+        ? await client.query(`select id, estado, nota_fiscal_id, recusa_definitiva, tentativa from public.noto_emissoes_comprovantes
+            where medico_id=$1 and consulta_chave=$2 and substituida_em is null for update`,[e.medicoId,e.item.chave])
+        : await client.query(`select estado from public.noto_emissoes_comprovantes where medico_id=$1 and consulta_chave=$2 for update`,[e.medicoId,e.item.chave]);
+      let tentativa = 1; let substituidaId: string | null = null;
+      if (existentes.length) {
+        if (!this.retomadaRecusaAtiva) {await client.query('commit');return {estado:existentes[0].estado==='nota_gerada'?'ja_faturada':'repetida'};}
+        const acao = classificarRetomadaEmissao({estado: existentes[0].estado,
+          recusaDefinitiva: existentes[0].recusa_definitiva === true, notaFiscalId: existentes[0].nota_fiscal_id ?? null});
+        if (acao !== 'reabrir') {await client.query('commit');return {estado:acao};}
+        // Recusa definitiva comprovada: substitui na MESMA transação (advisory lock por médico +
+        // índice único parcial garantem uma única emissão ativa por consulta sob concorrência).
+        const sub = await client.query(`update public.noto_emissoes_comprovantes set substituida_em=now(), atualizado_em=now()
+          where id=$1 and estado='erro' and recusa_definitiva and nota_fiscal_id is null and substituida_em is null returning id`,[existentes[0].id]);
+        if (sub.rowCount !== 1) {await client.query('rollback');return {estado:'erro'};}
+        substituidaId = existentes[0].id;
+        tentativa = Number(existentes[0].tentativa) + 1;
+      }
       const perfil = await this.solicitacoes.buscarPerfilFiscalMedico(e.medicoId,client);
       if (!perfil?.configuracaoCompleta) {await client.query('rollback');return {estado:'erro'};}
       const datas = new Date(c.data_hora).toLocaleDateString('pt-BR',{timeZone:'America/Sao_Paulo'});
@@ -82,8 +101,9 @@ export class PostgresEmissaoLote extends PostgresFilaRepositorio {
         xdescServ:montarDescricaoServico(perfil,datas),datasConsultaTexto:datas,ctribNac:perfil.ctribNacPadrao,cnbs:perfil.cnbs,cclassTrib:perfil.cclassTrib,cindOp:perfil.cindOp,
         contatoPaciente:resolverContatoConsulta(e.detalhe.contato)};
       const criada = await this.solicitacoes.enfileirarSolicitacao(params,client);
-      await client.query(`insert into public.noto_emissoes_comprovantes (medico_id, consulta_chave, lote_item_id, solicitacao_id, estado)
-        values ($1,$2,$3,$4,'enfileirada')`,[e.medicoId,e.item.chave,e.item.id,criada.id]);
+      const {rows: nova} = await client.query(`insert into public.noto_emissoes_comprovantes (medico_id, consulta_chave, lote_item_id, solicitacao_id, estado, tentativa)
+        values ($1,$2,$3,$4,'enfileirada',$5) returning id`,[e.medicoId,e.item.chave,e.item.id,criada.id,tentativa]);
+      if (substituidaId) await client.query(`update public.noto_emissoes_comprovantes set substituida_por=$2 where id=$1`,[substituidaId,nova[0].id]);
       await client.query('commit');
       return {...params,id:criada.id,tentativas:0};
     } catch (erro) {await client.query('rollback');throw erro;} finally {client.release();}

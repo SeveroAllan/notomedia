@@ -42,10 +42,11 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processa
     supabaseClient,
     sefinClient,
     config.agenteFiscalAtivo,
-    config.preparacaoFiscalAtiva
+    config.preparacaoFiscalAtiva,
+    config.retomadaRecusaSefinAtiva === true
   );
   const emissorComprovante = config.emissaoComprovanteHomologacaoAtiva
-    ? new PostgresEmissorDpsService(pool, config.encryptionKey, meuDanfeClient, hubCpfClient, supabaseClient, sefinClient, true, true)
+    ? new PostgresEmissorDpsService(pool, config.encryptionKey, meuDanfeClient, hubCpfClient, supabaseClient, sefinClient, true, true, config.retomadaRecusaSefinAtiva === true)
     : undefined;
   const evolutionClient = new EvolutionApiClient(
     config.evolutionApiUrl,

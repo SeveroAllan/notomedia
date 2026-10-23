@@ -252,7 +252,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const lotes = new PostgresLotesEmissao(pool, config.appPepper);
   const lotePermitido = async (id: string) => config.conversaLivreAtiva === true && config.emissaoComprovanteHomologacaoAtiva === true && await comunicacaoHomologacao.medicoPermitido(id);
-  const emissaoLote = new PostgresEmissaoLote(pool, config.encryptionKey, config.appPepper, lotePermitido);
+  const emissaoLote = new PostgresEmissaoLote(pool, config.encryptionKey, config.appPepper, lotePermitido, config.retomadaRecusaSefinAtiva === true);
   const diagnosticarPeriodo = async (medicoId:string, desde:string, ate:string) => {
     const {rows} = await pool.query<{id_externo:string}>(`select id_externo from public.noto_consultas_sincronizadas
       where medico_id=$1 and fonte='tribemd' and status='realizada'

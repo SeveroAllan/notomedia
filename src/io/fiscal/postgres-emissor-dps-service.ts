@@ -6,6 +6,8 @@
 
 import type pg from 'pg';
 import { sanitizarErroFiscal } from '../../observabilidade/erros.js';
+import { ehRejeicaoRegraNegocio } from '../../fiscal/retomada-recusa.js';
+import type { ResultadoTransmissaoSefin } from './sefin-nacional-client.js';
 import { validarCpf } from '../../paciente/validar-cpf.js';
 import { dadosProfissionaisCompletos } from '../../conta/validar-dados-emissao.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
@@ -61,7 +63,8 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly supabaseClient?: SupabaseClient,
     private readonly sefinClient?: SefinNacionalClient,
     private readonly modoAgenteConservador = false,
-    private readonly preparacaoFiscalAtiva = false
+    private readonly preparacaoFiscalAtiva = false,
+    private readonly retomadaRecusaAtiva = false
   ) {}
 
   /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
@@ -237,9 +240,11 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       let resSefinFinal: any;
       const MAX_INCREMENTOS_SEQUENCIA = 5;
 
+      let dpsIdFinal: string | undefined;
       for (let seq = 0; seq <= MAX_INCREMENTOS_SEQUENCIA; seq++) {
         emissaoInput.nDPS = String(ndpsAtual);
         const { dpsId, xml: xmlGerado } = gerarXmlDps(emissaoInput, prestadorConfig, dataGeracao);
+        dpsIdFinal = dpsId;
         xmlDpsOriginal = xmlGerado;
         if (correcao && xmlGerado !== correcao.xmlDpsOriginal) {
           return { sucesso: false, erro: 'Dados da emissão mudaram desde a rejeição. Correção interrompida sem transmitir.' };
@@ -353,6 +358,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
 
       if (!resSefinFinal || !resSefinFinal.sucesso) {
+        await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
         const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
         const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
           prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
@@ -377,6 +383,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         };
       }
 
+      await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
       chaveAcessoFinal = resSefinFinal.chaveAcesso;
       respostaSefinRaw = resSefinFinal.respostaRaw;
       xmlAutorizadoFinal = resSefinFinal.xmlAutorizado;
@@ -609,5 +616,35 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const { rows } = await this.pool.query(sql, [medicoId]);
     const proximoLocal = Number.parseInt(rows[0].proximo, 10);
     return Math.max(proximoLocal, numeroConfigurado || 1);
+  }
+
+  /**
+   * Retomada (inativa por padrão): persiste o identificador oficial da DPS transmitida e, em
+   * rejeição estruturada de regra de negócio, reconcilia com HEAD /dps/{id}. Só marca
+   * recusa_definitiva quando a consulta confirma que NENHUMA NFS-e foi gerada; qualquer falha
+   * ou resposta indeterminada deixa a tentativa travada. Nunca interfere na emissão.
+   */
+  private async registrarResultadoParaRetomada(
+    solicitacaoId: string,
+    dpsId: string | undefined,
+    resSefin: ResultadoTransmissaoSefin | undefined,
+    cert: { pfxBuffer: Buffer; senhaCertificado: string },
+    ambiente: 1 | 2
+  ): Promise<void> {
+    if (!this.retomadaRecusaAtiva || !dpsId) return;
+    try {
+      await this.pool.query(`update public.noto_emissoes_comprovantes set dps_id = $2, atualizado_em = now()
+        where solicitacao_id = $1 and dps_id is null`, [solicitacaoId, dpsId]);
+      if (resSefin && !resSefin.sucesso && this.sefinClient &&
+          ehRejeicaoRegraNegocio({ httpStatus: resSefin.httpStatus, codigoErro: resSefin.codigoErro, respostaRaw: resSefin.respostaRaw })) {
+        const consulta = await this.sefinClient.consultarDpsGerada(dpsId, { pfxBuffer: cert.pfxBuffer, senhaCertificado: cert.senhaCertificado, ambiente });
+        if (consulta.resultado === 'nao_gerada') {
+          await this.pool.query(`update public.noto_emissoes_comprovantes set recusa_definitiva = true, atualizado_em = now()
+            where solicitacao_id = $1 and estado = 'erro' and nota_fiscal_id is null`, [solicitacaoId]);
+        }
+      }
+    } catch (erro) {
+      console.warn('[PostgresEmissorDpsService] Reconciliação de retomada falhou (tentativa permanece travada):', (erro as Error)?.message);
+    }
   }
 }
