@@ -169,7 +169,7 @@ export class LinksCofre {
         if (!rows.length) return;
         const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
         if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(!conectado ? { falhaAcesso } : {}) }); return; }
-        await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}. Confira seu login, senha e permissão de acesso na área segura da sua conta.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.');
+        await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}: o serviço está exigindo uma etapa de verificação a mais na sua conta (como a verificação em duas etapas, 2FA). Sem concluir essa etapa na área segura da sua conta, não consigo acessar.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.');
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
         const credencial = contemCredencialAgenda(texto);

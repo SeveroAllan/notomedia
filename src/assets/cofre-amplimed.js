@@ -13,7 +13,7 @@
     vazio: 'Conecte sua agenda para o Noto conferir suas consultas. Só leitura.',
     salvo: 'Acesso salvo. Verificando…', conectando: 'Verificando o acesso ao Amplimed…',
     conectado: 'Agenda conectada. O Noto só lê; não altera nada no Amplimed.',
-    atencao: 'Não consegui validar o acesso ao Amplimed. Confira a senha ou tente de novo.',
+    atencao: 'Não consegui validar o acesso ao Amplimed. Se o Amplimed estiver pedindo a verificação em duas etapas (2FA), resolva essa etapa na sua conta e tente de novo.',
     desconectado: 'Agenda desconectada.'
   };
   function renderizar(s) {

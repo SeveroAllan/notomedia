@@ -514,7 +514,7 @@ it('conclusão de link chega ao modelo como fatos.eventoAgenda e a fala vai sem 
  c.completar.mockImplementation(async(_k,_m,msgs)=>{
   const d=JSON.parse(msgs[1].content);
   expect(d.fatos.eventoAgenda).toEqual({agenda:'amplimed',conectado:false,falhaAcesso:true});
-  return '{"fala":["Não consegui conectar sua agenda Amplimed: confira login, senha e permissão de acesso na área segura da sua conta. Se quiser, mando um novo link seguro."],"acao":null}';
+  return '{"fala":["Não consegui conectar sua agenda Amplimed: o Amplimed está exigindo a verificação em duas etapas (2FA) na sua conta. Quando resolver na área segura, me avise."],"acao":null}';
  });
  await processarComunicacaoMedico({medicoId:'m',chaveProcessamento:'agenda:xyz',agora,chaveConversa:'c',eventoAgenda:{agenda:'amplimed',conectado:false,falhaAcesso:true}},c.deps);
  expect(c.executar).not.toHaveBeenCalled();
@@ -529,6 +529,7 @@ it('conclusão com modelo insistindo em ação cai no texto determinístico da c
  expect(c.executar).not.toHaveBeenCalled();
  const enviada=c.enviar.mock.calls[0][0].join(' ');
  expect(enviada).toMatch(/Não consegui conectar sua agenda Amplimed/);
- expect(enviada).toMatch(/login, senha e permissão de acesso na área segura/);
+ expect(enviada).toMatch(/verificação em duas etapas, 2FA/);
+ expect(enviada).not.toMatch(/confira login/i);
  expect(enviada).not.toMatch(/Aqui está o link/);
 });
