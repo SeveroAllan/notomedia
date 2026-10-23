@@ -14,6 +14,9 @@ import { ehIdAmplimed, prepararLoteAmplimed } from './agenda/amplimed-lote.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { chaveComprovante } from './atendimento/comprovante.js';
+import { validarCpf } from './paciente/validar-cpf.js';
+import { buscarCpfConversa } from './permissoes/buscar-cpf-conversa.js';
+import { extrairTelefoneJid } from './whatsapp/extrair-telefone-jid.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
 import { Permissoes, ROTULOS } from './permissoes/permissoes.js';
@@ -107,6 +110,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName);
   const origemLinksSeguros = process.env['COFRE_ORIGEM'] || '';
   const permissoesNoto = config.permissoesAtiva && origemLinksSeguros ? new Permissoes({ pool, origem: origemLinksSeguros }) : undefined;
+  // solicitar_cpf só entra em operação quando a migração que alarga os CHECKs está aplicada.
+  const permissoesCpfAtivaP: Promise<boolean> = permissoesNoto ? pool.query(
+    `select 1 from pg_constraint where conname='noto_permissoes_permissao_check' and pg_get_constraintdef(oid) ilike '%solicitar_cpf%'`
+  ).then(r => r.rows.length > 0).catch(() => false) : Promise.resolve(false);
   const comunicacaoHomologacao = new ComunicacaoHomologacao(pool, config, evolutionAssistantClient, console.info, permissoesNoto);
   const dadosProfissionais = new PostgresDadosProfissionaisService(pool);
   const authAdminService = new SupabaseAuthAdminService(
@@ -364,7 +371,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
         permissoes:permissoesNoto?{emitirAutonomo:(await permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null))?.valor??null,
           entregarPaciente:(await permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null))?.valor??null,
-          pendentes:(await permissoesNoto.faltantes(medicoId,['emitir_autonomo','entregar_paciente']).catch(()=>[])).length>0}:null,
+          pendentes:(await permissoesNoto.faltantes(medicoId,['emitir_autonomo']).catch(()=>[])).length>0}:null,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
         homologacaoInformada:false};
@@ -384,9 +391,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='pedir_link_permissoes') {
         if(!permissoesNoto) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:'PERMISSOES_INDISPONIVEIS'}};
-        const faltantes=await permissoesNoto.faltantes(c.medicoId).catch(()=>[] as const);
+        const faltantes=await permissoesNoto.faltantes(c.medicoId,['emitir_autonomo']).catch(()=>[] as const);
         const pedida=decisao.parametros?.permissao;
-        const alvo=(pedida==='emitir_autonomo'||pedida==='entregar_paciente'||pedida==='solicitar_cpf')?pedida:faltantes[0];
+        const alvo=(pedida==='emitir_autonomo'||pedida==='entregar_paciente'||(pedida==='solicitar_cpf'&&await permissoesCpfAtivaP))?pedida:faltantes[0];
         if(!alvo) return {dados:{ferramenta:'pedir_link_permissoes',ok:true,motivo:'TODAS_ESCOLHIDAS'}};
         const r=await permissoesNoto.criarLink(c.medicoId,alvo).catch(()=>null);
         if(!r||'erro' in r) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:r&&'erro' in r?r.erro:'FALHA'}};
@@ -1011,13 +1018,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
         },
         aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
-          aoCpfAusente: !permissoesNoto ? undefined : async medicoId => {
-            // CPF ausente na agenda e na conversa: pergunta ao médico a quem recorrer, uma única vez, por link.
-            if (await permissoesNoto.ler(medicoId, 'solicitar_cpf').catch(() => null)) return;
-            if (await permissoesNoto.linkJaCriado(medicoId, 'solicitar_cpf').catch(() => true)) return;
-            const r = await permissoesNoto.criarLink(medicoId, 'solicitar_cpf').catch(() => null);
+          buscarCpfConversa: !permissoesNoto ? undefined : async (medicoId, pacienteId) =>
+            await permissoesCpfAtivaP ? buscarCpfConversa(pool, medicoId, pacienteId) : { tipo: 'sem_conversa' as const },
+          aoCpfAusente: !permissoesNoto ? undefined : async (medicoId, busca) => {
+            if (!await permissoesCpfAtivaP) return;
+            // CPF ausente em todas as fontes verificadas: pergunta ao médico a quem recorrer, uma única vez, por link.
+            if (await permissoesNoto!.ler(medicoId, 'solicitar_cpf').catch(() => null)) return;
+            if (await permissoesNoto!.linkJaCriado(medicoId, 'solicitar_cpf').catch(() => true)) return;
+            const r = await permissoesNoto!.criarLink(medicoId, 'solicitar_cpf').catch(() => null);
             if (!r || 'erro' in r) return;
-            const fala = ['Doutor(a), não encontrei o CPF do paciente na agenda nem na conversa recente. Para emitir, preciso dele. Quando isso acontecer, prefere que eu pergunte sempre a você ou direto ao paciente? Escolha no link seguro a seguir.', r.url];
+            const ausencia = busca?.tipo === 'sem_cpf' ? 'não encontrei o CPF do paciente na agenda nem na conversa recente dele aqui no WhatsApp'
+              : busca?.tipo === 'sem_conversa' ? 'não encontrei o CPF do paciente na agenda, e não há conversa recente dele aqui para eu procurar'
+              : busca?.tipo === 'ambiguos' ? 'encontrei mais de um CPF na conversa recente com o paciente e não sei qual é o dele'
+              : 'não encontrei o CPF do paciente na agenda';
+            const fala = [`Doutor(a), ${ausencia}. Para emitir, preciso dele. Quando isso acontecer, prefere que eu pergunte sempre a você ou direto ao paciente? Escolha no link seguro a seguir.`, r.url];
             await comunicacaoHomologacao.conversa({ medicoId, chave: `link_permissoes:solicitar_cpf:${r.url.slice(-12)}`,
               fala, falaMemoria: [fala[0], '[LINK_SEGURO]'] });
           },
@@ -1032,6 +1046,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             return rows.length === 0;
           },
           aoComunicar: config.envioMedicoRealAtivo ? async (decisao, lido) => {
+            if (decisao.tipo === 'perguntar_medico' && decisao.motivo === 'CADASTRO_INCOMPLETO' && permissoesNoto && await permissoesCpfAtivaP) {
+              const escolhaCpf = await permissoesNoto.ler(contexto.medicoId, 'solicitar_cpf').catch(() => null);
+              if (escolhaCpf?.valor === 'paciente') {
+                const est = await atendimentoRepo.lerEstado(contexto.medicoId, contexto.pacienteId).catch(() => null);
+                const telefone = extrairTelefoneJid(contexto.mensagem.key.remoteJidAlt) || extrairTelefoneJid(contexto.mensagem.key.remoteJid) || '';
+                if (est && (!est.paciente.cpf || !validarCpf(est.paciente.cpf)) && telefone) {
+                  await comunicacaoHomologacao.pedirCpfPaciente({ medicoId: contexto.medicoId, contatoTelefone: telefone,
+                    chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
+                  return;
+                }
+              }
+            }
             if (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda') {
               await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: decisao.tipo, motivo: decisao.motivo,
                 ...(decisao.tipo === 'perguntar_medico' && decisao.detalhe ? { detalhe: decisao.detalhe } : {}),

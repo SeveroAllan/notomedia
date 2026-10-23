@@ -283,6 +283,27 @@ export class ComunicacaoHomologacao {
     return rows.length === 1;
   }
 
+  // Pedido de CPF direto ao paciente (escolha solicitar_cpf='paciente' da conta). Em homologação
+  // (envioPacienteRealAtivo=false) é simulado; fora da allowlist não sai. Dedup por comprovante.
+  async pedirCpfPaciente(entrada: { medicoId: string; contatoTelefone: string; chave: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_instancia'> {
+    const { medicoId, contatoTelefone, chave } = entrada;
+    const texto = 'Para o consultório emitir a nota da sua consulta, preciso do seu CPF. Pode me informar por aqui?';
+    if (!this.config.envioPacienteRealAtivo) return this.simular('pedir_cpf_paciente');
+    try {
+      const { rows } = await this.pool.query(`select pf.ambiente, wi.nome_instancia from medicos m
+        left join medico_perfil_fiscal pf on pf.medico_id = m.id
+        left join lateral (select nome_instancia from whatsapp_instancias
+          where medico_id = m.id and oficial = false and status = 'conectado'
+            and nome_instancia <> $2 and nome_instancia <> $3 order by criado_em desc limit 1) wi on true
+        where m.id = $1`, [medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName]);
+      const r = rows[0];
+      if (!r?.nome_instancia) return 'sem_instancia';
+      if (!this.permitido(this.config.envioPacienteRealAtivo, r.ambiente, contatoTelefone)) return this.simular('pedir_cpf_paciente');
+      return await this.enviarUnico(medicoId, 'pedir_cpf_paciente', chave, async () => (await this.transporte.enviarTexto({
+        instanciaNome: r.nome_instancia, contatoTelefone, texto })).sucesso);
+    } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
+  }
+
   private async enviarUnico(medicoId: string, acao: string, chave: string, enviar: () => Promise<boolean>): Promise<'enviado' | 'erro' | 'repetido'> {
     const hash = createHmac('sha256', this.config.appPepper).update(JSON.stringify([medicoId, acao, chave])).digest('hex');
     // A reserva permanece consumida mesmo se o transporte ou a confirmação falhar.

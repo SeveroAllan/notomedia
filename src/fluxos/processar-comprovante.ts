@@ -4,6 +4,7 @@ import type { DadosMensagemEvolution } from '../whatsapp/payload-webhook-schema.
 import type { ExtratorComprovante, EstadoPedidoComprovante, ResultadoExtracaoComprovante,
   DecisaoPedidoComprovante } from '../atendimento/comprovante.js';
 import { validarCpf } from '../paciente/validar-cpf.js';
+import type { BuscaCpfConversa } from '../permissoes/buscar-cpf-conversa.js';
 import type { HistoricoComunicacaoRepositorio } from '../onboarding/historico-comunicacao-repositorio.js';
 import type { ProcessarWebhookDeps } from './processar-mensagem-webhook.js';
 
@@ -22,19 +23,28 @@ interface ProcessarComprovanteDeps {
 interface OrquestrarComprovanteDeps extends Omit<ProcessarComprovanteDeps, 'log'> {
   lerEstado: (medicoId: string, pacienteId: string) => Promise<EstadoPedidoComprovante>;
   log: (nivel: 'info' | 'erro', mensagem: string) => void;
-  // CPF ausente na agenda e na conversa: o Noto pergunta ao médico a quem recorrer (permissão solicitar_cpf).
-  aoCpfAusente?: (medicoId: string) => Promise<void>;
+  // CPF ausente na agenda: antes de perguntar, o Noto procura na conversa recente vinculada ao paciente.
+  buscarCpfConversa?: (medicoId: string, pacienteId: string) => Promise<BuscaCpfConversa>;
+  // CPF não encontrado em nenhuma fonte: o Noto pergunta ao médico a quem recorrer (permissão solicitar_cpf).
+  aoCpfAusente?: (medicoId: string, busca: BuscaCpfConversa | null) => Promise<void>;
 }
 
 export async function orquestrarComprovante(
   contexto: Parameters<NonNullable<ProcessarWebhookDeps['aoReceberComprovante']>>[0],
   deps: OrquestrarComprovanteDeps
 ): Promise<DecisaoPedidoComprovante> {
-  const estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
+  let estado = await deps.lerEstado(contexto.medicoId, contexto.pacienteId);
+  let buscaCpf: BuscaCpfConversa | null = null;
+  if (deps.buscarCpfConversa && (!estado.paciente.cpf || !validarCpf(estado.paciente.cpf))) {
+    try {
+      buscaCpf = await deps.buscarCpfConversa(contexto.medicoId, contexto.pacienteId);
+      if (buscaCpf.tipo === 'cpf') estado = { ...estado, paciente: { ...estado.paciente, cpf: buscaCpf.cpf } };
+    } catch { deps.log('erro', 'BUSCA_CPF_CONVERSA_FALHOU'); }
+  }
   const decisao = await processarComprovante(contexto.mensagem, estado, deps);
   if (decisao.tipo === 'perguntar_medico' && decisao.motivo === 'CADASTRO_INCOMPLETO' && deps.aoCpfAusente &&
       (!estado.paciente.cpf || !validarCpf(estado.paciente.cpf))) {
-    try { await deps.aoCpfAusente(estado.medicoId); }
+    try { await deps.aoCpfAusente(estado.medicoId, buscaCpf); }
     catch { deps.log('erro', 'OFERTA_CPF_FALHOU'); }
   }
   if (decisao.tipo === 'pedido_nota_pronto' && !deps.aoDecidir) deps.log('info', `pediria nota ${decisao.tipo}`);
