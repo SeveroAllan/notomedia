@@ -6,6 +6,7 @@ import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { REACOES_PERMITIDAS } from '../whatsapp/reagir-mensagem.js';
 import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lote-retroativo.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
+import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar-sincrono.js';
 
 export { ERRO_CONVERSA } from './falas.js';
 export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'nenhuma'] as const;
@@ -159,7 +160,7 @@ export class ConversadorMedico {
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
     } catch (erro) {
       const motivo=erro instanceof z.ZodError?'SCHEMA_INVALIDO':erro instanceof SyntaxError?'JSON_INVALIDO':erro instanceof ErroNvidiaChat?erro.codigo:erro instanceof Error&&erro.message==='IA_NAO_CONFIGURADA'?'IA_NAO_CONFIGURADA':'RESPOSTA_IA_RECUSADA';
-      console.warn(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo,...(erro instanceof ErroNvidiaChat&&erro.statusHttp?{statusHttp:erro.statusHttp}:{}),...(erro instanceof z.ZodError?{campos:erro.issues.slice(0,5).map(i=>`${i.path.join('.')}:${i.code}`)}:{})}));
+      registrarLinhaSincronaConsoleAviso(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo,...(erro instanceof ErroNvidiaChat&&erro.statusHttp?{statusHttp:erro.statusHttp}:{}),...(erro instanceof z.ZodError?{campos:erro.issues.slice(0,5).map(i=>`${i.path.join('.')}:${i.code}`)}:{})}));
       return {fala:[ERRO_CONVERSA],acao:null};
     }
   }

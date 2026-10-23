@@ -8,6 +8,7 @@ import { processarLoteRetroativo } from './worker/processar-lote-retroativo.js';
 import { PostgresEmissaoLote, type ExecutorFiscalLote } from './io/postgres/postgres-emissao-lote.js';
 import { sincronizarAgenda, CacheAgendaProcesso } from './agenda/sincronizar-agenda.js';
 import { registroErroNoto } from './observabilidade/erros.js';
+import { registrarLinhaSincrona } from './observabilidade/registrar-sincrono.js';
 import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
 import { ehIdAmplimed, prepararLoteAmplimed } from './agenda/amplimed-lote.js';
@@ -272,7 +273,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     classificar: entrada => classificarPendencias(iaApiKey, iaModeloTexto, completarIa, entrada),
     listar: (id, inicio, agora) => listarPendencias(id, { nome: 'tribemd', conectada: true }, agora, inicio),
     enviar: async (medicoId, conversa, chave, fala, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, falaMemoria }); },
-    log: mensagem => mensagem.startsWith('FERRAMENTA_AGENDA_RESULTADO ') ? console.info(mensagem) : console.warn(registroErroNoto(mensagem, 'tecnico', { etapa: 'pendencias' }))
+    log: mensagem => mensagem.startsWith('FERRAMENTA_AGENDA_RESULTADO ') ? console.info(mensagem) : registrarLinhaSincrona(registroErroNoto(mensagem, 'tecnico', { etapa: 'pendencias' }))
   }) : undefined;
   app.locals.aguardarPendencias = () => pendencias?.aguardar();
 
@@ -451,7 +452,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
       } : undefined,
       lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),
-      log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
+      log: (nivel, mensagem) => nivel === 'info' ? console.info(mensagem) : registrarLinhaSincrona(mensagem)
     });
   };
   const aoConectarWhatsapp = (medicoId: string) => {
@@ -1113,7 +1114,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
           extrator: new ExtratorComprovanteNvidia(iaApiKey, iaModeloVisao,
             mensagem => evolutionClient.obterBase64MensagemMidia(req.body.instance, mensagem.key.id), completarIa),
-          log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
+          log: (nivel, mensagem) => nivel === 'info' ? console.info(mensagem) : registrarLinhaSincrona(mensagem)
         }),
         async aoAtualizarConexao(evento) {
           if (

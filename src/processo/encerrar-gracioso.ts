@@ -5,6 +5,8 @@
  * `sair` são injetados para testar sem derrubar o processo de teste.
  */
 
+import { registrarLinhaSincrona } from '../observabilidade/registrar-sincrono.js';
+
 export interface AlvosEncerramento {
   fecharServidor: () => Promise<void>;
   pararWorker: () => Promise<void>;
@@ -23,7 +25,7 @@ export function criarEncerramentoGracioso(alvos: AlvosEncerramento, opcoes: Opco
   return async (motivo, codigo) => {
     if (emAndamento) return;
     emAndamento = true;
-    console.warn(`[Encerramento] ${motivo}: aguardando requisições e emissão em andamento (limite ${opcoes.tempoLimiteMs} ms).`);
+    registrarLinhaSincrona(`[Encerramento] ${motivo}: aguardando requisições e emissão em andamento (limite ${opcoes.tempoLimiteMs} ms).`);
     await drenarComLimite(alvos, opcoes.tempoLimiteMs);
     opcoes.sair(codigo);
   };
@@ -33,7 +35,7 @@ async function drenarComLimite(alvos: AlvosEncerramento, tempoLimiteMs: number):
   let temporizador: NodeJS.Timeout | undefined;
   const limite = new Promise<void>((resolver) => {
     temporizador = setTimeout(() => {
-      console.warn('[Encerramento] Tempo limite atingido; encerrando mesmo com trabalho pendente.');
+      registrarLinhaSincrona('[Encerramento] Tempo limite atingido; encerrando mesmo com trabalho pendente.');
       resolver();
     }, tempoLimiteMs);
   });
@@ -43,5 +45,5 @@ async function drenarComLimite(alvos: AlvosEncerramento, tempoLimiteMs: number):
 
 async function drenar(alvos: AlvosEncerramento): Promise<void> {
   await Promise.allSettled([alvos.fecharServidor(), alvos.pararWorker()]);
-  await alvos.fecharPool().catch((erro: Error) => console.warn('[Encerramento] Falha ao fechar o pool:', erro.message));
+  await alvos.fecharPool().catch((erro: Error) => registrarLinhaSincrona(`[Encerramento] Falha ao fechar o pool: ${erro.message}`));
 }

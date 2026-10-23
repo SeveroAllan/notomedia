@@ -5,6 +5,7 @@
  */
 
 import type { Encerrar } from './encerrar-gracioso.js';
+import { registrarLinhaSincrona } from '../observabilidade/registrar-sincrono.js';
 
 export interface ProcessoObservavel {
   on(evento: string, ouvinte: (...args: any[]) => void): unknown;
@@ -16,12 +17,12 @@ export function registrarSinaisDeProcesso(processo: ProcessoObservavel, encerrar
 
   // Promessa rejeitada isolada não corrompe o estado: registra e segue atendendo os demais médicos.
   processo.on('unhandledRejection', (motivo: unknown) => {
-    console.error('[Processo] Promessa rejeitada sem tratamento:', motivo);
+    registrarLinhaSincrona(`[Processo] Promessa rejeitada sem tratamento: ${motivo instanceof Error ? motivo.message : String(motivo)}`);
   });
 
   // Exceção síncrona solta deixa o estado indefinido: encerra de forma ordenada e o orquestrador reinicia.
   processo.on('uncaughtException', (erro: Error) => {
-    console.error('[Processo] Exceção não capturada:', erro);
+    registrarLinhaSincrona(`[Processo] Exceção não capturada: ${erro.message}`);
     void encerrar('uncaughtException', 1);
   });
 }
