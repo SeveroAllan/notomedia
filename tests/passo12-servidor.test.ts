@@ -8,7 +8,7 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 
 const portas = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), extrair: vi.fn(), agenda: vi.fn() }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: portas }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: portas.extrair }));
+vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: portas.extrair }));
 vi.mock('../src/cofre/router.js', async () => {
   const { default: express } = await import('express');
   return { criarCofreContas: () => ({ app: express(), encerrar: async () => {}, statusAgenda: async () => ({ nome: 'falsa', conectada: true }), fonteAgenda: { consultar: portas.agenda } }) };

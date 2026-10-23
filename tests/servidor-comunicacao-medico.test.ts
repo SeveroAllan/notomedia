@@ -4,7 +4,7 @@ import { criarAppExpress } from '../src/server.js';
 import { config } from '../src/config.js';
 import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js';
 const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), agenda: vi.fn(), completar: vi.fn(), sincronizar: vi.fn(), emitir: vi.fn() }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.completar }));
+vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.completar }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/cofre/router.js', async () => { const express = await import('express'); return { criarCofreContas: () => ({ app: express.default(), statusAgenda: fronteiras.agenda, encerrar: async () => {} }) }; });
 vi.mock('../src/onboarding/io/sincronizar-historico-evolution.js', () => ({ sincronizarHistoricoEvolutionUmaVez: fronteiras.sincronizar }));

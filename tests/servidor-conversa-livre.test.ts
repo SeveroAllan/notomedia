@@ -15,7 +15,7 @@ import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
 const fronteiras = vi.hoisted(() => ({ registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.openai }));
+vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');

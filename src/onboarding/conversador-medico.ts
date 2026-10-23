@@ -1,7 +1,7 @@
 import { agendaSuportada } from '../agenda/agendas-suportadas.js';
 import { ERRO_CONVERSA } from './falas.js';
 import { z } from 'zod';
-import type { completarOpenAi } from '../io/nvidia/chat-client.js';
+import { ErroNvidiaChat, type completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import { REACOES_PERMITIDAS } from '../whatsapp/reagir-mensagem.js';
 import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lote-retroativo.js';
@@ -158,8 +158,8 @@ export class ConversadorMedico {
       if (resposta.fala.some(t=>/\b(?:[A-Z][A-Z0-9]*_)+[A-Z0-9_]+\b/.test(t))) throw Error('CODIGO_NA_FALA');
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
     } catch (erro) {
-      const motivo=erro instanceof z.ZodError?'SCHEMA_INVALIDO':erro instanceof SyntaxError?'JSON_INVALIDO':erro instanceof Error&&erro.message==='IA_NAO_CONFIGURADA'?'IA_NAO_CONFIGURADA':'RESPOSTA_IA_RECUSADA';
-      console.warn(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo,...(erro instanceof z.ZodError?{campos:erro.issues.slice(0,5).map(i=>`${i.path.join('.')}:${i.code}`)}:{})}));
+      const motivo=erro instanceof z.ZodError?'SCHEMA_INVALIDO':erro instanceof SyntaxError?'JSON_INVALIDO':erro instanceof ErroNvidiaChat?erro.codigo:erro instanceof Error&&erro.message==='IA_NAO_CONFIGURADA'?'IA_NAO_CONFIGURADA':'RESPOSTA_IA_RECUSADA';
+      console.warn(registroErroNoto('CONVERSA_DECISAO_FALHOU','tecnico',{etapa:'decisor',detalhe:motivo,...(erro instanceof ErroNvidiaChat&&erro.statusHttp?{statusHttp:erro.statusHttp}:{}),...(erro instanceof z.ZodError?{campos:erro.issues.slice(0,5).map(i=>`${i.path.join('.')}:${i.code}`)}:{})}));
       return {fala:[ERRO_CONVERSA],acao:null};
     }
   }
@@ -174,7 +174,7 @@ export class ConversadorMedico {
   private consultar(sistema:string, entrada:unknown) {
     if(!this.apiKey?.trim() || !this.modelo?.trim()) throw Error('IA_NAO_CONFIGURADA');
     const seguro=JSON.parse(JSON.stringify(entrada,(_k,v)=>typeof v==='string'?sanitizarTextoMedico(v):v));
-    return this.completar(this.apiKey,this.modelo,[{role:'system',content:sistema},{role:'user',content:JSON.stringify(seguro)}],{formatoJson:true,temperature:.1,tentativasMax:1});
+    return this.completar(this.apiKey,this.modelo,[{role:'system',content:sistema},{role:'user',content:JSON.stringify(seguro)}],{formatoJson:true,temperature:.1,tentativasMax:2});
   }
 }
 

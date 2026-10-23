@@ -16,6 +16,9 @@ export interface OpcoesCompletarNvidia {
 
 const tempoEsgotado = (erro: unknown): boolean => erro instanceof Error && ['TimeoutError', 'AbortError'].includes(erro.name);
 
+/** Falhas transitórias do provedor: uma nova tentativa dentro do limite já resolve sem repassar erro ao médico. */
+const HTTP_RETENTAVEL = new Set([408, 425, 429, 500, 502, 503, 504]);
+
 export async function completarOpenAi(
   apiKey: string, model: string, messages: MensagemNvidia[], opcoesOuTimeout: number | OpcoesCompletarNvidia = 90_000
 ): Promise<string> {
@@ -37,6 +40,13 @@ export async function completarOpenAi(
           messages
         })
       });
+      if (!response.ok && tentativa < tentativasMax && HTTP_RETENTAVEL.has(response.status)) {
+        const retryAfter = Number(response.headers.get('retry-after'));
+        await response.body?.cancel().catch(() => {});
+        const espera = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 5_000) : 1_000 * tentativa;
+        await new Promise(r => setTimeout(r, espera));
+        continue;
+      }
       break;
     } catch (erro) {
       if (tentativa === tentativasMax) throw new ErroNvidiaChat(tempoEsgotado(erro) ? 'IA_TEMPO_ESGOTADO' : 'IA_CONEXAO_FALHOU');

@@ -8,7 +8,7 @@ it('prompt estruturado, uma chamada sem regeneração, histórico/resumo/fatos s
  const r=await new ConversadorMedico('k','m',completar).responder({...entrada,mensagens:['Pergunta anterior','Resposta anterior'],resumo:'O período já foi informado.'});
  expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
  const dados=JSON.parse(completar.mock.calls[0][2][1].content);expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
- expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:1});
+ expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:2});
 });
 it.each(['{}','não JSON','{"fala":[]}',JSON.stringify({fala:['x'.repeat(501)]}),'{"fala":["a","b","c","d"]}'])('saída inválida %s usa só o erro técnico, sem segunda chamada',async texto=>{
  const completar=vi.fn(async()=>texto);expect((await new ConversadorMedico('k','m',completar).responder(entrada)).fala).toEqual([ERRO_CONVERSA]);expect(completar).toHaveBeenCalledOnce();

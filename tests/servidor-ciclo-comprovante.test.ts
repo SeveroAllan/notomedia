@@ -8,7 +8,7 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 
 const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), completar: vi.fn(), emitir: vi.fn(() => { throw new Error('EMISSAO_PROIBIDA'); }) }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
-vi.mock('../src/io/nvidia/chat-client.js', () => ({ completarOpenAi: fronteiras.completar }));
+vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.completar }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 const medico = '00000000-0000-4000-8000-000000000001', paciente = '00000000-0000-4000-8000-000000000002';
 let banco: BancoHistoricoFalso, enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, midia: ReturnType<typeof vi.spyOn>;

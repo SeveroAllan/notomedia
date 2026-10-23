@@ -18,6 +18,35 @@ describe('fronteira de IA compatível', () => {
     fetchMock.mockRestore();
   });
 
+  it('retenta erro HTTP transitório (429) e conclui na tentativa seguinte', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('limite', { status: 429, headers: { 'retry-after': '1' } }))
+      .mockResolvedValueOnce(respostaOk());
+    const inicio = Date.now();
+    const out = await completarOpenAi('sk-ficticia', 'gpt-4o-mini', [{ role: 'user', content: 'oi' }], { formatoJson: true, tentativasMax: 2 });
+    expect(out).toBe('{"tipo":"ilegivel"}');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(Date.now() - inicio).toBeGreaterThanOrEqual(900);
+    fetchMock.mockRestore();
+  });
+
+  it('mantém IA_HTTP_ERRO quando as tentativas se esgotam em 5xx', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response('erro', { status: 503 }));
+    await expect(completarOpenAi('sk-ficticia', 'gpt-4o-mini', [{ role: 'user', content: 'oi' }], { formatoJson: true, tentativasMax: 2 }))
+      .rejects.toMatchObject({ codigo: 'IA_HTTP_ERRO', statusHttp: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockRestore();
+  });
+
+  it('não retenta erro definitivo (401) nem com tentativas disponíveis', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('não autorizado', { status: 401 }));
+    await expect(completarOpenAi('sk-ficticia', 'gpt-4o-mini', [{ role: 'user', content: 'oi' }], { formatoJson: true, tentativasMax: 2 }))
+      .rejects.toMatchObject({ codigo: 'IA_HTTP_ERRO', statusHttp: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockRestore();
+  });
+
   it('sem chave OpenAI falha explicitamente antes de qualquer rede', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     await expect(completarOpenAi('  ', 'gpt-4o-mini', [{ role: 'user', content: 'oi' }]))
