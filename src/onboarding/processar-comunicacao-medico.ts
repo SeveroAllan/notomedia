@@ -154,6 +154,11 @@ export async function processarComunicacaoMedico(
         decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'o último lote terminou com erro; se o médico quer emitir de novo, use iniciar_lote anunciando; se só conversa, acao null',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
+      if(chamadas<orcamento && motivo==='PERIODO_NECESSARIO') {
+        deps.log('info','CONVERSA_PERIODO_CORRIGIR');
+        decisao=await decidir(permitidas,undefined,{motivo:'a acao precisa de parametros.desde ISO (use calendario com o periodo que o medico disse)',faltou:['parametros.desde']});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
       const corrigirIntroducao=chamadas<orcamento && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
       if(corrigirIntroducao) {
         deps.log('info',`CONVERSA_INTRODUCAO_CORRIGIR ${motivo}`);
