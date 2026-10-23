@@ -479,3 +479,15 @@ it('Amplimed: "quero emitir as notas dos últimos 7 dias" abre o lote (iniciar_l
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'iniciar_lote'});
  expect(PROMPT_CONVERSA).toMatch(/EMITIR notas[\s\S]*iniciar_lote[\s\S]*listar_pendencias só se pedir para ver/);
 });
+
+it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do último link é preservada',async()=>{
+ const c=cenario();
+ c.fatos.link={ativo:false,enviados:1,agenda:'amplimed',expirado:true};
+ c.completar.mockResolvedValue('{"fala":["Aqui está o link seguro: https://notomed.tech/c/[LINK_SEGURO]"],"acao":"pedir_link_agenda","parametros":{"agenda":"Amplimed"}}');
+ c.executar.mockImplementation(async(d,ctx)=>{await c.enviar(d.fala,ctx.chave);return {jaRespondida:true,dados:{ok:true,motivo:'enviado'}};});
+ await c.turno('renovar','O link expirou.');
+ expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0][0].fala).toEqual(['Aqui está o link seguro:']);
+ expect(c.executar.mock.calls[0][0].parametros.agenda).toBe('Amplimed');
+ expect(c.enviar.mock.calls[0][0].join(' ')).not.toMatch(/http|LINK_SEGURO/);
+});

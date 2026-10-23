@@ -24,7 +24,7 @@ COMO DECIDIR (siga na ordem)
 2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Se ele so reagiu, proponha emitir essas notas (mostra total antes) ou ver valores; acao null. Se quiser emitir (sim, pode, emite), use iniciar_lote se permitida. So liste de novo se ele pedir explicitamente, com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. O médico citou a agenda que usa: "Tribe", "tribe md", "o tribe" = TribeMD; "Amplimed" = Amplimed. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD" ou "Amplimed","evidencia":"<trecho literal da fala atual>"}.
    Primeiro link (fatos.link.enviados=0): no máximo 2 balões (explicação + "Aqui está o link seguro:"): só leio as consultas para conferir comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
-   Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Nunca chame o primeiro link de "novo". Link ativo: informe que vale, não gere outro.
+   Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Primeiro link não é "novo". Ativo: diga que vale, não gere outro. Sem agenda citada, use fatos.link.agenda. Nunca escreva URLs: o sistema anexa o link.
 4. O médico disse que NÃO usa agenda digital (papel, caderno, WhatsApp, de cabeça): acao "registrar_modo_sem_agenda" com parametros {"evidencia":"<trecho literal>","confianca":0..1}. Explique uma vez que sem agenda você não vê histórico antigo e precisa conferir os dados dele; peça CPF, telefone, valor e data, UM paciente e UM dado por vez. Isso não emite nada. "[OCULTO]" é dado já enviado e protegido pelo sistema: reconheça e avance, sem pedir de novo (telefone, valor, data).
 5. Agenda desconhecida (fatos.agenda.nome=null, fatos.semAgendaDigital=false) e o médico quer emitir ou conferir notas: acao null e pergunte qual agenda ele usa, com um porquê curto. Não peça CPF/telefone/valor nem fale em "histórico do WhatsApp" antes de saber que ele não usa agenda digital.
 6. Fora do assunto: responda com naturalidade e retome o passo atual.
@@ -67,7 +67,7 @@ export function confirmacaoDaDecisao(d:DecisaoConversa) {
 export interface FatosConversa {
   ambiente: string | null;
   agenda: { nome: string | null; conectada: boolean };
-  link: { ativo: boolean; enviados: number; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
+  link: { ativo: boolean; enviados: number; agenda?: string | null; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
   periodo: { desde: string | null; origem: string | null };
   semAgendaDigital: boolean;
   permissoes?: { emitirAutonomo: string | null; entregarPaciente: string | null; pendentes: boolean } | null;
@@ -122,8 +122,16 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'pedir_link_agenda') {
     if(!opcoes?.introducaoVerificada && d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
     if (fatos.agenda.conectada || fatos.link.ativo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
-    if (!agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? undefined))) return 'AGENDA_NAO_SUPORTADA';
-    if (!fatos.agenda.nome && (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) || !agendaSuportada(normalizarAgenda(d.parametros.evidencia)))) return 'AGENDA_NAO_INFORMADA';
+    if (!agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined))) return 'AGENDA_NAO_SUPORTADA';
+    if (!fatos.agenda.nome) {
+      const evidenciaValida = !!d.parametros?.evidencia && texto.includes(d.parametros.evidencia) && !!agendaSuportada(normalizarAgenda(d.parametros.evidencia));
+      if (!evidenciaValida) {
+        // Renovação contextual: a agenda do último link é a agenda já escolhida pelo médico, não um palpite.
+        const agendaDoLink = fatos.link.agenda && agendaSuportada(fatos.link.agenda) ? normalizarAgenda(fatos.link.agenda)! : null;
+        const pedida = normalizarAgenda(d.parametros?.agenda ?? undefined);
+        if (!agendaDoLink || (pedida && pedida !== agendaDoLink)) return 'AGENDA_NAO_INFORMADA';
+      }
+    }
     if (!opcoes?.introducaoVerificada && !fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
@@ -150,6 +158,9 @@ export class ConversadorMedico {
     try {
       const resposta = respostaSchema.parse(JSON.parse(await this.consultar(PROMPT_CONVERSA, { ...entrada, calendario:calendarioConversa(entrada.agora) })));
       resposta.fala=resposta.fala.filter(Boolean);
+      // O link é gerado e anexado pelo sistema: a fala nunca carrega URL (o histórico sanitizado pode induzir eco do placeholder).
+      if ((resposta.acao ?? null) === 'pedir_link_agenda')
+        resposta.fala = resposta.fala.map(t => t.replace(/https?:\/\/\S+/gi, '').replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
       // Rascunho de ação sem anúncio volta ao decisor uma vez antes de qualquer efeito.
       const confirmacaoPendente=entrada.fatos.lote?.estado==='aguardando_confirmacao_lote' && resposta.parametros?.confirmacao && (!resposta.acao || resposta.acao==='nenhuma') && entrada.resultadoFerramenta===undefined;
       if (!resposta.fala.length && !resposta.reacao && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');

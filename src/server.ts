@@ -370,6 +370,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         where l.medico_id=$1 and a.evento='enviado'`,[medicoId]);
       return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
+          agenda:conexao?.link?.agenda??null,
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
         permissoes:permissoesNoto?{emitirAutonomo:(await permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null))?.valor??null,
@@ -389,7 +390,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='pedir_link_agenda') {
         await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
-        const r=await cofres.links?.solicitarLinkCofre(c.medicoId,normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined)??'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
+        const r=await cofres.links?.solicitarLinkCofre(c.medicoId,normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??c.fatos.link.agenda??undefined)??'tribemd',{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
       if(decisao.acao==='pedir_link_permissoes') {

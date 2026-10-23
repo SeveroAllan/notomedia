@@ -185,3 +185,19 @@ it('STEER 20: prompt exige interpretar a confirmação em vez de inventar falta 
  expect(PROMPT_CONVERSA).not.toContain('Nenhuma ação disponível emite nota');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
 });
+
+it('reenvio: URL imitada do histórico sanitizado sai da fala e o anúncio continua válido',async()=>{
+ const completar=vi.fn(async()=>'{"fala":["Aqui está o link seguro: https://notomed.tech/c/[LINK_SEGURO]"],"acao":"pedir_link_agenda","parametros":{"agenda":"Amplimed"}}');
+ const r=await new ConversadorMedico('k','m',completar).responder({...entrada,texto:'O link expirou.',fatos:{...fatos,link:{ativo:false,enviados:1,agenda:'amplimed',expirado:true}}});
+ expect(r.acao).toBe('pedir_link_agenda');expect(r.fala).toEqual(['Aqui está o link seguro:']);
+ expect(r.fala.join(' ')).not.toMatch(/http|LINK_SEGURO/);
+});
+it('renovação preserva a agenda do último link sem evidência nova; agenda divergente continua recusada',()=>{
+ const reenvio={...fatos,link:{ativo:false,enviados:1,agenda:'amplimed',expirado:true}};
+ const d={fala:['Aqui está o link:'],acao:'pedir_link_agenda' as const,parametros:{agenda:'Amplimed'}};
+ expect(validarAcaoConversa(d,reenvio,['pedir_link_agenda'],'O link expirou.',agora)).toBeNull();
+ expect(validarAcaoConversa({...d,parametros:{}},reenvio,['pedir_link_agenda'],'O link expirou.',agora)).toBeNull();
+ expect(validarAcaoConversa({...d,parametros:{agenda:'TribeMD'}},reenvio,['pedir_link_agenda'],'O link expirou.',agora)).toBe('AGENDA_NAO_INFORMADA');
+ expect(validarAcaoConversa(d,fatos,['pedir_link_agenda'],'O link expirou.',agora)).toBe('AGENDA_NAO_INFORMADA');
+ expect(validarAcaoConversa({...d,parametros:{agenda:'TribeMD'}},{...reenvio,link:{ativo:false,enviados:1,agenda:'tribemd',expirado:true}},['pedir_link_agenda'],'O link expirou.',agora)).toBeNull();
+});

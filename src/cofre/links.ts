@@ -6,7 +6,7 @@ import { AGENDAS_SUPORTADAS, agendaSuportada, type AgendaSuportada } from '../ag
 export interface ContextoConexaoAgenda {
     aguardandoConexao: boolean;
     agendaConectada: boolean;
-    link: { enviado: boolean; minutosDesdeEnvio: number | null; usado: boolean; expirado: boolean; rejeitado: boolean | null } | null;
+    link: { agenda: string; enviado: boolean; minutosDesdeEnvio: number | null; usado: boolean; expirado: boolean; rejeitado: boolean | null } | null;
 }
 
 // Protege credenciais antes de qualquer classificação, memória ou log do texto.
@@ -117,12 +117,15 @@ export class LinksCofre {
     }
 
     async lerContextoConexao(medicoId: string, agora: Date): Promise<ContextoConexaoAgenda> {
-        const status = await this.deps.cofre.status(medicoId);
-        const link = (await this.deps.pool.query(`select l.usado_em, l.expira_em,
+        // O link mais recente define a agenda do contexto: renovação preserva a agenda já escolhida pelo médico.
+        const link = (await this.deps.pool.query(`select l.agenda, l.usado_em, l.expira_em,
             (select a.criado_em from cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado' limit 1) as enviado_em
-            from cofre_links l where l.medico_id=$1 and l.agenda='tribemd' order by l.criado_em desc limit 1`, [medicoId])).rows[0];
+            from cofre_links l where l.medico_id=$1 order by l.criado_em desc limit 1`, [medicoId])).rows[0];
+        const cofreDoContexto = link ? this.cofreDe(link.agenda) ?? this.deps.cofre : this.deps.cofre;
+        const status = await cofreDoContexto.status(medicoId);
         const agendaConectada = status.estado === 'conectado' && !!status.ativo;
         return { agendaConectada, aguardandoConexao: !agendaConectada && !!link, link: link ? {
+            agenda: link.agenda,
             enviado: !!link.enviado_em,
             minutosDesdeEnvio: link.enviado_em ? Math.max(0, Math.floor((agora.getTime() - new Date(link.enviado_em).getTime()) / 60000)) : null,
             usado: !!link.usado_em, expirado: new Date(link.expira_em).getTime() <= agora.getTime(),

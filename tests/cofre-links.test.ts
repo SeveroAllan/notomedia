@@ -381,7 +381,7 @@ it('estado real do link expõe idade, uso e expiração sem token ou credenciais
     const { token } = await pedir(); const link = (await salvos())[0];
     const agora = new Date(link.criado_em.getTime() + 20 * 60000);
     expect(await links.lerContextoConexao(medicoId, agora)).toEqual({ agendaConectada: false, aguardandoConexao: true,
-        link: { enviado: true, minutosDesdeEnvio: 20, usado: false, expirado: true, rejeitado: null } });
+        link: { agenda: 'tribemd', enviado: true, minutosDesdeEnvio: 20, usado: false, expirado: true, rejeitado: null } });
     await links.enviarCredencial(token, { ...dados });
     expect((await links.lerContextoConexao(medicoId, agora)).link?.usado).toBe(true);
     estado = 'conectado'; expect(await links.lerContextoConexao(medicoId, agora)).toMatchObject({ agendaConectada: true, aguardandoConexao: false });
@@ -554,4 +554,16 @@ it('texto/resultado apenas: usa fala contextual do chamador antes da URL, sem al
     const token = new URL(textos[1]).pathname.split('/').at(-1)!;
     expect((await post(token)).status).toBe(202); expect((await post(token)).status).toBe(410);
     expect(iniciar).toHaveBeenCalledOnce();
+});
+
+it('contexto do link acompanha a agenda do link mais recente, não a padrão', async () => {
+    const amplimedStatus = vi.fn(async () => ({ salvo: false, estado: 'desconectado' as const, ativo: false, verificadoEm: null, codigo: null, consultasDisponiveis: null }));
+    links = new LinksCofre({ pool, origem: base, cofre: { status: async () => ({ salvo: true, estado: 'conectado' as const, ativo: true, verificadoEm: null, codigo: null, consultasDisponiveis: null }), iniciar },
+        cofres: { amplimed: { status: amplimedStatus, iniciar } }, enviar: async () => 'enviado' });
+    expect(await links.solicitarLinkCofre(medicoId, 'amplimed')).toEqual({ ok: true, motivo: 'enviado' });
+    const c = await links.lerContextoConexao(medicoId, new Date());
+    expect(c.link?.agenda).toBe('amplimed');
+    expect(c.link).toMatchObject({ enviado: true, usado: false, expirado: false });
+    expect(c.agendaConectada).toBe(false); expect(c.aguardandoConexao).toBe(true);
+    expect(amplimedStatus).toHaveBeenCalled();
 });
