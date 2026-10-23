@@ -336,6 +336,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const conexao = await cofres.links?.lerContextoConexao(medicoId,agora);
       const periodo = await contextoPendencias.ler(medicoId);
       const lote = retroativo ? await lotes.ativo(medicoId) : null;
+      const ultimo = retroativo ? await pool.query(`select l.estado, count(*) filter (where i.estado='erro')::int as com_erro, count(*) filter (where i.estado='emitida')::int as emitidas
+        from (select id, estado from public.noto_lotes_emissao where medico_id=$1 and estado='concluido' order by criado_em desc limit 1) l
+        left join public.noto_lotes_itens i on i.lote_id=l.id group by l.estado`,[medicoId]).then(r=>r.rows[0]).catch(()=>undefined) : undefined;
       const enviados = await pool.query(`select count(*)::int as total from cofre_links l join cofre_links_auditoria a on a.link_id=l.id
         where l.medico_id=$1 and a.evento='enviado'`,[medicoId]);
       return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
@@ -343,6 +346,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
+        ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
         homologacaoInformada:false};
     },
     permitidas: fatos => ferramentasLiberadas(fatos,{lote:!!retroativo}),

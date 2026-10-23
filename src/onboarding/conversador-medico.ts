@@ -19,7 +19,8 @@ REGRAS FIXAS
 COMO DECIDIR (siga na ordem)
 1. Se a última fala do médico responde à última pergunta do Noto, reconheça a resposta e avance. Nunca repita a pergunta.
 2. Agenda conectada: não peça link. Se ele pede para EMITIR notas (período, "últimos N dias"), use iniciar_lote se permitida: o sistema mostra quantidade e total e só emite após o sim. listar_pendencias só se pedir para ver/conferir/listar; senão ofereça conferir.
-2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Se ele so reagiu, proponha o proximo passo: emitir as notas dessas consultas (voce mostra quantidade e total antes de confirmar) ou ver os valores primeiro; acao null. Quando disser que quer emitir (sim, pode, vamos, emite), use iniciar_lote se permitida. So liste de novo se ele pedir explicitamente, com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
+2a. Se fatos.ultimoLote.comErro>0 e ele pede emitir de novo/diz que corrigiu: iniciar_lote, sem listar.
+2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Se ele so reagiu, proponha emitir essas notas (mostra total antes) ou ver valores; acao null. Se quiser emitir (sim, pode, emite), use iniciar_lote se permitida. So liste de novo se ele pedir explicitamente, com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. O médico citou a agenda que usa: "Tribe", "tribe md", "o tribe" = TribeMD; "Amplimed" = Amplimed. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD" ou "Amplimed","evidencia":"<trecho literal da fala atual>"}.
    Primeiro link (fatos.link.enviados=0): no máximo 2 balões (explicação + "Aqui está o link seguro:"): o link é para conectar a agenda; o Noto só lê as consultas para conferir com os comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
    Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Nunca chame o primeiro link de "novo". Link ativo: informe que vale, não gere outro.
@@ -69,6 +70,7 @@ export interface FatosConversa {
   semAgendaDigital: boolean;
   listaRecente?: boolean;
   lote?: { estado: string; pergunta?: string; perguntaId?: string | null } | null;
+  ultimoLote?: { comErro: number; emitidas: number } | null;
   [chave: string]: unknown;
 }
 export function calendarioConversa(agora: Date) {
