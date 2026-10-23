@@ -20,6 +20,8 @@ export function classificarRetomadaEmissao(e: EmissaoExistenteParaRetomada): 're
   return 'repetida';
 }
 
+import { REGRAS_REJEICAO_ANEXO_I } from './regras-rejeicao-sefin.js';
+
 export type ResultadoConsultaDps = 'gerada' | 'nao_gerada' | 'indeterminado';
 
 /**
@@ -30,8 +32,10 @@ export type ResultadoConsultaDps = 'gerada' | 'nao_gerada' | 'indeterminado';
  * (https://sefin.producaorestrita.nfse.gov.br/API/SefinNacional/docs/index) é inacessível da
  * nossa infra. Qualquer status fora destas listas é "indeterminado" e mantém a trava.
  */
-export const STATUS_DPS_GERADA: readonly number[] = [200];
-export const STATUS_DPS_NAO_GERADA: readonly number[] = [404];
+// VAZIAS por segurança: um status mal interpretado pode liberar duplicidade. Preencher SOMENTE
+// após confirmação empírica em produção restrita (HEAD em DPS autorizada e em DPS sem NFS-e).
+export const STATUS_DPS_GERADA: readonly number[] = [];
+export const STATUS_DPS_NAO_GERADA: readonly number[] = [];
 
 export function classificarStatusConsultaDps(status: number): ResultadoConsultaDps {
   if (STATUS_DPS_GERADA.includes(status)) return 'gerada';
@@ -39,7 +43,6 @@ export function classificarStatusConsultaDps(status: number): ResultadoConsultaD
   return 'indeterminado';
 }
 
-export const CODIGO_REGRA_NEGOCIO = /^E\d{4}$/;
 
 /**
  * Só a resposta estruturada do provedor (lista erros[]/mensagens[] cujo primeiro código E####
@@ -50,7 +53,8 @@ export function ehRejeicaoRegraNegocio(r: { httpStatus?: number; codigoErro?: st
   // Apenas os status documentados de rejeição de negócio; auth (401/403), transitórios
   // (408/429), 5xx e qualquer outro código são indeterminados e mantêm a trava.
   if (r.httpStatus !== 400 && r.httpStatus !== 422) return false;
-  if (!r.codigoErro || !CODIGO_REGRA_NEGOCIO.test(r.codigoErro)) return false;
+  // O código precisa ser classificado "Rej." no ANEXO I oficial; qualquer outro E#### não basta.
+  if (!r.codigoErro || !REGRAS_REJEICAO_ANEXO_I.has(r.codigoErro)) return false;
   const raw = r.respostaRaw as Record<string, unknown> | undefined;
   const erros = (raw?.['erros'] ?? raw?.['mensagens'] ?? raw?.['Erros'] ?? raw?.['Mensagens']) as Array<Record<string, unknown>> | undefined;
   if (!Array.isArray(erros) || erros.length === 0) return false;

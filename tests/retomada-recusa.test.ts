@@ -14,10 +14,8 @@ it('classifica destino da consulta com emissão existente', () => {
   expect(classificarRetomadaEmissao({ estado: 'emitindo', recusaDefinitiva: true, notaFiscalId: null })).toBe('repetida');
 });
 
-it('status da consulta DPS: só o documentado libera leitura; o resto é indeterminado', () => {
-  expect(classificarStatusConsultaDps(200)).toBe('gerada');
-  expect(classificarStatusConsultaDps(404)).toBe('nao_gerada');
-  for (const s of [0, 204, 400, 401, 403, 408, 429, 500, 503]) expect(classificarStatusConsultaDps(s)).toBe('indeterminado');
+it('status da consulta DPS: TUDO indeterminado até confirmação empírica (inclusive 200/404)', () => {
+  for (const s of [0, 200, 204, 400, 401, 403, 404, 408, 429, 500, 503]) expect(classificarStatusConsultaDps(s)).toBe('indeterminado');
 });
 
 it('recusa definitiva exige resposta estruturada do provedor com código E####', () => {
@@ -27,6 +25,9 @@ it('recusa definitiva exige resposta estruturada do provedor com código E####',
   expect(ehRejeicaoRegraNegocio({ httpStatus: 422, codigoErro: 'E0207' })).toBe(false);
   expect(ehRejeicaoRegraNegocio({ httpStatus: 422, codigoErro: 'E0207', respostaRaw: { erros: [{ codigo: 'E9999' }] } })).toBe(false);
   expect(ehRejeicaoRegraNegocio({ httpStatus: 422, codigoErro: 'SEFIN_TIMEOUT', respostaRaw: raw })).toBe(false);
+  // E#### fora da classificação "Rej." do ANEXO I oficial nunca é recusa definitiva:
+  expect(ehRejeicaoRegraNegocio({ httpStatus: 422, codigoErro: 'E9999', respostaRaw: { erros: [{ codigo: 'E9999' }] } })).toBe(false);
+  expect(ehRejeicaoRegraNegocio({ httpStatus: 422, codigoErro: 'E0676', respostaRaw: { erros: [{ codigo: 'E0676' }] } })).toBe(false);
   for (const st of [401, 403, 408, 429, 500, 503]) expect(ehRejeicaoRegraNegocio({ httpStatus: st, codigoErro: 'E0207', respostaRaw: raw })).toBe(false);
 });
 
