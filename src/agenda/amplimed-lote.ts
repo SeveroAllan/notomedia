@@ -15,7 +15,8 @@ export function prepararLoteAmplimed(dias: DiaElegiveisAmplimed[]) {
   const consultas: ConsultaSincronizada[] = []; const valoresAoVivo = new Map<string, number | null>(); let semTomador = 0;
   for (const d of dias) for (const e of d.elegiveis) {
     if (!e.detalhe) { semTomador++; continue; }
-    const pacienteId = 'amp-' + createHash('sha256').update(e.detalhe.cpf).digest('hex').slice(0, 24);
+    const h = createHash('sha256').update('amplimed:' + e.detalhe.cpf).digest('hex'); // a coluna paciente_id é uuid: derivado do CPF, sem expor o CPF
+    const pacienteId = `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
     consultas.push({ pacienteId, idExterno: e.idExterno, dataHora: e.dataHora, status: 'realizada', valorConsultaCentavos: e.valorCentavos, valorCobradoAoVivoCentavos: e.valorCentavos, nomeAoVivo: e.detalhe.nome,
       ...(e.detalhe.celular ? { telefonePaciente: e.detalhe.celular } : {}) });
     valoresAoVivo.set(e.idExterno, e.valorCentavos);

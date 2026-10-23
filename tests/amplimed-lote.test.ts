@@ -19,6 +19,10 @@ describe('lote Amplimed', () => {
   it('a tabela de consultas não recebe CPF nem o valor do paciente em claro no id do paciente', () => {
     expect(JSON.stringify(prepararLoteAmplimed(dias).consultas)).not.toContain('10000000019');
   });
+  it('paciente_id é um uuid válido (a coluna é uuid) e igual para o mesmo CPF', () => {
+    const [a] = prepararLoteAmplimed(dias).consultas; const [b] = prepararLoteAmplimed(dias).consultas;
+    expect(a!.pacienteId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/); expect(a!.pacienteId).toBe(b!.pacienteId);
+  });
   it('releitura ao vivo devolve o tomador; sem tomador ou sumida da agenda, falha', () => {
     expect(tomadorAmplimedAoVivo(dias, '2026-10-22T08:00|51993527271')).toMatchObject({ cpf: '10000000019', valorCobradoCentavos: 25000, contato: { celular: '51993527271' } });
     expect(() => tomadorAmplimedAoVivo(dias, '2026-10-21T08:00|51993527271')).toThrow('DETALHES_NAO_CONCLUIDOS');
