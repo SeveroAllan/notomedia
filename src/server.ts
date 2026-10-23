@@ -1053,7 +1053,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                 const est = await atendimentoRepo.lerEstado(contexto.medicoId, contexto.pacienteId).catch(() => null);
                 const telefone = extrairTelefoneJid(contexto.mensagem.key.remoteJidAlt) || extrairTelefoneJid(contexto.mensagem.key.remoteJid) || '';
                 if (est && (!est.paciente.cpf || !validarCpf(est.paciente.cpf)) && telefone) {
-                  await comunicacaoHomologacao.pedirCpfPaciente({ medicoId: contexto.medicoId, contatoTelefone: telefone,
+                  await comunicacaoHomologacao.pedirCpfPaciente({ medicoId: contexto.medicoId, pacienteId: contexto.pacienteId, contatoTelefone: telefone,
                     chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
                   return;
                 }

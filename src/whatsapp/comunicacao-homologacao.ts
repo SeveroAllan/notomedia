@@ -285,8 +285,8 @@ export class ComunicacaoHomologacao {
 
   // Pedido de CPF direto ao paciente (escolha solicitar_cpf='paciente' da conta). Em homologação
   // (envioPacienteRealAtivo=false) é simulado; fora da allowlist não sai. Dedup por comprovante.
-  async pedirCpfPaciente(entrada: { medicoId: string; contatoTelefone: string; chave: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_instancia'> {
-    const { medicoId, contatoTelefone, chave } = entrada;
+  async pedirCpfPaciente(entrada: { medicoId: string; pacienteId: string; contatoTelefone: string; chave: string }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_instancia'> {
+    const { medicoId, pacienteId, contatoTelefone, chave } = entrada;
     const texto = 'Para o consultório emitir a nota da sua consulta, preciso do seu CPF. Pode me informar por aqui?';
     if (!this.config.envioPacienteRealAtivo) return this.simular('pedir_cpf_paciente');
     try {
@@ -299,8 +299,13 @@ export class ComunicacaoHomologacao {
       const r = rows[0];
       if (!r?.nome_instancia) return 'sem_instancia';
       if (!this.permitido(this.config.envioPacienteRealAtivo, r.ambiente, contatoTelefone)) return this.simular('pedir_cpf_paciente');
-      return await this.enviarUnico(medicoId, 'pedir_cpf_paciente', chave, async () => (await this.transporte.enviarTexto({
+      const envio = await this.enviarUnico(medicoId, 'pedir_cpf_paciente', chave, async () => (await this.transporte.enviarTexto({
         instanciaNome: r.nome_instancia, contatoTelefone, texto })).sucesso);
+      // Marca a espera pela resposta na conversa vinculada; a captura usa esse sinal.
+      if (envio === 'enviado' || envio === 'repetido') await this.pool.query(
+        'update whatsapp_conversas set aguardando_cpf_desde = now() where medico_id=$1 and paciente_id=$2',
+        [medicoId, pacienteId]).catch(() => {});
+      return envio;
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
