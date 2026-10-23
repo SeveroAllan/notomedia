@@ -129,9 +129,9 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if ((d.parametros?.desde || d.parametros?.periodo) && !periodoDecisao(d,agora,texto)) return 'PERIODO_INVALIDO';
     if (!periodoDecisao(d, agora,texto) && !validarInicioRetroativo(fatos.periodo.desde, agora)) return 'PERIODO_NECESSARIO';
   }
-  if (acao === 'listar_pendencias' && fatos.listaRecente === true) {
+  if (acao === 'listar_pendencias' && (fatos.listaRecente === true || (fatos.ultimoLote?.comErro ?? 0) > 0)) {
     const pedido = d.parametros?.pedidoExplicito;
-    if (!pedido || !pedido.evidencia.trim() || !(pedido.confianca >= .9) || !texto.includes(pedido.evidencia)) return 'LISTA_JA_ENVIADA';
+    if (!pedido || !pedido.evidencia.trim() || !(pedido.confianca >= .9) || !texto.includes(pedido.evidencia)) return fatos.listaRecente === true ? 'LISTA_JA_ENVIADA' : 'LISTA_EM_VEZ_DE_LOTE';
   }
   if (acao === 'registrar_modo_sem_agenda') {
     const evidencia = d.parametros?.evidencia;
