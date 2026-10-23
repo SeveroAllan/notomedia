@@ -1,6 +1,6 @@
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { ErroCofre } from './tribemd-cofre.js';
-import { diasAtrasAmplimed, montarLeituraAmplimed } from '../agenda/amplimed-leitor.js';
+import { diasAtrasAmplimed, montarLeituraAmplimed, type DetalheAmplimed } from '../agenda/amplimed-leitor.js';
 import { separarElegiveis } from '../agenda/leitura-adaptativa.js';
 import type { CodigoLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 
@@ -15,7 +15,7 @@ export class CofreAmplimed {
         verificar?: (credencial: { email: string; senha: string }) => Promise<CodigoLoginAmplimed>;
         aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
         /** Leitura de observação da agenda do dia; sem ele a leitura fica indisponível. */
-        lerEventos?: (credencial: { email: string; senha: string }, diasAtras: number) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string }[] }[]; profissional: string | null; completo: boolean }> }) {
+        lerEventos?: (credencial: { email: string; senha: string }, diasAtras: number, detalhes?: boolean) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean }> }) {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
@@ -46,7 +46,7 @@ export class CofreAmplimed {
         return this.status(id);
     }
     /** Lê a agenda de `desde` até hoje (teto 31 dias) em modo observação. Devolve só consultas já checadas; nunca a credencial. */
-    async lerAgendaPeriodo(id: string, desde: string, hoje: string) {
+    async lerAgendaPeriodo(id: string, desde: string, hoje: string, comDetalhes = false) {
         if (!this.opcoes.lerEventos) return { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
         const diasAtras = diasAtrasAmplimed(hoje, desde);
         if (diasAtras === null) return { ok: false as const, motivo: 'PERIODO_FORA_DO_LIMITE' };
@@ -55,16 +55,16 @@ export class CofreAmplimed {
         const credencial = { email: p.email, senha: p.senha };
         p.email = ''; p.senha = '';
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.lerEventos>>>;
-        try { r = await this.opcoes.lerEventos(credencial, diasAtras); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        try { r = await this.opcoes.lerEventos(credencial, diasAtras, comDetalhes); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
-        const dias: { data: string; elegiveis: { paciente: string; dataHora: string }[]; lidos: number }[] = [];
+        const dias: { data: string; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
         for (const d of r.dias) {
             const leitura = montarLeituraAmplimed(d.eventos, { data: d.data, profissional: r.profissional });
             if (!leitura.confiavel) return { ok: false as const, motivo: 'LEITURA_NAO_CONFIAVEL', problemas: leitura.problemas.map(x => x.codigo), data: d.data };
-            dias.push({ data: d.data, lidos: leitura.lidos, elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora })) });
+            dias.push({ data: d.data, lidos: leitura.lidos, elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora, idExterno: c.idExterno, valorCentavos: c.valorCentavos ?? 0, detalhe: leitura.detalhes.get(c.idExterno) ?? null })) });
         }
         return { ok: true as const, dias };
     }

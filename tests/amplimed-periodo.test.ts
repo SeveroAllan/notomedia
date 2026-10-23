@@ -78,3 +78,21 @@ describe('cor vermelha do cancelado na conta teste', () => {
     expect(statusAmplimedPorCor('rgb(255, 0, 0)')).toBe(statusAmplimedPorCor('red')); expect(statusAmplimedPorCor('green')).toBe('realizada');
   });
 });
+
+import { lerDetalheAmplimedTexto, montarLeituraAmplimed as montar } from '../src/agenda/amplimed-leitor.js';
+describe('detalhe do atendimento (tomador)', () => {
+  const painel = '× Visualizar Agendamento 22/10/2026 Cadastro paciente Whatsapp Teleatendimento Prontuário rápido A RECEBER 2 - Paciente Teste Um Data nasc. : 01/01/1990 36a 9m 21d CPF : 100.000.000-19 Endereço : , - Contato : 51993527271 E-mail : Convênio : Particular Plano : Nro cart. :';
+  it('lê nome, CPF e celular do painel', () => {
+    expect(lerDetalheAmplimedTexto(painel, 'Paciente Teste Um')).toEqual({ nome: 'Paciente Teste Um', cpf: '10000000019', celular: '51993527271' });
+  });
+  it('nome diferente do compromisso, CPF inválido ou ausente: nenhum tomador', () => {
+    expect(lerDetalheAmplimedTexto(painel, 'Paciente Teste Dois')).toBeNull();
+    expect(lerDetalheAmplimedTexto(painel.replace('100.000.000-19', '100.000.000-18'), 'Paciente Teste Um')).toBeNull();
+    expect(lerDetalheAmplimedTexto(painel.replace(/CPF : [\d.-]+/, 'CPF :'), 'Paciente Teste Um')).toBeNull();
+  });
+  it('o detalhe só acompanha o compromisso quando o nome do painel bate com o da agenda', () => {
+    const ev = (nome: string) => ({ texto: `08:00 - 08:30\n${'Paciente Teste Um'} | Avaliação | Particular |  R$ 250,00 | 51993527271`, cor: 'green', detalhe: { nome, cpf: '10000000019', celular: null } });
+    expect(montar([ev('Paciente Teste Um')], { data: '2026-10-22', profissional: 'X' }).detalhes.size).toBe(1);
+    expect(montar([ev('Outra Pessoa')], { data: '2026-10-22', profissional: 'X' }).detalhes.size).toBe(0);
+  });
+});
