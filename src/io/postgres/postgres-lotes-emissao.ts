@@ -24,11 +24,11 @@ export class PostgresLotesEmissao implements RepositorioLotes {
       and estado in ('aguardando_data_inicio','aguardando_confirmacao_lote','confirmado','processando')`, [medicoId]);
     return rows.length === 1 ? lote(rows[0]) : null;
   }
-  async contarConsultasPeriodo(medicoId: string, desde: string, ate: string, valoresAoVivo: ReadonlyMap<string, number | null>): Promise<ContagemPeriodo> {
+  async contarConsultasPeriodo(medicoId: string, desde: string, ate: string, valoresAoVivo: ReadonlyMap<string, number | null>, fonteAgenda: 'tribemd' | 'amplimed' = 'tribemd'): Promise<ContagemPeriodo> {
     if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');
     const { rows } = await this.pool.query<{ fonte: string; id_externo: string }>(`select fonte, id_externo
-      from public.noto_consultas_sincronizadas where medico_id=$1 and fonte='tribemd' and status='realizada'
-      and data_hora >= ($2::date::timestamp at time zone 'America/Sao_Paulo') and data_hora <= $3::timestamptz order by data_hora, id_externo`, [medicoId, desde, ate]);
+      from public.noto_consultas_sincronizadas where medico_id=$1 and fonte=$4 and status='realizada'
+      and data_hora >= ($2::date::timestamp at time zone 'America/Sao_Paulo') and data_hora <= $3::timestamptz order by data_hora, id_externo`, [medicoId, desde, ate, fonteAgenda]);
     const consultas: ConsultaLote[] = []; let totalCentavos = 0, totalConsultas = 0, semValor = 0;
     for (const r of rows) {
       if (!valoresAoVivo.has(r.id_externo)) continue;

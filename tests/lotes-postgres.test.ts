@@ -6,7 +6,7 @@ it('contar_consultas_periodo usa médico/período/realizada e exclui faturada po
   const query = vi.fn(async (sql: string, p?: unknown[]) => {
     if (sql.includes('from public.noto_consultas_sincronizadas')) {
       expect(sql).toContain("status='realizada'"); expect(sql).toContain("time zone 'America/Sao_Paulo'");
-      expect(p).toEqual(['m', '2026-10-01', '2026-10-20T15:00Z']);
+      expect(p).toEqual(['m', '2026-10-01', '2026-10-20T15:00Z', 'tribemd']);
       return { rows: [{ fonte: 'tribemd', id_externo: '1', valor_consulta_centavos: 30000 }, { fonte: 'tribemd', id_externo: '2', valor_consulta_centavos: null }, { fonte: 'tribemd', id_externo: '3', valor_consulta_centavos: 40000 }] };
     }
     expect(sql).toContain("estado='nota_gerada'");
@@ -144,4 +144,12 @@ it('sem lote confirmado ou órfão antigo elegível não altera itens nem segura
   expect(await repo.reservar()).toBeNull();
   expect(query.mock.calls).toHaveLength(3);
   expect(release).toHaveBeenCalledOnce();
+});
+it('fonte do lote: padrão tribemd; amplimed só quando pedida, sempre como parâmetro (nunca no texto do SQL)', async () => {
+  const query = vi.fn(async () => ({ rows: [] }));
+  const repo = new PostgresLotesEmissao({ query } as any, 'pepper');
+  await repo.contarConsultasPeriodo('m', '2026-10-01', '2026-10-20T15:00Z', new Map());
+  await repo.contarConsultasPeriodo('m', '2026-10-01', '2026-10-20T15:00Z', new Map(), 'amplimed');
+  expect((query.mock.calls[0] as any)[1][3]).toBe('tribemd'); expect((query.mock.calls[1] as any)[1][3]).toBe('amplimed');
+  expect((query.mock.calls[0] as any)[0]).not.toMatch(/'tribemd'|'amplimed'/);
 });
