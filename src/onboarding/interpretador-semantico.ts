@@ -98,7 +98,7 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
     return {fala:['Vou conferir sua agenda nesse período.'],acao:'consultar_agenda',parametros:{desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
   }
-  if(i.dominio==='fiscal'&&i.objetivo==='pendencias_fiscais'&&i.objetivo==='consultar'){
+  if(i.dominio==='fiscal'&&i.objeto==='pendencias_fiscais'&&i.objetivo==='consultar'){
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('listar_pendencias'))return null;
     return {fala:['Vou conferir as pendências desse período.'],acao:'listar_pendencias',parametros:{desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
   }
