@@ -38,7 +38,10 @@ describe('leitura de período do Amplimed (observação)', () => {
     ].slice(0, dias + 1) }));
     const r = await c.lerAgendaPeriodo(id, '2026-10-20', '2026-10-22');
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.dias.map(d => [d.data, d.elegiveis.length])).toEqual([['2026-10-22', 1], ['2026-10-21', 1], ['2026-10-20', 0]]);
+    if (r.ok) {
+      expect(r.dias.map(d => [d.data, d.elegiveis.length])).toEqual([['2026-10-22', 1], ['2026-10-21', 1], ['2026-10-20', 0]]);
+      expect(r.dias[2]!.consultas).toEqual([expect.objectContaining({paciente:'Paciente Passado',status:'cancelada'})]);
+    }
   });
   it('não navegou até o fim: leitura incompleta, nada é afirmado', async () => {
     const c = await criar(async () => ({ codigo: 'CONECTADO', profissional: prof, completo: false, dias: [{ data: '2026-10-22', eventos: [] }] }));
