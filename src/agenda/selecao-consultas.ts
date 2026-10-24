@@ -6,7 +6,7 @@ export function selecionarDias<T extends {data:string;elegiveis:{paciente:string
 }
 /** Extração limitada a um nome literal em pedido de consulta, sem resolver identidade por semelhança. */
 export function pacienteLiteralDaConsulta(texto:string): {nome:string;evidencia:string}|undefined {
-  const m=/\bconsulta\s+d[oa]\s+(.+?)(?=\s+(?:de|do dia|em)\s+\d|[.?!]|$)/i.exec(texto);
+  const m=/\bconsulta\s+d[oa]\s+(.+?)(?=\s+(?:(?:de|do dia|em)\s+\d|(?:de\s+)?(?:hoje|ontem|anteontem|amanh[ãa])\b)|[.?!]|$)/i.exec(texto);
   const nome=m?.[1]?.trim();
   if(!nome||/^(?:dia|ontem|hoje|semana|m[eê]s)\b/i.test(nome)||/^\d/.test(nome))return undefined;
   return {nome,evidencia:nome};

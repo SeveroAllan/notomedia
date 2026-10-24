@@ -18,3 +18,11 @@ it('evidência inventada ou nome diferente do literal é recusado',()=>{
  expect(()=>selecaoConsultas('consulta do Teste Um de 23/10 e Teste Cinco',null,{nome:'Teste Cinco',evidencia:'Teste Cinco'})).toThrow();
 });
 it('consulta do dia não é interpretada como nome',()=>expect(selecaoConsultas('consulta do dia 23/10','2026-10-23')).toEqual({dia:'2026-10-23'}));
+
+it('separa nome literal do dia relativo sem rejeitar a evidência correta',()=>{
+ for(const frase of ['Quero listar só a consulta do Paciente Teste Um de hoje, 24/10/2026, antes de emitir.', 'consulta do Paciente Teste Um de ontem', 'consulta do Paciente Teste Um hoje']) {
+  const selecao=selecaoConsultas(frase,'2026-10-24',{nome:'Paciente Teste Um',evidencia:'Paciente Teste Um'});
+  expect(selecao.paciente?.nome).toBe('Paciente Teste Um');
+  expect(selecionarDias(dias,selecao)[0].elegiveis.map(e=>e.idExterno)).toEqual(['24']);
+ }
+});
