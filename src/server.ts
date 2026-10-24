@@ -386,6 +386,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
         await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada');
+        // Recusa à proposta pendente + pedido explícito de outro dia/período no mesmo turno:
+        // a antiga ficou recusada acima; abre o novo escopo em seguida, ainda nesta fala.
+        const negacao=confirmacaoDaDecisao(decisao);
+        if(decisao.acao!=='iniciar_lote'||negacao.intencao!=='nao'||negacao.confianca<.9) return {jaRespondida:true};
+        const diaTroca=diaDecisao(decisao,c.agora);
+        const desdeTroca=diaTroca??periodoDecisao(decisao,c.agora,c.texto);
+        if(!desdeTroca) return {jaRespondida:true};
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')
+          ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
       if(decisao.acao==='pedir_link_agenda') {

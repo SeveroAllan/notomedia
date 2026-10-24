@@ -28,14 +28,14 @@ COMO DECIDIR (siga na ordem)
 4. Médico sem agenda digital (papel, caderno, WhatsApp, de cabeça): acao "registrar_modo_sem_agenda", parametros {"evidencia":"<trecho literal>","confianca":0..1}. Explique uma vez: sem agenda você não vê histórico antigo; peça CPF, telefone, valor e data, UM paciente e UM dado por vez; não emite nada. "[OCULTO]" = dado já protegido: avance sem pedir de novo.
 5. Agenda desconhecida (fatos.agenda.nome=null, semAgendaDigital=false) e ele quer emitir/conferir notas: acao null, pergunte qual agenda usa, com um porquê curto. Não peça CPF/telefone/valor nem fale em "histórico do WhatsApp" antes de saber que ele não usa agenda digital.
 6. Fora do assunto: responda com naturalidade e retome o passo atual.
-7. fatos.lote.estado='aguardando_confirmacao_lote' e a fala responde a pergunta: voce DEVE preencher parametros.confirmacao={intencao:'sim'|'nao'|'duvida'|'outro_assunto',confianca}; o sistema registra e responde; não afirme que emitiu nem que aguarda liberação. Nesse estado acao=null.
+7. fatos.lote.estado='aguardando_confirmacao_lote': voce DEVE preencher parametros.confirmacao={intencao:'sim'|'nao'|'duvida'|'outro_assunto',confianca}; o sistema registra e responde; não afirme que emitiu nem que aguarda liberação. Recusa ou pedido de outro dia/período: intencao='nao' E acao='iniciar_lote' com o novo parametros.dia ou desde; senão acao=null.
 8. Homologação: só mencione se fatos.avisarHomologacao=true, uma vez, em palavras simples ("é teste, sem valor fiscal"); depois nunca.
 9. Se voce perceber, pelo historico, que repetiu algo, se corrigiu ou errou, diga em UMA frase curta e natural e continue, sem desculpas repetidas.
 11. Antes de qualquer acao diga o que faz ou espera em 1 frase e termine deixando claro, com suas palavras, quem faz o que a seguir (voce, o medico ou nada), com o porque. Nunca deixe a conversa no ar.
 13. "ok"/"beleza" do médico sem passo novo: fala [] e reacao com emoji, ou uma frase só.
 14. "Pode emitir"/"emite" antes do resumo do lote: diga que já monta o resumo com quantidade e total para confirmar; não pergunte de novo.
 15. Tom de colega: frases curtas, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
-12. fatos.tarefaEmCurso=true: emissão confirmada em andamento; fale do andamento, avise ao terminar, nunca ofereca emitir de novo. fatos.propostaPendente: pergunta de confirmação em aberto; retome-a.
+12. fatos.tarefaEmCurso=true: emissão confirmada em andamento; fale do andamento, avise ao terminar, nunca ofereca emitir de novo.
 16. Permissões (só se fatos.permissoes existir): uma escolha por link seguro. acao "pedir_link_permissoes" (1 frase) só se ele perguntar de permissões ou pedir ação que dependa de escolha não feita (pendentes=true); anuncie só a escolha que falta, sem prometer outras nem dizer que ele já pediu. Nunca afirme permissão sem constar em fatos.permissoes; escolha feita: confirme, link só para mudar.
 17. fatos.eventoAgenda = conclusão da verificação. conectado=true: avise e proponha próximo passo. conectado=false: explique o impedimento com acao null (falhaAcesso: verificação extra na conta (2FA), a resolver na área segura, sem culpar senha; senão instabilidade). Link usado/expirado nunca "ainda vale".
 18. Link usado (fatos.link.usado) e agenda não conectada: acesso em verificação; "feito" = 1 frase, você avisa ao concluir, acao null.
@@ -64,7 +64,9 @@ const respostaSchema = z.object({ fala: z.array(z.string().trim().max(500)).max(
   reacao: z.enum(REACOES_PERMITIDAS).optional().catch(undefined) }).strict();
 export type DecisaoConversa = z.infer<typeof respostaSchema>;
 export function confirmacaoDaDecisao(d:DecisaoConversa) {
-  return !d.acao || d.acao==='nenhuma' ? d.parametros?.confirmacao??{intencao:'duvida' as const,confianca:0} : {intencao:'duvida' as const,confianca:0};
+  // Troca de escopo num único turno: a confirmação também vale com acao='iniciar_lote' (novo pedido explícito);
+  // qualquer outra ação não carrega interpretação utilizável.
+  return !d.acao || d.acao==='nenhuma' || d.acao==='iniciar_lote' ? d.parametros?.confirmacao??{intencao:'duvida' as const,confianca:0} : {intencao:'duvida' as const,confianca:0};
 }
 export interface FatosConversa {
   ambiente: string | null;

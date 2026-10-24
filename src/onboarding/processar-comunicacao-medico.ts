@@ -124,7 +124,11 @@ export async function processarComunicacaoMedico(
       const permitidas=deps.ferramentas.permitidas(fatos);
       let decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
-      if(entrada.respostaMedico && fatos.lote?.estado==='aguardando_confirmacao_lote' && !decisao.parametros?.confirmacao) {
+      // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
+      // não é resposta à pergunta, então não força parametros.confirmacao.
+      const trocaEscopo=decisao.acao==='iniciar_lote'&&permitidas.includes('iniciar_lote')
+        &&!!(decisao.parametros?.dia||decisao.parametros?.desde||decisao.parametros?.periodo);
+      if(entrada.respostaMedico && fatos.lote?.estado==='aguardando_confirmacao_lote' && !decisao.parametros?.confirmacao && !trocaEscopo) {
         deps.log('info','CONVERSA_CONFIRMACAO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo:'preencha parametros.confirmacao sobre a pergunta pendente',faltou:[]});
         if(!decisao.parametros?.confirmacao) {

@@ -544,7 +544,7 @@ it.each([0,1,2])('STEER 20: Pode com %i omissões confirma pelo lote existente o
  const responder=vi.spyOn(ConversaLoteRetroativo.prototype,'responder');const pergunta=perguntaLote(lote);
  const inventada='Beleza, recebi sua confirmação; aguardo liberação fiscal.';
  fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>{
-  expect(JSON.parse(msgs[1].content).acoesPermitidas).toEqual(['nenhuma']);
+  expect(JSON.parse(msgs[1].content).acoesPermitidas).toEqual(['nenhuma','iniciar_lote']);
   return JSON.stringify(fronteiras.openai.mock.calls.length<=omissoes?{fala:[inventada],acao:null}:{fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.98}}});
  });
  enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'pode-pendente','Pode.');
@@ -552,4 +552,55 @@ it.each([0,1,2])('STEER 20: Pode com %i omissões confirma pelo lote existente o
  if(omissoes===2) {expect(responder).not.toHaveBeenCalled();expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toBe(pergunta);expect(lote.estado).toBe('aguardando_confirmacao_lote');}
  else {expect(responder).toHaveBeenCalledOnce();expect(confirmar).toHaveBeenCalledExactlyOnceWith('lote-pode','assistente:pode-pendente','pergunta-pode',{intencao:'sim',confianca:.98},expect.any(Date));expect(lote.estado).toBe('confirmado');}
  expect(JSON.stringify([enviar.mock.calls,banco.mensagens])).not.toContain(inventada);
+});
+
+it('troca de escopo num único turno: recusa à proposta pendente abre o lote do novo dia', async () => {
+  config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};enviosEsperados=3;
+  let atual:any={id:'lote-antigo',medicoId:'medico',conversa:'conversa',desde:'2026-10-05',ate:new Date().toISOString(),estado:'aguardando_confirmacao_lote',totalConsultas:3,totalCentavos:73000,semValor:0,mensagemConfirmacaoId:'pergunta-antiga',perguntaEm:new Date().toISOString()};
+  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>({...atual}));
+  const abandonar=vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue(undefined);
+  const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockImplementation(async(_id,_m,_p,interpretacao)=>{if(interpretacao.intencao==='nao'){atual={...atual,estado:'recusado'};return false;}atual={...atual,estado:'confirmado'};return true;});
+  const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>atual={id:'lote-novo',medicoId,conversa,ate:agora.toISOString(),desde:null,estado:'aguardando_data_inicio',totalConsultas:0,totalCentavos:0,semValor:0,mensagemConfirmacaoId:null,perguntaEm:null});
+  const contar=vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:[{fonte:'tribemd',idExterno:'pendente',chave:'c1',assinatura:'a1'}],totalConsultas:1,totalCentavos:35000,semValor:0});
+  vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockImplementation(async(_id,desde,c,fim)=>Object.assign(atual,{desde,...(fim?{ate:fim}:{}),totalConsultas:c.totalConsultas,totalCentavos:c.totalCentavos,semValor:c.semValor,estado:'aguardando_confirmacao_lote'}));
+  vi.spyOn(PostgresLotesEmissao.prototype,'registrarPergunta').mockResolvedValue(undefined);
+  fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>{
+    const d=JSON.parse(msgs[1].content);
+    if(d.resultadoFerramenta)return JSON.stringify({fala:['Conferi o dia.'],acao:null});
+    return JSON.stringify({fala:['Certo, deixo o período anterior de lado e monto o resumo do dia 23/10.'],acao:'iniciar_lote',parametros:{confirmacao:{intencao:'nao',confianca:.97},dia:'2026-10-23'}});
+  });
+  enviar.mockResolvedValue({sucesso:true,mensagemId:'evo-x'});
+  await receber(criarAppExpress(),'troca-escopo','Não, essas antigas não. Quero emitir só a nota do dia 23/10.');
+  expect(confirmar).toHaveBeenCalledExactlyOnceWith('lote-antigo','assistente:troca-escopo','pergunta-antiga',{intencao:'nao',confianca:.97},expect.any(Date));
+  expect(abrir).toHaveBeenCalledOnce();expect(abandonar).toHaveBeenCalled();
+  expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-23','2026-10-23T23:59:59.999-03:00',expect.any(Map),'tribemd');
+  const falas=enviar.mock.calls.map(([p])=>p.texto);
+  expect(falas.some((t:string)=>t.includes('não vou seguir com esse lote'))).toBe(true);
+  expect(falas.some((t:string)=>t.includes('Em 23/10/2026 achei 1 consulta com valor, somando R$ 350,00'))).toBe(true);
+});
+
+it('pedido explícito de outro dia com proposta pendente não é resposta: abre o novo lote sem confirmar o anterior', async () => {
+  config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};enviosEsperados=2;
+  let atual:any={id:'lote-antigo',medicoId:'medico',conversa:'conversa',desde:'2026-10-05',ate:new Date().toISOString(),estado:'aguardando_confirmacao_lote',totalConsultas:3,totalCentavos:73000,semValor:0,mensagemConfirmacaoId:'pergunta-antiga',perguntaEm:new Date().toISOString()};
+  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>({...atual}));
+  const abandonar=vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue(undefined);
+  const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockResolvedValue(true);
+  const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>atual={id:'lote-novo',medicoId,conversa,ate:agora.toISOString(),desde:null,estado:'aguardando_data_inicio',totalConsultas:0,totalCentavos:0,semValor:0,mensagemConfirmacaoId:null,perguntaEm:null});
+  const contar=vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:[{fonte:'tribemd',idExterno:'pendente',chave:'c1',assinatura:'a1'}],totalConsultas:1,totalCentavos:35000,semValor:0});
+  vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockImplementation(async(_id,desde,c,fim)=>Object.assign(atual,{desde,...(fim?{ate:fim}:{}),totalConsultas:c.totalConsultas,totalCentavos:c.totalCentavos,semValor:c.semValor,estado:'aguardando_confirmacao_lote'}));
+  vi.spyOn(PostgresLotesEmissao.prototype,'registrarPergunta').mockResolvedValue(undefined);
+  const {ConversaLoteRetroativo}=await import('../src/onboarding/lote-retroativo.js');
+  const responder=vi.spyOn(ConversaLoteRetroativo.prototype,'responder');
+  fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>{
+    const d=JSON.parse(msgs[1].content);
+    if(d.resultadoFerramenta)return JSON.stringify({fala:['Conferi o dia.'],acao:null});
+    return JSON.stringify({fala:['Vou montar o resumo do dia 23/10 para você conferir antes.'],acao:'iniciar_lote',parametros:{dia:'2026-10-23'}});
+  });
+  enviar.mockResolvedValue({sucesso:true,mensagemId:'evo-x'});
+  await receber(criarAppExpress(),'novo-dia','Pode emitir a nota da consulta de 23/10?');
+  expect(responder).not.toHaveBeenCalled();expect(confirmar).not.toHaveBeenCalled();
+  expect(abrir).toHaveBeenCalledOnce();expect(abandonar).toHaveBeenCalled();
+  expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-23','2026-10-23T23:59:59.999-03:00',expect.any(Map),'tribemd');
+  const falas=enviar.mock.calls.map(([p])=>p.texto);
+  expect(falas.some((t:string)=>t.includes('Em 23/10/2026 achei 1 consulta com valor, somando R$ 350,00'))).toBe(true);
 });

@@ -26,6 +26,12 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
 ];
 export function ferramentasLiberadas(fatos:FatosConversa,disponibilidade:{lote:boolean}):readonly NomeFerramenta[] {
   if(fatos.ambiente!=='homologacao') return [];
-  if(tarefaOcupada(fatos)) return ['nenhuma'];
+  if(tarefaOcupada(fatos)) {
+    // Proposta ainda sem resposta pode ser substituída por um pedido explícito de outro dia/período
+    // (o iniciar abandona a pendente); emissão confirmada/em andamento não admite ação nova.
+    if(fatos.lote?.estado!=='aguardando_confirmacao_lote') return ['nenhuma'];
+    const iniciar=CATALOGO_FERRAMENTAS.find(t=>t.nome==='iniciar_lote')!;
+    return iniciar.liberada(fatos,disponibilidade)?['nenhuma','iniciar_lote']:['nenhuma'];
+  }
   return CATALOGO_FERRAMENTAS.filter(t=>t.liberada(fatos,disponibilidade)).map(t=>t.nome);
 }

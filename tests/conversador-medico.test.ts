@@ -73,6 +73,9 @@ it('ação fiscal inválida não fornece interpretação utilizável para libera
  const {confirmacaoDaDecisao}=await import('../src/onboarding/conversador-medico.js');
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'emitir_nota',parametros:{confirmacao:{intencao:'sim',confianca:1}}})).toEqual({intencao:'duvida',confianca:0});
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:.9}}})).toEqual({intencao:'sim',confianca:.9});
+ // Troca de escopo num único turno: iniciar_lote pode carregar a recusa da proposta pendente.
+ expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'iniciar_lote',parametros:{confirmacao:{intencao:'nao',confianca:.95}}})).toEqual({intencao:'nao',confianca:.95});
+ expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'iniciar_lote'})).toEqual({intencao:'duvida',confianca:0});
 });
 
 it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
