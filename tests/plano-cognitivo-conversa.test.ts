@@ -22,6 +22,9 @@ it('persiste plano cognitivo sem misturar estado interno com falas', async () =>
   expect(contexto.plano).toEqual(plano);
   expect(contexto.historicoRecente).toEqual(['Pode emitir depois que eu confirmar.']);
   expect(banco.mensagens.find(m => m.mensagemId === 'contexto:plano_cognitivo')?.papel).toBe('noto');
+
+  await memoria.registrarPlano('m', 'c', { ...plano, objetivo: 'emitir para CPF 529.982.247-25' });
+  expect((await memoria.lerContextoParaModelo('m', 'c')).plano?.objetivo).toBe('emitir para CPF [OCULTO]');
 });
 
 it('decisor recebe o plano anterior e pode devolver estado operacional atualizado', async () => {
