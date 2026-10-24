@@ -172,8 +172,9 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'consultar_agenda') {
     const ag=normalizarAgenda(fatos.agenda.nome??undefined);
     if(!fatos.agenda.conectada||fatos.semAgendaDigital||!(ag==='tribemd'||ag==='amplimed'))return 'AGENDA_NAO_CONECTADA';
-    const desde=validarInicioRetroativo(d.parametros?.desde??null,agora), ate=d.parametros?.ate??calendarioConversa(agora).hoje;
-    if(!desde||!/^\d{4}-\d{2}-\d{2}$/.test(ate)||ate<desde)return 'PERIODO_INVALIDO';
+    const calendario=calendarioConversa(agora),desde=validarInicioRetroativo(d.parametros?.desde??null,agora),ate=d.parametros?.ate??calendario.hoje;
+    const dataAte=/^\d{4}-\d{2}-\d{2}$/.test(ate)&&new Date(ate+'T12:00:00Z').toISOString().slice(0,10)===ate;
+    if(!desde||!dataAte||ate<desde||ate>calendario.hoje)return 'PERIODO_INVALIDO';
     return null;
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
