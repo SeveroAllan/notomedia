@@ -652,3 +652,11 @@ it('listar Amplimed desde data não oferece notas já autorizadas ou tentativas 
  await receber(criarAppExpress(),'lista-fiscal','O que ficou sem nota desde15outubro? Sem emitir.');
  const fala=enviar.mock.calls.map(([p])=>p.texto).join(' ');expect(fala).toContain('1 atendimento');expect(fala).toContain('Nova');expect(fala).not.toContain('Ja Emitida');expect(fala).not.toContain('Travada');expect(fala).toContain('1 já tem nota');expect(fala).toContain('1 tem tentativa anterior');
 });
+it('semana passada não inclui hoje nem herda paciente antigo',async()=>{
+ fronteiras.agenda={nome:'amplimed',conectada:true};config.envioRealAllowlist=['+5551993527271'];enviosEsperados=2;
+ const ev=(paciente:string,idExterno:string)=>({paciente,idExterno,dataHora:'2026-10-19T14:00:00-03:00',valorCentavos:35000});
+ fronteiras.amplimed.mockResolvedValue({ok:true,dias:[{data:'2026-10-20',lidos:1,elegiveis:[ev('Teste Hoje','hoje')]},{data:'2026-10-18',lidos:1,elegiveis:[ev('Teste Anterior','anterior')]}]});
+ fronteiras.openai.mockResolvedValue(JSON.stringify({fala:['Vou conferir a semana passada.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada',pedidoExplicito:{evidencia:'conferir',confianca:1}}}));
+ await receber(criarAppExpress(),'semana-fechada','Quero conferir a semana passada sem emitir.');
+ const falas=enviar.mock.calls.map(([p])=>p.texto).join(' ');expect(falas).toContain('a 18/10/2026');expect(falas).not.toContain('Teste Hoje');expect(falas).toContain('Teste Anterior');
+});

@@ -283,3 +283,7 @@ it('preparar total sem emitir é proposta, não simples lista',()=>{
  expect(PROMPT_CONVERSA).toContain('preparar/resumir o total');
  expect(PROMPT_CONVERSA).toContain('não emita');
 });
+it.each([['da semana passada','2026-10-18'],['da semana retrasada','2026-10-11'],['do mês passado','2026-09-30'],['desde a semana passada',null]])('fecha período natural sem ampliar até hoje: %s',async(texto,fim)=>{
+ const {fimPeriodoDecisao}=await import('../src/onboarding/conversador-medico.js');
+ expect(fimPeriodoDecisao({fala:[],acao:'listar_pendencias'},new Date('2026-10-24T17:00Z'),texto)).toBe(fim);
+});

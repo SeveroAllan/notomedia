@@ -105,7 +105,7 @@ export function diaDecisao(d: DecisaoConversa, agora: Date): string | null {
 export function periodoDecisao(d: DecisaoConversa, agora: Date, texto?: string): string | null {
   const calendario = calendarioConversa(agora);
   const normalizado=texto?.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
-  const literal=normalizado?.match(/(?:^|\bdesde\s+)(?:a\s+|o\s+)?(semana passada|semana retrasada|mes passado|mes retrasado)\b/)?.[1].replace(' ','_');
+  const literal=normalizado?.match(/\b(semana passada|semana retrasada|mes passado|mes retrasado)\b/)?.[1].replace(' ','_');
   if(literal && literal in calendario) return validarInicioRetroativo(calendario[literal as 'semana_passada'|'semana_retrasada'|'mes_passado'|'mes_retrasado'],agora);
   const informado=validarInicioRetroativo(d.parametros?.periodo ? calendario[d.parametros.periodo] : d.parametros?.desde ?? null, agora);
   if(informado) return informado;
@@ -233,4 +233,18 @@ export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<Dec
   if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
   if (!/consult|atendiment|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
   return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(decisao.fala.join(' '));
+}
+
+/** Recorte fechado é diferente de "desde": termina antes do período seguinte. */
+export function fimPeriodoDecisao(d: DecisaoConversa, agora: Date, texto: string): string | null {
+ const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+ if(/\bdesde\b/.test(t))return null;
+ const nome=t.match(/\b(semana passada|semana retrasada|mes passado|mes retrasado)\b/)?.[1].replace(' ','_')??d.parametros?.periodo;
+ if(!nome)return null;
+ const calendario=calendarioConversa(agora), inicio=calendario[nome as 'semana_passada'];
+ if(!inicio)return null;
+ const fim=new Date(inicio+'T12:00:00Z');
+ if(nome.startsWith('semana'))fim.setUTCDate(fim.getUTCDate()+6);
+ else {fim.setUTCMonth(fim.getUTCMonth()+1);fim.setUTCDate(0);}
+ return fim.toISOString().slice(0,10);
 }
