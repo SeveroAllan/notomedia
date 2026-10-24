@@ -25,6 +25,12 @@ export class PostgresLotesEmissao implements RepositorioLotes {
       and estado in ('aguardando_data_inicio','aguardando_confirmacao_lote','confirmado','processando')`, [medicoId]);
     return rows.length === 1 ? lote(rows[0]) : null;
   }
+  async situacaoConsulta(medicoId: string, fonte: string, idExterno: string): Promise<'pendente'|'ja_faturada'|'bloqueada'> {
+    const chave=chaveConsulta(this.pepper,medicoId,fonte,idExterno);
+    const {rows}=await this.pool.query('select estado, recusa_definitiva, nota_fiscal_id from public.noto_emissoes_comprovantes where medico_id=$1 and consulta_chave=$2 and substituida_em is null',[medicoId,chave]);
+    const destinos=rows.map(e=>classificarRetomadaEmissao({estado:e.estado,recusaDefinitiva:e.recusa_definitiva===true,notaFiscalId:e.nota_fiscal_id??null}));
+    return destinos.includes('ja_faturada')?'ja_faturada':destinos.includes('repetida')?'bloqueada':'pendente';
+  }
   async contarConsultasPeriodo(medicoId: string, desde: string, ate: string, valoresAoVivo: ReadonlyMap<string, number | null>, fonteAgenda: 'tribemd' | 'amplimed' = 'tribemd'): Promise<ContagemPeriodo> {
     if (!valoresAoVivo) throw Error('LEITURA_AO_VIVO_NECESSARIA');
     const { rows } = await this.pool.query<{ fonte: string; id_externo: string }>(`select fonte, id_externo

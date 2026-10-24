@@ -200,3 +200,11 @@ it('reservar rebaixa para bloqueada o item cuja chave tem tentativa ativa não c
   expect(r?.itens[0]).toMatchObject({ estado: 'bloqueada', idExterno: '19' });
   await repo.liberarReserva('l');
 });
+it('listagem concilia consulta pela mesma trava fiscal da contagem, sem liberar tentativas incertas',async()=>{
+ const query=vi.fn(async(_sql:string,p:unknown[])=>({rows:p[1]===chaveConsulta('p','m','amplimed','autorizada')?[{estado:'nota_gerada',nota_fiscal_id:'n'}]:p[1]===chaveConsulta('p','m','amplimed','incerta')?[{estado:'erro',recusa_definitiva:false}]:[]}));
+ const r=new PostgresLotesEmissao({query} as any,'p');
+ expect(await r.situacaoConsulta('m','amplimed','autorizada')).toBe('ja_faturada');
+ expect(await r.situacaoConsulta('m','amplimed','incerta')).toBe('bloqueada');
+ expect(await r.situacaoConsulta('m','amplimed','nova')).toBe('pendente');
+ expect(query.mock.calls.every(([s])=>s.includes('substituida_em is null'))).toBe(true);
+});

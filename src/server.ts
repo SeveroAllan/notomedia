@@ -459,14 +459,27 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const br=(d:string)=>d.split('-').reverse().join('/');
         const selecionados=selecionarDias(a.dias,selecao);
         if(selecao.paciente&&new Set(selecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1)return {falaAssinada:['Há cadastros diferentes com esse nome. Preciso identificar o paciente antes de preparar notas.'],dados:{ok:false,motivo:'PACIENTE_AMBIGUO'}};
+        let jaFaturadas=0,bloqueadas=0;
+        for(const d of selecionados) {
+          const pendentes:typeof d.elegiveis=[];
+          for(const e of d.elegiveis) {
+            const estado=await lotes.situacaoConsulta(c.medicoId,'amplimed',e.idExterno);
+            if(estado==='ja_faturada')jaFaturadas++;
+            else if(estado==='bloqueada')bloqueadas++;
+            else pendentes.push(e);
+          }
+          d.elegiveis=pendentes;
+        }
         const total=selecionados.reduce((n,d)=>n+d.elegiveis.length,0);
         const porDia=[...selecionados].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
         const escopo=diaSelecionado?`Em ${br(diaSelecionado)}`:`De ${br(desde)} a ${br(hoje)}`;
         const alvo=selecao.paciente?` do paciente ${selecao.paciente.nome}`:"";
         const fala=total
           ? [`${escopo} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
-          : [`${escopo} não vi atendimento finalizado com cobrança particular${alvo} na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
-        return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
+          : [`${escopo} não encontrei atendimento finalizado com cobrança particular${alvo} sem nota e livre para preparar na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
+        if(jaFaturadas)fala.push(jaFaturadas===1?'1 já tem nota autorizada e ficou fora da lista.':`${jaFaturadas} já têm nota autorizada e ficaram fora da lista.`);
+        if(bloqueadas)fala.push(bloqueadas===1?'1 tem tentativa anterior que precisa ser conciliada; não vou emitir de novo.':`${bloqueadas} têm tentativas anteriores que precisam ser conciliadas; não vou emitir de novo.`);
+        return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde,jaFaturadas,bloqueadas},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
         await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd',selecao)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);

@@ -40,6 +40,7 @@ beforeEach(() => {
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
   fronteiras.connect.mockImplementation(() => historico.connect());
   fronteiras.query.mockImplementation((sql: string, parametros: unknown[]) => {
+    if(sql.startsWith('select estado, recusa_definitiva, nota_fiscal_id from public.noto_emissoes_comprovantes')) return {rows:[]};
     if(sql.includes('s.aguardando_confirmacao_medico=true')) return {rows:[]};
     if(sql.startsWith('select count(*)::int as total from cofre_links')) return {rows:[{total:0}]};
     if (sql.startsWith('select data_inicio::text')) return { rows: [{ data_inicio: '2026-09-03', aguardando_data: false, ultimo_aviso: null }] };
@@ -640,4 +641,14 @@ it('timestamp original anterior à proposta não confirma no wiring mesmo proces
  fronteiras.openai.mockResolvedValue(JSON.stringify({fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:1}}}));
  enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'sim-atrasado','sim',true,undefined,Math.floor(Date.now()/1000)-60);
  expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toContain('Não há uma pergunta');
+});
+it('listar Amplimed desde data não oferece notas já autorizadas ou tentativas bloqueadas',async()=>{
+ fronteiras.agenda={nome:'amplimed',conectada:true};config.envioRealAllowlist=['+5551993527271'];config.emissaoComprovanteHomologacaoAtiva=true;enviar.mockResolvedValue({sucesso:true});enviosEsperados=4;
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockResolvedValue(null);
+ const ev=(paciente:string,idExterno:string)=>({paciente,idExterno,dataHora:'2026-10-19T14:00:00-03:00',valorCentavos:25000,detalhe:null});
+ fronteiras.amplimed.mockResolvedValue({ok:true,dias:[{data:'2026-10-19',elegiveis:[ev('Ja Emitida','emitida'),ev('Travada','travada'),ev('Nova','nova')]}]});
+ vi.spyOn(PostgresLotesEmissao.prototype,'situacaoConsulta').mockImplementation(async(_m,_f,id)=>id==='emitida'?'ja_faturada':id==='travada'?'bloqueada':'pendente');
+ fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>JSON.stringify(JSON.parse(msgs[1].content).resultadoFerramenta?{fala:['Conferi.'],acao:null}:{fala:['Vou consultar.'],acao:'listar_pendencias',parametros:{desde:'2026-10-15'}}));
+ await receber(criarAppExpress(),'lista-fiscal','O que ficou sem nota desde15outubro? Sem emitir.');
+ const fala=enviar.mock.calls.map(([p])=>p.texto).join(' ');expect(fala).toContain('1 atendimento');expect(fala).toContain('Nova');expect(fala).not.toContain('Ja Emitida');expect(fala).not.toContain('Travada');expect(fala).toContain('1 já tem nota');expect(fala).toContain('1 tem tentativa anterior');
 });
