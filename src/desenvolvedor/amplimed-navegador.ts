@@ -253,9 +253,18 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     let data: string | null = await cabecalho(page);
     if (!data) { console.warn('AMPLIMED_PERIODO cabecalho_ilegivel texto=' + JSON.stringify(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 120)`))); return; }
     if (data !== hoje) {
+      // O botão "Hoje" não é âncora confiável: na conta real visto pular para data sem relação com hoje
+      // (segue a seleção do mini-calendário). Navega dia a dia até o alvo, conferindo o cabeçalho a cada passo.
       console.warn('AMPLIMED_PERIODO ancorando esperado=' + hoje + ' cabecalho=' + data);
-      try { await page.locator('.fc-today-button').first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
-      for (let t = 0; t < 10 && data !== hoje; t++) { await page.waitForTimeout(500); data = await cabecalho(page) ?? data; }
+      let passos = 0;
+      while (data !== hoje && passos < 62) {
+        const botao = data < hoje ? '.fc-next-button' : '.fc-prev-button';
+        try { await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
+        const anterior: string = data;
+        for (let t = 0; t < 10 && data === anterior; t++) { await page.waitForTimeout(400); data = await cabecalho(page) ?? anterior; }
+        if (data === anterior) { console.warn('AMPLIMED_PERIODO ancora_travou em=' + anterior); break; }
+        passos++;
+      }
       if (data !== hoje) { console.warn('AMPLIMED_PERIODO ancora_falhou esperado=' + hoje + ' lido=' + data); return; } // não afirma o que não leu
       await page.waitForTimeout(1200);
     }
