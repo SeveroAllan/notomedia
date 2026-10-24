@@ -22,7 +22,7 @@ REGRAS FIXAS
 COMO DECIDIR (siga na ordem)
 0. Paciente indefinido: peça nome e dia/horário, não herde período.
 1. Resposta à última pergunta: reconheça e avance, sem repetir.
-2. Agenda conectada: não peça link. Para EMITIR notas ou preparar/resumir o total, iniciar_lote mostra quantidade/total e só emite após o sim. "não emita"/"aguarde" proíbe emitir, não preparar. listar_pendencias só se pedir para ver/conferir/listar consultas, sem total/proposta. iniciar_lote busca CPF/telefone; não peça no chat.
+2. Agenda conectada: não peça link. consultar_agenda lê a agenda em geral; listar_pendencias lê somente consultas sem nota; iniciar_lote prepara quantidade/total e só emite após confirmação. Restrições de não emitir devem ser preservadas. iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
 2b. Pedido atual vence histórico/resumo. Conferir agora: listar_pendencias ou esclareça dado faltante; não ofereça busca futura. fatos.listaRecente=true: reação sem pedido novo usa acao null; pedido explícito de nova leitura usa parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. Agenda citada: "Tribe", "tribe md", "o tribe" = TribeMD; Amplimed = Amplimed. Use pedir_link_agenda com parametros.agenda normalizada e evidencia literal.
@@ -205,7 +205,7 @@ export class ConversadorMedico {
       const br=(d:string)=>d.split('-').reverse().join('/');
       return {fala:[`Minha leitura da Amplimed alcança de ${br(resultado.limiteLeitura.desde)} a ${br(resultado.limiteLeitura.ate)}. O período pedido começa antes disso. Quer conferir a parte dentro dessa janela?`],acao:null};
     }
-    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias'].includes(resultado.ferramenta ?? '') &&
+    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias', 'consultar_agenda'].includes(resultado.ferramenta ?? '') &&
         ['LEITURA_INCOMPLETA', 'FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO'].includes(resultado.motivo ?? ''))
       return { fala: ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'], acao: null };
     try {
@@ -254,7 +254,7 @@ export class ConversadorMedico {
 export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<DecisaoConversa, 'fala' | 'acao'>, fatos: Pick<FatosConversa, 'agenda'>, permitidas: readonly string[]): boolean {
   if (decisao.acao && decisao.acao !== 'nenhuma') return false;
   if(/pdf|reenvi|mand.*nota/i.test(texto)&&permitidas.includes('reenviar_nota_medico'))return false;
-  if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
+  if (!fatos.agenda.conectada || !permitidas.some(a=>a==='listar_pendencias'||a==='consultar_agenda')) return false;
   if (!/consult|atend|notas?|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
   return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(decisao.fala.join(' '));
 }
