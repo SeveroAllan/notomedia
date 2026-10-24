@@ -13,13 +13,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, amplimed:vi.fn(), agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: (deps: any) => { fronteiras.registrarTextoLink = deps.registrarTextoLink; fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
+  return { criarCofreContas: (deps: any) => { fronteiras.registrarTextoLink = deps.registrarTextoLink; fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, lerAgendaAmplimed:fronteiras.amplimed, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -603,4 +603,22 @@ it('pedido explícito de outro dia com proposta pendente não é resposta: abre 
   expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-23','2026-10-23T23:59:59.999-03:00',expect.any(Map),'tribemd');
   const falas=enviar.mock.calls.map(([p])=>p.texto);
   expect(falas.some((t:string)=>t.includes('Em 23/10/2026 achei 1 consulta com valor, somando R$ 350,00'))).toBe(true);
+});
+
+it.each([false,true])('seleção Amplimed conserva dia e paciente ao listar e preparar no turno seguinte (presente=%s)',async presente=>{
+ fronteiras.agenda={nome:'amplimed',conectada:true};config.envioRealAllowlist=['+5551993527271'];config.emissaoComprovanteHomologacaoAtiva=true;
+ enviar.mockResolvedValue({sucesso:true});enviosEsperados=4;
+ const ev=(paciente:string,idExterno:string)=>({paciente,idExterno,dataHora:'2026-10-19T14:00:00-03:00',valorCentavos:35000,detalhe:{nome:paciente,cpf:'10000000019',celular:'51993527271'}});
+ fronteiras.amplimed.mockResolvedValue({ok:true,dias:[{data:'2026-10-20',lidos:1,elegiveis:[ev('Paciente Teste Um','outro-dia')]},{data:'2026-10-19',lidos:1,elegiveis:[ev('Paciente Teste Cinco','outro-paciente'),...(presente?[ev('Paciente Teste Um','alvo')]:[])]}]});
+ const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockResolvedValue({id:'l',medicoId:'medico',conversa:'c',desde:null,ate:'2026-10-20T15:00Z',estado:'aguardando_data_inicio'} as any);
+ vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue();
+ const contar=vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:[],totalConsultas:presente?1:0,totalCentavos:presente?35000:0,semValor:0});
+ vi.spyOn(PostgresLotesEmissao.prototype,'registrarPergunta').mockResolvedValue();
+ vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockResolvedValue({id:'l',medicoId:'medico',conversa:'c',desde:'2026-10-19',ate:'2026-10-20T02:59:59.999Z',totalConsultas:presente?1:0,totalCentavos:presente?35000:0,semValor:0,estado:presente?'aguardando_confirmacao_lote':'recusado'} as any);
+ fronteiras.openai.mockImplementation(async(_k,_m,mensagens)=>{const d=JSON.parse(mensagens[1].content);if(d.resultadoFerramenta)return JSON.stringify({fala:['Não achei a consulta pedida.'],acao:null});return d.texto.includes('preparar')?JSON.stringify({fala:['Vou conferir a seleção.'],acao:'iniciar_lote'}):JSON.stringify({fala:['Vou conferir só o dia e paciente pedidos.'],acao:'listar_pendencias',parametros:{dia:'2026-10-19',paciente:{nome:'Teste Um',evidencia:'Teste Um'}}});});
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockResolvedValue(null);
+ const app=criarAppExpress();await receber(app,'selecionar-ausente','Só a consulta do Teste Um de 19/10/2026. Pode conferir?');
+ const falas=enviar.mock.calls.map(([p])=>p.texto).join(' ');expect(falas).toContain('Em 19/10/2026');expect(falas).toContain(presente?'Paciente Teste Um':'do paciente Teste Um');expect(falas).not.toContain('Teste Cinco');expect(falas).not.toContain('20/10/2026');
+ await receber(app,'preparar-ausente','Pode preparar.');
+ expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-19','2026-10-19T23:59:59.999-03:00',presente?new Map([['alvo',35000]]):new Map(),'amplimed');
 });

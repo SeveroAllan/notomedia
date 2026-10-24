@@ -1,3 +1,4 @@
+import {selecionarDias,selecaoConsultas,pacienteLiteralDaConsulta,type SelecaoConsultas} from './agenda/selecao-consultas.js';
 import { origemWebhookConfigurada } from './onboarding/io/origem-webhook.js';
 import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
 import { contemCredencialAgenda } from './cofre/links.js';
@@ -292,7 +293,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     return {totalNoPeriodo:rows.length,jaEmitidas};
   };
   const detalheLote = (id: string, consulta: string) => ehIdAmplimed(consulta) ? cofres.detalheAmplimedAoVivo(id, consulta) : cofres.detalheAoVivo(id, consulta);
-  const criarRetroativo = (narrar?: ContextoAcaoConversa['narrar'], decisao?: DecisaoConversa, medicoId?: string, perguntaInterpretada?: string, fonteAgenda: 'tribemd' | 'amplimed' = 'tribemd') => config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
+  const criarRetroativo = (narrar?: ContextoAcaoConversa['narrar'], decisao?: DecisaoConversa, medicoId?: string, perguntaInterpretada?: string, fonteAgenda: 'tribemd' | 'amplimed' = 'tribemd', selecao?: SelecaoConsultas) => config.conversaLivreAtiva && config.emissaoComprovanteHomologacaoAtiva ? new ConversaLoteRetroativo(lotes, {
     permitido: lotePermitido,
     ultimaFala: (id, conversa) => memoriaPersistida!.lerUltimaFalaNoto(id, conversa),
     reenviar: narrar ? undefined : async (medicoId,conversa,chave,texto) => {
@@ -311,7 +312,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true);
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
         if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
-        const p = prepararLoteAmplimed(a.dias);
+        const diasSelecionados=selecionarDias(a.dias,selecao??{});
+        if(selecao?.paciente&&new Set(diasSelecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota; preciso identificar qual paciente você quer.']});return;}
+        const p = prepararLoteAmplimed(diasSelecionados);
         // paciente_id é FK de pacientes: vincula/cria o cadastro mínimo pelo celular do cadastro Amplimed (mesmo caminho do TribeMD).
         const repoConsultas = new PostgresConsultasSincronizadas(pool); const prontas: typeof p.consultas = [];
         for (const consulta of p.consultas) {
@@ -329,7 +332,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         fala:await narrar({ferramenta:'iniciar_lote',ok:false,motivo:resultado.motivo})});
     },
     narrarContagem: narrar ? async resultado => {
-      const diagnostico = resultado.contagem.totalConsultas ? {} : await diagnosticarPeriodo(medicoId!, resultado.desde, resultado.ate);
+      const diagnostico = resultado.contagem.totalConsultas || fonteAgenda==='amplimed' ? {} : await diagnosticarPeriodo(medicoId!, resultado.desde, resultado.ate);
       const fala = await narrar({ferramenta:'iniciar_lote',ok:true,desde:resultado.desde,
         totalConsultas:resultado.contagem.totalConsultas,totalCentavos:resultado.contagem.totalCentavos,
         semValor:resultado.contagem.semValor,...diagnostico,perguntaAssinada:resultado.perguntaConfirmacao});
@@ -388,15 +391,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     executar:async (decisao,c) => {
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
+        if(pacienteLiteralDaConsulta(c.texto)&&confirmacaoDaDecisao(decisao).intencao!=='nao')return {falaAssinada:['Seu pedido menciona um paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
         await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada');
         // Recusa à proposta pendente + pedido explícito de outro dia/período no mesmo turno:
         // a antiga ficou recusada acima; abre o novo escopo em seguida, ainda nesta fala.
         const negacao=confirmacaoDaDecisao(decisao);
         if(decisao.acao!=='iniciar_lote'||negacao.intencao!=='nao'||negacao.confianca<.9) return {jaRespondida:true};
         const diaTroca=diaDecisao(decisao,c.agora);
+        let selecaoTroca:SelecaoConsultas;try{selecaoTroca=selecaoConsultas(c.texto,diaTroca,decisao.parametros?.paciente);}catch{return {falaAssinada:['Qual é o nome do paciente na agenda?'],dados:{ok:false,motivo:'PACIENTE_NAO_RESOLVIDO'}};}
+        if(selecaoTroca.paciente&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Não preparei notas de outras pessoas. Preciso confirmar o paciente nessa agenda.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
         const desdeTroca=diaTroca??periodoDecisao(decisao,c.agora,c.texto);
         if(!desdeTroca) return {jaRespondida:true};
-        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd',selecaoTroca)
           ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
@@ -427,24 +433,38 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       // Dia único nomeado na mensagem vence o período salvo: nunca ampliar o pedido em silêncio.
       const dia=diaDecisao(decisao,c.agora);
-      const desde=dia??periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
-      const fimDoDia=dia?`${dia}T23:59:59.999-03:00`:undefined;
+      let selecao:SelecaoConsultas;
+      try{selecao=selecaoConsultas(c.texto,dia,decisao.parametros?.paciente);}catch{return {falaAssinada:['Preciso confirmar qual paciente você quer, antes de preparar as notas. Qual é o nome na agenda?'],dados:{ok:false,motivo:'PACIENTE_NAO_RESOLVIDO'}};}
+      if(selecao.paciente&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Ainda não consigo separar um paciente nessa agenda com segurança. Não preparei notas de outras pessoas.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
+      // A seleção específica sobrevive ao próximo 'pode preparar'; não cai no lote de todos.
+      if(!selecao.paciente&&!/\b(?:todos|todas|qualquer paciente)\b/i.test(c.texto)){
+        const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
+        if(rows[0])try{const anterior=JSON.parse(rows[0].texto);if(anterior.paciente)selecao.paciente=anterior.paciente;if(!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&anterior.dia)selecao.dia=anterior.dia;}catch{return {dados:{ok:false,motivo:'SELECAO_NAO_RESOLVIDA'},falaAssinada:['Qual paciente você quer conferir? Não preparei notas de outras pessoas.']};}
+      }
+      const diaSelecionado=selecao.dia;
+      const desde=diaSelecionado??periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
+      const fimDoDia=diaSelecionado?`${diaSelecionado}T23:59:59.999-03:00`:undefined;
+      await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:selecao:${c.chave}`,JSON.stringify(selecao),'noto');
       if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
         // Amplimed v1: modo observação, dia a dia até 31 dias; nada vira nota.
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
-        const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje);
+        const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,!!selecao.paciente);
         console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,dias:a.ok?a.dias.length:undefined,total:a.ok?a.dias.reduce((n,d)=>n+d.elegiveis.length,0):undefined}));
         if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo}};
         const br=(d:string)=>d.split('-').reverse().join('/');
-        const total=a.dias.reduce((n,d)=>n+d.elegiveis.length,0);
-        const porDia=[...a.dias].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
+        const selecionados=selecionarDias(a.dias,selecao);
+        if(selecao.paciente&&new Set(selecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1)return {falaAssinada:['Há cadastros diferentes com esse nome. Preciso identificar o paciente antes de preparar notas.'],dados:{ok:false,motivo:'PACIENTE_AMBIGUO'}};
+        const total=selecionados.reduce((n,d)=>n+d.elegiveis.length,0);
+        const porDia=[...selecionados].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
+        const escopo=diaSelecionado?`Em ${br(diaSelecionado)}`:`De ${br(desde)} a ${br(hoje)}`;
+        const alvo=selecao.paciente?` do paciente ${selecao.paciente.nome}`:"";
         const fala=total
-          ? [`De ${br(desde)} a ${br(hoje)} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
-          : [`De ${br(desde)} a ${br(hoje)} não vi atendimento finalizado com cobrança particular na sua agenda Amplimed, então não há nota para emitir nesse período.`];
+          ? [`${escopo} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
+          : [`${escopo} não vi atendimento finalizado com cobrança particular${alvo} na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
-        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd',selecao)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);
         return {jaRespondida:true};
       }
       const r=await listarPendencias(c.medicoId,c.fatos.agenda,c.agora,desde);
