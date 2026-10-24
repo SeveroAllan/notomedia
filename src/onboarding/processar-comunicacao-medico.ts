@@ -118,7 +118,7 @@ export async function processarComunicacaoMedico(
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
       const reservaPosFerramenta=orcamento>2?2:0;
-      const podeCorrigir=()=>podeCorrigir()-reservaPosFerramenta;
+      const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
