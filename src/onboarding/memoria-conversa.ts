@@ -54,9 +54,16 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   }
 
   async registrarPlano(medicoId: string, conversa: string, plano: PlanoConversa): Promise<void> {
+    const seguro: PlanoConversa = {
+      objetivo: sanitizarTextoMedico(plano.objetivo),
+      etapa: sanitizarTextoMedico(plano.etapa),
+      faltando: plano.faltando.map(sanitizarTextoMedico),
+      proximosPassos: plano.proximosPassos.map(sanitizarTextoMedico),
+      aguardando: plano.aguardando ? sanitizarTextoMedico(plano.aguardando) : null,
+    };
     await this.pool.query(`insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5)
       on conflict (medico_id, mensagem_id) do update set texto=excluded.texto, papel=excluded.papel`,
-      [medicoId, conversa, 'contexto:plano_cognitivo', JSON.stringify(plano), 'noto']);
+      [medicoId, conversa, 'contexto:plano_cognitivo', JSON.stringify(seguro), 'noto']);
   }
 
   async lerPlano(medicoId: string, conversa: string): Promise<PlanoConversa | null> {
