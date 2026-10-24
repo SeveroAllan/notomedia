@@ -127,6 +127,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if((!d.acao||d.acao==='nenhuma')&&!fatos.tarefaEmCurso&&/\b(?:vou|estou|j[aá] estou)\s+(?:pedir\s+o\s+)?(?:reenv|envi|mand)|assim que.*(?:concluir|terminar).*aviso|(?:n[aã]o encontr|indispon[ií]vel|n[aã]o.*dispon[ií]vel|j[aá].*(?:enviad|entregu|emitid))/i.test(d.fala.join(' '))&&/pdf|nota|reenvio/i.test(d.fala.join(' ')))return 'ENVIO_SEM_ACAO';
   const acao = d.acao ?? 'nenhuma';
   if (!ACOES_CONVERSA.includes(acao as typeof ACOES_CONVERSA[number])) return 'ACAO_INVALIDA';
+  // Todas as saídas, inclusive as produzidas por uma correção, passam pelo mesmo contrato factual.
+  if (afirmaFatoDaAgendaSemFerramenta(texto,d,fatos,permitidas)) return 'FATO_AGENDA_NAO_VERIFICADO';
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
   if (!d.fala.some(t=>t.trim())) return 'anuncie a acao com suas palavras';

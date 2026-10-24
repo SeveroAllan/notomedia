@@ -1,4 +1,4 @@
-import {afirmaFatoDaAgendaSemFerramenta} from './conversador-medico.js';
+import {afirmaFatoDaAgendaSemFerramenta,consultaNaoIdentificada} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
 import { FALA_CONCLUSAO_AGENDA_CONECTADA, FALA_CONCLUSAO_AGENDA_FALHA_ACESSO, FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL, FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
@@ -203,10 +203,12 @@ export async function processarComunicacaoMedico(
         const motivoRestante = validarAcaoConversa(comTemplate, fatos, permitidas, texto, agora, { introducaoVerificada: true });
         if (!motivoRestante) { deps.log('info', `CONVERSA_INTRODUCAO_TEMPLATE ${motivo}`); decisao = comTemplate; motivo = null; }
       }
+      // A correção pode trocar ação por fala: revalide o contrato completo antes de qualquer saída.
+      if(!motivo&&afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas))motivo='FATO_AGENDA_NAO_VERIFICADO';
       let fala=decisao.fala, falaMemoria:string[]|undefined;
       if(motivo) {
         deps.log('erro',`CONVERSA_ACAO_RECUSADA ${motivo}`);
-        fala=motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
+        fala=motivo==='FATO_AGENDA_NAO_VERIFICADO' ? [consultaNaoIdentificada(texto)?'Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.':'Preciso consultar a agenda antes de afirmar o estado dessa consulta. Não preparei nem emiti nada.'] : motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
       } else {
         const desde=periodoDecisao(decisao,agora,texto);
         if(desde) { await deps.ferramentas.guardarPeriodo(medicoId,desde); fatos.periodo={desde,origem:'resposta_atual'}; }

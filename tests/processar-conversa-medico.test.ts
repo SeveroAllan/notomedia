@@ -552,3 +552,19 @@ it('lista assinada exclui moldura que inventa bloqueio por extenso (real 24/10 1
  expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(assinada);
  expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).not.toContain('mas ela está bloqueada');
 });
+
+it.each(['Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?','Meu paciente teve várias consultas. Como escolho só uma?'])('correção de ação não pode escapar para fato herdado: %s',async texto=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-12',origem:'contexto_salvo'};
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou listar a semana passada.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['A consulta de 24/10 do Paciente Teste Um está bloqueada pela tentativa anterior.'],acao:null}));
+ await c.turno('ambiguo-pos-correcao',texto);
+ expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledTimes(2);
+ const fala=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');expect(fala).toMatch(/nome do paciente/);expect(fala).not.toMatch(/24\/10|Teste Um|bloqueada|tentativa anterior/);
+});
+it('fato inventado após correção de anúncio também é recusado sem narrador adicional',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-12',origem:'contexto_salvo'};
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:[],acao:'listar_pendencias'}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['Não há nenhuma consulta hoje.'],acao:null}));
+ await c.turno('anuncio-pos-correcao','Confira as consultas de hoje');expect(c.executar).not.toHaveBeenCalled();
+ expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Preciso consultar/);expect(c.completar).toHaveBeenCalledTimes(2);
+});
