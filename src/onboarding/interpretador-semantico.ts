@@ -34,7 +34,7 @@ Use texto, histórico, resumo, fatos e calendario para resolver referências tem
 Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
 Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
 Restrições como "sem emitir", "só conferir", "não prepare" devem ser preservadas.
-Datas devem ser YYYY-MM-DD e derivadas do calendario fornecido. Não invente fatos da agenda.
+Datas devem ser YYYY-MM-DD e derivadas do calendario fornecido. A leitura disponível vai até hoje; em períodos ainda em curso use o limite até hoje fornecido no calendario. Não invente fatos da agenda.
 
 SAÍDA JSON estrita:
 {
