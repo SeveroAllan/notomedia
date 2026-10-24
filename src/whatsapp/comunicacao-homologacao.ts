@@ -213,23 +213,43 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COFRE_ENVIO_FALHOU'); return 'erro'; }
   }
 
+  async retomarEntregaMedico(medicoId: string, transporte: EnviarPdfDanfse): Promise<void> {
+    if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return;
+    const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn
+      join notas_fiscais nf on nf.solicitacao_id=sn.id and nf.medico_id=sn.medico_id
+      join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id=nf.id and ec.medico_id=sn.medico_id
+      where sn.medico_id=$1 and nf.status='autorizada' and ec.estado='nota_gerada'
+      order by nf.criado_em`, [medicoId]);
+    for (const r of rows) await this.paciente({ medicoId, solicitacaoId: r.solicitacao_id }, transporte);
+  }
+
   async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
     const { medicoId, solicitacaoId } = entrada;
     try {
       const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, sn.origem,
-        case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
+        u.telefone as telefone_medico, case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
           when sn.origem='lote' then null else p.telefone end as contato_telefone, pf.ambiente, wi.nome_instancia,
         wi.medico_id as instancia_medico_id, wi.status as instancia_status
         from notas_fiscais nf join solicitacoes_nota sn on (sn.id = nf.solicitacao_id or (sn.origem='lote' and sn.nota_reenvio_id=nf.id))
         join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id = nf.id and ec.estado = 'nota_gerada'
         join pacientes p on p.id = sn.paciente_id and p.medico_id = sn.medico_id
         join medico_perfil_fiscal pf on pf.medico_id = sn.medico_id
+        join medicos m on m.id=sn.medico_id join usuarios u on u.id=m.usuario_id and u.ativo=true
         left join lateral (select nome_instancia, medico_id, status from whatsapp_instancias
           where medico_id = sn.medico_id and oficial = false and status = 'conectado'
             and nome_instancia <> $3 and nome_instancia <> $4 order by criado_em desc limit 1) wi on true
         where sn.id = $1 and sn.medico_id = $2 and nf.medico_id = $2 and nf.status = 'autorizada'`,
         [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName, this.config.encryptionKey]);
       const nota = rows[0];
+      if (nota && (await this.permissoes?.ler?.(medicoId, 'entregar_paciente'))?.valor === 'so_medico') {
+        if (!this.permitido(this.config.envioMedicoRealAtivo, nota.ambiente, nota.telefone_medico)) return this.simular('nota_medico');
+        if (!nota.pdf_storage_path) return 'erro';
+        return await this.enviarUnico(medicoId, 'nota_medico', nota.nota_fiscal_id, async () => (await transporte.enviarPdf({
+          instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: nota.telefone_medico,
+          pdfPathOuUrl: nota.pdf_storage_path, nomeArquivo: 'DANFSe.pdf',
+          legenda: 'Segue sua nota de homologação para você repassar. Documento sem valor fiscal.'
+        })).sucesso);
+      }
       if (nota?.origem === 'lote') {
         const telefone = typeof nota.contato_telefone === 'string' ? nota.contato_telefone.replace(/\D/g, '') : '';
         if (!/^\d{10,13}$/.test(telefone)) return 'sem_contato';
