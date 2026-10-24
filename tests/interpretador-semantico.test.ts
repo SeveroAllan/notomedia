@@ -33,6 +33,12 @@ it('planner mapeia significado de agenda para consultar_agenda, não listar_pend
   expect(d).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
 });
 
+it('planner distingue pendência fiscal de consulta geral pelo objeto semântico',()=>{
+ const fiscal:InterpretacaoSemantica={...frame,dominio:'fiscal',objetivo:'consultar',objeto:'pendencias_fiscais'};
+ const d=planejarPorSemantica(fiscal,fatos,['nenhuma','consultar_agenda','listar_pendencias']);
+ expect(d).toMatchObject({acao:'listar_pendencias',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
+});
+
 it('planner não força ação quando a semântica está incompleta ou pouco confiável',()=>{
   expect(planejarPorSemantica({...frame,confianca:.4},fatos,['consultar_agenda'])).toBeNull();
   expect(planejarPorSemantica({...frame,faltando:['periodo'],periodo:{inicio:null,fim:null,referencia:'nenhum'}},fatos,['consultar_agenda'])).toBeNull();
