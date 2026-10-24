@@ -8,6 +8,7 @@ import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lo
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar-sincrono.js';
 import type { PlanoConversa } from './memoria-conversa.js';
+import type { InterpretacaoSemantica } from './interpretador-semantico.js';
 
 export { ERRO_CONVERSA } from './falas.js';
 export const ACOES_CONVERSA = ['pedir_link_agenda', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
@@ -200,7 +201,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
 export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined, private readonly completar: typeof completarOpenAi, private readonly modeloAuxiliar?: string) {}
   async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; plano?: PlanoConversa | null; fatos: FatosConversa; agora: Date;
-    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; podeAgirAposFerramenta?: boolean; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
+    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; podeAgirAposFerramenta?: boolean; correcao?: {motivo:string;faltou:string[]}; interpretacaoSemantica?:InterpretacaoSemantica|null }): Promise<DecisaoConversa> {
     const resultado = entrada.resultadoFerramenta as { ferramenta?: string; ok?: boolean; motivo?: string; limiteLeitura?: {desde:string;ate:string} } | undefined;
     if(resultado?.ok===false && resultado.motivo==='PERIODO_FORA_DO_LIMITE' && resultado.limiteLeitura) {
       const br=(d:string)=>d.split('-').reverse().join('/');
