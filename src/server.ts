@@ -1,4 +1,4 @@
-import {selecionarDias,selecaoConsultas,pacienteLiteralDaConsulta,type SelecaoConsultas} from './agenda/selecao-consultas.js';
+import {selecionarDias,selecaoConsultas,pacienteLiteralDaConsulta, confirmaSelecaoAnterior,type SelecaoConsultas} from './agenda/selecao-consultas.js';
 import { origemWebhookConfigurada } from './onboarding/io/origem-webhook.js';
 import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
 import { contemCredencialAgenda } from './cofre/links.js';
@@ -391,7 +391,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     executar:async (decisao,c) => {
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
-        if(pacienteLiteralDaConsulta(c.texto)&&confirmacaoDaDecisao(decisao).intencao!=='nao')return {falaAssinada:['Seu pedido menciona um paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
+        const pacienteConfirmacao=pacienteLiteralDaConsulta(c.texto);
+        if(pacienteConfirmacao&&confirmacaoDaDecisao(decisao).intencao!=='nao') {
+          const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
+          let anterior:SelecaoConsultas|undefined;try{anterior=rows[0]?JSON.parse(rows[0].texto):undefined;}catch{}
+          if(!confirmaSelecaoAnterior({paciente:pacienteConfirmacao,dia:diaDecisao(decisao,c.agora)??undefined},anterior))return {falaAssinada:['Seu pedido menciona outro paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
+        }
         await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada');
         // Recusa à proposta pendente + pedido explícito de outro dia/período no mesmo turno:
         // a antiga ficou recusada acima; abre o novo escopo em seguida, ainda nesta fala.

@@ -1,5 +1,5 @@
 import {expect,it} from 'vitest';
-import {selecionarDias,selecaoConsultas} from '../src/agenda/selecao-consultas.js';
+import {selecionarDias,selecaoConsultas,mesmoPacienteSelecionado,confirmaSelecaoAnterior} from '../src/agenda/selecao-consultas.js';
 import {prepararLoteAmplimed} from '../src/agenda/amplimed-lote.js';
 const e=(paciente:string,id:string)=>({paciente,idExterno:id,dataHora:'2026-10-23T14:00:00-03:00',valorCentavos:35000,detalhe:{nome:paciente,cpf:'10000000019',celular:null}});
 const dias=[{data:'2026-10-24',elegiveis:[e('Paciente Teste Um','24')]},{data:'2026-10-23',elegiveis:[e('Paciente Teste Cinco','23'),e('Paciente Teste Um','23um')]}];
@@ -25,4 +25,18 @@ it('separa nome literal do dia relativo sem rejeitar a evidência correta',()=>{
   expect(selecao.paciente?.nome).toBe('Paciente Teste Um');
   expect(selecionarDias(dias,selecao)[0].elegiveis.map(e=>e.idExterno)).toEqual(['24']);
  }
+});
+
+it('confirmação pode repetir só o mesmo paciente com seleção anterior comprovada',()=>{
+ const atual=selecaoConsultas('Sim, pode emitir essa única nota de R$250 da consulta do Paciente Teste Um de 24/10/2026. Envie o PDF só para mim aqui.','2026-10-24').paciente;
+ expect(mesmoPacienteSelecionado(atual,{nome:'Teste Um',evidencia:'Teste Um'})).toBe(true);
+ expect(mesmoPacienteSelecionado(atual,{nome:'Teste Cinco',evidencia:'Teste Cinco'})).toBe(false);
+ expect(mesmoPacienteSelecionado(atual,undefined)).toBe(false);
+});
+
+it('dia diferente e seleção anterior ausente não podem confirmar outra proposta',()=>{
+ const paciente={nome:'Teste Um',evidencia:'Teste Um'};
+ expect(confirmaSelecaoAnterior({dia:'2026-10-24',paciente},{dia:'2026-10-24',paciente})).toBe(true);
+ expect(confirmaSelecaoAnterior({dia:'2026-10-23',paciente},{dia:'2026-10-24',paciente})).toBe(false);
+ expect(confirmaSelecaoAnterior({paciente},undefined)).toBe(false);
 });

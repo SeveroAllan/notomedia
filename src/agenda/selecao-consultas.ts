@@ -17,3 +17,12 @@ export function selecaoConsultas(texto:string,dia?:string|null,paciente?:{nome:s
   if(literal&&paciente&&normalizar(literal.nome)!==normalizar(paciente.nome))throw Error('PACIENTE_DIVERGENTE');
   return {...(dia?{dia}:{}),...((literal??paciente)?{paciente:literal??paciente}:{})};
 }
+
+/** Repetir o mesmo paciente na confirmação não troca o escopo já verificado. */
+export function mesmoPacienteSelecionado(a:SelecaoConsultas['paciente'],b:SelecaoConsultas['paciente']):boolean {
+ return !!a&&!!b&&normalizar(a.nome)===normalizar(b.nome);
+}
+
+export function confirmaSelecaoAnterior(atual:SelecaoConsultas,anterior:SelecaoConsultas|undefined):boolean {
+ return mesmoPacienteSelecionado(atual.paciente,anterior?.paciente)&&(!atual.dia||atual.dia===anterior?.dia);
+}
