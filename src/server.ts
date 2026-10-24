@@ -59,6 +59,7 @@ import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
 import { ConversadorMedico, normalizarAgenda, periodoDecisao, fimPeriodoDecisao, calendarioConversa, diaDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
+import { InterpretadorSemantico } from './onboarding/interpretador-semantico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -192,6 +193,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaModeloTexto=config.openaiTextoModel ?? '';
   const iaModeloPlanner=config.conversaAgenteAtiva ? config.openaiPlannerModel ?? iaModeloTexto : iaModeloTexto;
   const conversador = config.conversaLivreAtiva ? new ConversadorMedico(iaApiKey, iaModeloPlanner, completarIa, iaModeloTexto) : undefined;
+  const interpretadorSemantico = config.conversaLivreAtiva && config.conversaAgenteAtiva ? new InterpretadorSemantico(iaApiKey, config.openaiPlannerModel ?? iaModeloPlanner, completarIa) : undefined;
   const iaModeloVisao=config.openaiVisaoModel ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
@@ -502,7 +504,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
-    }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
+    }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, interpretadorSemantico, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
