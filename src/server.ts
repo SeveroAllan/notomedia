@@ -748,12 +748,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         || (titular.validoDe && titular.validoDe > new Date())) throw new Error('O certificado precisa estar válido e identificar seu titular.');
       const consulta = await adnNfseClient.buscarNfseMaisRecente(certificado.pfxBuffer, certificado.senhaCertificado, titular.documentoTitular);
       console.info('[ADN] Busca de referência concluída:', consulta.resumo);
+      const existente = await pool.query('select confirmado_pelo_medico from medico_perfil_fiscal where medico_id = $1', [medicoId]);
+      const somenteReferencia = existente.rows[0]?.confirmado_pelo_medico === true;
       const fiscal = await processarOnboardingXml({
-        pool, supabase: authAdminService.supabaseClient,
+        pool, supabase: authAdminService.supabaseClient, somenteReferencia,
         documentoTitularEsperado: titular.documentoTitular, chaveCriptografia: config.encryptionKey, pepperCpf: config.appPepper
       },
         medicoId, consulta.documento.xml);
-      const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
+      const adocaoFiscal = somenteReferencia ? { ok: false, codigo: 'REVISAO_EXPLICITA_NECESSARIA' } : await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
         medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
       return res.json({ ...fiscal, medicoId, fonte: 'adn', nsu: consulta.documento.nsu, adocaoFiscal });

@@ -52,6 +52,8 @@ export class BancoJornada {
     if (s.startsWith('update medico_certificados set status')) {this.certificados.forEach(c=>{if(c.medico_id===p[0]&&c.status==='ativo')c.status='vencido';});return ret();}
     if (s.startsWith('insert into medico_certificados')) {const c={id:p[0],medico_id:p[1],arquivo_storage_path:p[2],senha_secret_id:p[3],valido_de:p[4],valido_ate:p[5],status:'ativo'};this.certificados.unshift(c);return ret([c]);}
     if (s.startsWith('select id, medico_id, arquivo_storage_path')||s.startsWith('select id from medico_certificados')) return ret(this.certificados.filter(c=>c.status==='ativo').slice(0,1));
+    if (s.startsWith('select confirmado_pelo_medico from medico_perfil_fiscal')) return ret(this.perfil?[this.perfil]:[]);
+    if (s.startsWith('update medico_perfil_fiscal set dados_reforma_tributaria')) {this.perfil.dados_reforma_tributaria=JSON.parse(p[1]);this.perfil.xml_nota_referencia_url=p[2];return ret();}
     if (s.startsWith('insert into medico_perfil_fiscal')) {this.perfil={medico_id:p[0],razao_social:p[5],inscricao_municipal:p[7],uf:p[8],cod_municipio_ibge:p[9],serie_dps:p[10],opcao_simples_nacional:p[11],regime_apuracao_sn:p[12],regime_especial_tributacao:p[13],ambiente:p[14],proximo_numero_dps:p[16],dados_reforma_tributaria:JSON.parse(p[19]),xml_nota_referencia_url:p[20],extraido_automaticamente:true,confirmado_pelo_medico:false};return ret();}
     if (s.startsWith('update medico_servicos_fiscais set padrao')) return ret();
     if (s.startsWith('insert into medico_servicos_fiscais')) {this.servico={id:randomUUID(),medico_id:p[0],nome_servico:p[1],ctrib_nac:p[2],ctrib_mun:p[3],cnbs:p[4],xdesc_serv:p[5],valor_padrao_centavos:p[6],aliquota_iss:p[7],parametros_emissao:null};return ret();}

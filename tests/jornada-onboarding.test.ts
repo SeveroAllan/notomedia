@@ -202,3 +202,16 @@ it('pesquisa e aprovação profissionais concluem enquanto a importação ADN ai
     await envio;
   }
 });
+
+it('buscar referência não troca ambiente, numeração nem política já confirmados',async()=>{
+  const medicoId=await entrar();await upload(medicoId);
+  const referenciaHash=banco.perfil.dados_reforma_tributaria.hash;
+  await chamar('/api/onboarding/confirmar-fiscal',{medicoId,usarReferencia:true,referenciaHash});
+  const parametros={...banco.servico.parametros_emissao.parametros,ambiente:'homologacao'};
+  expect((await chamar('/api/onboarding/confirmar-fiscal',{medicoId,referenciaHash,parametrosEmissao:parametros,serieDps:'7',proximoNumeroDps:3000})).status).toBe(200);
+  const antes=JSON.parse(JSON.stringify({perfil:banco.perfil,servico:banco.servico}));
+  const busca=await chamar('/api/onboarding/buscar-referencia',{medicoId});
+  expect(busca.status).toBe(200);expect(busca.body.adocaoFiscal).toMatchObject({ok:false,codigo:'REVISAO_EXPLICITA_NECESSARIA'});
+  expect(banco.perfil).toMatchObject({ambiente:'homologacao',serie_dps:'7',proximo_numero_dps:3000,confirmado_pelo_medico:true});
+  expect(banco.servico).toEqual(antes.servico);
+});

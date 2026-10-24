@@ -20,6 +20,7 @@ export type ProcessarOnboardingXmlDeps = {
   chaveCriptografia: string;
   pepperCpf: string;
   documentoTitularEsperado?: string;
+  somenteReferencia?: boolean;
 };
 
 export type ResultadoProcessamentoXml = {
@@ -50,15 +51,21 @@ export async function processarOnboardingXml(
   try {
     await client.query('begin');
     await client.query('select id from medicos where id = $1 for update', [medicoId]);
-    await salvarParametrosFiscais(client, {
-    medicoId,
-    params: parametros,
-    xmlStorageUrl,
-    chaveCriptografia: deps.chaveCriptografia,
-    pepperCpf: deps.pepperCpf
-    });
+    if (deps.somenteReferencia) {
+      await client.query(`update medico_perfil_fiscal set dados_reforma_tributaria = $2,
+        xml_nota_referencia_url = $3, atualizado_em = now() where medico_id = $1`,
+        [medicoId, JSON.stringify(parametros.dadosReformaTributaria), xmlStorageUrl]);
+    } else {
+      await salvarParametrosFiscais(client, {
+      medicoId,
+      params: parametros,
+      xmlStorageUrl,
+      chaveCriptografia: deps.chaveCriptografia,
+      pepperCpf: deps.pepperCpf
+      });
 
-    await salvarServicoFiscalPadrao(client, medicoId, servico);
+      await salvarServicoFiscalPadrao(client, medicoId, servico);
+    }
     await client.query('commit');
   } catch (erro) {
     await client.query('rollback');
