@@ -1,11 +1,32 @@
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 import type { Page } from 'playwright-core';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { LeitorAgendaTribemd } from '../src/desenvolvedor/tribemd-agenda.js';
 
+function resolverChromium(): string | undefined {
+  const candidatos = [
+    process.env['CHROMIUM_EXECUTABLE_PATH'],
+    (() => { try { return chromium.executablePath(); } catch { return undefined; } })(),
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable'
+  ].filter((valor): valor is string => Boolean(valor));
+  return candidatos.find(existsSync);
+}
+
+const chromiumExecutavel = resolverChromium();
+if (process.env['TRIBEMD_BROWSER_REQUIRED'] === '1' && !chromiumExecutavel) {
+  it('Chromium obrigatório está disponível para validar a janela TribeMD', () => {
+    throw new Error('CHROMIUM_NAO_DISPONIVEL: instale com "npx playwright-core install chromium" ou defina CHROMIUM_EXECUTABLE_PATH.');
+  });
+}
+
+describe.skipIf(!chromiumExecutavel)('integração Chromium da janela TribeMD', () => {
 let browser: Browser;
-beforeAll(async () => { browser = await chromium.launch({ executablePath: '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] }); });
+beforeAll(async () => { browser = await chromium.launch({ executablePath: chromiumExecutavel!, headless: true, args: ['--no-sandbox'] }); });
 afterAll(async () => { await browser?.close(); });
 it.each(['normal', 'sem botão', 'não retrocede'])('Chromium observa GETs e navega até a semana anterior: %s', async caso => {
   const page = await browser.newPage(); const leitor = new LeitorAgendaTribemd(page); const chamadas: string[] = [];
@@ -30,6 +51,7 @@ it.each(['normal', 'sem botão', 'não retrocede'])('Chromium observa GETs e nav
       expect(chamadas).toHaveLength(2); expect(chamadas[1]).toContain('inicio=2026-10-12');
     }
   } finally { leitor.encerrar(); await page.close(); }
+});
 });
 
 it('90 dias percorrem 14 GETs contíguos, incluem semana passada e descartam datas fora da janela', async () => {
