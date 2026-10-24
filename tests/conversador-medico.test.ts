@@ -14,7 +14,7 @@ it('planner GPT-6 usa raciocinio medio sem temperature',async()=>{
  const completar=vi.fn(async()=>'{"fala":["Oi!"],"acao":null}');
  await new ConversadorMedico('k','gpt-6.1-sol',completar).responder(entrada);
  const opcoes=completar.mock.calls[0][3];
- expect(opcoes).toMatchObject({formatoJson:true,reasoningEffort:'medium',tentativasMax:2});
+ expect(opcoes).toMatchObject({formatoJson:true,reasoningEffort:'medium',maxTokens:8192,tentativasMax:2});
  expect(opcoes).not.toHaveProperty('temperature');
 });
 
