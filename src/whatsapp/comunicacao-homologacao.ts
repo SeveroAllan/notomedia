@@ -213,6 +213,11 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COFRE_ENVIO_FALHOU'); return 'erro'; }
   }
 
+  async entregarAoMedicoSemContato(medicoId: string, solicitacaoId: string, transporte: EnviarPdfDanfse): Promise<string> {
+    if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return 'sem_permissao';
+    return this.paciente({ medicoId, solicitacaoId }, transporte);
+  }
+
   async retomarEntregaMedico(medicoId: string, transporte: EnviarPdfDanfse): Promise<void> {
     if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return;
     const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn

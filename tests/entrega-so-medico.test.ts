@@ -40,3 +40,8 @@ it('retoma após escolha usando somente notas autorizadas existentes e não reem
   expect(enviarPdf).toHaveBeenCalledTimes(1);
   expect(query.mock.calls.find(([sql]) => sql.includes('select sn.id as solicitacao_id'))?.[0]).toContain("nf.status='autorizada'");
 });
+it('porta sem contato recusa escolha paciente antes de tentar entrega', async () => {
+  const {c,enviarPdf,query}=cenario({escolha:'paciente'});
+  expect(await c.entregarAoMedicoSemContato('m','s',{enviarPdf})).toBe('sem_permissao');
+  expect(enviarPdf).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();
+});

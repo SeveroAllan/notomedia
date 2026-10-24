@@ -87,7 +87,8 @@ export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig, processa
     while (ativo) {
       try {
         if (emissorComprovante && await processarLote?.({ emissorDps:emissorComprovante,
-          entregar:(medicoId,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId,solicitacaoId},evolutionClient) })) continue;
+          entregar:(medicoId,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId,solicitacaoId},evolutionClient),
+          entregarAoMedicoSemContato:(medicoId,solicitacaoId)=>comunicacaoHomologacao.entregarAoMedicoSemContato(medicoId,solicitacaoId,evolutionClient) })) continue;
         const item = await filaRepo.buscarETravarProximoItem(workerId);
         if (!item) {
           await new Promise((resolve) => setTimeout(resolve, 5000));

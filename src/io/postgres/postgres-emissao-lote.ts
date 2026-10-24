@@ -21,6 +21,7 @@ export interface EntradaEmissaoLote {
 export interface ExecutorFiscalLote {
   emissorDps: EmissorDpsService;
   entregar: (medicoId: string, solicitacaoId: string) => Promise<string>;
+  entregarAoMedicoSemContato?: (medicoId: string, solicitacaoId: string) => Promise<string>;
 }
 export type ResultadoEmissaoLote = {estado: 'emitida'; entrega: string; semContato: boolean} | {estado: 'ja_faturada' | 'repetida' | 'erro'};
 
@@ -51,7 +52,10 @@ export class PostgresEmissaoLote extends PostgresFilaRepositorio {
           codigoErroOriginal:sanitizarErroFiscal(p.codigoErro??'', [entrada.detalhe.nome]).slice(0,80),
           motivoErro:sanitizarErroFiscal(p.motivoErro, [entrada.detalhe.nome])}));
       },notificarDesenvolvedorEmail:async()=>{}},
-      aoAutorizarComprovante:async()=>{if (!semContato) entrega = await executor.entregar(entrada.medicoId,reservado.id);}
+      aoAutorizarComprovante:async()=>{
+        if (!semContato) entrega = await executor.entregar(entrada.medicoId,reservado.id);
+        else if (executor.entregarAoMedicoSemContato) entrega = await executor.entregarAoMedicoSemContato(entrada.medicoId,reservado.id);
+      }
     });
     return resultado.ok ? {estado:'emitida',entrega,semContato} : {estado:'erro'};
   }

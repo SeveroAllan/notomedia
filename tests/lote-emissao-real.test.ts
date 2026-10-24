@@ -153,3 +153,10 @@ it.each(['E9999','SEFIN_TIMEOUT'])('log mantém agregado, código original %s e 
  expect(updates).toHaveLength(2);expect(updates.every(([,p])=>p[1]===`EMISSAO_COMPROVANTE_RECUSADA: ${codigo}`)).toBe(true);
  expect(c.entregar).not.toHaveBeenCalled();expect(c.registrar).not.toHaveBeenCalled();
 });
+it('sem contato do paciente pode entregar somente por porta explícita ao médico, sem nova emissão',async()=>{
+ const c=cenario();const entregarAoMedicoSemContato=vi.fn(async()=> 'enviado');
+ const r=await c.repo.emitir({...entrada,detalhe:{...detalhe,contato:undefined}},{...c.executor,entregarAoMedicoSemContato});
+ expect(r).toMatchObject({estado:'emitida',semContato:true,entrega:'enviado'});
+ expect(entregarAoMedicoSemContato).toHaveBeenCalledExactlyOnceWith('medico-fixture','s');
+ expect(c.entregar).not.toHaveBeenCalled();expect(c.emitir).toHaveBeenCalledTimes(1);
+});
