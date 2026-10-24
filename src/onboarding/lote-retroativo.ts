@@ -140,7 +140,7 @@ export class ConversaLoteRetroativo {
     }
     const interpretacao = limitarConfirmacaoEmissao(texto, await this.deps.interpretarConfirmacao(texto, perguntaLote(lote)));
     if (interpretacao.intencao === 'duvida' || interpretacao.intencao === 'outro_assunto') {
-      await enviar(['Ainda não vou emitir. Você autoriza a emissão da proposta apresentada?']); return true;
+      await enviar(['Tudo bem, não vou emitir sem sua confirmação da proposta. Vou aguardar.']); return true;
     }
     const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));

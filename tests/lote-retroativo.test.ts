@@ -330,3 +330,9 @@ it('reserva temporal não cancela o lote mesmo com interpretação não', async 
  await c.conversa.responder('m','c','espera','Só prepare para minha confirmação; aguarde, não emita ainda.',agora,'pergunta-evolution');
  expect(c.repo.confirmar).not.toHaveBeenCalled();expect(c.lote().estado).toBe('aguardando_confirmacao_lote');
 });
+it('respeita espera temporária sem insistir em autorização imediata', async () => {
+ const c=cenario();await c.conversa.iniciar('m','c','e',agora);await c.conversa.responder('m','c','d','dia 1',agora);
+ await c.conversa.responder('m','c','espera','Ainda não. Vou conferir e te aviso depois.',agora,'pergunta-evolution');
+ expect(c.repo.confirmar).not.toHaveBeenCalled();expect(c.lote().estado).toBe('aguardando_confirmacao_lote');
+ expect(c.falas.at(-1)).toBe('Tudo bem, não vou emitir sem sua confirmação da proposta. Vou aguardar.');
+});
