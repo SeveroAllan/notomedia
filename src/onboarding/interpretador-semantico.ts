@@ -29,7 +29,7 @@ export type InterpretacaoSemantica = z.infer<typeof interpretacaoSemanticaSchema
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interprete a mensagem do médico pelo significado, não por palavras-chave.
 Você NÃO executa ações, NÃO responde ao médico e NÃO decide política de segurança. Produza apenas a representação semântica JSON.
 
-Use texto, histórico, resumo, fatos e calendario para resolver referências naturais ("essa semana", "ontem", "aquela consulta", etc.).
+Use texto, histórico, resumo, fatos e calendario para resolver referências temporais, anafóricas e contextuais naturais.
 "consultas" significa agenda em geral. "pendencias_fiscais" significa consultas sem nota/pendentes para emissão.
 Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
 Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
