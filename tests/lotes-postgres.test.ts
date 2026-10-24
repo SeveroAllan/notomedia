@@ -29,7 +29,7 @@ it('snapshot grava somente ids, HMAC e totais em transação, nunca valor indivi
 });
 it('confirmar usa CAS, vínculo da pergunta e TTL; baixa confiança não chega ao SQL', async () => {
   let ganhou = false;
-  const query = vi.fn(async () => { if (ganhou) return { rows: [] }; ganhou = true; return { rows: [{ id: 'l' }] }; });
+  const query = vi.fn(async (_sql:string, _parametros:unknown[] = []) => { if (ganhou) return { rows: [] }; ganhou = true; return { rows: [{ id: 'l' }] }; });
   const repo = new PostgresLotesEmissao({ query } as any, 'pepper');
   expect(await repo.confirmar('l', 's', 'p', { intencao: 'sim', confianca: .8 }, new Date())).toBe(false); expect(query).not.toHaveBeenCalled();
   const r = await Promise.all(Array.from({ length: 10 }, () => repo.confirmar('l', 's', 'p', { intencao: 'sim', confianca: .99 }, new Date('2026-10-20T15:00Z'))));
@@ -177,9 +177,9 @@ it('recusa definitiva comprovada reabre; tentativa ativa não resolvida bloqueia
   expect(c.consultas.map(x => x.idExterno)).toEqual(['1']); expect(c.bloqueadas).toBe(1); expect(c.totalConsultas).toBe(1);
 });
 it('abandonarPendentes recusa só lotes pendentes de OUTRA chave, sem tocar em concluídos', async () => {
-  const query = vi.fn(async () => ({ rows: [] }));
+  const query = vi.fn(async (_sql:string, _parametros:unknown[] = []) => ({ rows: [] }));
   await new PostgresLotesEmissao({ query } as any, 'pepper').abandonarPendentes('m', 'chave-nova');
-  const [sql, p] = query.mock.calls[0] as [string, unknown[]];
+  const [sql, p] = query.mock.calls[0]!;
   expect(sql).toContain("set estado='recusado'"); expect(sql).toContain('chave_evento<>$2');
   expect(sql).toContain("estado in ('aguardando_data_inicio','aguardando_confirmacao_lote')"); expect(p).toEqual(['m', 'chave-nova']);
 });

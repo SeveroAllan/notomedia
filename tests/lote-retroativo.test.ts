@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ConversaLoteRetroativo, perguntaLote, interpretarDataRetroativo, validarInicioRetroativo, type LoteRetroativo, type RepositorioLotes, type ContagemPeriodo } from '../src/onboarding/lote-retroativo.js';
+import type { InterpretacaoConfirmacao } from '../src/onboarding/confirmacao-emissao-medico.js';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 import { processarLoteRetroativo } from '../src/worker/processar-lote-retroativo.js';
 import { prepararTomadorAoVivo } from '../src/io/fiscal/postgres-emissor-dps-service.js';
 const agora = new Date('2026-10-21T01:00Z'); // 20/10 em São Paulo
@@ -21,8 +23,8 @@ function cenario() {
   };
   const falas: string[] = [];
   const deps = { comporContagem: (lote: LoteRetroativo) => ({ fala: [perguntaLote(lote)] }), permitido: vi.fn(async () => true), contar: vi.fn(async () => structuredClone(contagem)),
-    interpretarData: vi.fn(async () => '2026-10-01'), interpretarConfirmacao: vi.fn(async () => ({ intencao: 'sim' as const, confianca: .99 })),
-    enviar: vi.fn(async (_medico: string, _conversa: string, _chave: string, fala: string[], concluir?: (id: string) => Promise<void>) => { falas.push(...fala); await concluir?.('pergunta-evolution'); }), log: vi.fn() };
+    interpretarData: vi.fn(async () => '2026-10-01'), interpretarConfirmacao: vi.fn<(texto:string, pergunta:string)=>Promise<InterpretacaoConfirmacao>>(async () => ({ intencao: 'sim', confianca: .99 })),
+    enviar: vi.fn(async (_medico: string, _conversa: string, _chave: string, fala: string[], concluir?: (id: string, enviadoEm?: Date) => Promise<void>) => { falas.push(...fala); await concluir?.('pergunta-evolution'); }), log: vi.fn() };
   return { repo, deps, falas, conversa: new ConversaLoteRetroativo(repo, deps), lote: () => lote! };
 }
 describe('retroativo com escopo e confirmação vinculados', () => {
@@ -160,7 +162,7 @@ it('8b: resposta com citação antiga não confirma nova pergunta; sem citação
   expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.deps.interpretarConfirmacao).not.toHaveBeenCalled();
   await c.conversa.responder('m','c','nova','pode',agora);
   expect(c.repo.confirmar).toHaveBeenCalledWith('lote','nova','nova-pergunta',{ intencao: 'sim', confianca: .99 },agora);
-  expect(c.deps.interpretarConfirmacao.mock.calls[0][1]).toContain('400,00');
+  expect(c.deps.interpretarConfirmacao.mock.calls[0]![1]).toContain('400,00');
 });
 it('8b: pergunta inexistente não torna um sim solto autorização', async () => {
   const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
@@ -176,9 +178,9 @@ it.each([
  ['texto','{"reenvio":true,"confianca":1,"emitir":true}',false]
 ])('reenvio é interpretado pela IA com contrato estrito: %s',async(texto,json,esperado)=>{
  const {interpretarReenvioLote}=await import('../src/onboarding/lote-retroativo.js');
- const completar=vi.fn(async()=>json);expect(await interpretarReenvioLote('k','m',completar,texto)).toBe(esperado);
- expect(completar.mock.calls[0][2][0].content).toContain('Nenhuma emissão é autorizada');
- expect(completar.mock.calls[0][3]).toMatchObject({temperature:0,formatoJson:true});
+ const completar=vi.fn<typeof completarOpenAi>(async()=>json);expect(await interpretarReenvioLote('k','m',completar,texto)).toBe(esperado);
+ expect(String(completar.mock.calls[0]![2][0]!.content)).toContain('Nenhuma emissão é autorizada');
+ expect(completar.mock.calls[0]![3]).toMatchObject({temperature:0,formatoJson:true});
 });
 it('sem lote ativo, pedido de reenvio passa pelo executor restrito; outros assuntos seguem na conversa',async()=>{
  const c=cenario();const reenviar=vi.fn(async()=>true);
@@ -208,10 +210,10 @@ it.each([null,'2026-10-21','2026-02-30'])('período ausente/inválido pergunta d
 });
 it('proposta usa leitura ao vivo sem exibir lista e mantém gate antes da contagem',async()=>{
  const c=cenario();const valores=new Map([['12',30000]]);
- const listarPeriodo=vi.fn(async(_m,_c,_k,_desde,_agora,concluir)=>concluir(valores));
+ const listarPeriodo=vi.fn(async(_m:string,_c:string,_k:string,_desde:string,_agora:Date,concluir:(valoresAoVivo?:ReadonlyMap<string,number|null>)=>Promise<void>,_somenteContagem?:boolean)=>concluir(valores));
  const conversa=new ConversaLoteRetroativo(c.repo,{...c.deps,listarPeriodo});
  await conversa.iniciar('m','c','e',agora,'2026-09-03');
- expect(listarPeriodo.mock.calls[0][6]).toBe(true);expect(c.deps.contar).toHaveBeenCalledWith('m','2026-09-03',agora.toISOString(),valores);
+ expect(listarPeriodo.mock.calls[0]![6]).toBe(true);expect(c.deps.contar).toHaveBeenCalledWith('m','2026-09-03',agora.toISOString(),valores);
  c.deps.permitido.mockResolvedValue(false);await conversa.iniciar('m','c','e2',agora,'2026-09-03');expect(c.deps.contar).toHaveBeenCalledOnce();
 });
 it('status de lote confirmado varia em mensagens consecutivas sem nova contagem ou confirmação',async()=>{
@@ -221,7 +223,7 @@ it('status de lote confirmado varia em mensagens consecutivas sem nova contagem 
  expect(c.falas.at(-1)).not.toBe(c.falas.at(-2));expect(c.repo.confirmar).toHaveBeenCalledOnce();expect(c.deps.contar).toHaveBeenCalledOnce();
 });
 it('outro pedido de emissão sem período não fica mudo enquanto aguarda data nem abre segundo lote',async()=>{
- const c=cenario();await c.conversa.iniciar('m','c','e',agora,null);c.repo.abrir.mockResolvedValue(null);
+ const c=cenario();await c.conversa.iniciar('m','c','e',agora,null);vi.mocked(c.repo.abrir).mockResolvedValue(null);
  await c.conversa.iniciar('m','c','e2',agora,null);
  expect(c.falas).toHaveLength(2);expect(c.falas[1]).not.toBe(c.falas[0]);expect(c.falas[1]).toContain('dia');expect(c.deps.contar).not.toHaveBeenCalled();
 });

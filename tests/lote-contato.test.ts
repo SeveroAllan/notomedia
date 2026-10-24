@@ -13,16 +13,16 @@ it.each([
   [undefined,null]
 ])('contato único da mesma consulta: %j', (contato, esperado) => expect(resolverContatoConsulta(contato)).toBe(esperado));
 it('origem lote criptografa uma vez no INSERT; comprovante não escreve a coluna de contato', async () => {
-  const query = vi.fn(async (sql: string) => ({ rows: sql.includes('insert into solicitacoes_nota') ? [{ id:'s' }] : [] }));
+  const query = vi.fn(async (sql: string, _parametros: unknown[] = []) => ({ rows: sql.includes('insert into solicitacoes_nota') ? [{ id:'s' }] : [] }));
   const client = { query,release:vi.fn() }; const repo = new PostgresEmissaoApiRepositorio({ connect:async()=>client } as any,'chave-falsa','pepper');
   const base = { ref:'lote:i',medicoId:'m',pacienteId:'p',valorServicoCentavos:30000,xdescServ:'Consulta',ctribNac:'040101' };
   await repo.enfileirarSolicitacao({ ...base,origem:'lote',contatoPaciente:'5511999990000' } as any);
   let insert = query.mock.calls.find(([sql])=>sql.includes('insert into solicitacoes_nota'))!;
   expect(insert[0]).toContain('contato_paciente_encriptado'); expect(insert[0]).toContain('pgp_sym_encrypt');
-  expect(insert[1].slice(-2)).toEqual(['5511999990000','chave-falsa']);
+  expect(insert[1]!.slice(-2)).toEqual(['5511999990000','chave-falsa']);
   query.mockClear(); await repo.enfileirarSolicitacao({ ...base,ref:'comprovante:i',origem:'whatsapp' });
   insert = query.mock.calls.find(([sql])=>sql.includes('insert into solicitacoes_nota'))!;
-  expect(insert[0]).not.toContain('contato_paciente_encriptado'); expect(insert[0]).not.toContain('pgp_sym_encrypt'); expect(insert[1]).toHaveLength(11);
+  expect(insert[0]).not.toContain('contato_paciente_encriptado'); expect(insert[0]).not.toContain('pgp_sym_encrypt'); expect(insert[1]!).toHaveLength(11);
 });
 it('entrega de lote lê snapshot criptografado da solicitação e mantém instância própria e dedup por nota', async () => {
   const reservas = new Set<string>();
@@ -54,7 +54,7 @@ it.each([
   [true,'homologacao',[]],
   [true,'homologacao',['11888880000']]
 ])('snapshot não afrouxa gates de entrega flag=%s ambiente=%s',async(ativo,ambiente,allowlist)=>{
-  const query=vi.fn(async()=>({rows:[{nota_fiscal_id:'n',origem:'lote',ambiente,contato_telefone:'5511999990000',nome_instancia:'propria',instancia_medico_id:'m',instancia_status:'conectado',pdf_storage_path:'fake.pdf'}]}));
+  const query=vi.fn(async(_sql:string,_parametros:unknown[] = [])=>({rows:[{nota_fiscal_id:'n',origem:'lote',ambiente,contato_telefone:'5511999990000',nome_instancia:'propria',instancia_medico_id:'m',instancia_status:'conectado',pdf_storage_path:'fake.pdf'}]}));
   const enviarPdf=vi.fn();
   const c=new ComunicacaoHomologacao({query} as any,{...carregarConfig({}),envioPacienteRealAtivo:ativo,envioRealAllowlist:allowlist},{enviarTexto:vi.fn()},vi.fn());
   expect(await c.paciente({medicoId:'m',solicitacaoId:'s'},{enviarPdf})).toBe('simulado');expect(enviarPdf).not.toHaveBeenCalled();

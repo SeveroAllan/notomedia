@@ -21,6 +21,7 @@ import { processarComunicacaoMedico } from '../src/onboarding/processar-comunica
 import { MemoriaConversaMedico } from '../src/onboarding/contexto-conversa-medico.js';
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
 import { ExtratorRespostaMedicoNvidia } from '../src/io/nvidia/extrator-resposta-medico.js';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 import type { AtendimentoRepositorio } from '../src/atendimento/atendimento-repositorio.js';
 
 const medicoId = '11111111-1111-4111-8111-111111111111';
@@ -483,7 +484,7 @@ async function conversaComLinkRealFalso() {
         await historico.reservar(medicoId, 'simulado', chave); await historico.gravarAcao(medicoId, 'simulado', chave, acao, agora.toISOString()); await historico.liberar(medicoId, 'simulado', chave);
     }
     registrarTextoLink = async e => { await memoria.registrar(e.medicoId, 'conversa', `noto:agenda:link:${e.linkId}:${e.indice}`, e.texto, 'noto'); };
-    const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Resuma')
+    const completar = vi.fn<typeof completarOpenAi>(async (_chave, _modelo, mensagens) => String(mensagens[0]?.content).startsWith('Resuma')
         ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : JSON.stringify({fala:introducaoLinkV2,acao:'pedir_link_agenda'}));
     const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean; fala?:readonly string[] }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
     const aoConversar = vi.fn(async (_fala: string[]) => {});
@@ -491,7 +492,7 @@ async function conversaComLinkRealFalso() {
         conversador:new ConversadorMedico('k','m',completar), aoConversar, ferramentas:ferramentasLinkV2(enviarLink), enviarLinkCofreAgenda:enviarLink,
         listarConsultasSemNota:vi.fn(), lerContextoConexao:(id:string, instante:Date)=>links.lerContextoConexao(id, instante),
         extratorResposta:{extrair:async()=>({temNota:'fora_do_assunto' as const,desde:null,confianca:.95})},
-        lerEstado:async()=>({estado:{fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:{nome:null,conectada:false},ultimaNota:null}}),log:vi.fn() };
+        lerEstado:async()=>({estado:{agora:new Date(),fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:{nome:null,conectada:false},ultimaNota:null}}),log:vi.fn() };
     const turno = (chave: string, texto: string) => processarComunicacaoMedico({medicoId,chaveConversa:'conversa',chaveProcessamento:chave,agora:new Date(),respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
     return {banco,memoria,completar,enviarLink,aoConversar,turno};
 }
@@ -501,9 +502,9 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
     const recebidas=await c.memoria.ler(medicoId,'conversa');expect(recebidas.join(' ')).toContain(textos[0]);expect(recebidas.join(' ')).toContain(textos[1]);
     expect(recebidas.join(' ')).not.toContain(token);expect(recebidas.join(' ')).toContain('[LINK_SEGURO]');
     c.completar.mockImplementation(async (_k,_m,msgs)=>{
-        if(msgs[0].content.startsWith('Revise a continuidade manual'))return '{"semAgendaDigitalAtual":true,"evidencia":"não tenho agenda digital","confianca":1,"repeteOrientacao":false}';
-        if(msgs[0].content.startsWith('Resuma'))return '{"resumo":"O médico usa agenda de papel; já recebeu a explicação da conexão e o link."}';
-        const contexto=JSON.parse(msgs[1].content);expect(contexto.texto).toBe('não tenho agenda digital, uso agenda de papel mesmo');
+        if(String(msgs[0]!.content).startsWith('Revise a continuidade manual'))return '{"semAgendaDigitalAtual":true,"evidencia":"não tenho agenda digital","confianca":1,"repeteOrientacao":false}';
+        if(String(msgs[0]!.content).startsWith('Resuma'))return '{"resumo":"O médico usa agenda de papel; já recebeu a explicação da conexão e o link."}';
+        const contexto=JSON.parse(String(msgs[1]!.content));expect(contexto.texto).toBe('não tenho agenda digital, uso agenda de papel mesmo');
         expect(contexto.mensagens.join(' ')).toContain(textos[0]);expect(contexto.mensagens.join(' ')).toContain(textos[1]);
         expect(contexto.fatos.link.ativo).toBe(true);
         return '{"fala":["Entendi, você usa agenda de papel. Podemos conferir um paciente por vez: CPF, telefone, valor e data da consulta."],"acao":"registrar_modo_sem_agenda","parametros":{"evidencia":"não tenho agenda digital","confianca":1}}';
@@ -515,7 +516,7 @@ it('emissão → link → agenda de papel: primeira resposta reconhece a fala co
 it('novo link depois de expirar é curto e não repete o motivo da conexão ou a explicação de segurança',async()=>{
     const c=await conversaComLinkRealFalso();await c.turno('primeiro','Preciso emitir.');
     if(bancoReal)await bancoReal.query("update cofre_links set expira_em=now()-interval '1 second'");else registros[0].expira_em=new Date(Date.now()-1000);
-    c.completar.mockImplementation(async (_k,_m,msgs)=>msgs[0].content.startsWith('Resuma') ? '{"resumo":"O médico recebeu um novo link seguro."}' : '{"fala":["Claro. Aqui está o novo link seguro:"],"acao":"pedir_link_agenda"}');
+    c.completar.mockImplementation(async (_k,_m,msgs)=>String(msgs[0]!.content).startsWith('Resuma') ? '{"resumo":"O médico recebeu um novo link seguro."}' : '{"fala":["Claro. Aqui está o novo link seguro:"],"acao":"pedir_link_agenda"}');
     await c.turno('novo','Me manda um novo link.');
     expect(c.enviarLink).toHaveBeenLastCalledWith(medicoId,{reenvio:true,fala:['Claro. Aqui está o novo link seguro:']});expect(textos.slice(3)).toHaveLength(2);
     expect(textos[3]).toBe('Claro. Aqui está o novo link seguro:');expect(textos[4]).toMatch(/^https?:\/\/.+\/c\/[A-Za-z0-9_-]{43}$/);

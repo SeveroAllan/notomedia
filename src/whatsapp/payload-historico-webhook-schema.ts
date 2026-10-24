@@ -7,9 +7,10 @@
 import { z } from 'zod';
 import { dadosMensagemSchema, type DadosMensagemEvolution } from './payload-webhook-schema.js';
 
+const LIMITE_MENSAGENS_HISTORICO = 1000;
 const dadosHistoricoSchema = z.union([
-  z.array(dadosMensagemSchema),
-  z.object({ messages: z.array(dadosMensagemSchema) }).passthrough()
+  z.array(dadosMensagemSchema).max(LIMITE_MENSAGENS_HISTORICO),
+  z.object({ messages: z.array(dadosMensagemSchema).max(LIMITE_MENSAGENS_HISTORICO) }).passthrough()
 ]);
 
 const webhookHistoricoSchema = z.object({
@@ -24,6 +25,12 @@ export interface PayloadHistoricoEvolution {
 }
 
 export function extrairPayloadHistorico(payloadBruto: unknown): PayloadHistoricoEvolution | null {
+  if (payloadBruto && typeof payloadBruto === 'object') {
+    const data = (payloadBruto as { data?: unknown }).data;
+    const mensagens = Array.isArray(data) ? data
+      : data && typeof data === 'object' ? (data as { messages?: unknown }).messages : undefined;
+    if (Array.isArray(mensagens) && mensagens.length > LIMITE_MENSAGENS_HISTORICO) return null;
+  }
   const parsed = webhookHistoricoSchema.safeParse(payloadBruto);
   if (!parsed.success || normalizarEvento(parsed.data.event) !== 'messages.set') return null;
 
