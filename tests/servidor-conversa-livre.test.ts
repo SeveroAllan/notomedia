@@ -618,7 +618,7 @@ it.each([false,true])('seleção Amplimed conserva dia e paciente ao listar e pr
  fronteiras.openai.mockImplementation(async(_k,_m,mensagens)=>{const d=JSON.parse(mensagens[1].content);if(d.resultadoFerramenta)return JSON.stringify({fala:['Não achei a consulta pedida.'],acao:null});return d.texto.includes('preparar')?JSON.stringify({fala:['Vou conferir a seleção.'],acao:'iniciar_lote'}):JSON.stringify({fala:['Vou conferir só o dia e paciente pedidos.'],acao:'listar_pendencias',parametros:{dia:'2026-10-19',paciente:{nome:'Teste Um',evidencia:'Teste Um'}}});});
  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockResolvedValue(null);
  const app=criarAppExpress();await receber(app,'selecionar-ausente','Só a consulta do Teste Um de 19/10/2026. Pode conferir?');
- const falas=enviar.mock.calls.map(([p])=>p.texto).join(' ');expect(falas).toContain('Em 19/10/2026');expect(falas).toContain(presente?'Paciente Teste Um':'do paciente Teste Um');expect(falas).not.toContain('Teste Cinco');expect(falas).not.toContain('20/10/2026');
+ const falas=enviar.mock.calls.map(([p]:any[])=>p.texto).join(' ');expect(falas).toContain('Em 19/10/2026');expect(falas).toContain(presente?'Paciente Teste Um':'do paciente Teste Um');expect(falas).not.toContain('Teste Cinco');expect(falas).not.toContain('20/10/2026');
  await receber(app,'preparar-ausente','Pode preparar.');
  expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-19','2026-10-19T23:59:59.999-03:00',presente?new Map([['alvo',35000]]):new Map(),'amplimed');
 });
