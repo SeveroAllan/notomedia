@@ -19,7 +19,7 @@ function cenario() {
  const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi! O que você precisa?"],"acao":null}');
  const enviar=vi.fn(async(_fala:string[],_chave:string,_memoria?:string[])=>{}),executar=vi.fn<FerramentasConversa['executar']>(async()=>({dados:{ok:true}}));
  const guardarPeriodo=vi.fn(async(_id:string,desde:string)=>{fatos.periodo={desde,origem:'contexto_salvo'};});
- const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
+ const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
  const deps={ativo:true,conversaLivreAtiva:true,orcamentoChamadas:undefined as number|undefined,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
    historico:new HistoricoComunicacaoEmMemoria(),lerEstado:async()=>({estado:{agora,fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:fatos.agenda,ultimaNota:null}}),aoConversar:enviar,log:vi.fn(),aoReagir:vi.fn()};
  const turno=(chave:string,texto:string)=>processarComunicacaoMedico({medicoId:'m',chaveProcessamento:chave,chaveConversa:'c',agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
@@ -608,27 +608,30 @@ it('fato inventado após correção de anúncio também é recusado sem narrador
  expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Preciso consultar/);expect(c.completar).toHaveBeenCalledTimes(2);
 });
 
-it('regressão 24/10: "me fale sobre minhas consultas dessa semana" não pede dia e horário',async()=>{
+it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e horário',async()=>{
  const c=cenario();
  c.fatos.agenda={nome:'amplimed',conectada:true};
  c.fatos.periodo={desde:null,origem:null};
- Object.assign(c.deps,{orcamentoChamadas:2});
+ c.deps.orcamentoChamadas=6;
+ c.deps.interpretadorSemantico={interpretar:vi.fn(async()=>({
+   dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
+   restricoes:{naoEmitir:false,somenteLeitura:true},faltando:[],confianca:.98
+ }))};
  c.executar.mockResolvedValueOnce({
-   dados:{ferramenta:'listar_pendencias',ok:true,total:2,desde:'2026-10-19'},
-   falaAssinada:['De 19/10/2026 até hoje encontrei 2 atendimentos para conferir.']
+   dados:{ferramenta:'consultar_agenda',ok:true,total:2,desde:'2026-10-19',ate:'2026-10-21'},
+   falaAssinada:['Na sua agenda de 19/10/2026 a 21/10/2026 encontrei 2 consultas.']
  });
- c.completar
-   .mockResolvedValueOnce(JSON.stringify({fala:['Para conferir suas consultas dessa semana, preciso que você me diga o dia e horário da consulta que deseja verificar.'],acao:null}))
-   .mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir suas consultas dessa semana agora.'],acao:'listar_pendencias'}));
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Certo.'],acao:null}));
 
  await c.turno('semana-atual-real','Me fale sobre minhas consultas dessa semana.');
 
- expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(c.deps.interpretadorSemantico.interpretar).toHaveBeenCalledOnce();
  expect(c.executar).toHaveBeenCalledOnce();
- expect(c.executar.mock.calls[0]![0].acao).toBe('listar_pendencias');
- expect(c.executar.mock.calls[0]![0].parametros?.desde).toBe('2026-10-19');
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
  expect(c.guardarPeriodo).toHaveBeenCalledWith('m','2026-10-19');
  const falas=c.enviar.mock.calls.flatMap(([fala])=>fala).join(' ');
+ expect(falas).toContain('encontrei 2 consultas');
  expect(falas).not.toMatch(/diga o dia|dia e hor[aá]rio/i);
 });
 
