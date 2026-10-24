@@ -150,7 +150,7 @@ it.each(['E9999','SEFIN_TIMEOUT'])('log mantém agregado, código original %s e 
  expect(registro.contexto.motivoErro).toContain('Prestador não habilitado');expect(registro.contexto.motivoErro.length).toBeLessThanOrEqual(500);
  expect(JSON.stringify(registro)).not.toMatch(/Pessoa Ficticia|52998224725|11999990000|pessoa@example.com|SEGREDO/);
  const updates=c.query.mock.calls.filter(([sql])=>sql.includes("set estado = 'erro'")||sql.includes("set status = 'erro'"));
- expect(updates).toHaveLength(2);expect(updates.every(([,p])=>p[1]===`EMISSAO_COMPROVANTE_RECUSADA: ${codigo}`)).toBe(true);
+ expect(updates).toHaveLength(2);expect(updates.every(([,p])=>p?.[1]===`EMISSAO_COMPROVANTE_RECUSADA: ${codigo}`)).toBe(true);
  expect(c.entregar).not.toHaveBeenCalled();expect(c.registrar).not.toHaveBeenCalled();
 });
 it('sem contato do paciente pode entregar somente por porta explícita ao médico, sem nova emissão',async()=>{
