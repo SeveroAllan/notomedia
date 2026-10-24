@@ -116,9 +116,15 @@ export async function processarComunicacaoMedico(
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
+      let planoAtual=contexto.plano??null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]}) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        return deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora,acoesPermitidas,resultadoFerramenta,correcao});
+        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,correcao});
+        if(resposta.plano) {
+          planoAtual=resposta.plano;
+          await memoria.registrarPlano(medicoId,conversa,planoAtual);
+        }
+        return resposta;
       };
       const narrar=async (resultado:unknown) => chamadas>=orcamento ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
       const permitidas=deps.ferramentas.permitidas(fatos);
