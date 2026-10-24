@@ -36,7 +36,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     };
     const resumo = await this.lerResumo(medicoId, conversa);
     const plano = await this.lerPlano(medicoId, conversa);
-    return { historicoRecente, marcas, resumo, plano };
+    return plano ? { historicoRecente, marcas, resumo, plano } : { historicoRecente, marcas, resumo };
   }
 
   registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
