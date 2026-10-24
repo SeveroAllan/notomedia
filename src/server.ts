@@ -312,8 +312,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true);
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
         if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo, limiteLeitura:{desde:calendarioConversa(agora).amplimedDesde,ate:hoje} }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
-        const diasSelecionados=selecionarDias(a.dias,selecao??{});
-        if(selecao?.paciente&&new Set(diasSelecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota; preciso identificar qual paciente você quer.']});return;}
+        let diasSelecionados:typeof a.dias;try{diasSelecionados=selecionarDias(a.dias,selecao??{});}catch{await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:selecao:${chave}`,fala:['Não consegui identificar um único atendimento nessa seleção. Não preparei nenhuma nota. Qual é a data e o horário?']});return;}
+        if(selecao?.paciente&&new Set(selecionarDias(a.dias,{...selecao,ordem:undefined}).flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota; preciso identificar qual paciente você quer.']});return;}
         const p = prepararLoteAmplimed(diasSelecionados);
         // paciente_id é FK de pacientes: vincula/cria o cadastro mínimo pelo celular do cadastro Amplimed (mesmo caminho do TribeMD).
         const repoConsultas = new PostgresConsultasSincronizadas(pool); const prontas: typeof p.consultas = [];
@@ -395,7 +395,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(pacienteConfirmacao&&confirmacaoDaDecisao(decisao).intencao!=='nao') {
           const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
           let anterior:SelecaoConsultas|undefined;try{anterior=rows[0]?JSON.parse(rows[0].texto):undefined;}catch{}
-          if(!confirmaSelecaoAnterior({paciente:pacienteConfirmacao,dia:diaDecisao(decisao,c.agora)??undefined},anterior))return {falaAssinada:['Seu pedido menciona outro paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
+          let atual:SelecaoConsultas;try{atual=selecaoConsultas(c.texto,diaDecisao(decisao,c.agora),pacienteConfirmacao);}catch{return {falaAssinada:['Preciso confirmar a data e o horário antes de mudar a seleção. Mantive a proposta sem emitir.'],dados:{ok:false,motivo:'SELECAO_AMBIGUA'}};}
+          if(!confirmaSelecaoAnterior(atual,anterior))return {falaAssinada:['Seu pedido menciona outro paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
         }
         await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada',c.mensagemEm ?? new Date(NaN));
         // Recusa à proposta pendente + pedido explícito de outro dia/período no mesmo turno:
@@ -444,7 +445,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       // A seleção específica sobrevive ao próximo 'pode preparar'; não cai no lote de todos.
       if(!selecao.paciente&&!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&!/\b(?:todos|todas|qualquer paciente)\b/i.test(c.texto)){
         const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
-        if(rows[0])try{const anterior=JSON.parse(rows[0].texto);if(anterior.paciente)selecao.paciente=anterior.paciente;if(anterior.desde)selecao.desde=anterior.desde;if(anterior.ate)selecao.ate=anterior.ate;if(!selecao.horario&&anterior.horario)selecao.horario=anterior.horario;if(!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&anterior.dia)selecao.dia=anterior.dia;}catch{return {dados:{ok:false,motivo:'SELECAO_NAO_RESOLVIDA'},falaAssinada:['Qual paciente você quer conferir? Não preparei notas de outras pessoas.']};}
+        if(rows[0])try{const anterior=JSON.parse(rows[0].texto);if(anterior.paciente)selecao.paciente=anterior.paciente;if(anterior.desde)selecao.desde=anterior.desde;if(anterior.ate)selecao.ate=anterior.ate;if(!selecao.horario&&anterior.horario)selecao.horario=anterior.horario;if(!selecao.ordem&&anterior.ordem)selecao.ordem=anterior.ordem;if(!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&anterior.dia)selecao.dia=anterior.dia;}catch{return {dados:{ok:false,motivo:'SELECAO_NAO_RESOLVIDA'},falaAssinada:['Qual paciente você quer conferir? Não preparei notas de outras pessoas.']};}
       }
       const diaSelecionado=selecao.dia;
       const desde=diaSelecionado??periodoDecisao(decisao,c.agora,c.texto)??selecao.desde??c.fatos.periodo.desde!;
@@ -459,8 +460,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,dias:a.ok?a.dias.length:undefined,total:a.ok?a.dias.reduce((n,d)=>n+d.elegiveis.length,0):undefined}));
         if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
         const br=(d:string)=>d.split('-').reverse().join('/');
-        const selecionados=selecionarDias(a.dias,selecao);
-        if(selecao.paciente&&new Set(selecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1)return {falaAssinada:['Há cadastros diferentes com esse nome. Preciso identificar o paciente antes de preparar notas.'],dados:{ok:false,motivo:'PACIENTE_AMBIGUO'}};
+        let selecionados:typeof a.dias;try{selecionados=selecionarDias(a.dias,selecao);}catch{return {falaAssinada:['Não consegui identificar um único atendimento nessa seleção. Não preparei nenhuma nota. Qual é a data e o horário?'],dados:{ok:false,motivo:'SELECAO_AMBIGUA'}};}
+        if(selecao.paciente&&new Set(selecionarDias(a.dias,{...selecao,ordem:undefined}).flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1)return {falaAssinada:['Há cadastros diferentes com esse nome. Preciso identificar o paciente antes de preparar notas.'],dados:{ok:false,motivo:'PACIENTE_AMBIGUO'}};
         let jaFaturadas=0,bloqueadas=0;
         for(const d of selecionados) {
           const pendentes:typeof d.elegiveis=[];

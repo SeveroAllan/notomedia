@@ -53,3 +53,30 @@ it('hora inexistente não volta a todas e duas horas pedem esclarecimento',()=>{
  expect(()=>selecaoConsultas('a das 25h')).toThrow('HORARIO_AMBIGUO');
  expect(confirmaSelecaoAnterior({paciente:{nome:'Teste Um',evidencia:'Teste Um'},horario:'10:00'},{paciente:{nome:'Teste Um',evidencia:'Teste Um'},horario:'09:00'})).toBe(false);
 });
+
+it.each(['mais recente','último','primeiro','mais antigo'])('ordem natural %s escolhe uma consulta do paciente, não do conjunto',ordem=>{
+ const dias=[{data:'2026-10-24',elegiveis:[{...e('Teste Um','tarde'),dataHora:'2026-10-24T15:00:00-03:00'},{...e('Teste Dois','outro'),dataHora:'2026-10-24T16:00:00-03:00'}]},{data:'2026-10-23',elegiveis:[e('Teste Um','cedo')]}];
+ const sel=selecaoConsultas(`Confira ${ordem==='primeiro'?'o primeiro atendimento':`o atendimento ${ordem}`} do Teste Um neste mês`,undefined,{nome:'Teste Um',evidencia:'Teste Um'});
+ const esperada=['mais recente','último'].includes(ordem)?'tarde':'cedo';
+ expect(selecionarDias(dias,sel).flatMap(d=>d.elegiveis).map(e=>e.idExterno)).toEqual([esperada]);
+ expect(prepararLoteAmplimed(selecionarDias(dias,sel)).consultas.map(e=>e.idExterno)).toEqual([esperada]);
+});
+it('ordinal sem paciente, datas inválidas e empate não escolhem arbitrariamente',()=>{
+ expect(()=>selecaoConsultas('Confira só o atendimento mais recente')).toThrow('PACIENTE_NECESSARIO');
+ const sel=selecaoConsultas('mais recente do Teste Um',undefined,{nome:'Teste Um',evidencia:'Teste Um'});
+ expect(()=>selecionarDias([{data:'2026-10-23',elegiveis:[e('Teste Um','a'),e('Teste Um','b')]}],sel)).toThrow('CONSULTA_AMBIGUA');
+ expect(()=>selecionarDias([{data:'2026-10-23',elegiveis:[{...e('Teste Um','a'),dataHora:undefined}]}],sel)).toThrow('HORARIO_NAO_IDENTIFICADO');
+});
+
+it('primeiro como anúncio não altera seleção',()=>expect(selecaoConsultas('Mostre primeiro qual consulta encontrou e o valor, sem emitir').ordem).toBeUndefined());
+
+it('não muda ordinal na confirmação e empate em outros pacientes não interfere',()=>{
+ const paciente={nome:'Teste Um',evidencia:'Teste Um'};
+ expect(confirmaSelecaoAnterior({paciente,ordem:'mais_antigo'},{paciente,ordem:'mais_recente'})).toBe(false);
+ const sel=selecaoConsultas('mais recente Teste Um',undefined,paciente);
+ const dados=[{data:'2026-10-23',elegiveis:[e('Teste Um','a'),e('Teste Dois','b')]}];
+ expect(selecionarDias(dados,sel)[0].elegiveis.map(x=>x.idExterno)).toEqual(['a']);
+ expect(()=>selecaoConsultas('mais recente ou mais antigo Teste Um',undefined,paciente)).toThrow('ORDEM_AMBIGUA');
+});
+
+it.each(['último mês','última semana','último lote','última proposta'])('referência %s não é ordinal de consulta',termo=>expect(selecaoConsultas(`Quero conferir o ${termo}`).ordem).toBeUndefined());
