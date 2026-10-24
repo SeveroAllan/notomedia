@@ -20,7 +20,7 @@ function cenario() {
  const enviar=vi.fn(async(_fala:string[],_chave:string,_memoria?:string[])=>{}),executar=vi.fn<FerramentasConversa['executar']>(async()=>({dados:{ok:true}}));
  const guardarPeriodo=vi.fn(async(_id:string,desde:string)=>{fatos.periodo={desde,origem:'contexto_salvo'};});
  const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
- const deps={ativo:true,conversaLivreAtiva:true,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
+ const deps={ativo:true,conversaLivreAtiva:true,orcamentoChamadas:undefined as number|undefined,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
    historico:new HistoricoComunicacaoEmMemoria(),lerEstado:async()=>({estado:{agora,fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:fatos.agenda,ultimaNota:null}}),aoConversar:enviar,log:vi.fn(),aoReagir:vi.fn()};
  const turno=(chave:string,texto:string)=>processarComunicacaoMedico({medicoId:'m',chaveProcessamento:chave,chaveConversa:'c',agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
  return {banco,memoria,fatos,completar,enviar,executar,guardarPeriodo,deps,turno};
@@ -411,7 +411,7 @@ it.each([0,1,2])('STEER 20: confirmação pendente com %i omissões não envia a
  await c.turno('pode','Pode.');
  expect(c.completar).toHaveBeenCalledTimes(omissoes===0?1:2);
  if(omissoes===2) {expect(c.executar).not.toHaveBeenCalled();expect(c.enviar).toHaveBeenCalledExactlyOnceWith([pergunta],'pode');}
- else {expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].parametros.confirmacao).toEqual({intencao:'sim',confianca:.98});expect(c.enviar).not.toHaveBeenCalled();}
+ else {expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].parametros?.confirmacao).toEqual({intencao:'sim',confianca:.98});expect(c.enviar).not.toHaveBeenCalled();}
  if(omissoes) expect(JSON.parse(String(c.completar.mock.calls[1]![2][1]!.content)).correcao.motivo).toBe('preencha parametros.confirmacao sobre a pergunta pendente');
  expect(JSON.stringify([c.enviar.mock.calls,c.banco.mensagens])).not.toContain(inventada);
 });
@@ -527,7 +527,7 @@ it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do
  await c.turno('renovar','O link expirou.');
  expect(c.executar).toHaveBeenCalledOnce();
  expect(c.executar.mock.calls[0]![0].fala).toEqual(['Aqui está o link seguro:']);
- expect(c.executar.mock.calls[0]![0].parametros.agenda).toBe('Amplimed');
+ expect(c.executar.mock.calls[0]![0].parametros?.agenda).toBe('Amplimed');
  expect(c.enviar.mock.calls[0][0].join(' ')).not.toMatch(/http|LINK_SEGURO/);
 });
 
