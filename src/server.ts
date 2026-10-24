@@ -416,6 +416,42 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
+      if(decisao.acao==='consultar_agenda') {
+        const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+        const desde=decisao.parametros?.desde??'', ate=decisao.parametros?.ate??hoje;
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(desde)||!/^\d{4}-\d{2}-\d{2}$/.test(ate)||ate<desde||ate>hoje)
+          return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:'PERIODO_INVALIDO'}};
+        const br=(d:string)=>d.split('-').reverse().join('/');
+        const statusPt=(s:string)=>s==='realizada'?'realizada':s==='agendada'?'agendada':s==='cancelada'?'cancelada':s==='faltou'?'não compareceu':s;
+        const hora=(iso:string)=>{const d=new Date(iso);return Number.isFinite(d.getTime())?d.toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'}):'';};
+        const montar=(consultas:{paciente:string;dataHora:string;status:string}[])=>{
+          const ordenadas=[...consultas].sort((a,b)=>Date.parse(a.dataHora)-Date.parse(b.dataHora));
+          if(!ordenadas.length)return [`Não encontrei consultas na sua agenda de ${br(desde)} a ${br(ate)}.`];
+          const itens=ordenadas.slice(0,12).map(x=>`${br(x.dataHora.slice(0,10))} ${hora(x.dataHora)} — ${x.paciente} (${statusPt(x.status)})`);
+          const cab=`Na sua agenda de ${br(desde)} a ${br(ate)} encontrei ${ordenadas.length} consulta${ordenadas.length===1?'':'s'}.`;
+          const baloes=[cab];let atual='';
+          for(const item of itens){const prox=atual?atual+'\n'+item:item;if(prox.length>480){baloes.push(atual);atual=item;}else atual=prox;}
+          if(atual)baloes.push(atual);
+          if(ordenadas.length>itens.length){const aviso=`Mostrei as primeiras ${itens.length}; há mais ${ordenadas.length-itens.length} nesse período.`;if(baloes.length<3)baloes.push(aviso);}
+          return baloes.slice(0,3);
+        };
+        if(c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
+          const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,false);
+          console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'consultar_agenda',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo}));
+          if(!a.ok)return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
+          const consultas=a.dias.flatMap(d=>d.consultas).filter(x=>{const dia=x.dataHora.slice(0,10);return dia>=desde&&dia<=ate;});
+          const fala=montar(consultas);
+          return {dados:{ferramenta:'consultar_agenda',ok:true,total:consultas.length,desde,ate},falaAssinada:fala,falaMemoria:fala};
+        }
+        const janelaDias=Math.max(1,Math.ceil((Date.parse(hoje)-Date.parse(desde))/86400000));
+        const a=await sincronizarAgendaHomologacao(c.medicoId,c.agora,janelaDias);
+        console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'consultar_agenda',agenda:'tribemd',ok:a.tipo==='consultas',motivo:a.tipo==='erro'?a.codigo:undefined}));
+        if(a.tipo==='erro')return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.codigo}};
+        const consultas=a.consultas.filter(x=>{const dia=x.dataHora.slice(0,10);return dia>=desde&&dia<=ate;})
+          .map(x=>({paciente:x.nomeAoVivo?.trim()||'Paciente',dataHora:x.dataHora,status:x.status}));
+        const fala=montar(consultas);
+        return {dados:{ferramenta:'consultar_agenda',ok:true,total:consultas.length,desde,ate},falaAssinada:fala,falaMemoria:fala};
+      }
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);
         const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Já existe uma tentativa de envio deste PDF. Vou preservar a nota sem repetir o envio; o recebimento ainda precisa ser conferido.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
