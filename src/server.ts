@@ -175,12 +175,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.use(
     express.json({
       limit: '10mb',
+      inflate: false,
       verify: (req: any, _res, buf) => {
         req.rawBody = buf;
       }
     })
   );
-  app.use(express.text({ limit: '10mb', type: ['text/*', 'application/xml'] }));
+  app.use(express.text({ limit: '10mb', inflate: false, type: ['text/*', 'application/xml'] }));
 
   const hubCpfClient = config.hubDesenvolvedorToken
     ? new HubDesenvolvedorCpfClient(config.hubDesenvolvedorToken)
