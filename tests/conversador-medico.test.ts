@@ -51,6 +51,13 @@ it('calendário calcula início de semana e mês no servidor, inclusive fronteir
 it.each(['2026-02-30','2026-10-22','2025-01-01'])('data inválida/futura/fora da janela %s não é assinada',desde=>{
  expect(periodoDecisao({fala:['Entendi.'],parametros:{desde}},agora)).toBeNull();
 });
+it('consultar_agenda valida capacidade e período sem interpretar a frase do médico',()=>{
+ const conectada={...fatos,agenda:{nome:'amplimed',conectada:true}};
+ const d={fala:['Vou consultar.'],acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}};
+ expect(validarAcaoConversa(d,conectada,['consultar_agenda'],'formulação linguística arbitrária',agora)).toBeNull();
+ expect(validarAcaoConversa({...d,parametros:{desde:'2026-10-19',ate:'2026-10-22'}},conectada,['consultar_agenda'],'qualquer texto',agora)).toBe('PERIODO_INVALIDO');
+});
+
 it('ação inválida, não permitida ou sem agenda/período nunca é assinada',()=>{
  expect(validarAcaoConversa({fala:['Ok'],acao:'emitir_nota'},fatos,['emitir_nota'],'sim',agora)).toBe('ACAO_INVALIDA');
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},fatos,[],'sim',agora)).toBe('ACAO_NAO_PERMITIDA');
