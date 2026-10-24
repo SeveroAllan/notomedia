@@ -164,7 +164,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if ((d.parametros?.desde || d.parametros?.periodo) && !periodoDecisao(d,agora,texto)) return 'PERIODO_INVALIDO';
     if (!diaDecisao(d, agora) && !periodoDecisao(d, agora,texto) && !validarInicioRetroativo(fatos.periodo.desde, agora)) return 'PERIODO_NECESSARIO';
   }
-  if (acao === 'listar_pendencias' && (fatos.listaRecente === true || (fatos.ultimoLote?.comErro ?? 0) > 0)) {
+  if (acao === 'listar_pendencias' && (fatos.listaRecente === true || (fatos.ultimoLote?.comErro ?? 0) > 0) && !diaDecisao(d,agora) && !periodoDecisao(d,agora,texto)) {
     const pedido = d.parametros?.pedidoExplicito;
     if (!pedido || !pedido.evidencia.trim() || !(pedido.confianca >= .9) || !texto.includes(pedido.evidencia)) return fatos.listaRecente === true ? 'LISTA_JA_ENVIADA' : 'LISTA_EM_VEZ_DE_LOTE';
   }
@@ -231,7 +231,7 @@ export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<Dec
   if (decisao.acao && decisao.acao !== 'nenhuma') return false;
   if(/pdf|reenvi|mand.*nota/i.test(texto)&&permitidas.includes('reenviar_nota_medico'))return false;
   if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
-  if (!/consult|atendiment|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
+  if (!/consult|atend|notas?|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
   return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(decisao.fala.join(' '));
 }
 

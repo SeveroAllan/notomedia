@@ -287,3 +287,9 @@ it.each([['da semana passada','2026-10-18'],['da semana retrasada','2026-10-11']
  const {fimPeriodoDecisao}=await import('../src/onboarding/conversador-medico.js');
  expect(fimPeriodoDecisao({fala:[],acao:'listar_pendencias'},new Date('2026-10-24T17:00Z'),texto)).toBe(fim);
 });
+it('notas de quem atendi não permite bloqueio inventado sem leitura',()=>{
+ expect(afirmaFatoDaAgendaSemFerramenta('E se eu quiser as notas da semana passada só de quem eu atendi particular, consegue conferir primeiro sem emitir?',{fala:['Já conferi: só 1 atendimento está bloqueado.'],acao:null},{agenda:{nome:'amplimed',conectada:true}},['listar_pendencias'])).toBe(true);
+});
+it('novo período explícito pode ser relido apesar de lista recente',()=>{
+ expect(validarAcaoConversa({fala:['Vou conferir.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}},{...fatos,agenda:{nome:'amplimed',conectada:true},listaRecente:true},['listar_pendencias'],'Confira semana passada',agora)).toBeNull();
+});
