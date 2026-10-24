@@ -9,6 +9,7 @@ import 'dotenv/config';
 export interface AppConfig {
   porta: number;
   host: string;
+  appPublicOrigin?: string;
   databaseUrl: string;
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
@@ -53,6 +54,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
   return {
     porta: Number.parseInt(env['PORT'] || '3000', 10),
     host: env['HOST'] || '0.0.0.0',
+    appPublicOrigin: env['APP_PUBLIC_ORIGIN']?.trim() || env['COFRE_ORIGEM']?.trim() || undefined,
     databaseUrl: env['DATABASE_URL'] || '',
     supabaseUrl: env['SUPABASE_URL'] || '',
     supabaseServiceRoleKey: env['SUPABASE_SERVICE_ROLE_KEY'] || '',

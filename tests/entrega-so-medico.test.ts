@@ -55,3 +55,17 @@ it('pedido de reenvio único não repete envio já reservado e não reemite',asy
  expect(await c.reenviarNotaMedico('m',{enviarPdf})).toBe('enviado');
  expect(await c.reenviarNotaMedico('m',{enviarPdf})).toBe('repetido');expect(enviarPdf).toHaveBeenCalledTimes(1);
 });
+it('reenvio filtra pela data da consulta e escopo médico, nunca data da emissão',async()=>{
+ const {c,enviarPdf,query}=cenario();
+ await c.reenviarNotaMedico('m',{enviarPdf},'2026-10-20');
+ const leitura=query.mock.calls.find(([sql])=>sql.includes('select sn.id as solicitacao_id'))!;
+ expect(leitura[1]).toEqual(['m','20/10/2026']);
+ expect(leitura[0]).toContain('sn.medico_id=$1');
+ expect(leitura[0]).toContain('sn.datas_consulta_texto=$2');
+ expect(leitura[0]).not.toMatch(/criado_em\s*=/);
+});
+it('reenvio sem nota pede detalhe sem tocar transporte',async()=>{
+ const {c,enviarPdf,query}=cenario();query.mockResolvedValue({rows:[]});
+ expect(await c.reenviarNotaMedico('m',{enviarPdf},'2026-10-20')).toBe('ausente');
+ expect(enviarPdf).not.toHaveBeenCalled();
+});

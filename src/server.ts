@@ -1,3 +1,4 @@
+import { origemWebhookConfigurada } from './onboarding/io/origem-webhook.js';
 import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
 import { contemCredencialAgenda } from './cofre/links.js';
 import { PendenciasMedico, classificarPendencias, formatarPendencias } from './onboarding/pendencias-medico.js';
@@ -927,9 +928,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!revisaoProfissional.aprovado) return res.status(409).json({ ok: false,
         codigo: 'DADOS_PROFISSIONAIS_PENDENTES', detalhe: 'Revise e aprove seus dados profissionais antes de conectar o WhatsApp.' });
 
-      const appUrl = config.host === '0.0.0.0'
-        ? 'https://notomed-web.6t32my.easypanel.host'
-        : `http://${config.host}:${config.porta}`;
+      const appUrl = origemWebhookConfigurada(config.appPublicOrigin);
+      if (!appUrl) return res.status(503).json({ ok: false,
+        codigo: 'ORIGEM_WEBHOOK_NAO_CONFIGURADA', detalhe: 'Conexão indisponível: a origem pública do aplicativo precisa ser configurada.' });
 
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
