@@ -10,6 +10,7 @@ import type { HistoricoComunicacaoRepositorio } from './historico-comunicacao-re
 import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-proxima-acao.js';
 import type { MemoriaConversa, PostgresMemoriaConversaMedico } from './memoria-conversa.js';
 import type { ReacaoMedico } from '../whatsapp/reagir-mensagem.js';
+import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
@@ -116,10 +117,12 @@ export async function processarComunicacaoMedico(
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
+      const reservaPosFerramenta=orcamento>2?2:0;
+      const podeCorrigir=()=>podeCorrigir()-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
-      const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]}) => {
+      const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,correcao});
+        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao});
         if(resposta.plano) {
           planoAtual=resposta.plano;
           await memoria.registrarPlano(medicoId,conversa,planoAtual);
@@ -143,7 +146,7 @@ export async function processarComunicacaoMedico(
           return {tipo:'nenhuma'};
         }
       }
-      if(chamadas<orcamento && afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
+      if(podeCorrigir() && afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
         deps.log('info','CONVERSA_FATO_SEM_FERRAMENTA');
         decisao=await decidir(permitidas,undefined,{motivo:'a resposta afirma fatos da agenda sem consultar: para conferir use listar_pendencias; para preparar total/proposta use iniciar_lote (exige confirmação antes de emitir). Anuncie a ação ou não afirme quantidade, ausência nem bloqueio',faltou:[]});
         if(afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
@@ -153,35 +156,35 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
-      if(chamadas<orcamento && motivo==='LEITURA_ATUAL_SEM_ACAO') {
+      if(podeCorrigir() && motivo==='LEITURA_ATUAL_SEM_ACAO') {
         decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte atual; se faltar identificação, pergunte só o dado necessário. Não repita oferta futura.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && motivo==='PACIENTE_NECESSARIO') {
+      if(podeCorrigir() && motivo==='PACIENTE_NECESSARIO') {
         decisao=await decidir([],undefined,{motivo:'o paciente e a consulta ainda não foram identificados; pergunte nome e data/horário, sem herdar o período anterior nem listar todos',faltou:['paciente','consulta']});
         motivo=validarAcaoConversa(decisao,fatos,[],texto,agora);
       }
-      if(chamadas<orcamento && motivo==='anuncie a acao com suas palavras') {
+      if(podeCorrigir() && motivo==='anuncie a acao com suas palavras') {
         deps.log('info','CONVERSA_ANUNCIO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo,faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && motivo==='LISTA_EM_VEZ_DE_LOTE' && permitidas.includes('iniciar_lote')) {
+      if(podeCorrigir() && motivo==='LISTA_EM_VEZ_DE_LOTE' && permitidas.includes('iniciar_lote')) {
         // Lote anterior terminou com erro: listar de novo não destrava; a releitura ao vivo vem do iniciar_lote (o médico confirma antes).
         deps.log('info','CONVERSA_LISTA_EM_VEZ_DE_LOTE');
         decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'o último lote terminou com erro; se o médico quer emitir de novo, use iniciar_lote anunciando; se só conversa, acao null',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && (motivo==='ENVIO_SEM_ACAO'||motivo==='PEDIDO_REENVIO_AUSENTE')) {
+      if(podeCorrigir() && (motivo==='ENVIO_SEM_ACAO'||motivo==='PEDIDO_REENVIO_AUSENTE')) {
         decisao=await decidir(permitidas,undefined,{motivo:'Não existe envio em andamento. Pedido claro de PDF: use reenviar_nota_medico com dia e evidencia literal; se faltar data, pergunte. Não prometa tarefa sem ação.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && motivo==='PERIODO_NECESSARIO') {
+      if(podeCorrigir() && motivo==='PERIODO_NECESSARIO') {
         deps.log('info','CONVERSA_PERIODO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo:'a acao precisa de parametros.desde ISO (use calendario com o periodo que o medico disse)',faltou:['parametros.desde']});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && motivo==='CONCLUSAO_SEM_ACAO') {
+      if(podeCorrigir() && motivo==='CONCLUSAO_SEM_ACAO') {
         deps.log('info','CONVERSA_CONCLUSAO_SEM_ACAO');
         decisao=await decidir([],undefined,{motivo:'o turno de conclusão só anuncia o resultado: conectado → avise que conectou e proponha o próximo passo; falha → explique o impedimento real e ofereça novo link; acao null',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
@@ -193,12 +196,12 @@ export async function processarComunicacaoMedico(
         decisao={fala:[ev.conectado?FALA_CONCLUSAO_AGENDA_CONECTADA(nome):ev.falhaAcesso?FALA_CONCLUSAO_AGENDA_FALHA_ACESSO(nome):FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL(nome)],acao:null};
         motivo=null;
       }
-      if(chamadas<orcamento && motivo==='CONEXAO_EM_VERIFICACAO') {
+      if(podeCorrigir() && motivo==='CONEXAO_EM_VERIFICACAO') {
         deps.log('info','CONVERSA_CONEXAO_EM_VERIFICACAO');
         decisao=await decidir(permitidas.filter(a=>a!=='pedir_link_agenda'&&a!=='pedir_link_permissoes'),undefined,{motivo:'o acesso da agenda está em verificação; confirme em 1 frase que você avisa assim que concluir, sem nova ação nem novo link',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      const corrigirIntroducao=chamadas<orcamento && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
+      const corrigirIntroducao=podeCorrigir() && decisao.acao==='pedir_link_agenda' && ['INTRODUCAO_INCOMPLETA','BALOES_LINK_EXCEDIDOS'].includes(motivo??'');
       if(corrigirIntroducao) {
         deps.log('info',`CONVERSA_INTRODUCAO_CORRIGIR ${motivo}`);
         decisao=await decidir(['pedir_link_agenda'],undefined,{motivo:motivo!,faltou:faltasIntroducaoLink(decisao.fala)});
