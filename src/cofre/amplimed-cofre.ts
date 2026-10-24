@@ -3,6 +3,7 @@ import { ErroCofre } from './tribemd-cofre.js';
 import { diasAtrasAmplimed, montarLeituraAmplimed, type DetalheAmplimed } from '../agenda/amplimed-leitor.js';
 import { separarElegiveis } from '../agenda/leitura-adaptativa.js';
 import type { CodigoLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
+import type { EstadoNavegador } from '../desenvolvedor/tribemd-perfil.js';
 
 /**
  * Cofre do Amplimed. Marco 1: guarda a credencial criptografada, separada da do TribeMD
@@ -12,13 +13,28 @@ export class CofreAmplimed {
     private perfis: PerfisTribemd;
     constructor(private opcoes: { diretorio: string; chave: string; aoAlterarAcesso?: (medicoId: string) => void;
         /** Login de observação; sem ele a credencial só é guardada. */
-        verificar?: (credencial: { email: string; senha: string }) => Promise<CodigoLoginAmplimed>;
+        verificar?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }) => Promise<CodigoLoginAmplimed>;
+        /** Fallback assistido do desafio de 2FA (código transitório, vínculo à tentativa). Sem ele o desafio vira PRECISA_VERIFICACAO. */
+        pedirCodigo2fa?: (medicoId: string) => Promise<string | null>;
         aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
         /** Leitura de observação da agenda do dia; sem ele a leitura fica indisponível. */
-        lerEventos?: (credencial: { email: string; senha: string }, diasAtras: number, detalhes?: boolean) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean }> }) {
+        lerEventos?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }, diasAtras: number, detalhes?: boolean) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean }> }) {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
+    /** Lê a sessão guardada e devolve os ganchos de sessão/2FA para uma tentativa de acesso. */
+    private async ganchosSessao(id: string) {
+        const p = await this.perfis.ler(this.chave(id));
+        const estado = p.estado;
+        p.email = ''; p.senha = '';
+        const pedir = this.opcoes.pedirCodigo2fa;
+        return { estado, aoPedirCodigo2fa: pedir ? () => pedir(id) : undefined,
+            aoSalvarEstado: async (e: EstadoNavegador) => {
+                const q = await this.perfis.ler(this.chave(id));
+                try { if (q.senha) await this.perfis.salvar(this.chave(id), { ...q, estado: e }); }
+                finally { q.email = ''; q.senha = ''; }
+            } };
+    }
     async status(id: string) {
         const p = await this.perfis.ler(this.chave(id));
         try {
@@ -55,7 +71,8 @@ export class CofreAmplimed {
         const credencial = { email: p.email, senha: p.senha };
         p.email = ''; p.senha = '';
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.lerEventos>>>;
-        try { r = await this.opcoes.lerEventos(credencial, diasAtras, comDetalhes); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
+        try { r = await this.opcoes.lerEventos({ ...credencial, ...ganchos }, diasAtras, comDetalhes); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
@@ -72,7 +89,8 @@ export class CofreAmplimed {
     async excluir(id: string) { this.opcoes.aoAlterarAcesso?.(id); await this.perfis.esquecer(this.chave(id)); return this.status(id); }
     private async verificarEmSegundoPlano(id: string, credencial: { email: string; senha: string }) {
         let codigo: CodigoLoginAmplimed = 'TEMPO_ESGOTADO';
-        try { codigo = await this.opcoes.verificar!(credencial); } catch { /* estado de instabilidade */ }
+        const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
+        try { codigo = await this.opcoes.verificar!({ ...credencial, ...ganchos }); } catch { /* estado de instabilidade */ }
         finally { credencial.email = ''; credencial.senha = ''; }
         const conectado = codigo === 'CONECTADO';
         const p = await this.perfis.ler(this.chave(id));

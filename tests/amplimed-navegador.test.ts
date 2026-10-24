@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classificarTelaAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
+import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, filtrarEstadoAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
 
 describe('guarda de rede do Amplimed', () => {
   it('POST só uma vez, no domínio aprovado, com envio liberado', () => {
@@ -46,4 +46,33 @@ it('libera só o POST livewire do login, mesmo antes do envio, e nenhum outro ca
   expect(permitirRequisicaoAmplimed('https://auth.amplimed.com.br/livewire/update', 'POST', 'fetch', false)).toBe(true);
   expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/livewire/update', 'POST', 'fetch', false)).toBe(false);
   expect(permitirRequisicaoAmplimed('https://auth.amplimed.com.br/outro', 'POST', 'fetch', false)).toBe(false);
+});
+
+describe('desafio de 2FA depois do enrollment', () => {
+  const t = (url: string, texto: string, senhasVisiveis = 0) => ({ url, texto, senhasVisiveis });
+  it('reconhece a tela /twofactor como PRECISA_VERIFICACAO, não AGUARDANDO', () => {
+    expect(desafioDoisFatoresAmplimed(t('https://auth.amplimed.com.br/twofactor?hash=abc', 'Verificar código de autenticação'))).toBe(true);
+    expect(classificarTelaAmplimed(t('https://auth.amplimed.com.br/twofactor?hash=abc', 'Verificar código de autenticação Um código foi enviado para se***@gm***.com via e-mail.'))).toBe('PRECISA_VERIFICACAO');
+    expect(desafioDoisFatoresAmplimed(t('https://app.amplimed.com.br/login', 'Verificar código de autenticação'))).toBe(true);
+    expect(desafioDoisFatoresAmplimed(t('https://app.amplimed.com.br/agenda', 'Agenda'))).toBe(false);
+    expect(desafioDoisFatoresAmplimed(t('https://auth.amplimed.com.br/2fa/verification/abc', 'Proteja sua conta com autenticação em 2 fatores! Clique em Ativar agora'))).toBe(false);
+  });
+});
+describe('filtrarEstadoAmplimed', () => {
+  it('mantém só cookies e origens do domínio amplimed.com.br', () => {
+    const estado = filtrarEstadoAmplimed({
+      cookies: [
+        { name: 'a', value: '1', domain: '.amplimed.com.br', path: '/', expires: -1, httpOnly: true, secure: true, sameSite: 'Lax' as const },
+        { name: 'b', value: '2', domain: 'auth.amplimed.com.br', path: '/', expires: -1, httpOnly: true, secure: true, sameSite: 'Lax' as const },
+        { name: 'c', value: '3', domain: '.google.com', path: '/', expires: -1, httpOnly: true, secure: true, sameSite: 'Lax' as const },
+        { name: 'd', value: '4', domain: 'amplimed.com.br.evil.com', path: '/', expires: -1, httpOnly: true, secure: true, sameSite: 'Lax' as const },
+      ],
+      origins: [
+        { origin: 'https://app.amplimed.com.br', localStorage: [{ name: 'x', value: '1' }] },
+        { origin: 'https://outro.com', localStorage: [{ name: 'y', value: '2' }] },
+      ],
+    });
+    expect(estado.cookies.map(c => c.name)).toEqual(['a', 'b']);
+    expect(estado.origins.map(o => o.origin)).toEqual(['https://app.amplimed.com.br']);
+  });
 });
