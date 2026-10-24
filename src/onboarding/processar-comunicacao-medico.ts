@@ -259,10 +259,12 @@ export async function processarComunicacaoMedico(
               if(r.falaAssinada) {
                 await enviar([...r.falaAssinada],[...(r.falaMemoria??r.falaAssinada)],':observacao:1');
               }
+              const objetivoConsulta=interpretacaoSemantica?.objetivo==='consultar';
               const podePrepararAposLeitura=!interpretacaoSemantica||
                 (['preparar','emitir'].includes(interpretacaoSemantica.objetivo)&&!interpretacaoSemantica.restricoes.naoEmitir&&!interpretacaoSemantica.restricoes.somenteLeitura);
               const permitidasAposLeitura=deps.ferramentas.permitidas(fatos).filter(a=>{
                 if(a===decisao.acao) return false;
+                if(objetivoConsulta)return a==='nenhuma';
                 const ferramenta=CATALOGO_FERRAMENTAS.find(f=>f.nome===a);
                 return a==='nenhuma'||(a==='iniciar_lote'&&podePrepararAposLeitura)||ferramenta?.tipo==='leitura';
               });
