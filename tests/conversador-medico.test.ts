@@ -274,3 +274,7 @@ it('decisão explícita de reenvio mantém a fala atual inteira como evidência 
  const completar=vi.fn(async()=>JSON.stringify({fala:['Vou reenviar o PDF.'],acao:'reenviar_nota_medico',parametros:{dia:'2026-10-20',evidencia:'envie a nota'}}));
  const r=await new ConversadorMedico('k','m',completar).responder({...entrada,texto:'Pode me mandar o PDF do dia20?'});expect(r.parametros?.evidencia).toBe('Pode me mandar o PDF do dia20?');
 });
+
+it.each(['Hoje só há uma consulta sem nota, mas ela está bloqueada para emissão.','A consulta está bloqueada porque houve tentativa anterior.'])('não afirma bloqueio sem consultar: %s',fala=>{
+ expect(afirmaFatoDaAgendaSemFerramenta('Prepare só a consulta de hoje para eu ver o total antes. Aguarde minha confirmação, não emita.',{fala:[fala],acao:null},{agenda:{nome:'amplimed',conectada:true}},['listar_pendencias','iniciar_lote'])).toBe(true);
+});

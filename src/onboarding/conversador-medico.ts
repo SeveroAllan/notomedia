@@ -232,5 +232,5 @@ export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<Dec
   if(/pdf|reenvi|mand.*nota/i.test(texto)&&permitidas.includes('reenviar_nota_medico'))return false;
   if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
   if (!/consult|atendiment|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
-  return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)/i.test(decisao.fala.join(' '));
+  return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(decisao.fala.join(' '));
 }
