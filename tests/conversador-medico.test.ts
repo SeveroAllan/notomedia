@@ -264,3 +264,6 @@ it('calendário informa limite real de leitura sem excluir30setembro',()=>{
 it.each(['Vou pedir o reenvio do PDF. Assim que concluir te aviso.','Estou enviando sua nota por aqui.'])('não promete envio sem ação real: %s',fala=>{
  expect(validarAcaoConversa({fala:[fala],acao:null},{...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}},['reenviar_nota_medico'],'Pode me mandar o PDF',agora)).toBe('ENVIO_SEM_ACAO');
 });
+it('não inventa indisponibilidade de PDF sem consultar ferramenta',()=>{
+ expect(validarAcaoConversa({fala:['O sistema não encontrou o PDF disponível para reenvio da nota.'],acao:null},fatos,['reenviar_nota_medico'],'Pode reenviar agora o PDF da nota de23/10',agora)).toBe('ENVIO_SEM_ACAO');
+});
