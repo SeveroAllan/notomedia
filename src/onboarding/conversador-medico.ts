@@ -151,7 +151,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   }
   if (acao === 'reenviar_nota_medico') {
     if (fatos.permissoes?.entregarPaciente !== 'so_medico') return 'ENTREGA_NAO_ESCOLHIDA';
-    if (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia)) return 'PEDIDO_REENVIO_AUSENTE';
+    if (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) ||
+        !/(?:envi[ae]|reenvi|mand[ae]|receber|quero.*(?:pdf|nota)|baixar)/i.test(d.parametros.evidencia)) return 'PEDIDO_REENVIO_AUSENTE';
     if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
