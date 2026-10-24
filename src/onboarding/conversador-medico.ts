@@ -233,7 +233,7 @@ export class ConversadorMedico {
     if(!this.apiKey?.trim() || !modelo?.trim()) throw Error('IA_NAO_CONFIGURADA');
     const seguro=JSON.parse(JSON.stringify(entrada,(_k,v)=>typeof v==='string'?sanitizarTextoMedico(v):v));
     const opcoes = modelo.startsWith('gpt-6')
-      ? {formatoJson:true,reasoningEffort:'medium' as const,tentativasMax:2 as const}
+      ? {formatoJson:true,reasoningEffort:'medium' as const,maxTokens:8192,tentativasMax:2 as const}
       : {formatoJson:true,temperature:.1,tentativasMax:2 as const};
     return this.completar(this.apiKey,modelo,[{role:'system',content:sistema},{role:'user',content:JSON.stringify(seguro)}],opcoes);
   }
