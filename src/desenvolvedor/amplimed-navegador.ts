@@ -259,7 +259,7 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
       let passos = 0;
       while (data !== hoje && passos < 62) {
         const botao = data < hoje ? '.fc-next-button' : '.fc-prev-button';
-        try { await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
+        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
         const anterior: string = data;
         for (let t = 0; t < 10 && data === anterior; t++) { await page.waitForTimeout(400); data = await cabecalho(page) ?? anterior; }
         if (data === anterior) { console.warn('AMPLIMED_PERIODO ancora_travou em=' + anterior); break; }
@@ -280,7 +280,7 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
       let passos = 0;
       while (d && d !== alvo && passos < 62) {
         const botao = d < alvo ? '.fc-next-button' : '.fc-prev-button';
-        try { await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
+        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
         const ant: string = d;
         for (let t = 0; t < 10 && d === ant; t++) { await page.waitForTimeout(400); d = await cabecalho(page) ?? ant; }
         if (d === ant) break;
@@ -294,6 +294,7 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     // Verificado contra positivos conhecidos: os eventos dos dias 19/21/22 aparecem na consulta.
     const verificarDiaSemEventos = async (alvo: string): Promise<boolean | null> => {
       try {
+        await page.evaluate('window.scrollTo(0, 0)');
         await page.locator('.fc-month-button').first().click({ timeout: 5000 });
         await page.waitForTimeout(1500);
         const total_eventos = await page.evaluate(`(async () => {
@@ -309,16 +310,18 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
         return typeof total_eventos === 'number' ? total_eventos === 0 : null;
       } catch { return null; }
       finally {
-        try { await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* reancora decide */ }
+        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* reancora decide */ }
         await page.waitForTimeout(1200);
       }
     };
     while (lidos < total) {
       const esperado = dataEsperadaAtras(hoje, lidos + 1);
+      await page.evaluate('window.scrollTo(0, 0)');
       await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
       let atual: string = posicao;
       for (let t = 0; t < 12 && atual === posicao; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? posicao; }
       if (atual !== esperado && atual < esperado) {
+        await page.evaluate('window.scrollTo(0, 0)');
         await page.locator('.fc-next-button').first().click({ timeout: 5000 });
         let volta: string = atual;
         for (let t = 0; t < 12 && volta === atual; t++) { await page.waitForTimeout(500); volta = await cabecalho(page) ?? atual; }
