@@ -189,7 +189,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=config.openaiApiKey;
   const completarIa=completarOpenAi;
   const iaModeloTexto=config.openaiTextoModel ?? '';
-  const conversador = config.conversaLivreAtiva ? new ConversadorMedico(iaApiKey, iaModeloTexto, completarIa) : undefined;
+  const iaModeloPlanner=config.conversaAgenteAtiva ? config.openaiPlannerModel ?? iaModeloTexto : iaModeloTexto;
+  const conversador = config.conversaLivreAtiva ? new ConversadorMedico(iaApiKey, iaModeloPlanner, completarIa, iaModeloTexto) : undefined;
   const iaModeloVisao=config.openaiVisaoModel ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
@@ -500,7 +501,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
-    }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 3 : 2,
+    }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,

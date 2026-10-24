@@ -11,6 +11,7 @@ export interface OpcoesCompletarNvidia {
   temperature?: number;
   formatoJson?: boolean;
   maxTokens?: number;
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   tentativasMax?: 1 | 2;
 }
 
@@ -27,6 +28,7 @@ export async function completarOpenAi(
   const temperature = typeof opcoesOuTimeout === 'object' && typeof opcoesOuTimeout.temperature === 'number' ? opcoesOuTimeout.temperature : 1;
   const formatoJson = typeof opcoesOuTimeout === 'object' && opcoesOuTimeout.formatoJson === true;
   const maxTokens = typeof opcoesOuTimeout === 'object' ? (opcoesOuTimeout.maxTokens ?? 4096) : 4096;
+  const reasoningEffort = typeof opcoesOuTimeout === 'object' ? opcoesOuTimeout.reasoningEffort : undefined;
   let response: Response | undefined;
   const tentativasMax = typeof opcoesOuTimeout === 'object' ? (opcoesOuTimeout.tentativasMax ?? 2) : 2;
   for (let tentativa = 1; tentativa <= tentativasMax; tentativa++) {
@@ -35,7 +37,8 @@ export async function completarOpenAi(
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeoutMs),
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
-          model, stream: false, temperature, max_tokens: maxTokens,
+          model, stream: false,
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort, max_completion_tokens: maxTokens } : { temperature, max_tokens: maxTokens }),
           ...(formatoJson ? { response_format: { type: 'json_object' } } : {}),
           messages
         })
