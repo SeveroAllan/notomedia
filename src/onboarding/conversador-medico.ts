@@ -8,9 +8,10 @@ import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lo
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar-sincrono.js';
 import type { PlanoConversa } from './memoria-conversa.js';
+import type { InterpretacaoSemantica } from './interpretador-semantico.js';
 
 export { ERRO_CONVERSA } from './falas.js';
-export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
+export const ACOES_CONVERSA = ['pedir_link_agenda', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Noto, assistente fiscal no WhatsApp. Português, primeira pessoa, até 3 balões.
 
 REGRAS FIXAS
@@ -19,9 +20,9 @@ REGRAS FIXAS
 - Datas: use calendario. Amplimed lê desde calendario.amplimedDesde até hoje. Novo dia/período exige reavaliar, não repetir falha anterior. Limite de leitura não proíbe emissão fiscal. Preserve o período já dito. Período exige parametros.desde ISO mesmo com acao=null; "desde dia 5" usa o mês. Nota de 1 dia: parametros.dia ISO. Paciente: parametros.paciente={nome,evidencia literal}; não amplie. Amplimed: mais recente/antigo filtra o paciente no período; outra agenda não suporta. Só explicar: acao=null.
 
 COMO DECIDIR (siga na ordem)
-0. Paciente indefinido: peça nome e dia/horário, não herde período.
+0. Sem frame semântico, peça só o mínimo necessário para identificar um item. Com interpretacaoSemantica, qualquer pergunta deve se limitar a interpretacaoSemantica.faltando.
 1. Resposta à última pergunta: reconheça e avance, sem repetir.
-2. Agenda conectada: não peça link. Para EMITIR notas ou preparar/resumir o total, iniciar_lote mostra quantidade/total e só emite após o sim. "não emita"/"aguarde" proíbe emitir, não preparar. listar_pendencias só se pedir para ver/conferir/listar consultas, sem total/proposta. iniciar_lote busca CPF/telefone; não peça no chat.
+2. Agenda conectada: não peça link. consultar_agenda lê a agenda em geral; listar_pendencias lê somente consultas sem nota; iniciar_lote prepara quantidade/total e só emite após confirmação. Restrições de não emitir devem ser preservadas. iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
 2b. Pedido atual vence histórico/resumo. Conferir agora: listar_pendencias ou esclareça dado faltante; não ofereça busca futura. fatos.listaRecente=true: reação sem pedido novo usa acao null; pedido explícito de nova leitura usa parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. Agenda citada: "Tribe", "tribe md", "o tribe" = TribeMD; Amplimed = Amplimed. Use pedir_link_agenda com parametros.agenda normalizada e evidencia literal.
@@ -43,14 +44,11 @@ COMO DECIDIR (siga na ordem)
 19. PDF pedido claramente ou data confirmada: reenviar_nota_medico com evidencia literal e dia da CONSULTA; dúvida: pergunte. Nunca prometa envio com acao null nem mande baixar na agenda.
 18. Link usado (fatos.link.usado) e agenda não conectada: acesso em verificação; "feito" = 1 frase, você avisa ao concluir, acao null.
 
-EXEMPLOS (reescreva com suas palavras)
-- "Tribe" (agenda) -> {"fala":["TribeMD, certo. Conecte a agenda: só leio consultas para conferir comprovantes e emitir; senha só no link, nada vai a pacientes.","Aqui está o link seguro:"],"acao":"pedir_link_agenda","parametros":{"agenda":"TribeMD","evidencia":"Tribe"}}
-- fatos.listaRecente=true, medico: "Certo." -> {"fala":["Quer que eu prepare o total para confirmar a emissão?"],"acao":null}
-- fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
 
+Se interpretacaoSemantica existir, ela é o significado normalizado do turno: não invente campos ausentes nem reinterprete a linguagem para criar novas faltas. Pergunte somente o que estiver em interpretacaoSemantica.faltando. Se faltando=[], avance usando uma capacidade permitida ou responda ao resultado.
 Corrija sem narrar validações.
 SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano sem autoridade. Máx 3x500 chars. Ações só de acoesPermitidas. Após ferramenta, acao só se podeAgirAposFerramenta=true; senão null. Só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
-const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), dia: z.string().optional(),
+const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
@@ -168,6 +166,14 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
         !/(?:envi[ae]|reenvi|mand[ae]|receber|quero.*(?:pdf|nota)|baixar)/i.test(d.parametros.evidencia)) return 'PEDIDO_REENVIO_AUSENTE';
     if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
   }
+  if (acao === 'consultar_agenda') {
+    const ag=normalizarAgenda(fatos.agenda.nome??undefined);
+    if(!fatos.agenda.conectada||fatos.semAgendaDigital||!(ag==='tribemd'||ag==='amplimed'))return 'AGENDA_NAO_CONECTADA';
+    const calendario=calendarioConversa(agora),desde=validarInicioRetroativo(d.parametros?.desde??null,agora),ate=d.parametros?.ate??calendario.hoje;
+    const dataAte=/^\d{4}-\d{2}-\d{2}$/.test(ate)&&new Date(ate+'T12:00:00Z').toISOString().slice(0,10)===ate;
+    if(!desde||!dataAte||ate<desde||ate>calendario.hoje)return 'PERIODO_INVALIDO';
+    return null;
+  }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     if(consultaNaoIdentificada(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
@@ -191,13 +197,13 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
 export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined, private readonly completar: typeof completarOpenAi, private readonly modeloAuxiliar?: string) {}
   async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; plano?: PlanoConversa | null; fatos: FatosConversa; agora: Date;
-    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; podeAgirAposFerramenta?: boolean; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
+    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; podeAgirAposFerramenta?: boolean; correcao?: {motivo:string;faltou:string[]}; interpretacaoSemantica?:InterpretacaoSemantica|null }): Promise<DecisaoConversa> {
     const resultado = entrada.resultadoFerramenta as { ferramenta?: string; ok?: boolean; motivo?: string; limiteLeitura?: {desde:string;ate:string} } | undefined;
     if(resultado?.ok===false && resultado.motivo==='PERIODO_FORA_DO_LIMITE' && resultado.limiteLeitura) {
       const br=(d:string)=>d.split('-').reverse().join('/');
       return {fala:[`Minha leitura da Amplimed alcança de ${br(resultado.limiteLeitura.desde)} a ${br(resultado.limiteLeitura.ate)}. O período pedido começa antes disso. Quer conferir a parte dentro dessa janela?`],acao:null};
     }
-    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias'].includes(resultado.ferramenta ?? '') &&
+    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias', 'consultar_agenda'].includes(resultado.ferramenta ?? '') &&
         ['LEITURA_INCOMPLETA', 'FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO'].includes(resultado.motivo ?? ''))
       return { fala: ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'], acao: null };
     try {
@@ -246,7 +252,7 @@ export class ConversadorMedico {
 export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<DecisaoConversa, 'fala' | 'acao'>, fatos: Pick<FatosConversa, 'agenda'>, permitidas: readonly string[]): boolean {
   if (decisao.acao && decisao.acao !== 'nenhuma') return false;
   if(/pdf|reenvi|mand.*nota/i.test(texto)&&permitidas.includes('reenviar_nota_medico'))return false;
-  if (!fatos.agenda.conectada || !permitidas.includes('listar_pendencias')) return false;
+  if (!fatos.agenda.conectada || !permitidas.some(a=>a==='listar_pendencias'||a==='consultar_agenda')) return false;
   if (!/consult|atend|notas?|paciente|pend[eê]nc|agenda/i.test(texto)) return false;
   return /\d|nenhum|zero|n[aã]o (?:teve|tive|h[aá]|tem|tenho|vi|encontr)|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(decisao.fala.join(' '));
 }
@@ -271,7 +277,7 @@ export function consultaNaoIdentificada(texto:string):boolean {
  return /\b(?:um|meu|o) paciente\b/.test(t)&&/\b(?:duas|varias|mais de uma|so (?:uma|de uma)|escolh|qual|como)\b/.test(t);
 }
 
-/** Uma oferta futura não atende um pedido concreto atual; perguntas de funcionamento ficam sem ação. */
+/** Pedido concreto de leitura não pode virar oferta futura nem pedir recorte já informado. */
 export function leituraAtualVirouOferta(texto:string,d:Pick<DecisaoConversa,'acao'|'fala'>,fatos:Pick<FatosConversa,'agenda'|'lote'>,permitidas:readonly string[]):boolean {
  if(d.acao&&d.acao!=='nenhuma'||!fatos.agenda.conectada||!permitidas.includes('listar_pendencias')||['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??''))return false;
  const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();

@@ -19,7 +19,7 @@ function cenario() {
  const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi! O que você precisa?"],"acao":null}');
  const enviar=vi.fn(async(_fala:string[],_chave:string,_memoria?:string[])=>{}),executar=vi.fn<FerramentasConversa['executar']>(async()=>({dados:{ok:true}}));
  const guardarPeriodo=vi.fn(async(_id:string,desde:string)=>{fatos.periodo={desde,origem:'contexto_salvo'};});
- const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
+ const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
  const deps={ativo:true,conversaLivreAtiva:true,orcamentoChamadas:undefined as number|undefined,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
    historico:new HistoricoComunicacaoEmMemoria(),lerEstado:async()=>({estado:{agora,fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:fatos.agenda,ultimaNota:null}}),aoConversar:enviar,log:vi.fn(),aoReagir:vi.fn()};
  const turno=(chave:string,texto:string)=>processarComunicacaoMedico({medicoId:'m',chaveProcessamento:chave,chaveConversa:'c',agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
@@ -516,7 +516,9 @@ it('Amplimed: "quero emitir as notas dos últimos 7 dias" abre o lote (iniciar_l
  c.completar.mockImplementation(async()=>JSON.stringify({fala:['Certo, vou montar o resumo dos últimos 7 dias para você confirmar.'],acao:'iniciar_lote',parametros:{desde:'2026-10-14'}}));
  await c.turno('emitir','quero emitir as notas dos últimos 7 dias');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'iniciar_lote'});
- expect(PROMPT_CONVERSA).toMatch(/EMITIR notas[\s\S]*iniciar_lote[\s\S]*listar_pendencias só se pedir para ver/);
+ expect(PROMPT_CONVERSA).toContain('consultar_agenda lê a agenda em geral');
+ expect(PROMPT_CONVERSA).toContain('listar_pendencias lê somente consultas sem nota');
+ expect(PROMPT_CONVERSA).toContain('iniciar_lote prepara quantidade/total');
 });
 
 it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do último link é preservada',async()=>{
@@ -606,6 +608,36 @@ it('fato inventado após correção de anúncio também é recusado sem narrador
  .mockResolvedValueOnce(JSON.stringify({fala:['Não há nenhuma consulta hoje.'],acao:null}));
  await c.turno('anuncio-pos-correcao','Confira as consultas de hoje');expect(c.executar).not.toHaveBeenCalled();
  expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Preciso consultar/);expect(c.completar).toHaveBeenCalledTimes(2);
+});
+
+it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e horário',async()=>{
+ const c=cenario();
+ c.fatos.agenda={nome:'amplimed',conectada:true};
+ c.fatos.periodo={desde:null,origem:null};
+ c.deps.orcamentoChamadas=6;
+ const interpretar=vi.fn(async()=>({
+   dominio:'agenda' as const,objetivo:'consultar' as const,objeto:'consultas' as const,granularidade:'colecao' as const,
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito' as const},paciente:null,
+   restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.98
+ }));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.executar.mockResolvedValueOnce({
+   dados:{ferramenta:'consultar_agenda',ok:true,total:2,desde:'2026-10-19',ate:'2026-10-21'},
+   falaAssinada:['Na sua agenda de 19/10/2026 a 21/10/2026 encontrei 2 consultas.']
+ });
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Certo.'],acao:null}));
+
+ await c.turno('semana-atual-real','Me fale sobre minhas consultas dessa semana.');
+
+ expect(interpretar).toHaveBeenCalledOnce();
+ expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
+ expect(c.guardarPeriodo).toHaveBeenCalledWith('m','2026-10-19');
+ const replanejamento=JSON.parse(String(c.completar.mock.calls[0]![2][1]!.content));
+ expect(replanejamento.acoesPermitidas).toEqual(['nenhuma']);
+ const falas=c.enviar.mock.calls.flatMap(([fala])=>fala).join(' ');
+ expect(falas).toContain('encontrei 2 consultas');
+ expect(falas).not.toMatch(/diga o dia|dia e hor[aá]rio/i);
 });
 
 // Pedido concreto atual vence a explicação anterior, sem forçar consulta em perguntas de funcionamento.

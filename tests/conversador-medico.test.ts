@@ -51,6 +51,13 @@ it('calendário calcula início de semana e mês no servidor, inclusive fronteir
 it.each(['2026-02-30','2026-10-22','2025-01-01'])('data inválida/futura/fora da janela %s não é assinada',desde=>{
  expect(periodoDecisao({fala:['Entendi.'],parametros:{desde}},agora)).toBeNull();
 });
+it('consultar_agenda valida capacidade e período sem interpretar a frase do médico',()=>{
+ const conectada={...fatos,agenda:{nome:'amplimed',conectada:true}};
+ const d={fala:['Vou consultar.'],acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}};
+ expect(validarAcaoConversa(d,conectada,['consultar_agenda'],'formulação linguística arbitrária',agora)).toBeNull();
+ expect(validarAcaoConversa({...d,parametros:{desde:'2026-10-19',ate:'2026-10-22'}},conectada,['consultar_agenda'],'qualquer texto',agora)).toBe('PERIODO_INVALIDO');
+});
+
 it('ação inválida, não permitida ou sem agenda/período nunca é assinada',()=>{
  expect(validarAcaoConversa({fala:['Ok'],acao:'emitir_nota'},fatos,['emitir_nota'],'sim',agora)).toBe('ACAO_INVALIDA');
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},fatos,[],'sim',agora)).toBe('ACAO_NAO_PERMITIDA');
@@ -112,14 +119,11 @@ it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
  for(let passo=1;passo<=8;passo++) expect(PROMPT_CONVERSA).toMatch(new RegExp('^'+passo+'\\. ', 'm'));
 });
 
-it('exemplo Tribe do prompt passa pela guarda real de introdução com dois balões',()=>{
- const exemplo=PROMPT_CONVERSA.match(/^- "Tribe" .* -> (\{.*\})$/m);
- expect(exemplo).not.toBeNull();
- const decisao=JSON.parse(exemplo![1]);
+it('prompt não depende de exemplo Tribe embutido; contrato real continua validando a introdução',()=>{
+ expect(PROMPT_CONVERSA).not.toContain('EXEMPLOS');
+ expect(PROMPT_CONVERSA).not.toMatch(/^- "Tribe" .* -> \{/m);
+ const decisao={fala:['TribeMD, certo. Vou enviar o link seguro para conectar a agenda.','Eu só leio as consultas; login e senha ficam no link seguro e nada é enviado a pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'TribeMD',evidencia:'Tribe'}};
  expect(validarAcaoConversa(decisao,fatos,['pedir_link_agenda'],'Tribe',agora)).toBeNull();
- expect(decisao.fala).toHaveLength(2);
- expect(decisao.fala[1]).toMatch(/Aqui está o link seguro:$/);
- for(const balao of decisao.fala) expect(balao.length).toBeLessThanOrEqual(500);
 });
 
 it.each([
@@ -172,13 +176,10 @@ it('sem lista recente a leitura continua permitida; lista recente não bloqueia 
  expect(validarAcaoConversa({fala:['Conferindo.'],acao:'iniciar_lote'},{...f,listaRecente:true},['iniciar_lote'],'Quero emitir',agora)).toBeNull();
 });
 
-it('prompt avança após lista recente e orienta pedido explícito para nova leitura',()=>{
+it('prompt mantém o contrato de lista recente sem exemplo textual embutido',()=>{
  expect(PROMPT_CONVERSA).toContain('2b. Pedido atual vence histórico/resumo.');
  expect(PROMPT_CONVERSA).toContain('parametros.pedidoExplicito=');
- const exemplo=PROMPT_CONVERSA.match(/^- fatos.listaRecente=true, medico: "Certo\." -> (\{.*\})$/m);
- expect(exemplo).not.toBeNull();const d=JSON.parse(exemplo![1]);
- expect(d.acao).toBeNull();expect(d.fala.length).toBeLessThanOrEqual(3);
- for(const balao of d.fala)expect(balao.length).toBeLessThanOrEqual(500);
+ expect(PROMPT_CONVERSA).not.toContain('medico: "Certo." ->');
 });
 it('prompt pede correção em UMA frase curta e respeita o teto atualizado',()=>{
  expect(PROMPT_CONVERSA).toContain('UMA frase curta');
@@ -187,12 +188,13 @@ it('prompt pede correção em UMA frase curta e respeita o teto atualizado',()=>
 
 });
 
-it('prompt orienta anúncio e próximo passo sem impor frases fixas',()=>{
+it('prompt orienta anúncio e próximo passo sem exemplos ou frases fixas',()=>{
  expect(PROMPT_CONVERSA).toContain('com suas palavras');
  expect(PROMPT_CONVERSA).toContain('quem faz o que a seguir');
  expect(PROMPT_CONVERSA).not.toContain('Vou conferir sua agenda');
  expect(PROMPT_CONVERSA).not.toContain('Vou te enviar um link');
- expect(PROMPT_CONVERSA).toContain('reescreva com suas palavras');
+ expect(PROMPT_CONVERSA).not.toContain('EXEMPLOS');
+ expect(PROMPT_CONVERSA).not.toContain('reescreva com suas palavras');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
 });
 it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('ação %s sem fala exige anúncio antes de validar seu conteúdo',async acao=>{
@@ -308,9 +310,11 @@ it.each(['Hoje só há uma consulta sem nota, mas ela está bloqueada para emiss
  expect(afirmaFatoDaAgendaSemFerramenta('Prepare só a consulta de hoje para eu ver o total antes. Aguarde minha confirmação, não emita.',{fala:[fala],acao:null},{agenda:{nome:'amplimed',conectada:true}},['listar_pendencias','iniciar_lote'])).toBe(true);
 });
 
-it('preparar total sem emitir é proposta, não simples lista',()=>{
- expect(PROMPT_CONVERSA).toContain('preparar/resumir o total');
- expect(PROMPT_CONVERSA).toContain('não emita');
+it('contratos distinguem consulta, pendência e preparação fiscal',()=>{
+ expect(PROMPT_CONVERSA).toContain('consultar_agenda lê a agenda em geral');
+ expect(PROMPT_CONVERSA).toContain('listar_pendencias lê somente consultas sem nota');
+ expect(PROMPT_CONVERSA).toContain('iniciar_lote prepara quantidade/total');
+ expect(PROMPT_CONVERSA).toContain('Restrições de não emitir devem ser preservadas');
 });
 it.each([['da semana passada','2026-10-18'],['da semana retrasada','2026-10-11'],['do mês passado','2026-09-30'],['desde a semana passada',null]])('fecha período natural sem ampliar até hoje: %s',async(texto,fim)=>{
  const {fimPeriodoDecisao}=await import('../src/onboarding/conversador-medico.js');

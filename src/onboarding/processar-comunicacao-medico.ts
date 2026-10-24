@@ -11,6 +11,7 @@ import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-p
 import type { MemoriaConversa, PostgresMemoriaConversaMedico } from './memoria-conversa.js';
 import type { ReacaoMedico } from '../whatsapp/reagir-mensagem.js';
 import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
+import { planejarPorSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
@@ -29,7 +30,7 @@ export interface FerramentasConversa {
 }
 interface Dependencias {
   ativo:boolean; conversaLivreAtiva?:boolean; orcamentoChamadas?:number; memoriaPersistida?:PostgresMemoriaConversaMedico;
-  conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa;
+  conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa; interpretadorSemantico?:Pick<InterpretadorSemantico,'interpretar'>;
   aoReagir?:(reacao:ReacaoMedico)=>Promise<void>; aoConversar?:(fala:string[],chave:string,falaMemoria?:string[])=>Promise<void>;
   memoriaConversa?:MemoriaConversa; extratorResposta?:ExtratorRespostaMedico; historico:HistoricoComunicacaoRepositorio;
   lerEstado:(medicoId:string,agora:Date)=>Promise<EstadoComunicacaoMedico|null>;
@@ -120,9 +121,10 @@ export async function processarComunicacaoMedico(
       const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
+      let interpretacaoSemantica:InterpretacaoSemantica|null=null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao});
+        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao,interpretacaoSemantica});
         if(resposta.plano) {
           planoAtual=resposta.plano;
           await memoria.registrarPlano(medicoId,conversa,planoAtual);
@@ -131,7 +133,23 @@ export async function processarComunicacaoMedico(
       };
       const narrar=async (resultado:unknown) => chamadas>=orcamento ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
       const permitidas=deps.ferramentas.permitidas(fatos);
-      let decisao=await decidir(permitidas);
+      if(deps.interpretadorSemantico&&entrada.respostaMedico) {
+        if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
+        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora});
+        if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
+      }
+      let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
+      if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
+        planoAtual={
+          objetivo:[interpretacaoSemantica.objetivo,interpretacaoSemantica.objeto].filter(Boolean).join(':'),
+          etapa:decisao?.acao?'executar_capacidade':'resolver_faltantes',
+          faltando:[...interpretacaoSemantica.faltando],
+          proximosPassos:decisao?.acao?[decisao.acao]:[],
+          aguardando:interpretacaoSemantica.faltando[0]??null
+        };
+        await memoria.registrarPlano(medicoId,conversa,planoAtual);
+      }
+      if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
       // não é resposta à pergunta, então não força parametros.confirmacao.
@@ -229,23 +247,28 @@ export async function processarComunicacaoMedico(
           await memoria.registrarMarca(medicoId,conversa,'sem_agenda_digital');
         } else if(decisao.acao && decisao.acao!=='nenhuma' || fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
           const executarFerramenta=async (atual:DecisaoConversa,sufixo:string) => {
-            if(atual.acao==='listar_pendencias' || atual.acao==='iniciar_lote') await enviar(atual.fala.slice(0,1),undefined,sufixo);
+            if(['consultar_agenda','listar_pendencias','iniciar_lote'].includes(atual.acao??'')) await enviar(atual.fala.slice(0,1),undefined,sufixo);
             ferramentasExecutadas++;
             return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});
           };
-          const r=await executarFerramenta(decisao,':anuncio');
+          const decisaoExecutada=decisao;
+          const r=await executarFerramenta(decisaoExecutada,':anuncio');
           if(r.jaRespondida) fala=[];
           else {
-            const tipo=CATALOGO_FERRAMENTAS.find(f=>f.nome===decisao.acao)?.tipo;
+            const tipo=CATALOGO_FERRAMENTAS.find(f=>f.nome===decisaoExecutada.acao)?.tipo;
             const podeReplanejar=orcamento>2 && tipo==='leitura' && r.dados!==undefined && chamadas<orcamento && ferramentasExecutadas<2;
             if(podeReplanejar) {
               if(r.falaAssinada) {
                 await enviar([...r.falaAssinada],[...(r.falaMemoria??r.falaAssinada)],':observacao:1');
               }
+              const objetivoConsulta=interpretacaoSemantica?.objetivo==='consultar';
+              const podePrepararAposLeitura=!interpretacaoSemantica||
+                (['preparar','emitir'].includes(interpretacaoSemantica.objetivo)&&!interpretacaoSemantica.restricoes.naoEmitir&&!interpretacaoSemantica.restricoes.somenteLeitura);
               const permitidasAposLeitura=deps.ferramentas.permitidas(fatos).filter(a=>{
-                if(a===decisao.acao) return false;
+                if(a===decisaoExecutada.acao) return false;
+                if(objetivoConsulta)return a==='nenhuma';
                 const ferramenta=CATALOGO_FERRAMENTAS.find(f=>f.nome===a);
-                return a==='nenhuma'||a==='iniciar_lote'||ferramenta?.tipo==='leitura';
+                return a==='nenhuma'||(a==='iniciar_lote'&&podePrepararAposLeitura)||ferramenta?.tipo==='leitura';
               });
               const proxima=await decidir(permitidasAposLeitura,r.dados,undefined,true);
               let motivoProxima=validarAcaoConversa(proxima,fatos,permitidasAposLeitura,texto,agora);
@@ -292,7 +315,7 @@ export async function processarComunicacaoMedico(
       } catch {deps.log('erro','CONVERSA_RESUMO_FALHOU');}
       deps.log('info',`CONVERSA_CHAMADAS ${chamadas}`);
       // Observação (passo 4): só metadados, sem texto do médico, para achar padrões de erro depois. Não altera a resposta.
-      deps.log('info','CONVERSA_OBSERVACAO '+JSON.stringify({chamadas,ferramentasExecutadas,acao:decisao.acao??'nenhuma',recusa:motivo??null,loteEstado:fatos.lote?.estado??null,listaRecente:fatos.listaRecente===true,tarefaEmCurso:fatos.tarefaEmCurso===true}));
+      deps.log('info','CONVERSA_OBSERVACAO '+JSON.stringify({chamadas,ferramentasExecutadas,acao:decisao.acao??'nenhuma',recusa:motivo??null,loteEstado:fatos.lote?.estado??null,listaRecente:fatos.listaRecente===true,tarefaEmCurso:fatos.tarefaEmCurso===true,semantica:interpretacaoSemantica?{dominio:interpretacaoSemantica.dominio,objetivo:interpretacaoSemantica.objetivo,objeto:interpretacaoSemantica.objeto,granularidade:interpretacaoSemantica.granularidade,confianca:interpretacaoSemantica.confianca,faltando:interpretacaoSemantica.faltando}:null}));
       return {tipo:'nenhuma'};
     } catch (erro) {
       if(!deps.conversaLivreAtiva) {deps.log('erro','COMUNICACAO_ESTADO_FALHOU');return {tipo:'nenhuma'};}

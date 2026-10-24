@@ -89,11 +89,11 @@ export class CofreAmplimed {
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
         // Defesa em profundidade: o primeiro dia lido tem que ser o "hoje" pedido (a agenda pode reabrir em outra data).
         if (r.dias[0]?.data !== hoje) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
-        const dias: { data: string; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
+        const dias: { data: string; consultas: { paciente: string; dataHora: string; status: 'realizada'|'cancelada'|'faltou'|'agendada'; valorCentavos: number | null }[]; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
         for (const d of r.dias) {
             const leitura = montarLeituraAmplimed(d.eventos, { data: d.data, profissional: r.profissional });
             if (!leitura.confiavel) return { ok: false as const, motivo: 'LEITURA_NAO_CONFIAVEL', problemas: leitura.problemas.map(x => x.codigo), data: d.data };
-            dias.push({ data: d.data, lidos: leitura.lidos, elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora, idExterno: c.idExterno, valorCentavos: c.valorCentavos ?? 0, detalhe: leitura.detalhes.get(c.idExterno) ?? null })) });
+            dias.push({ data: d.data, lidos: leitura.lidos, consultas: leitura.consultas.map(c => ({ paciente:c.pacienteNome,dataHora:c.dataHora,status:c.status,valorCentavos:c.valorCentavos })), elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora, idExterno: c.idExterno, valorCentavos: c.valorCentavos ?? 0, detalhe: leitura.detalhes.get(c.idExterno) ?? null })) });
         }
         return { ok: true as const, dias };
     }
