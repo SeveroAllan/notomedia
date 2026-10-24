@@ -30,6 +30,14 @@ it('modelo auxiliar barato fica restrito ao resumo',async()=>{
  expect(completar.mock.calls[1][3]).toMatchObject({temperature:.1});
 });
 
+it('resultado de leitura só pode gerar nova ação quando o orquestrador libera replanejamento',async()=>{
+ const completar=vi.fn(async()=>'{"fala":["Vou preparar o total."],"acao":"iniciar_lote","parametros":{"desde":"2026-10-05"}}');
+ const conversador=new ConversadorMedico('k','m',completar);
+ const base={...entrada,fatos:{...fatos,agenda:{nome:'tribemd',conectada:true},periodo:{desde:'2026-10-05',origem:'contexto'}},acoesPermitidas:['iniciar_lote'],resultadoFerramenta:{ferramenta:'listar_pendencias',ok:true,total:2}};
+ expect((await conversador.responder(base)).acao).toBeNull();
+ expect((await conversador.responder({...base,podeAgirAposFerramenta:true})).acao).toBe('iniciar_lote');
+});
+
 it.each(['{}','não JSON','{"fala":[]}',JSON.stringify({fala:['x'.repeat(501)]}),'{"fala":["a","b","c","d"]}'])('saída inválida %s usa só o erro técnico, sem segunda chamada',async texto=>{
  const completar=vi.fn(async()=>texto);expect((await new ConversadorMedico('k','m',completar).responder(entrada)).fala).toEqual([ERRO_CONVERSA]);expect(completar).toHaveBeenCalledOnce();
 });
