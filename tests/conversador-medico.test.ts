@@ -296,3 +296,11 @@ it('novo período explícito pode ser relido apesar de lista recente',()=>{
 it('paciente não identificado não pode virar lista herdada',()=>{
  expect(validarAcaoConversa({fala:['Vou listar a semana passada.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}},{...fatos,agenda:{nome:'amplimed',conectada:true}},['listar_pendencias'],'Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?',agora)).toBe('PACIENTE_NECESSARIO');
 });
+it.each(['Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?','Meu paciente teve várias consultas. Como escolho só uma?','O paciente voltou duas vezes. Quero só uma nota.'])('orientação sem identidade não continua seleção: %s',async texto=>{
+ const {consultaNaoIdentificada}=await import('../src/onboarding/conversador-medico.js');expect(consultaNaoIdentificada(texto)).toBe(true);
+ expect(validarAcaoConversa({fala:['Vou listar.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}},{...fatos,agenda:{nome:'amplimed',conectada:true}},['listar_pendencias'],texto,agora)).toBe('PACIENTE_NECESSARIO');
+});
+it('continuação de seleção já identificada não vira orientação genérica',async()=>{
+ const {consultaNaoIdentificada}=await import('../src/onboarding/conversador-medico.js');
+ expect(consultaNaoIdentificada('Pode preparar essa consulta.')).toBe(false);expect(consultaNaoIdentificada('Quero só a consulta do Teste Um de ontem.')).toBe(false);
+});

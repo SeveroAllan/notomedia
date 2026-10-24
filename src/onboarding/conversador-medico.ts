@@ -32,7 +32,7 @@ COMO DECIDIR (siga na ordem)
 7. fatos.lote.estado='aguardando_confirmacao_lote': voce DEVE preencher parametros.confirmacao={intencao:'sim'|'nao'|'duvida'|'outro_assunto',confianca}; o sistema registra e responde; não afirme que emitiu nem que aguarda liberação. Recusa ou pedido de outro dia/período: intencao='nao' E acao='iniciar_lote' com o novo parametros.dia ou desde; senão acao=null.
 8. Homologação: só mencione se fatos.avisarHomologacao=true, uma vez, em palavras simples ("é teste, sem valor fiscal"); depois nunca.
 9. Se voce perceber repetição ou erro no histórico, corrija em UMA frase curta e continue, sem desculpas repetidas.
-11. Antes de qualquer acao anuncie em 1 frase, com suas palavras, o que faz e quem faz o próximo passo, com o porque.
+11. Antes de qualquer acao anuncie em 1 frase, com suas palavras, o que faz e quem faz o que a seguir, com o porque.
 13. "ok"/"beleza" do médico sem passo novo: fala [] e reacao com emoji, ou uma frase só.
 14. "Pode emitir"/"emite" antes do resumo do lote: diga que já monta o resumo com quantidade e total para confirmar; não pergunte de novo.
 15. Tom de colega, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
@@ -158,7 +158,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
-    if(/\bum paciente\b/i.test(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
+    if(consultaNaoIdentificada(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
       if (!fatos.agenda.conectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed')) return 'AGENDA_NAO_CONECTADA'; }
     if(d.parametros?.paciente&&(!texto.includes(d.parametros.paciente.evidencia)||!d.parametros.paciente.evidencia.includes(d.parametros.paciente.nome)))return 'PACIENTE_SEM_EVIDENCIA';
@@ -249,4 +249,10 @@ export function fimPeriodoDecisao(d: DecisaoConversa, agora: Date, texto: string
  if(nome.startsWith('semana'))fim.setUTCDate(fim.getUTCDate()+6);
  else {fim.setUTCMonth(fim.getUTCMonth()+1);fim.setUTCDate(0);}
  return fim.toISOString().slice(0,10);
+}
+
+/** Pedido de orientação ou escolha sem identidade não é continuação de uma seleção antiga. */
+export function consultaNaoIdentificada(texto:string):boolean {
+ const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+ return /\b(?:um|meu|o) paciente\b/.test(t)&&/\b(?:duas|varias|mais de uma|so (?:uma|de uma)|escolh|qual|como)\b/.test(t);
 }
