@@ -21,6 +21,7 @@ import { processarComunicacaoMedico } from '../src/onboarding/processar-comunica
 import { MemoriaConversaMedico } from '../src/onboarding/contexto-conversa-medico.js';
 import { HistoricoComunicacaoEmMemoria } from '../src/onboarding/historico-comunicacao-repositorio.js';
 import { ExtratorRespostaMedicoNvidia } from '../src/io/nvidia/extrator-resposta-medico.js';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 import type { AtendimentoRepositorio } from '../src/atendimento/atendimento-repositorio.js';
 
 const medicoId = '11111111-1111-4111-8111-111111111111';
@@ -483,7 +484,7 @@ async function conversaComLinkRealFalso() {
         await historico.reservar(medicoId, 'simulado', chave); await historico.gravarAcao(medicoId, 'simulado', chave, acao, agora.toISOString()); await historico.liberar(medicoId, 'simulado', chave);
     }
     registrarTextoLink = async e => { await memoria.registrar(e.medicoId, 'conversa', `noto:agenda:link:${e.linkId}:${e.indice}`, e.texto, 'noto'); };
-    const completar = vi.fn(async (_chave: string, _modelo: string, mensagens: Array<{ content: string }>) => mensagens[0].content.startsWith('Resuma')
+    const completar = vi.fn<typeof completarOpenAi>(async (_chave, _modelo, mensagens) => String(mensagens[0]?.content).startsWith('Resuma')
         ? '{"resumo":"O médico recebeu o motivo da conexão e a orientação do link seguro."}' : JSON.stringify({fala:introducaoLinkV2,acao:'pedir_link_agenda'}));
     const enviarLink = vi.fn((id: string, opcoes?: { reenvio?: boolean; fala?:readonly string[] }) => links.solicitarLinkCofre(id, 'tribemd', opcoes));
     const aoConversar = vi.fn(async (_fala: string[]) => {});
@@ -491,7 +492,7 @@ async function conversaComLinkRealFalso() {
         conversador:new ConversadorMedico('k','m',completar), aoConversar, ferramentas:ferramentasLinkV2(enviarLink), enviarLinkCofreAgenda:enviarLink,
         listarConsultasSemNota:vi.fn(), lerContextoConexao:(id:string, instante:Date)=>links.lerContextoConexao(id, instante),
         extratorResposta:{extrair:async()=>({temNota:'fora_do_assunto' as const,desde:null,confianca:.95})},
-        lerEstado:async()=>({estado:{fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:{nome:null,conectada:false},ultimaNota:null}}),log:vi.fn() };
+        lerEstado:async()=>({estado:{agora:new Date(),fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:{nome:null,conectada:false},ultimaNota:null}}),log:vi.fn() };
     const turno = (chave: string, texto: string) => processarComunicacaoMedico({medicoId,chaveConversa:'conversa',chaveProcessamento:chave,agora:new Date(),respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
     return {banco,memoria,completar,enviarLink,aoConversar,turno};
 }
