@@ -616,7 +616,7 @@ it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e hor�
  const interpretar=vi.fn(async()=>({
    dominio:'agenda' as const,objetivo:'consultar' as const,objeto:'consultas' as const,granularidade:'colecao' as const,
    periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito' as const},paciente:null,
-   restricoes:{naoEmitir:false,somenteLeitura:true},faltando:[] as const,confianca:.98
+   restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.98
  }));
  Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
  c.executar.mockResolvedValueOnce({
@@ -631,6 +631,8 @@ it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e hor�
  expect(c.executar).toHaveBeenCalledOnce();
  expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
  expect(c.guardarPeriodo).toHaveBeenCalledWith('m','2026-10-19');
+ const replanejamento=JSON.parse(String(c.completar.mock.calls[0]![2][1]!.content));
+ expect(replanejamento.acoesPermitidas).not.toContain('iniciar_lote');
  const falas=c.enviar.mock.calls.flatMap(([fala])=>fala).join(' ');
  expect(falas).toContain('encontrei 2 consultas');
  expect(falas).not.toMatch(/diga o dia|dia e hor[aá]rio/i);
