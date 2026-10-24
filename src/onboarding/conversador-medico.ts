@@ -171,6 +171,10 @@ export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined, private readonly completar: typeof completarOpenAi) {}
   async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; fatos: FatosConversa; agora: Date;
     acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
+    const resultado = entrada.resultadoFerramenta as { ferramenta?: string; ok?: boolean; motivo?: string } | undefined;
+    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias'].includes(resultado.ferramenta ?? '') &&
+        ['LEITURA_INCOMPLETA', 'FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO'].includes(resultado.motivo ?? ''))
+      return { fala: ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'], acao: null };
     try {
       const resposta = respostaSchema.parse(JSON.parse(await this.consultar(PROMPT_CONVERSA, { ...entrada, calendario:calendarioConversa(entrada.agora) })));
       resposta.fala=resposta.fala.filter(Boolean);

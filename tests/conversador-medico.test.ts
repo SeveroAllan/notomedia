@@ -237,3 +237,9 @@ it('dia único válido supre PERIODO_NECESSARIO; dia inválido é PERIODO_INVALI
  expect(validarAcaoConversa({fala:['Ok'],acao:'iniciar_lote',parametros:{dia:'2026-10-19'}},conectado,['iniciar_lote'],'sim',agora)).toBeNull();
  expect(validarAcaoConversa({fala:['Ok'],acao:'iniciar_lote',parametros:{dia:'2026-10-22'}},conectado,['iniciar_lote'],'sim',agora)).toBe('PERIODO_INVALIDO');
 });
+it('falha de leitura da agenda não promete retorno sem mecanismo, mesmo que o modelo prometa',async()=>{
+ const completar=vi.fn(async()=>JSON.stringify({fala:['Vou tentar de novo e te aviso assim que conseguir.'],acao:null}));
+ const r=await new ConversadorMedico('k','m',completar).responder({...entrada,resultadoFerramenta:{ferramenta:'iniciar_lote',ok:false,motivo:'LEITURA_INCOMPLETA'}});
+ expect(r.fala).toEqual(['Não consegui ler sua agenda agora. Tento de novo quando você pedir.']);
+ expect(r.acao).toBeNull();expect(completar).not.toHaveBeenCalled();
+});
