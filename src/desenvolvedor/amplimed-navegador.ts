@@ -133,7 +133,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
     page.on('response', r => { try { const u = new URL(r.url()); if (r.request().resourceType() === 'document' || r.request().method() !== 'GET') respostas.push(r.request().method() + ' ' + u.host + u.pathname.split('/').slice(0, 3).join('/') + ' ' + r.status()); } catch { /* ignora */ } });
     page.setDefaultTimeout(12000);
     context.on('page', p => { if (p !== page) void p.close().catch(() => {}); });
-    const limite = Date.now() + (opcoes.tempoMs ?? 40000);
+    let limite = Date.now() + (opcoes.tempoMs ?? 40000);
     signal?.throwIfAborted();
     await page.goto(loginAmplimed, { waitUntil: 'domcontentloaded', timeout: 30000 });
     // Sessão reutilizada: com cookies válidos a raiz já cai na área logada, sem formulário.
@@ -189,6 +189,8 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
         if (!opcoes.aoPedirCodigo2fa || tentativasCodigo >= 2) { console.warn('AMPLIMED_2FA_DESAFIO sem_canal_codigo'); return 'PRECISA_VERIFICACAO'; }
         tentativasCodigo++;
         console.warn('AMPLIMED_2FA_DESAFIO pedindo_codigo tentativa=' + tentativasCodigo);
+        // A espera humana/assistida pelo código tem janela própria; o teto do login não pode expirar durante ela.
+        limite = Math.max(limite, Date.now() + 300_000);
         const codigo = await opcoes.aoPedirCodigo2fa().catch(() => null);
         if (!codigo || !/^\d{6}$/.test(codigo)) { console.warn('AMPLIMED_2FA_DESAFIO sem_resposta'); return 'PRECISA_VERIFICACAO'; }
         if (!await preencherCodigo2fa(page, codigo)) { console.warn('AMPLIMED_2FA_DESAFIO formulario_nao_reconhecido'); return 'FORMULARIO_NAO_RECONHECIDO'; }
