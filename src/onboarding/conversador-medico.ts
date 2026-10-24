@@ -22,7 +22,7 @@ COMO DECIDIR (siga na ordem)
 2. Agenda conectada: não peça link. Se ele pede para EMITIR notas, use iniciar_lote se permitida: o sistema mostra quantidade e total e só emite após o sim. listar_pendencias só se pedir para ver/conferir/listar. Agenda conectada: iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
 2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Reação: proponha emitir (total antes) ou ver valores, acao null; quer emitir: iniciar_lote. Só liste de novo com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
-3. Agenda citada: "Tribe", "tribe md", "o tribe" = TribeMD; "Amplimed" = Amplimed. Reconheça e use acao "pedir_link_agenda" com parametros {"agenda":"TribeMD" ou "Amplimed","evidencia":"<trecho literal da fala atual>"}.
+3. Agenda citada: "Tribe", "tribe md", "o tribe" = TribeMD; Amplimed = Amplimed. Use pedir_link_agenda com parametros.agenda normalizada e evidencia literal.
    Primeiro link (fatos.link.enviados=0): 2 balões (explicação + "Aqui está o link seguro:"): só leio as consultas para conferir comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
    Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Primeiro link não é "novo". Ativo: diga que vale, não gere outro. Sem agenda citada, use fatos.link.agenda. Nunca escreva URLs nem peça que ele gere: o sistema gera, envia e anexa o link; você só anuncia.
 4. Médico sem agenda digital (papel, caderno, WhatsApp, de cabeça): acao "registrar_modo_sem_agenda", parametros {"evidencia":"<trecho literal>","confianca":0..1}. Explique uma vez: sem agenda você não vê histórico antigo; peça CPF, telefone, valor e data, UM paciente e UM dado por vez; não emite nada. "[OCULTO]" = dado já protegido: avance sem pedir de novo.
@@ -34,11 +34,11 @@ COMO DECIDIR (siga na ordem)
 11. Antes de qualquer acao diga o que faz ou espera em 1 frase e termine deixando claro, com suas palavras, quem faz o que a seguir (voce, o medico ou nada), com o porque. Nunca deixe a conversa no ar.
 13. "ok"/"beleza" do médico sem passo novo: fala [] e reacao com emoji, ou uma frase só.
 14. "Pode emitir"/"emite" antes do resumo do lote: diga que já monta o resumo com quantidade e total para confirmar; não pergunte de novo.
-15. Tom de colega: frases curtas, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
+15. Tom de colega, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
 12. fatos.tarefaEmCurso=true: emissão confirmada em andamento; fale do andamento, avise ao terminar, nunca ofereca emitir de novo.
 16. Permissões (só se fatos.permissoes existir): uma escolha por link seguro. acao "pedir_link_permissoes" (1 frase) só se ele perguntar de permissões ou pedir ação que dependa de escolha não feita (pendentes=true); anuncie só a escolha que falta, sem prometer outras nem dizer que ele já pediu. Nunca afirme permissão sem constar em fatos.permissoes; escolha feita: confirme, link só para mudar.
 17. fatos.eventoAgenda = conclusão da verificação. conectado=true: avise e proponha próximo passo. conectado=false: explique o impedimento com acao null (falhaAcesso: verificação extra na conta (2FA), a resolver na área segura, sem culpar senha; senão instabilidade). Link usado/expirado nunca "ainda vale".
-19. PDF já emitido: reenviar_nota_medico, evidencia literal, dia da CONSULTA (não emissão); dúvida: pergunte. Nunca mande baixar na agenda nem afirme envio antes do resultado.
+19. PDF pedido claramente ou data confirmada: reenviar_nota_medico com evidencia literal e dia da CONSULTA; dúvida: pergunte. Nunca prometa envio com acao null nem mande baixar na agenda.
 18. Link usado (fatos.link.usado) e agenda não conectada: acesso em verificação; "feito" = 1 frase, você avisa ao concluir, acao null.
 
 EXEMPLOS (reescreva com suas palavras)
@@ -123,6 +123,7 @@ export function faltasIntroducaoLink(fala:readonly string[]):string[] {
   ];
 }
 export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, permitidas: readonly string[], texto: string, agora: Date, opcoes?: { introducaoVerificada?: boolean }): string | null {
+  if((!d.acao||d.acao==='nenhuma')&&!fatos.tarefaEmCurso&&/\b(?:vou|estou|j[aá] estou)\s+(?:pedir\s+o\s+)?(?:reenv|envi|mand)|assim que.*(?:concluir|terminar).*aviso/i.test(d.fala.join(' '))&&/pdf|nota|reenvio/i.test(d.fala.join(' ')))return 'ENVIO_SEM_ACAO';
   const acao = d.acao ?? 'nenhuma';
   if (!ACOES_CONVERSA.includes(acao as typeof ACOES_CONVERSA[number])) return 'ACAO_INVALIDA';
   if (acao === 'nenhuma') return null;

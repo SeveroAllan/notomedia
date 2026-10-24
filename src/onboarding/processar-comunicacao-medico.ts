@@ -158,6 +158,10 @@ export async function processarComunicacaoMedico(
         decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'o último lote terminou com erro; se o médico quer emitir de novo, use iniciar_lote anunciando; se só conversa, acao null',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
+      if(chamadas<orcamento && motivo==='ENVIO_SEM_ACAO') {
+        decisao=await decidir(permitidas,undefined,{motivo:'Não existe envio em andamento. Pedido claro de PDF: use reenviar_nota_medico com dia e evidencia literal; se faltar data, pergunte. Não prometa tarefa sem ação.',faltou:[]});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
       if(chamadas<orcamento && motivo==='PERIODO_NECESSARIO') {
         deps.log('info','CONVERSA_PERIODO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo:'a acao precisa de parametros.desde ISO (use calendario com o periodo que o medico disse)',faltou:['parametros.desde']});

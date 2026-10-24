@@ -533,3 +533,11 @@ it('conclusão com modelo insistindo em ação cai no texto determinístico da c
  expect(enviada).not.toMatch(/confira login/i);
  expect(enviada).not.toMatch(/Aqui está o link/);
 });
+it('promessa de PDF sem ação é corrigida para execução, não tarefa imaginária',async()=>{
+ const c=cenario();c.fatos.permissoes={emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false};c.deps.ferramentas.permitidas=()=>['reenviar_nota_medico'];
+ c.completar.mockImplementation(async(_k:any,_m:any,msgs:any)=>{
+  const x=JSON.parse(msgs[1].content);
+  return JSON.stringify(x.resultadoFerramenta?{fala:['Envio aceito.'],acao:null}:x.correcao?{fala:['Vou reenviar o PDF.'],acao:'reenviar_nota_medico',parametros:{dia:'2026-10-20',evidencia:'Pode me mandar o PDF'}}:{fala:['Vou pedir o reenvio do PDF. Assim que concluir te aviso.'],acao:null});
+ });
+ await c.turno('pdf','Pode me mandar o PDF');expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]?.[0]).toMatchObject({acao:'reenviar_nota_medico'});
+});

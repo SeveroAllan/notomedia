@@ -261,3 +261,6 @@ it('limite do leitor Amplimed é explicado como janela, não proibição fiscal 
 it('calendário informa limite real de leitura sem excluir30setembro',()=>{
  const c=calendarioConversa(new Date('2026-10-24T15:00Z'));expect(c.amplimedDesde).toBe('2026-09-23');
 });
+it.each(['Vou pedir o reenvio do PDF. Assim que concluir te aviso.','Estou enviando sua nota por aqui.'])('não promete envio sem ação real: %s',fala=>{
+ expect(validarAcaoConversa({fala:[fala],acao:null},{...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}},['reenviar_nota_medico'],'Pode me mandar o PDF',agora)).toBe('ENVIO_SEM_ACAO');
+});
