@@ -75,7 +75,7 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
 const ultimosBloqueadosAmplimed: string[] = [];
 /** Preenche o desafio de 2FA: seis caixas de um dígito (ou um campo único) e o botão "Confirmar". Nunca registra o código. */
 async function preencherCodigo2fa(page: Page, codigo: string): Promise<boolean> {
-  const caixas = page.locator('main input:visible, form input:visible');
+  const caixas = page.locator('input:visible');
   let indices: number[] = [];
   try {
     const total = await caixas.count();
@@ -91,8 +91,12 @@ async function preencherCodigo2fa(page: Page, codigo: string): Promise<boolean> 
       for (let i = 0; i < 6; i++) await caixas.nth(indices[i]!).fill(codigo[i]!);
     } else if (indices.length === 1) {
       await caixas.nth(indices[0]!).fill(codigo);
-    } else return false;
-    await page.getByRole('button', { name: /^confirmar$/i }).first().click({ timeout: 5000 });
+    } else {
+      const rotulos = await page.evaluate(`[...document.querySelectorAll('button')].map(e => (e.innerText || '').trim().replace(/\s+/g, ' ').slice(0, 30)).filter(Boolean).slice(0, 8)`) as string[];
+      console.warn('AMPLIMED_2FA_DESAFIO caixas=' + indices.length + ' botoes=' + JSON.stringify(rotulos));
+      return false;
+    }
+    await page.getByRole('button', { name: /confirmar/i }).first().click({ timeout: 5000 });
     return true;
   } catch { return false; }
 }
