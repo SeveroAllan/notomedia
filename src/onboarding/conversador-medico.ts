@@ -99,7 +99,7 @@ export function calendarioConversa(agora: Date) {
   };
   const inicioAmplimed=new Date(hoje+'T12:00:00Z');inicioAmplimed.setUTCDate(inicioAmplimed.getUTCDate()-31);
   return { hoje, amplimedDesde:inicioAmplimed.toISOString().slice(0,10), instanteIso: agora.toISOString(), fuso:'America/Sao_Paulo',
-    semana_atual:inicio(0,0), semana_passada:inicio(0,1), semana_retrasada:inicio(0,2), mes_passado:inicio(1,0), mes_retrasado:inicio(2,0) };
+    semana_passada:inicio(0,1), semana_retrasada:inicio(0,2), mes_passado:inicio(1,0), mes_retrasado:inicio(2,0) };
 }
 export function normalizarAgenda(nome: string | undefined): string | null {
   if (!nome) return null;
@@ -114,8 +114,6 @@ export function diaDecisao(d: DecisaoConversa, agora: Date): string | null {
 export function periodoDecisao(d: DecisaoConversa, agora: Date, texto?: string): string | null {
   const calendario = calendarioConversa(agora);
   const normalizado=texto?.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
-  const semanaAtual=!!normalizado && /\b(?:(?:esta|essa|dessa|nesta) semana|semana atual)\b/.test(normalizado);
-  if(semanaAtual) return validarInicioRetroativo(calendario.semana_atual,agora);
   const literal=normalizado?.match(/\b(semana passada|semana retrasada|mes passado|mes retrasado)\b/)?.[1].replace(' ','_');
   if(literal && literal in calendario) return validarInicioRetroativo(calendario[literal as 'semana_passada'|'semana_retrasada'|'mes_passado'|'mes_retrasado'],agora);
   const informado=validarInicioRetroativo(d.parametros?.periodo ? calendario[d.parametros.periodo] : d.parametros?.desde ?? null, agora);
@@ -265,11 +263,9 @@ export function afirmaFatoDaAgendaSemFerramenta(texto: string, decisao: Pick<Dec
 export function fimPeriodoDecisao(d: DecisaoConversa, agora: Date, texto: string): string | null {
  const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
  if(/\bdesde\b/.test(t))return null;
- const calendario=calendarioConversa(agora);
- if(/\b(?:(?:esta|essa|dessa|nesta) semana|semana atual)\b/.test(t))return calendario.hoje;
  const nome=t.match(/\b(semana passada|semana retrasada|mes passado|mes retrasado)\b/)?.[1].replace(' ','_')??d.parametros?.periodo;
  if(!nome)return null;
- const inicio=calendario[nome as 'semana_passada'];
+ const calendario=calendarioConversa(agora), inicio=calendario[nome as 'semana_passada'];
  if(!inicio)return null;
  const fim=new Date(inicio+'T12:00:00Z');
  if(nome.startsWith('semana'))fim.setUTCDate(fim.getUTCDate()+6);
@@ -286,12 +282,8 @@ export function consultaNaoIdentificada(texto:string):boolean {
 /** Pedido concreto de leitura não pode virar oferta futura nem pedir recorte já informado. */
 export function leituraAtualVirouOferta(texto:string,d:Pick<DecisaoConversa,'acao'|'fala'>,fatos:Pick<FatosConversa,'agenda'|'lote'>,permitidas:readonly string[]):boolean {
  if(d.acao&&d.acao!=='nenhuma'||!fatos.agenda.conectada||!permitidas.includes('listar_pendencias')||['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??''))return false;
- const normalizar=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
- const t=normalizar(texto), fala=normalizar(d.fala.join(' '));
+ const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
  if(/como (?:funciona|faco)|so (?:estou )?(?:entendendo|explic)|se eu|quando a|nao (?:consulte|busque|confira)/.test(t))return false;
- const periodoColetivo=/\b(?:(?:esta|essa|dessa|nesta) semana|semana atual|semana passada|semana retrasada|mes passado|mes retrasado)\b/.test(t);
- const pedidoDireto=/(?:\b(?:mostre|confira|liste|veja|busque|consegue conferir)\b|quero (?:olhar|ver|conferir)|\bme (?:fale|conte|diga)(?: sobre)?\b)/.test(t);
- if(!/consult|atend|agenda|pendencia/.test(t)||!pedidoDireto)return false;
- if(periodoColetivo && /(?:preciso|me diga|informe|qual)[^.!?]{0,80}\b(?:dia|data|horario)\b|\bdia e horario\b/.test(fala))return true;
- return /quando (?:quiser|voce pedir)|se quiser|posso (?:buscar|conferir|consultar|listar)|e so (?:avisar|pedir)/.test(fala);
+ if(!/consult|atend|agenda|pendencia/.test(t)||!/(?:\b(?:mostre|confira|liste|veja|busque|consegue conferir)\b|quero (?:olhar|ver|conferir))/.test(t))return false;
+ return /quando (?:quiser|voce pedir)|se quiser|posso (?:buscar|conferir|consultar|listar)|e so (?:avisar|pedir)/i.test(d.fala.join(' '));
 }
