@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { expect, it, vi } from 'vitest';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 import { ConversadorMedico, type FatosConversa } from '../src/onboarding/conversador-medico.js';
 import { PostgresMemoriaConversaMedico, type PlanoConversa } from '../src/onboarding/memoria-conversa.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
@@ -28,7 +29,7 @@ it('persiste plano cognitivo sem misturar estado interno com falas', async () =>
 });
 
 it('decisor recebe o plano anterior e pode devolver estado operacional atualizado', async () => {
-  const completar = vi.fn(async () => JSON.stringify({
+  const completar = vi.fn<typeof completarOpenAi>(async () => JSON.stringify({
     fala: ['Vou montar o total para você confirmar.'],
     acao: 'iniciar_lote',
     parametros: { desde: '2026-10-12' },
@@ -59,6 +60,6 @@ it('decisor recebe o plano anterior e pode devolver estado operacional atualizad
   });
 
   expect(resposta.plano?.etapa).toBe('montar resumo do lote');
-  const entradaModelo = JSON.parse(completar.mock.calls[0][2][1].content);
+  const entradaModelo = JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
   expect(entradaModelo.plano).toEqual(plano);
 });
