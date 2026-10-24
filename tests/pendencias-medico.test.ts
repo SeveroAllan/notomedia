@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { PendenciasMedico, formatarPendencias, type ContextoPendencias, type RepositorioContextoPendencias } from '../src/onboarding/pendencias-medico.js';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 const agora = new Date('2026-10-21T01:00Z');
 const resultado = { ok: true, total: 23, consultas: Array.from({ length: 20 }, (_, i) => ({ paciente: `Pessoa Ficticia ${String.fromCharCode(65 + i)}`, dataHora: '2026-10-19T14:00Z', valorCentavos: 30000 })) };
 it('lista determinística mantém nome + data, informa restantes e mascara memória', () => {
@@ -101,10 +102,10 @@ it('pós-conexão sem início pergunta data antes de sincronizar ou listar', asy
 });
 it('classificador independente usa contexto e relógio, sem depender de acao; JSON indevido não destrava', async () => {
   const { classificarPendencias } = await import('../src/onboarding/pendencias-medico.js');
-  const completar = vi.fn(async () => '{"verificar":true,"desde":"2026-10-19","moldura":"Veja o que encontrei."}');
+  const completar = vi.fn<typeof completarOpenAi>(async () => '{"verificar":true,"desde":"2026-10-19","moldura":"Veja o que encontrei."}');
   const entrada = { texto: 've as penentes desdi onten', mensagens: ['Quer verificar suas pendências?'], agora, aguardandoData: false };
   expect(await classificarPendencias('key','model',completar,entrada)).toMatchObject({ verificar: true, desde: '2026-10-19' });
-  expect(completar.mock.calls[0][2][1].content).toContain('2026-10-20'); expect(completar.mock.calls[0][2][1].content).toContain('Quer verificar');
+  expect(completar.mock.calls[0]![2][1]!.content).toContain('2026-10-20'); expect(completar.mock.calls[0]![2][1]!.content).toContain('Quer verificar');
   completar.mockResolvedValue('{"verificar":true,"desde":"2026-10-19","acao":"emitir"}');
   expect((await classificarPendencias('key','model',completar,entrada)).verificar).toBe(false);
 });
@@ -147,9 +148,9 @@ it('contagem lê ferramenta e chama continuação sem reenviar a lista já apres
 });
 it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as notaas'])('protocolo IA distingue emissão atual com contexto: %s',async texto=>{
  const {classificarPendencias}=await import('../src/onboarding/pendencias-medico.js');
- const completar=vi.fn(async()=>'{"verificar":true,"emitir":true,"desde":null,"moldura":"Conferi esse período."}');
+ const completar=vi.fn<typeof completarOpenAi>(async()=>'{"verificar":true,"emitir":true,"desde":null,"moldura":"Conferi esse período."}');
  expect(await classificarPendencias('k','m',completar,{texto,mensagens:['173 consultas sem nota desde 03/09/2026'],agora,aguardandoData:false})).toMatchObject({emitir:true,verificar:false});
- expect(completar.mock.calls[0][2][0].content).toContain('Pedido ATUAL de emissão');expect(completar.mock.calls[0][2][1].content).toContain(texto);
+ expect(completar.mock.calls[0]![2][0]!.content).toContain('Pedido ATUAL de emissão');expect(completar.mock.calls[0]![2][1]!.content).toContain(texto);
 });
 it('agrupa por data sem nome solto e mantém a memória mascarada',()=>{
  const r=formatarPendencias({ok:true,total:3,consultas:[
