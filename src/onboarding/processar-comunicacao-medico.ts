@@ -147,6 +147,10 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      if(chamadas<orcamento && motivo==='LEITURA_ATUAL_SEM_ACAO') {
+        decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte atual; se faltar identificação, pergunte só o dado necessário. Não repita oferta futura.',faltou:[]});
+        motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      }
       if(chamadas<orcamento && motivo==='PACIENTE_NECESSARIO') {
         decisao=await decidir([],undefined,{motivo:'o paciente e a consulta ainda não foram identificados; pergunte nome e data/horário, sem herdar o período anterior nem listar todos',faltou:['paciente','consulta']});
         motivo=validarAcaoConversa(decisao,fatos,[],texto,agora);
@@ -208,7 +212,7 @@ export async function processarComunicacaoMedico(
       let fala=decisao.fala, falaMemoria:string[]|undefined;
       if(motivo) {
         deps.log('erro',`CONVERSA_ACAO_RECUSADA ${motivo}`);
-        fala=motivo==='FATO_AGENDA_NAO_VERIFICADO' ? [consultaNaoIdentificada(texto)?'Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.':'Preciso consultar a agenda antes de afirmar o estado dessa consulta. Não preparei nem emiti nada.'] : motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
+        fala=motivo==='PACIENTE_NECESSARIO'?['Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.']:motivo==='LEITURA_ATUAL_SEM_ACAO'?['Não consegui iniciar a conferência desse pedido. Não preparei nem emiti nada.']:motivo==='FATO_AGENDA_NAO_VERIFICADO' ? [consultaNaoIdentificada(texto)?'Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.':'Preciso consultar a agenda antes de afirmar o estado dessa consulta. Não preparei nem emiti nada.'] : motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
       } else {
         const desde=periodoDecisao(decisao,agora,texto);
         if(desde) { await deps.ferramentas.guardarPeriodo(medicoId,desde); fatos.periodo={desde,origem:'resposta_atual'}; }

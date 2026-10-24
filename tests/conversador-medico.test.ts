@@ -144,7 +144,7 @@ it('sem lista recente a leitura continua permitida; lista recente não bloqueia 
 });
 
 it('prompt avança após lista recente e orienta pedido explícito para nova leitura',()=>{
- expect(PROMPT_CONVERSA).toContain('2b. Se fatos.listaRecente=true');
+ expect(PROMPT_CONVERSA).toContain('2b. Pedido atual vence histórico/resumo.');
  expect(PROMPT_CONVERSA).toContain('parametros.pedidoExplicito=');
  const exemplo=PROMPT_CONVERSA.match(/^- fatos.listaRecente=true, medico: "Certo\." -> (\{.*\})$/m);
  expect(exemplo).not.toBeNull();const d=JSON.parse(exemplo![1]);

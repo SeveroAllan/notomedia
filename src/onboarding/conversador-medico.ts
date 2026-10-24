@@ -22,7 +22,7 @@ COMO DECIDIR (siga na ordem)
 1. Resposta à última pergunta: reconheça e avance, sem repetir.
 2. Agenda conectada: não peça link. Para EMITIR notas ou preparar/resumir o total, iniciar_lote mostra quantidade/total e só emite após o sim. "não emita"/"aguarde" proíbe emitir, não preparar. listar_pendencias só se pedir para ver/conferir/listar consultas, sem total/proposta. iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
-2b. Se fatos.listaRecente=true, a lista JA foi enviada: NAO use listar_pendencias nem repita a lista. Reação: proponha emitir (total antes) ou ver valores, acao null; quer emitir: iniciar_lote. Só liste de novo com parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
+2b. Pedido atual vence histórico/resumo. Conferir agora: listar_pendencias ou esclareça dado faltante; não ofereça busca futura. fatos.listaRecente=true: reação sem pedido novo usa acao null; pedido explícito de nova leitura usa parametros.pedidoExplicito={"evidencia":"<trecho literal>","confianca":0..1}.
 3. Agenda citada: "Tribe", "tribe md", "o tribe" = TribeMD; Amplimed = Amplimed. Use pedir_link_agenda com parametros.agenda normalizada e evidencia literal.
    Primeiro link (fatos.link.enviados=0): 2 balões (explicação + "Aqui está o link seguro:"): só leio as consultas para conferir comprovantes e emitir; login e senha só no link seguro; nada é enviado a pacientes.
    Reenvio (fatos.link.enviados>0): UM balão curto, sem repetir leitura/senha/pacientes; termine com "Aqui está o link:". Primeiro link não é "novo". Ativo: diga que vale, não gere outro. Sem agenda citada, use fatos.link.agenda. Nunca escreva URLs nem peça que ele gere: o sistema gera, envia e anexa o link; você só anuncia.
@@ -129,6 +129,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (!ACOES_CONVERSA.includes(acao as typeof ACOES_CONVERSA[number])) return 'ACAO_INVALIDA';
   // Todas as saídas, inclusive as produzidas por uma correção, passam pelo mesmo contrato factual.
   if (afirmaFatoDaAgendaSemFerramenta(texto,d,fatos,permitidas)) return 'FATO_AGENDA_NAO_VERIFICADO';
+  if (acao === 'nenhuma' && consultaNaoIdentificada(texto) && /mais recente|mais antig|ultim[oa]|primeir[oa]/i.test(d.fala.join(' ')))return 'PACIENTE_NECESSARIO';
+  if (acao === 'nenhuma' && leituraAtualVirouOferta(texto,d,fatos,permitidas)) return 'LEITURA_ATUAL_SEM_ACAO';
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
   if (!d.fala.some(t=>t.trim())) return 'anuncie a acao com suas palavras';
@@ -257,4 +259,13 @@ export function fimPeriodoDecisao(d: DecisaoConversa, agora: Date, texto: string
 export function consultaNaoIdentificada(texto:string):boolean {
  const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
  return /\b(?:um|meu|o) paciente\b/.test(t)&&/\b(?:duas|varias|mais de uma|so (?:uma|de uma)|escolh|qual|como)\b/.test(t);
+}
+
+/** Uma oferta futura não atende um pedido concreto atual; perguntas de funcionamento ficam sem ação. */
+export function leituraAtualVirouOferta(texto:string,d:Pick<DecisaoConversa,'acao'|'fala'>,fatos:Pick<FatosConversa,'agenda'|'lote'>,permitidas:readonly string[]):boolean {
+ if(d.acao&&d.acao!=='nenhuma'||!fatos.agenda.conectada||!permitidas.includes('listar_pendencias')||['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??''))return false;
+ const t=texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+ if(/como (?:funciona|faco)|so (?:estou )?(?:entendendo|explic)|se eu|quando a|nao (?:consulte|busque|confira)/.test(t))return false;
+ if(!/consult|atend|agenda|pendencia/.test(t)||!/(?:\b(?:mostre|confira|liste|veja|busque|consegue conferir)\b|quero (?:olhar|ver|conferir))/.test(t))return false;
+ return /quando (?:quiser|voce pedir)|se quiser|posso (?:buscar|conferir|consultar|listar)|e so (?:avisar|pedir)/i.test(d.fala.join(' '));
 }

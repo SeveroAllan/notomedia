@@ -260,7 +260,7 @@ it.each([
 });
 it('introdução recusada após a correção cai no template verificado e o link é executado',async()=>{
  const {FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA}=await import('../src/onboarding/falas.js');
- const c=cenario();c.deps.orcamentoChamadas=3;
+ const c=cenario();Object.assign(c.deps,{orcamentoChamadas:3});
  c.completar.mockResolvedValueOnce(JSON.stringify({fala:['a','b','c'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}))
   .mockResolvedValueOnce(JSON.stringify({fala:['Só leio a agenda. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}}))
   .mockResolvedValueOnce(JSON.stringify({fala:['Link seguro enviado. Ele vale por 15 minutos.'],acao:null}));
@@ -567,4 +567,48 @@ it('fato inventado após correção de anúncio também é recusado sem narrador
  .mockResolvedValueOnce(JSON.stringify({fala:['Não há nenhuma consulta hoje.'],acao:null}));
  await c.turno('anuncio-pos-correcao','Confira as consultas de hoje');expect(c.executar).not.toHaveBeenCalled();
  expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Preciso consultar/);expect(c.completar).toHaveBeenCalledTimes(2);
+});
+
+// Pedido concreto atual vence a explicação anterior, sem forçar consulta em perguntas de funcionamento.
+it.each(['Na consulta de hoje do Paciente Teste Um, quero olhar só a das 9h. Mostre primeiro qual você encontrou e o valor, sem preparar nem emitir.', 'Confira os atendimentos particulares de ontem, sem emitir.', 'Mostre as consultas desta semana.'])('consulta atual não vira oferta futura: %s',async texto=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-20',origem:'contexto_salvo'};Object.assign(c.deps,{orcamentoChamadas:3});
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Quando quiser posso buscar a consulta mais recente.'],acao:null}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir a seleção agora.'],acao:'listar_pendencias',parametros:{dia:'2026-10-20'}}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['Confira o resultado.'],acao:null}));
+ await c.turno('concreto',texto);expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).not.toContain('Quando quiser');
+});
+it('escolha indefinida não herda ordinal da explicação anterior',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};
+ Object.assign(c.deps,{orcamentoChamadas:3});
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Posso buscar só a mais recente.'],acao:null}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['Qual o nome do paciente e qual a data ou horário da consulta que você quer?'],acao:null}));
+ await c.turno('escolher','Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?');
+ expect(c.executar).not.toHaveBeenCalled();expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).not.toMatch(/mais recente/);
+});
+it.each(['E quando a mesma pessoa vem duas vezes no mês, dá para escolher só o atendimento mais recente? Só estou entendendo como funciona, não prepare nada agora.','Se eu pedir para conferir amanhã, como funciona?'])('explicação não força ferramenta: %s',async texto=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.completar.mockResolvedValue(JSON.stringify({fala:['Quando quiser, posso buscar o atendimento indicado.'],acao:null}));
+ await c.turno('explicacao',texto);expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledOnce();
+});
+it('recusa persistente de conferir não é oferecida como tarefa futura',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.completar.mockResolvedValue(JSON.stringify({fala:['Quando quiser posso buscar.'],acao:null}));
+ await c.turno('persistente','Confira os atendimentos de ontem.');expect(c.executar).not.toHaveBeenCalled();expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Não consegui iniciar/);
+});
+it('ordinal inventado persistente termina perguntando identificação sem nova narração livre',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.completar.mockResolvedValue(JSON.stringify({fala:['Posso buscar só a mais recente.'],acao:null}));
+ await c.turno('persistente','Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?');
+ expect(c.executar).not.toHaveBeenCalled();expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/nome do paciente/);expect(c.completar).toHaveBeenCalledTimes(2);
+});
+it('conversa contínua alterna explicação, leitura concreta e escolha sem herdar ordinal',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};Object.assign(c.deps,{orcamentoChamadas:3});
+ const responder=(fala:string,acao:string|null=null,parametros?:object)=>JSON.stringify({fala:[fala],acao,parametros});
+ c.completar.mockResolvedValueOnce(responder('Posso buscar a mais recente quando quiser.'));
+ await c.turno('explicar','E quando a mesma pessoa vem duas vezes no mês, dá para escolher só o atendimento mais recente? Só estou entendendo como funciona, não prepare nada agora.');
+ expect(c.executar).not.toHaveBeenCalled();
+ c.completar.mockResolvedValueOnce(responder('Quando quiser posso buscar a mais recente.')).mockResolvedValueOnce(responder('Vou conferir a consulta das 9h.','listar_pendencias',{dia:'2026-10-20',horario:'09:00'})).mockResolvedValueOnce(responder('Resultado da consulta.'));
+ await c.turno('ler','Na consulta de hoje do Paciente Teste Um, quero olhar só a das 9h. Mostre primeiro qual você encontrou e o valor, sem preparar nem emitir.');
+ expect(c.executar).toHaveBeenCalledOnce();
+ c.completar.mockResolvedValueOnce(responder('Posso buscar a mais recente.')).mockResolvedValueOnce(responder('Qual o nome e a data ou horário da consulta?'));
+ await c.turno('escolher','Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.at(-1)?.[0].join(' ')).toMatch(/nome e a data/);
 });
