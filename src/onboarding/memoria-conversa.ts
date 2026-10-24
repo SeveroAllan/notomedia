@@ -16,11 +16,18 @@ export interface MemoriaConversa {
   registrar(medicoId: string, conversa: string, id: string, texto: string, papel?: 'medico' | 'noto'): void | boolean | Promise<void | boolean>;
 }
 export type ResumoConversa = { resumo: string; ateId: string };
+export type PlanoConversa = {
+  objetivo: string;
+  etapa: string;
+  faltando: string[];
+  proximosPassos: string[];
+  aguardando: string | null;
+};
 
 export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   constructor(private readonly pool: pg.Pool) {}
 
-  async lerContextoParaModelo(medicoId: string, conversa: string) {
+  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa }> {
     const historicoRecente = await this.ler(medicoId, conversa);
     const marcas = {
       semAgendaDigital: await this.semAgendaDigital(medicoId, conversa),
@@ -28,7 +35,8 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
       boasVindasComunicadas: await this.temBoasVindas(medicoId, conversa),
     };
     const resumo = await this.lerResumo(medicoId, conversa);
-    return { historicoRecente, marcas, resumo };
+    const plano = await this.lerPlano(medicoId, conversa);
+    return plano ? { historicoRecente, marcas, resumo, plano } : { historicoRecente, marcas, resumo };
   }
 
   registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
@@ -43,6 +51,31 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
 
   registrarResumo(medicoId: string, conversa: string, resumo: string, ateId: string): Promise<void> {
     return this.gravarResumo(medicoId, conversa, resumo, ateId);
+  }
+
+  async registrarPlano(medicoId: string, conversa: string, plano: PlanoConversa): Promise<void> {
+    const seguro: PlanoConversa = {
+      objetivo: sanitizarTextoMedico(plano.objetivo),
+      etapa: sanitizarTextoMedico(plano.etapa),
+      faltando: plano.faltando.map(sanitizarTextoMedico),
+      proximosPassos: plano.proximosPassos.map(sanitizarTextoMedico),
+      aguardando: plano.aguardando ? sanitizarTextoMedico(plano.aguardando) : null,
+    };
+    await this.pool.query(`insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5)
+      on conflict (medico_id, mensagem_id) do update set texto=excluded.texto, papel=excluded.papel`,
+      [medicoId, conversa, 'contexto:plano_cognitivo', JSON.stringify(seguro), 'noto']);
+  }
+
+  async lerPlano(medicoId: string, conversa: string): Promise<PlanoConversa | null> {
+    const { rows } = await this.pool.query<{ texto: string }>(
+      'select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id=$3 limit 1',
+      [medicoId, conversa, 'contexto:plano_cognitivo']);
+    if (!rows[0]) return null;
+    try {
+      const plano = JSON.parse(rows[0].texto) as PlanoConversa;
+      if (!plano?.objetivo || !plano?.etapa || !Array.isArray(plano.faltando) || !Array.isArray(plano.proximosPassos)) return null;
+      return plano;
+    } catch { return null; }
   }
 
   async limparTudoDoMedico(medicoId: string): Promise<void> {
