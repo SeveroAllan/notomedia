@@ -158,7 +158,7 @@ export async function processarComunicacaoMedico(
         decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'o último lote terminou com erro; se o médico quer emitir de novo, use iniciar_lote anunciando; se só conversa, acao null',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
-      if(chamadas<orcamento && motivo==='ENVIO_SEM_ACAO') {
+      if(chamadas<orcamento && (motivo==='ENVIO_SEM_ACAO'||motivo==='PEDIDO_REENVIO_AUSENTE')) {
         decisao=await decidir(permitidas,undefined,{motivo:'Não existe envio em andamento. Pedido claro de PDF: use reenviar_nota_medico com dia e evidencia literal; se faltar data, pergunte. Não prometa tarefa sem ação.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
@@ -202,7 +202,7 @@ export async function processarComunicacaoMedico(
       let fala=decisao.fala, falaMemoria:string[]|undefined;
       if(motivo) {
         deps.log('erro',`CONVERSA_ACAO_RECUSADA ${motivo}`);
-        fala=corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
+        fala=motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
       } else {
         const desde=periodoDecisao(decisao,agora,texto);
         if(desde) { await deps.ferramentas.guardarPeriodo(medicoId,desde); fatos.periodo={desde,origem:'resposta_atual'}; }

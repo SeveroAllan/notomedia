@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa} from '../src/onboarding/conversador-medico.js';
+import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta} from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
@@ -266,4 +266,7 @@ it.each(['Vou pedir o reenvio do PDF. Assim que concluir te aviso.','Estou envia
 });
 it('não inventa indisponibilidade de PDF sem consultar ferramenta',()=>{
  expect(validarAcaoConversa({fala:['O sistema não encontrou o PDF disponível para reenvio da nota.'],acao:null},fatos,['reenviar_nota_medico'],'Pode reenviar agora o PDF da nota de23/10',agora)).toBe('ENVIO_SEM_ACAO');
+});
+it('pedido de PDF não vira correção de listagem da agenda',()=>{
+ expect(afirmaFatoDaAgendaSemFerramenta('PDF da consulta23/10',{fala:['Vou conferir23/10'],acao:null},{agenda:{nome:'amplimed',conectada:true}},['listar_pendencias','reenviar_nota_medico'])).toBe(false);
 });
