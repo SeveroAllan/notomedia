@@ -251,10 +251,11 @@ export async function processarComunicacaoMedico(
             ferramentasExecutadas++;
             return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});
           };
-          const r=await executarFerramenta(decisao,':anuncio');
+          const decisaoExecutada=decisao;
+          const r=await executarFerramenta(decisaoExecutada,':anuncio');
           if(r.jaRespondida) fala=[];
           else {
-            const tipo=CATALOGO_FERRAMENTAS.find(f=>f.nome===decisao.acao)?.tipo;
+            const tipo=CATALOGO_FERRAMENTAS.find(f=>f.nome===decisaoExecutada.acao)?.tipo;
             const podeReplanejar=orcamento>2 && tipo==='leitura' && r.dados!==undefined && chamadas<orcamento && ferramentasExecutadas<2;
             if(podeReplanejar) {
               if(r.falaAssinada) {
@@ -264,7 +265,7 @@ export async function processarComunicacaoMedico(
               const podePrepararAposLeitura=!interpretacaoSemantica||
                 (['preparar','emitir'].includes(interpretacaoSemantica.objetivo)&&!interpretacaoSemantica.restricoes.naoEmitir&&!interpretacaoSemantica.restricoes.somenteLeitura);
               const permitidasAposLeitura=deps.ferramentas.permitidas(fatos).filter(a=>{
-                if(a===decisao.acao) return false;
+                if(a===decisaoExecutada.acao) return false;
                 if(objetivoConsulta)return a==='nenhuma';
                 const ferramenta=CATALOGO_FERRAMENTAS.find(f=>f.nome===a);
                 return a==='nenhuma'||(a==='iniciar_lote'&&podePrepararAposLeitura)||ferramenta?.tipo==='leitura';
