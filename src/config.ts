@@ -32,6 +32,7 @@ export interface AppConfig {
   openaiApiKey?: string;
   openaiVisaoModel?: string;
   openaiTextoModel?: string;
+  openaiPlannerModel?: string;
   agenteFiscalAtivo?: boolean;
   retomadaRecusaSefinAtiva?: boolean;
   permissoesAtiva?: boolean;
@@ -77,6 +78,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     openaiApiKey: env['OPENAI_API_KEY']?.trim() || undefined,
     openaiVisaoModel: env['OPENAI_VISAO_MODEL']?.trim() || 'gpt-4o-mini',
     openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',
+    openaiPlannerModel: env['OPENAI_PLANNER_MODEL']?.trim() || 'gpt-6.1-sol',
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     permissoesAtiva: env['PERMISSOES_ATIVA'] === 'true',
