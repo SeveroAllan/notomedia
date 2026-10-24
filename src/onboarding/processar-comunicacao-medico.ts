@@ -139,7 +139,7 @@ export async function processarComunicacaoMedico(
       }
       if(chamadas<orcamento && afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
         deps.log('info','CONVERSA_FATO_SEM_FERRAMENTA');
-        decisao=await decidir(permitidas,undefined,{motivo:'a resposta afirma fatos da agenda sem consultar: use a acao listar_pendencias (anuncie) ou nao afirme numero nem ausencia',faltou:[]});
+        decisao=await decidir(permitidas,undefined,{motivo:'a resposta afirma fatos da agenda sem consultar: para conferir use listar_pendencias; para preparar total/proposta use iniciar_lote (exige confirmação antes de emitir). Anuncie a ação ou não afirme quantidade, ausência nem bloqueio',faltou:[]});
         if(afirmaFatoDaAgendaSemFerramenta(texto,decisao,fatos,permitidas)) {
           deps.log('erro','CONVERSA_FATO_SEM_FERRAMENTA_PERSISTE');
           await enviar(['Não vou chutar: preciso consultar a agenda para te responder isso. Pode repetir o pedido?']);
@@ -215,10 +215,9 @@ export async function processarComunicacaoMedico(
           else {
             fala=await narrar(r.dados??{ok:true});
             if(r.falaAssinada) {
-              // Números/status ficam no texto assinado; uma moldura contraditória não altera a lista real.
-              const moldura=fala[0]&&fala[0]!==ERRO_CONVERSA&&!/\d|n[aã]o h[aá]|nenhuma|zero|sem pend[eê]ncias|n[aã]o encontrei/i.test(fala[0])?fala[0]:'';
+              // A lista assinada já traz fatos e próximo passo. Prosa livre pode contradizer
+              // contagem/travas mesmo sem dígitos ("só há uma, mas está bloqueada").
               fala=[...r.falaAssinada]; falaMemoria=[...(r.falaMemoria??r.falaAssinada)];
-              if(moldura && moldura.length+fala[0].length+1<=500) {fala[0]=moldura+'\n'+fala[0];falaMemoria[0]=moldura+'\n'+falaMemoria[0];}
             }
           }
         }

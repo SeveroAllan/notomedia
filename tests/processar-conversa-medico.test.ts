@@ -541,3 +541,14 @@ it('promessa de PDF sem ação é corrigida para execução, não tarefa imagin�
  });
  await c.turno('pdf','Pode me mandar o PDF');expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]?.[0]).toMatchObject({acao:'reenviar_nota_medico'});
 });
+
+it('lista assinada exclui moldura que inventa bloqueio por extenso (real 24/10 13:50)',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-21',origem:'contexto_salvo'};
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir a agenda.'],acao:'listar_pendencias',parametros:{desde:'2026-10-21'}}))
+ .mockResolvedValueOnce(JSON.stringify({fala:['Hoje só há uma consulta sem nota, mas ela está bloqueada para emissão.'],acao:null}));
+ const assinada=['Vi 1 atendimento livre.','1 tem tentativa anterior que precisa ser conciliada; não vou emitir de novo.'];
+ c.executar.mockResolvedValue({dados:{ferramenta:'listar_pendencias',ok:true,total:1,bloqueadas:1},falaAssinada:assinada,falaMemoria:assinada} as never);
+ await c.turno('conferir','Confira as consultas desde 21/10, sem emitir.');
+ expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(assinada);
+ expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).not.toContain('mas ela está bloqueada');
+});
