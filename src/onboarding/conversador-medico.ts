@@ -48,8 +48,8 @@ EXEMPLOS (reescreva com suas palavras)
 - fatos.listaRecente=true, medico: "Certo." -> {"fala":["Quer que eu prepare o total para confirmar a emissão?"],"acao":null}
 - fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
 
-Corrija o motivo sem narrar validações.
-SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano guarda objetivo/passos, nunca autoriza ação. Máx 3 falas/500 chars. Ações só de acoesPermitidas. Após ferramenta acao=null; só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
+Corrija sem narrar validações.
+SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano sem autoridade. Máx 3x500 chars. Ações só de acoesPermitidas. Após ferramenta, acao só se podeAgirAposFerramenta=true; senão null. Só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
 const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
@@ -191,7 +191,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
 export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined, private readonly completar: typeof completarOpenAi, private readonly modeloAuxiliar?: string) {}
   async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; plano?: PlanoConversa | null; fatos: FatosConversa; agora: Date;
-    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
+    acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; podeAgirAposFerramenta?: boolean; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
     const resultado = entrada.resultadoFerramenta as { ferramenta?: string; ok?: boolean; motivo?: string; limiteLeitura?: {desde:string;ate:string} } | undefined;
     if(resultado?.ok===false && resultado.motivo==='PERIODO_FORA_DO_LIMITE' && resultado.limiteLeitura) {
       const br=(d:string)=>d.split('-').reverse().join('/');
@@ -212,7 +212,7 @@ export class ConversadorMedico {
       const desde=periodoDecisao(resposta,entrada.agora,entrada.texto);
       if(desde) resposta.parametros={...resposta.parametros,desde};
       if(resposta.acao==='reenviar_nota_medico'&&entrada.resultadoFerramenta===undefined)resposta.parametros={...resposta.parametros,evidencia:entrada.texto.slice(0,300)};
-      if (entrada.resultadoFerramenta!==undefined) resposta.acao = null;
+      if (entrada.resultadoFerramenta!==undefined && !entrada.podeAgirAposFerramenta) resposta.acao = null;
       if (resposta.fala.some(t=>/\b(?:[A-Z][A-Z0-9]*_)+[A-Z0-9_]+\b/.test(t))) throw Error('CODIGO_NA_FALA');
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
     } catch (erro) {
