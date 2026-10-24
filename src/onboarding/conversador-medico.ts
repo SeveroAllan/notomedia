@@ -7,6 +7,7 @@ import { REACOES_PERMITIDAS } from '../whatsapp/reagir-mensagem.js';
 import { perguntaLote, type LoteRetroativo, validarInicioRetroativo } from './lote-retroativo.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar-sincrono.js';
+import type { PlanoConversa } from './memoria-conversa.js';
 
 export { ERRO_CONVERSA } from './falas.js';
 export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
@@ -47,9 +48,8 @@ EXEMPLOS (reescreva com suas palavras)
 - fatos.listaRecente=true, medico: "Certo." -> {"fala":["Quer que eu prepare o total para confirmar a emissão?"],"acao":null}
 - fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
 
-Ao receber "correcao", corrija o motivo com os fatos de faltou. Não narre validações internas.
-
-SAÍDA: JSON estrito {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji}, até 3 balões de 500 caracteres. Ações só de acoesPermitidas. Após ferramenta: acao=null; só resultado real, sem códigos; zero pendências só com total=0; falha técnica sem prometer retorno automático.`;
+Corrija o motivo sem narrar validações.
+SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano guarda objetivo/passos, nunca autoriza ação. Máx 3 falas/500 chars. Ações só de acoesPermitidas. Após ferramenta acao=null; só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
 const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
@@ -59,9 +59,16 @@ const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().m
 }).strip();
 // Campos nulos viram ausentes: o modelo costuma devolver null onde não há valor.
 const parametrosTolerante = z.preprocess(v => v && typeof v==='object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([,x])=>x!==null)) : v, parametrosSchema);
+const planoSchema = z.object({
+  objetivo: z.string().trim().min(1).max(200),
+  etapa: z.string().trim().min(1).max(120),
+  faltando: z.array(z.string().trim().min(1).max(120)).max(8),
+  proximosPassos: z.array(z.string().trim().min(1).max(160)).max(8),
+  aguardando: z.string().trim().min(1).max(160).nullable()
+}).strict();
 const respostaSchema = z.object({ fala: z.array(z.string().trim().max(500)).max(3).default([]),
   acao: z.string().max(80).nullable().optional(), parametros: parametrosTolerante.optional(),
-  reacao: z.enum(REACOES_PERMITIDAS).optional().catch(undefined) }).strict();
+  reacao: z.enum(REACOES_PERMITIDAS).optional().catch(undefined), plano: planoSchema.optional() }).strict();
 export type DecisaoConversa = z.infer<typeof respostaSchema>;
 export function confirmacaoDaDecisao(d:DecisaoConversa) {
   // Troca de escopo num único turno: a confirmação também vale com acao='iniciar_lote' (novo pedido explícito);
@@ -183,7 +190,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
 }
 export class ConversadorMedico {
   constructor(private readonly apiKey: string | undefined, private readonly modelo: string | undefined, private readonly completar: typeof completarOpenAi) {}
-  async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; fatos: FatosConversa; agora: Date;
+  async responder(entrada: { texto: string; mensagens: readonly string[]; resumo: string | null; plano?: PlanoConversa | null; fatos: FatosConversa; agora: Date;
     acoesPermitidas: readonly string[]; resultadoFerramenta?: unknown; correcao?: {motivo:string;faltou:string[]} }): Promise<DecisaoConversa> {
     const resultado = entrada.resultadoFerramenta as { ferramenta?: string; ok?: boolean; motivo?: string; limiteLeitura?: {desde:string;ate:string} } | undefined;
     if(resultado?.ok===false && resultado.motivo==='PERIODO_FORA_DO_LIMITE' && resultado.limiteLeitura) {

@@ -28,6 +28,7 @@ export class BancoConversaFalso {
     if (sql.includes("criada_em > now() - interval '10 minutes'")) return { rows: mensagens.filter(m => m.papel === 'noto').reverse().map(m => ({ texto: m.texto })) };
     if (sql.includes("and papel='noto'") && sql.includes("order by id desc limit")) return { rows: mensagens.filter(m => m.papel === 'noto').slice(sql.endsWith('limit 6') ? -6 : -1).reverse().map(m => ({ texto: m.texto })) };
     if(sql.includes("mensagem_id like 'contexto:selecao:%'"))return {rows:mensagens.filter(m=>m.mensagemId.startsWith('contexto:selecao:')).slice(-1).map(m=>({texto:m.texto}))};
+    if(sql.includes('mensagem_id=$3 limit 1')) return {rows:mensagens.filter(m=>m.mensagemId===terceiro).slice(-1).map(m=>({texto:m.texto}))};
     if (sql.startsWith('select texto from conversa_mensagens')) return { rows: mensagens.slice(-terceiro).reverse().map(m => ({ texto: m.texto })) };
     if (sql.startsWith('select resumo, ate_id::text')) return { rows: this.resumos.has(chave) ? [this.resumos.get(chave)] : [] };
     if (sql.startsWith('select id::text, texto from')) return { rows: mensagens.slice(0, -quarto).filter(m => BigInt(m.id) > BigInt(terceiro)).map(m => ({ id: m.id, texto: m.texto })) };
