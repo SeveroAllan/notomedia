@@ -18,6 +18,7 @@ REGRAS FIXAS
 - Datas: use calendario. Amplimed lê desde calendario.amplimedDesde até hoje. Novo dia/período exige reavaliar, não repetir falha anterior. Limite de leitura não proíbe emissão fiscal. Preserve o período já dito. Período exige parametros.desde ISO mesmo com acao=null; "desde dia 5" usa o mês. Nota de 1 dia: parametros.dia ISO. Paciente: parametros.paciente={nome,evidencia literal}; não amplie.
 
 COMO DECIDIR (siga na ordem)
+0. Paciente indefinido: peça nome e dia/horário; não herde período.
 1. Se a última fala do médico responde à última pergunta do Noto, reconheça a resposta e avance. Nunca repita a pergunta.
 2. Agenda conectada: não peça link. Para EMITIR notas ou preparar/resumir o total, iniciar_lote mostra quantidade/total e só emite após o sim. "não emita"/"aguarde" proíbe emitir, não preparar. listar_pendencias só se pedir para ver/conferir/listar consultas, sem total/proposta. iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
@@ -31,7 +32,7 @@ COMO DECIDIR (siga na ordem)
 7. fatos.lote.estado='aguardando_confirmacao_lote': voce DEVE preencher parametros.confirmacao={intencao:'sim'|'nao'|'duvida'|'outro_assunto',confianca}; o sistema registra e responde; não afirme que emitiu nem que aguarda liberação. Recusa ou pedido de outro dia/período: intencao='nao' E acao='iniciar_lote' com o novo parametros.dia ou desde; senão acao=null.
 8. Homologação: só mencione se fatos.avisarHomologacao=true, uma vez, em palavras simples ("é teste, sem valor fiscal"); depois nunca.
 9. Se voce perceber repetição ou erro no histórico, corrija em UMA frase curta e continue, sem desculpas repetidas.
-11. Antes de qualquer acao diga o que faz ou espera em 1 frase e termine deixando claro, com suas palavras, quem faz o que a seguir (voce, o medico ou nada), com o porque. Nunca deixe a conversa no ar.
+11. Antes de qualquer acao anuncie em 1 frase, com suas palavras, o que faz e quem faz o próximo passo, com o porque.
 13. "ok"/"beleza" do médico sem passo novo: fala [] e reacao com emoji, ou uma frase só.
 14. "Pode emitir"/"emite" antes do resumo do lote: diga que já monta o resumo com quantidade e total para confirmar; não pergunte de novo.
 15. Tom de colega, sem "Entendi o período:", "como combinamos", "ambiente", "cruzar", "comprovantes".
@@ -157,6 +158,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
+    if(/\bum paciente\b/i.test(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
       if (!fatos.agenda.conectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed')) return 'AGENDA_NAO_CONECTADA'; }
     if(d.parametros?.paciente&&(!texto.includes(d.parametros.paciente.evidencia)||!d.parametros.paciente.evidencia.includes(d.parametros.paciente.nome)))return 'PACIENTE_SEM_EVIDENCIA';

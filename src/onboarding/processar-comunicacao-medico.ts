@@ -147,6 +147,10 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      if(chamadas<orcamento && motivo==='PACIENTE_NECESSARIO') {
+        decisao=await decidir([],undefined,{motivo:'o paciente e a consulta ainda não foram identificados; pergunte nome e data/horário, sem herdar o período anterior nem listar todos',faltou:['paciente','consulta']});
+        motivo=validarAcaoConversa(decisao,fatos,[],texto,agora);
+      }
       if(chamadas<orcamento && motivo==='anuncie a acao com suas palavras') {
         deps.log('info','CONVERSA_ANUNCIO_CORRIGIR');
         decisao=await decidir(permitidas,undefined,{motivo,faltou:[]});

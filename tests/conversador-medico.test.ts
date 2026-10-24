@@ -293,3 +293,6 @@ it('notas de quem atendi não permite bloqueio inventado sem leitura',()=>{
 it('novo período explícito pode ser relido apesar de lista recente',()=>{
  expect(validarAcaoConversa({fala:['Vou conferir.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}},{...fatos,agenda:{nome:'amplimed',conectada:true},listaRecente:true},['listar_pendencias'],'Confira semana passada',agora)).toBeNull();
 });
+it('paciente não identificado não pode virar lista herdada',()=>{
+ expect(validarAcaoConversa({fala:['Vou listar a semana passada.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada'}},{...fatos,agenda:{nome:'amplimed',conectada:true}},['listar_pendencias'],'Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?',agora)).toBe('PACIENTE_NECESSARIO');
+});
