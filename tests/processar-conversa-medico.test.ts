@@ -94,6 +94,8 @@ it('modo agente observa leitura e pode executar uma segunda ferramenta validada'
   expect(d.podeAgirAposFerramenta).toBe(true);
   expect(d.acoesPermitidas).toContain('iniciar_lote');
   expect(d.acoesPermitidas).not.toContain('listar_pendencias');
+  expect(d.acoesPermitidas).not.toContain('pedir_link_agenda');
+  expect(d.acoesPermitidas).not.toContain('registrar_modo_sem_agenda');
   return JSON.stringify({fala:['Com a conferência feita, vou preparar o total para você confirmar.'],acao:'iniciar_lote',parametros:{desde:'2026-10-05'}});
  });
  c.executar
