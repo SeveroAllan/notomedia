@@ -92,7 +92,7 @@ export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId:
     const pendencias = validarReferenciaFiscal(p.dados_reforma_tributaria, { referenciaHash: input.referenciaHash, parametros, fidelidadeReferencia: input.usarReferencia, ctribNac: s.ctrib_nac, ctribMun: s.ctrib_mun, cnbs: s.cnbs });
     if (pendencias.length) throw new Error(pendencias.join(' '));
     const serie = input.serieDps ?? p.serie_dps;
-    if (!/^\d{1,5}$/.test(serie)) throw new Error('Série da DPS inválida.');
+    if (!/^\d{1,5}$/.test(serie) || Number(serie) > 49999) throw new Error('Série da DPS deve estar entre 0 e 49999 para emissão pelo aplicativo próprio.');
     if (input.proximoNumeroDps !== undefined && (!Number.isSafeInteger(input.proximoNumeroDps) || input.proximoNumeroDps < 1)) throw new Error('Número da DPS inválido.');
     if (!/^\d{6}$/.test(s.ctrib_nac)) throw new Error('Código de tributação do serviço inválido.');
     await client.query(`update medico_perfil_fiscal set confirmado_pelo_medico = true,

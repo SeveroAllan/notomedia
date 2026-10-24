@@ -116,3 +116,16 @@ it('migração adiciona só as quatro colunas com IF NOT EXISTS sem modificar SQ
     'alter table medico_servicos_fiscais add column if not exists ctrib_mun text',
   ]);
 });
+
+describe('série do aplicativo próprio', () => {
+  it.each(['50000','69999','70000','79999','80000','99999'])('recusa série %s reservada para outro emissor', async serieDps => {
+    const resposta = await confirmar({ parametrosEmissao:parametros, referenciaHash:referencia.hash, serieDps });
+    expect(resposta.status).toBe(400);
+    expect(banco.estado.confirmado).toBe(false);
+    expect(banco.estado.politica).toBe(null);
+    expect(banco.comandos.at(-1)).toBe('rollback');
+  });
+  it.each(['0','00001','49999'])('aceita série API %s', async serieDps => {
+    expect(await confirmar({ parametrosEmissao:parametros, referenciaHash:referencia.hash, serieDps })).toMatchObject({status:200,data:{ok:true}});
+  });
+});
