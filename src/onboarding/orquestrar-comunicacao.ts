@@ -7,7 +7,7 @@ interface EntradaComunicacao {
   medicoId: string;
   chaveProcessamento: string;
   nomeMedico?: string;
-  respostaMedico?: { texto: string; dataMensagem: string | null; mensagensSeguras?: readonly string[]; ultimaFalaNoto?: string };
+  respostaMedico?: { texto: string; dataMensagem: string | null; enviadaEm?: string | null; mensagensSeguras?: readonly string[]; ultimaFalaNoto?: string };
   instanciaNome?: string;
   contatoTelefone?: string;
   estado: Omit<EstadoMedicoAposOnboarding, 'historico'> & { agora: Date };

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { EstadoConversaRetroativo } from './regras/decidir-proxima-acao.js';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
-import { type InterpretacaoConfirmacao } from './confirmacao-emissao-medico.js';
+import { limitarConfirmacaoEmissao, type InterpretacaoConfirmacao } from './confirmacao-emissao-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
 export interface ConsultaLote { fonte: string; idExterno: string; chave: string; assinatura: string | null }
@@ -64,7 +64,7 @@ export class ConversaLoteRetroativo {
     narrarContagem?: (resultado: ResultadoContagemLote) => Promise<string[]>;
     interpretarData: (texto: string, agora: Date) => Promise<string | null>;
     interpretarConfirmacao: (texto: string, pergunta: string) => Promise<InterpretacaoConfirmacao>;
-    enviar: (medicoId: string, conversa: string, chave: string, fala: string[], aoEnviar?: (mensagemId: string) => Promise<void>) => Promise<void>;
+    enviar: (medicoId: string, conversa: string, chave: string, fala: string[], aoEnviar?: (mensagemId: string, enviadoEm?: Date) => Promise<void>) => Promise<void>;
     log: (mensagem: string) => void;
   }) {}
   async iniciar(medicoId: string, conversa: string, chave: string, agora: Date, inicioConhecido?: string | null, fimConhecido?: string): Promise<boolean> {
@@ -106,12 +106,12 @@ export class ConversaLoteRetroativo {
       const fala = [...avisoBloqueadas(contagem.bloqueadas), ...(this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: fim, contagem, perguntaConfirmacao: perguntaLote(preparado) })
         : this.deps.comporContagem(preparado).fala)];
       await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, fala,
-        id => this.repo.registrarPergunta(lote.id, id, agora));
+        (id, enviadoEm) => this.repo.registrarPergunta(lote.id, id, enviadoEm ?? agora));
     };
     if (this.deps.listarPeriodo) await this.deps.listarPeriodo(medicoId, conversa, mensagemId, desde, agora, propor, somenteContagem);
     else await propor();
   }
-  async responder(medicoId: string, conversa: string, mensagemId: string, texto: string, agora: Date, perguntaId?: string): Promise<boolean> {
+  async responder(medicoId: string, conversa: string, mensagemId: string, texto: string, agora: Date, perguntaId?: string, mensagemEm: Date = agora): Promise<boolean> {
     if (!await this.deps.permitido(medicoId)) return false;
     const lote = await this.repo.ativo(medicoId);
     if (!lote) return await this.deps.reenviar?.(medicoId,conversa,mensagemId,texto) ?? false;
@@ -131,13 +131,17 @@ export class ConversaLoteRetroativo {
     const pergunta = perguntaId?.trim() || perguntaPendente;
     const perguntadaEm = Date.parse(lote.perguntaEm ?? '');
     const idade = agora.getTime() - perguntadaEm;
-    if (!perguntaPendente || !Number.isFinite(perguntadaEm) || idade < 0 || idade >= 48 * 3600000) {
+    const enviadaEm = mensagemEm.getTime();
+    if (!perguntaPendente || !Number.isFinite(perguntadaEm) || !Number.isFinite(enviadaEm) || enviadaEm < perguntadaEm || idade < 0 || idade >= 48 * 3600000) {
       await enviar(['Não há uma pergunta de confirmação válida neste momento. Precisamos conferir o período e o total novamente antes de seguir.']); return true;
     }
     if (pergunta !== perguntaPendente) {
       await enviar(['Essa resposta se refere a outra pergunta. A confirmação pendente é do período e total que acabei de apresentar.']); return true;
     }
-    const interpretacao = await this.deps.interpretarConfirmacao(texto, perguntaLote(lote));
+    const interpretacao = limitarConfirmacaoEmissao(texto, await this.deps.interpretarConfirmacao(texto, perguntaLote(lote)));
+    if (interpretacao.intencao === 'duvida' || interpretacao.intencao === 'outro_assunto') {
+      await enviar(['Ainda não vou emitir. Você autoriza a emissão da proposta apresentada?']); return true;
+    }
     const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));
     await enviar([confirmou ? `Pronto, já estou emitindo ${lote.totalConsultas === 1 ? 'a nota' : `as ${lote.totalConsultas} notas`}. Te aviso por aqui quando terminar.`

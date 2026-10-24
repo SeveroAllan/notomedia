@@ -78,10 +78,10 @@ afterEach(() => {
   expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros.mock.calls).toEqual([...Array.from({ length: errosEsperados }, () => ['COMUNICACAO_SEM_FALA']),...errosExtras.map(e=>[e])]);
   Object.assign(config, anterior); vi.restoreAllMocks();
 });
-async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá', validar = true, pergunta?: string) {
+async function receber(app: ReturnType<typeof criarAppExpress>, id: string, texto = 'Olá', validar = true, pergunta?: string, timestamp = Math.ceil(Date.now()/1000)) {
 
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/webhook/evolution').route.stack[0].handle;
-  const body = { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: { messageTimestamp: 1792508400,
+  const body = { event: 'messages.upsert', instance: config.evolutionAssistantInstanceName, data: { messageTimestamp: timestamp,
     key: { id, remoteJid: `${jid}@s.whatsapp.net`, fromMe: false }, message: pergunta ? { extendedTextMessage: { text: texto, contextInfo: { stanzaId: pergunta } } } : { conversation: texto } } };
   const res = { status: vi.fn().mockReturnThis(), json: vi.fn() };
   const hash = createHmac('sha256', config.appPepper).update(JSON.stringify([config.evolutionAssistantInstanceName, id])).digest('hex');
@@ -621,4 +621,23 @@ it.each([false,true])('seleção Amplimed conserva dia e paciente ao listar e pr
  const falas=enviar.mock.calls.map(([p]:any[])=>p.texto).join(' ');expect(falas).toContain('Em 19/10/2026');expect(falas).toContain(presente?'Paciente Teste Um':'do paciente Teste Um');expect(falas).not.toContain('Teste Cinco');expect(falas).not.toContain('20/10/2026');
  await receber(app,'preparar-ausente','Pode preparar.');
  expect(abrir).toHaveBeenCalledOnce();expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-19','2026-10-19T23:59:59.999-03:00',presente?new Map([['alvo',35000]]):new Map(),'amplimed');
+});
+it.each(['Pode preparar agora o lote, para minha confirmação.', 'prepare', 'aguarde', 'não emita', 'Sim, mas aguarde'])('gate real não confirma preparação mesmo com decisor sim: %s',async texto=>{
+ config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};enviosEsperados=1;
+ const lote:any={id:'lote-veto',medicoId:'medico',conversa:'conversa',desde:'2026-10-05',ate:new Date().toISOString(),estado:'aguardando_confirmacao_lote',totalConsultas:1,totalCentavos:25000,semValor:0,mensagemConfirmacaoId:'pergunta-veto',perguntaEm:new Date(Date.now()-10000).toISOString()};
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockResolvedValue(lote);
+ const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockResolvedValue(true);
+ fronteiras.openai.mockResolvedValue(JSON.stringify({fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:1}}}));
+ enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'preparar-veto',texto);
+ expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toContain('não vou emitir');
+});
+
+it('timestamp original anterior à proposta não confirma no wiring mesmo processado depois',async()=>{
+ config.emissaoComprovanteHomologacaoAtiva=true;config.envioRealAllowlist=['+5551993527271'];fronteiras.agenda={nome:'tribemd',conectada:true};enviosEsperados=1;
+ const lote:any={id:'lote-atrasado',medicoId:'medico',conversa:'conversa',desde:'2026-10-05',ate:new Date().toISOString(),estado:'aguardando_confirmacao_lote',totalConsultas:1,totalCentavos:25000,semValor:0,mensagemConfirmacaoId:'pergunta-atrasado',perguntaEm:new Date(Date.now()-10000).toISOString()};
+ vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockResolvedValue(lote);
+ const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockResolvedValue(true);
+ fronteiras.openai.mockResolvedValue(JSON.stringify({fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:1}}}));
+ enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'sim-atrasado','sim',true,undefined,Math.floor(Date.now()/1000)-60);
+ expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toContain('Não há uma pergunta');
 });

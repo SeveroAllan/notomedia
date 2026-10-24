@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { interpretarConfirmacaoEmissao } from '../src/onboarding/confirmacao-emissao-medico.js';
+import { interpretarConfirmacaoEmissao, limitarConfirmacaoEmissao } from '../src/onboarding/confirmacao-emissao-medico.js';
 
 it.each(['pode', 'manda ver', 'bora', '👍', 'emite aí', 'claro', 'isso mesmo'])('aceita interpretação OpenAI de %s sem classificador de palavras', async texto => {
   const completar = vi.fn(async () => '{"intencao":"sim","confianca":0.98}');
@@ -28,4 +28,11 @@ it('sem chave ou falha OpenAI nunca presume confirmação e sanitiza segredos', 
   expect(completar).not.toHaveBeenCalled();
   expect(await interpretarConfirmacaoEmissao('chave', 'modelo', completar, { texto: 'senha=segredo', pergunta: '?' })).toEqual({ intencao: 'duvida', confianca: 0 });
   expect(JSON.stringify(completar.mock.calls)).not.toContain('senha=segredo');
+});
+
+it.each(['Pode preparar agora o lote, para minha confirmação.', 'prepare', 'para minha confirmação', 'aguarde', 'não emita', 'Sim, mas aguarde', 'Sim?', 'talvez pode emitir', 'pode enviar o resumo'])('veta sim incorreto do modelo: %s', texto => {
+ expect(limitarConfirmacaoEmissao(texto,{intencao:'sim',confianca:1})).toEqual({intencao:'duvida',confianca:0});
+});
+it.each(['Sim, pode emitir essa única nota de R$250 da consulta do Paciente Teste Um de 23/10/2026. Envie o PDF só para mim aqui.', 'pode', 'emite aí', '👍'])('mantém aprovação inequívoca: %s', texto => {
+ expect(limitarConfirmacaoEmissao(texto,{intencao:'sim',confianca:1})).toEqual({intencao:'sim',confianca:1});
 });

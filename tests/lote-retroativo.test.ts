@@ -303,3 +303,24 @@ it('consulta bloqueada por tentativa não concluída é avisada, sem parecer per
   expect(c.falas.some(f => /conciliar essa tentativa/.test(f))).toBe(true);
   expect(c.falas.some(f => /Não encontrei consultas com valor/.test(f))).toBe(true);
 });
+
+// Mesmo que o modelo erre "sim", preparação ou espera não autoriza transmissão.
+it.each(['Pode preparar agora o lote só dessa consulta de 23/10/2026 do Paciente Teste Um, para minha confirmação.', 'prepare a nota', 'para minha confirmação', 'aguarde', 'não emita', 'Sim, mas não emita ainda', 'quero ver o resumo antes de confirmar'])('não confirma preparação/espera: %s', async texto => {
+  const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
+  await c.conversa.responder('m','c','s',texto,agora,'pergunta-evolution');
+  expect(c.repo.confirmar).not.toHaveBeenCalled(); expect(c.lote().estado).toBe('aguardando_confirmacao_lote');
+});
+it('resposta enviada antes da proposta não confirma mesmo se processada depois', async () => {
+  const c = cenario(); await c.conversa.iniciar('m','c','e',agora); await c.conversa.responder('m','c','d','dia 1',agora);
+  await c.conversa.responder('m','c','s','sim',new Date(agora.getTime()+60000),'pergunta-evolution',new Date(agora.getTime()-1000));
+  expect(c.repo.confirmar).not.toHaveBeenCalled();
+});
+
+it('marca a pergunta no instante de envio, não no início da leitura lenta', async () => {
+ const c=cenario();const entregue=new Date(agora.getTime()+60000);
+ c.deps.enviar.mockImplementation(async(_m,_c,_k,fala,concluir)=>{c.falas.push(...fala);await (concluir as any)?.('pergunta-evolution',entregue);});
+ await c.conversa.iniciar('m','c','e',agora);await c.conversa.responder('m','c','d','dia 1',agora);
+ expect(c.lote().perguntaEm).toBe(entregue.toISOString());
+ await c.conversa.responder('m','c','repeticao','Pode preparar a nota',new Date(agora.getTime()+120000),'pergunta-evolution',new Date(agora.getTime()+30000));
+ expect(c.repo.confirmar).not.toHaveBeenCalled();
+});

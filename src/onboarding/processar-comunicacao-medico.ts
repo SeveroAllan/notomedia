@@ -17,7 +17,7 @@ export interface ResultadoAcaoConversa {
   dados?: unknown; jaRespondida?: boolean; falaAssinada?: string[]; falaMemoria?: string[];
 }
 export interface ContextoAcaoConversa {
-  medicoId: string; conversa: string; chave: string; texto: string; agora: Date; chavePergunta?: string;
+  medicoId: string; conversa: string; chave: string; texto: string; agora: Date; chavePergunta?: string; mensagemEm?: Date;
   fatos: FatosConversa; narrar: (dados: unknown) => Promise<string[]>;
 }
 export interface FerramentasConversa {
@@ -206,7 +206,7 @@ export async function processarComunicacaoMedico(
           await memoria.registrarMarca(medicoId,conversa,'sem_agenda_digital');
         } else if(decisao.acao && decisao.acao!=='nenhuma' || fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
           if(decisao.acao==='listar_pendencias' || decisao.acao==='iniciar_lote') await enviar(decisao.fala.slice(0,1),undefined,':anuncio');
-          const r=await deps.ferramentas.executar(decisao,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,fatos,narrar});
+          const r=await deps.ferramentas.executar(decisao,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});
           if(r.jaRespondida) fala=[];
           else {
             fala=await narrar(r.dados??{ok:true});

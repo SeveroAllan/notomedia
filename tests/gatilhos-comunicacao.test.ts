@@ -60,7 +60,7 @@ describe('webhook assistente', () => {
   });
   it('mensagem recebida de médico identificado aciona uma vez o ciclo sem criar paciente', async () => {
     const c = webhook(true); await processarMensagemWebhook(c.payload, 'segredo-ficticio', c.deps);
-    expect(c.aoReceberMensagemMedico).toHaveBeenCalledExactlyOnceWith({ medicoId: 'medico-ficticio', texto: 'não', chaveMensagem: 'mensagem-ficticia', chaveWhatsApp: c.payload.data.key, chaveConversa: 'b37abf8e0d16b341fdbcb549ba228f479022562bd2f9074f1d1ddec4771b3e32', dataMensagem: null });
+    expect(c.aoReceberMensagemMedico).toHaveBeenCalledExactlyOnceWith({ medicoId: 'medico-ficticio', texto: 'não', chaveMensagem: 'mensagem-ficticia', chaveWhatsApp: c.payload.data.key, chaveConversa: 'b37abf8e0d16b341fdbcb549ba228f479022562bd2f9074f1d1ddec4771b3e32', dataMensagem: null, enviadaEm: null });
   });
   it.each(['enviada', 'grupo', 'imagem', 'oficial', 'segredo_invalido'] as const)('%s nunca é resposta do médico', async caso => {
     const c = webhook(true); let segredo = 'segredo-ficticio';
@@ -101,7 +101,7 @@ it('gatilhos simultâneos do mesmo médico preservam resposta clara após a amb�
  ])('timestamp do webhook %s vira data civil %s, sem usar processamento', async (timestamp, dataMensagem) => {
    const c = webhook(true); (c.payload.data as any).messageTimestamp = timestamp;
    await processarMensagemWebhook(c.payload, 'segredo-ficticio', c.deps);
-   expect(c.aoReceberMensagemMedico).toHaveBeenCalledExactlyOnceWith({ medicoId: 'medico-ficticio', texto: 'não', chaveMensagem: 'mensagem-ficticia', chaveWhatsApp: c.payload.data.key, chaveConversa: 'b37abf8e0d16b341fdbcb549ba228f479022562bd2f9074f1d1ddec4771b3e32', dataMensagem });
+   expect(c.aoReceberMensagemMedico).toHaveBeenCalledExactlyOnceWith({ medicoId: 'medico-ficticio', texto: 'não', chaveMensagem: 'mensagem-ficticia', chaveWhatsApp: c.payload.data.key, chaveConversa: 'b37abf8e0d16b341fdbcb549ba228f479022562bd2f9074f1d1ddec4771b3e32', dataMensagem, enviadaEm: dataMensagem ? new Date(Number(timestamp)>1e11?Number(timestamp):Number(timestamp)*1000).toISOString() : null });
  });
 
 it('contatos diferentes na instância assistente têm chaves de conversa distintas', async () => {

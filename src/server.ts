@@ -11,7 +11,7 @@ import { PostgresEmissaoLote, type ExecutorFiscalLote } from './io/postgres/post
 import { sincronizarAgenda, CacheAgendaProcesso } from './agenda/sincronizar-agenda.js';
 import { registroErroNoto } from './observabilidade/erros.js';
 import { registrarLinhaSincrona } from './observabilidade/registrar-sincrono.js';
-import { interpretarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
+import { interpretarConfirmacaoEmissao, limitarConfirmacaoEmissao } from './onboarding/confirmacao-emissao-medico.js';
 import { PostgresConsultasSincronizadas } from './io/postgres/postgres-consultas-sincronizadas.js';
 import { ehIdAmplimed, prepararLoteAmplimed } from './agenda/amplimed-lote.js';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
@@ -346,7 +346,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     },
     interpretarData: (texto, agora) => decisao ? Promise.resolve(periodoDecisao(decisao,agora,texto)) : interpretarDataRetroativo(iaApiKey, iaModeloTexto, completarIa, texto, agora),
     interpretarConfirmacao: (texto, pergunta) => decisao ? Promise.resolve(pergunta === perguntaInterpretada ? confirmacaoDaDecisao(decisao) : {intencao:'duvida' as const,confianca:0}) : interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto, pergunta }),
-    enviar: async (medicoId, conversa, chave, fala, aoEnviar) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, aoEnviar }); },
+    enviar: async (medicoId, conversa, chave, fala, aoEnviar) => { await comunicacaoHomologacao.conversa({ medicoId, conversa, chave, fala, aoEnviar: aoEnviar ? id => aoEnviar(id, new Date()) : undefined }); },
     log: mensagem => console.info(mensagem)
   }) : undefined;
   const retroativo = criarRetroativo();
@@ -397,7 +397,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           let anterior:SelecaoConsultas|undefined;try{anterior=rows[0]?JSON.parse(rows[0].texto):undefined;}catch{}
           if(!confirmaSelecaoAnterior({paciente:pacienteConfirmacao,dia:diaDecisao(decisao,c.agora)??undefined},anterior))return {falaAssinada:['Seu pedido menciona outro paciente. Vou manter a proposta anterior sem emitir. Quer descartá-la para preparar só esse paciente?'],dados:{ok:false,motivo:'NOVO_ESCOPO_PACIENTE'}};
         }
-        await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada');
+        await criarRetroativo(c.narrar,decisao,c.medicoId,c.fatos.lote.pergunta)?.responder(c.medicoId,c.conversa,c.chave,c.texto,c.agora,c.chavePergunta ?? c.fatos.lote.perguntaId ?? 'pergunta_nao_observada',c.mensagemEm ?? new Date(NaN));
         // Recusa à proposta pendente + pedido explícito de outro dia/período no mesmo turno:
         // a antiga ficou recusada acima; abre o novo escopo em seguida, ainda nesta fala.
         const negacao=confirmacaoDaDecisao(decisao);
@@ -480,10 +480,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   };
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string) => {
+  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null) => {
     const agora = new Date();
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
-      ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
+      ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
     }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 3 : 2,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
       aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
@@ -1057,8 +1057,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               { medicoId: contexto.medicoId, texto: contexto.texto, chavePergunta: contexto.chavePergunta }) === 'consumida') return;
           }
           if (config.conversaLivreAtiva) await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp);
-          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
-          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
+          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm);
+          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm);
           if (emissaoComprovante && config.envioMedicoRealAtivo) {
             const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
             if (pendentes.length) {
@@ -1074,7 +1074,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                   lote:{estado:'aguardando_confirmacao_individual',pergunta,perguntaId:c?.perguntaChave},pendentes:pendentes.length}
               }))
                 : await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
-              const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, interpretacao, new Date(),
+              const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, limitarConfirmacaoEmissao(contexto.texto, interpretacao), new Date(),
                 await comunicacaoHomologacao.medicoPermitido(contexto.medicoId), c?.perguntaChave ?? '', contexto.chavePergunta);
               if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
                 const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: unica.id,
@@ -1091,7 +1091,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               return;
             }
           }
-          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta);
+          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm);
         },
         aoReceberRespostaCpf: async contexto => {
           if (!await permissoesCpfAtivaP) return;
