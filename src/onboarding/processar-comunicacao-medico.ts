@@ -242,7 +242,11 @@ export async function processarComunicacaoMedico(
               if(r.falaAssinada) {
                 await enviar([...r.falaAssinada],[...(r.falaMemoria??r.falaAssinada)],':observacao:1');
               }
-              const permitidasAposLeitura=deps.ferramentas.permitidas(fatos).filter(a=>a!==decisao.acao);
+              const permitidasAposLeitura=deps.ferramentas.permitidas(fatos).filter(a=>{
+                if(a===decisao.acao) return false;
+                const ferramenta=CATALOGO_FERRAMENTAS.find(f=>f.nome===a);
+                return a==='nenhuma'||a==='iniciar_lote'||ferramenta?.tipo==='leitura';
+              });
               const proxima=await decidir(permitidasAposLeitura,r.dados,undefined,true);
               let motivoProxima=validarAcaoConversa(proxima,fatos,permitidasAposLeitura,texto,agora);
               if(!motivoProxima&&afirmaFatoDaAgendaSemFerramenta(texto,proxima,fatos,permitidasAposLeitura)) motivoProxima='FATO_AGENDA_NAO_VERIFICADO';
