@@ -215,9 +215,10 @@ export async function processarComunicacaoMedico(
           else {
             fala=await narrar(r.dados??{ok:true});
             if(r.falaAssinada) {
-              // A lista assinada já traz fatos e próximo passo. Prosa livre pode contradizer
-              // contagem/travas mesmo sem dígitos ("só há uma, mas está bloqueada").
+              // Contexto de acesso/cortesia pode acompanhar a lista; contagem e status só no texto assinado.
+              const moldura=fala[0]&&fala[0]!==ERRO_CONVERSA&&!/\d|n[aã]o h[aá]|nenhum|zero|sem pend[eê]ncias|n[aã]o encontrei|bloquead|travad|tentativa anterior|s[oó] h[aá] (?:uma?|duas?|tr[eê]s)/i.test(fala[0])?fala[0]:'';
               fala=[...r.falaAssinada]; falaMemoria=[...(r.falaMemoria??r.falaAssinada)];
+              if(moldura && moldura.length+fala[0].length+1<=500) {fala[0]=moldura+'\n'+fala[0];falaMemoria[0]=moldura+'\n'+falaMemoria[0];}
             }
           }
         }
