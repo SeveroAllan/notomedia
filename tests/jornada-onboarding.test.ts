@@ -40,6 +40,7 @@ const objetos=new Map<string,Buffer>();
 const requisitarLocal=globalThis.fetch;
 beforeEach(async()=>{
   vi.clearAllMocks();objetos.clear();banco=new BancoJornada();codigo='';conectado=false;respostas=[];
+  config.appPublicOrigin='https://app-ficticio.invalid';
   config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
   fronteiras.query.mockImplementation((s,p)=>banco.query(s,p));fronteiras.connect.mockImplementation(()=>banco.connect());
   supabase={auth:{getUser:vi.fn(async(t:string)=>({data:{user:t===token?{id:authId}:null},error:t===token?null:{message:'Token invalido'}})),admin:{
@@ -61,6 +62,7 @@ beforeEach(async()=>{
     if(url.hostname==='127.0.0.1')return requisitarLocal(input,init);
     if(url.hostname!=='evolution.invalid')throw Error(`REDE_PROIBIDA: ${url.hostname}`);
     const body=init?.body?JSON.parse(String(init.body)):{};
+    if(url.pathname.includes('/webhook/set/')) expect(body.webhook.url).toBe('https://app-ficticio.invalid/webhook/evolution');
     if(url.pathname.includes('/message/sendButtons/')){codigo=JSON.stringify(body).match(/\b\d{6}\b/)?.[0]??'';return Response.json({key:{id:'otp-ficticio'}});}
     if(url.pathname.includes('/message/sendText/')||url.pathname.includes('/message/sendMedia/'))throw Error('ENVIO_REAL_PROIBIDO');
     if(url.pathname==='/instance/create')return Response.json(body.qrcode?{qrcode:{base64:'cXI='}}:{pairingCode:'1234-5678'});
