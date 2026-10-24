@@ -213,9 +213,9 @@ it.each([undefined, '2026-10-21', '2026-02-30', '2025-01-01'])('pendências sem 
   expect(r).toEqual({ ok: false, motivo: 'DATA_INICIO_NECESSARIA' }); expect(query).not.toHaveBeenCalled(); expect(faturada).not.toHaveBeenCalled();
 });
 it('sync não grava nome nem cobrado ao vivo, mesmo quando diferentes do valor da consulta', async () => {
-  const query = vi.fn(async () => ({ rows: [] }));
+  const query = vi.fn(async (_sql:string, _parametros?:unknown[]) => ({ rows: [] }));
   await new PostgresConsultasSincronizadas({ query } as any).salvar(medico,'tribemd', [{ pacienteId: 'paciente', idExterno: '12', dataHora: '2026-10-19T12:00Z', status: 'realizada', nomeAoVivo: 'Pessoa Efemera', valorConsultaCentavos: 30000, valorCobradoAoVivoCentavos: 25000 }]);
-  const payload = JSON.parse(query.mock.calls[0][1][2]);
+  const payload = JSON.parse(String(query.mock.calls[0]![1]?.[2]));
   expect(payload).toEqual([{ paciente_id:'paciente',id_externo:'12',data_hora:'2026-10-19T12:00Z',status:'realizada',valor_consulta_centavos:30000 }]);
   expect(JSON.stringify(query.mock.calls)).not.toMatch(/Pessoa Efemera|25000|valorCobrado/);
 });
