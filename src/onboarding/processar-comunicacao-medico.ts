@@ -136,6 +136,7 @@ export async function processarComunicacaoMedico(
       if(deps.interpretadorSemantico&&entrada.respostaMedico) {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
         interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora});
+        if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
       if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
