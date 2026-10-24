@@ -1,25 +1,26 @@
 import {expect,it,vi} from 'vitest';
+import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
 import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta} from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
 it('prompt estruturado, uma chamada sem regeneração, histórico/resumo/fatos separados e temperatura baixa',async()=>{
- const completar=vi.fn(async()=>'{"fala":["Oi! Como posso ajudar?"],"acao":null}');
+ const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi! Como posso ajudar?"],"acao":null}');
  const r=await new ConversadorMedico('k','m',completar).responder({...entrada,mensagens:['Pergunta anterior','Resposta anterior'],resumo:'O período já foi informado.'});
  expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);expect(r.acao).toBeNull();expect(completar).toHaveBeenCalledOnce();
- const dados=JSON.parse(completar.mock.calls[0][2][1].content);expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
- expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:2});
+ const dados=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
+ expect(completar.mock.calls[0]![3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:2});
 });
 it('planner GPT-6 usa raciocinio medio sem temperature',async()=>{
- const completar=vi.fn(async()=>'{"fala":["Oi!"],"acao":null}');
+ const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi!"],"acao":null}');
  await new ConversadorMedico('k','gpt-6.1-sol',completar).responder(entrada);
- const opcoes=completar.mock.calls[0][3];
+ const opcoes=completar.mock.calls[0]![3];
  expect(opcoes).toMatchObject({formatoJson:true,reasoningEffort:'medium',maxTokens:8192,tentativasMax:2});
  expect(opcoes).not.toHaveProperty('temperature');
 });
 
 it('modelo auxiliar barato fica restrito ao resumo',async()=>{
- const completar=vi.fn()
+ const completar=vi.fn<typeof completarOpenAi>()
   .mockResolvedValueOnce('{"fala":["Oi!"],"acao":null}')
   .mockResolvedValueOnce('{"resumo":"Resumo curto"}');
  const conversador=new ConversadorMedico('k','gpt-6.1-sol',completar,'gpt-4o-mini');
