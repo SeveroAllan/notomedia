@@ -249,7 +249,7 @@ export async function processarComunicacaoMedico(
               decisao=proxima;
               if(motivoProxima) {
                 deps.log('erro',`CONVERSA_REPLANEJAMENTO_RECUSADO ${motivoProxima}`);
-                fala=r.falaAssinada?[]:proxima.fala;
+                fala=r.falaAssinada?[]:await narrar({ok:false,motivo:motivoProxima,executada:false});
               } else if(proxima.acao && proxima.acao!=='nenhuma') {
                 const r2=await executarFerramenta(proxima,':anuncio:2');
                 if(r2.jaRespondida) fala=[];
