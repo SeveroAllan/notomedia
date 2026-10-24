@@ -324,3 +324,9 @@ it('marca a pergunta no instante de envio, não no início da leitura lenta', as
  await c.conversa.responder('m','c','repeticao','Pode preparar a nota',new Date(agora.getTime()+120000),'pergunta-evolution',new Date(agora.getTime()+30000));
  expect(c.repo.confirmar).not.toHaveBeenCalled();
 });
+it('reserva temporal não cancela o lote mesmo com interpretação não', async () => {
+ const c=cenario();await c.conversa.iniciar('m','c','e',agora);await c.conversa.responder('m','c','d','dia 1',agora);
+ c.deps.interpretarConfirmacao.mockResolvedValue({intencao:'nao',confianca:1});
+ await c.conversa.responder('m','c','espera','Só prepare para minha confirmação; aguarde, não emita ainda.',agora,'pergunta-evolution');
+ expect(c.repo.confirmar).not.toHaveBeenCalled();expect(c.lote().estado).toBe('aguardando_confirmacao_lote');
+});

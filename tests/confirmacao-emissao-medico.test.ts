@@ -36,3 +36,9 @@ it.each(['Pode preparar agora o lote, para minha confirmação.', 'prepare', 'pa
 it.each(['Sim, pode emitir essa única nota de R$250 da consulta do Paciente Teste Um de 23/10/2026. Envie o PDF só para mim aqui.', 'pode', 'emite aí', '👍'])('mantém aprovação inequívoca: %s', texto => {
  expect(limitarConfirmacaoEmissao(texto,{intencao:'sim',confianca:1})).toEqual({intencao:'sim',confianca:1});
 });
+it.each(['Só prepare para minha confirmação; aguarde, não emita ainda.', 'aguarde', 'não emita ainda', 'quero ver o resumo antes de confirmar', 'para minha confirmação'])('não cancela uma reserva temporal quando modelo diz não: %s', texto => {
+ expect(limitarConfirmacaoEmissao(texto,{intencao:'nao',confianca:1})).toEqual({intencao:'duvida',confianca:0});
+});
+it.each(['não', 'melhor não emitir', 'não emita', 'cancele esse lote', 'não quero mais, cancele; não emita ainda'])('preserva recusa definitiva: %s', texto => {
+ expect(limitarConfirmacaoEmissao(texto,{intencao:'nao',confianca:1})).toEqual({intencao:'nao',confianca:1});
+});
