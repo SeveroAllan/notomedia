@@ -69,3 +69,9 @@ it('reenvio sem nota pede detalhe sem tocar transporte',async()=>{
  expect(await c.reenviarNotaMedico('m',{enviarPdf},'2026-10-20')).toBe('ausente');
  expect(enviarPdf).not.toHaveBeenCalled();
 });
+it('pedido explícito novo de PDF pode reenviar nota entregue, mas replay da mesma mensagem não duplica',async()=>{
+ const {c,enviarPdf,query}=cenario();await c.paciente({medicoId:'m',solicitacaoId:'s'},{enviarPdf});
+ expect(await c.reenviarNotaMedico('m',{enviarPdf},'2026-10-20','msg-pdf')).toBe('enviado');
+ expect(await c.reenviarNotaMedico('m',{enviarPdf},'2026-10-20','msg-pdf')).toBe('repetido');expect(enviarPdf).toHaveBeenCalledTimes(2);
+ expect(query.mock.calls.some(([sql])=>/delete|update notas_fiscais|insert into notas_fiscais/i.test(sql))).toBe(false);
+});

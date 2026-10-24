@@ -218,7 +218,7 @@ export class ComunicacaoHomologacao {
     return this.paciente({ medicoId, solicitacaoId }, transporte);
   }
 
-  async reenviarNotaMedico(medicoId: string, transporte: EnviarPdfDanfse, dia?: string): Promise<string> {
+  async reenviarNotaMedico(medicoId: string, transporte: EnviarPdfDanfse, dia?: string, chavePedido?: string): Promise<string> {
     if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return 'sem_permissao';
     const data = dia ? dia.split('-').reverse().join('/') : null;
     const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn
@@ -229,7 +229,7 @@ export class ComunicacaoHomologacao {
       order by nf.criado_em limit 2`, [medicoId, data]);
     if (!rows.length) return 'ausente';
     if (rows.length > 1) return 'ambiguo';
-    return this.paciente({ medicoId, solicitacaoId: rows[0].solicitacao_id }, transporte);
+    return this.paciente({ medicoId, solicitacaoId: rows[0].solicitacao_id, chaveReenvio:chavePedido }, transporte);
   }
 
   async retomarEntregaMedico(medicoId: string, transporte: EnviarPdfDanfse): Promise<void> {
@@ -242,7 +242,7 @@ export class ComunicacaoHomologacao {
     for (const r of rows) await this.paciente({ medicoId, solicitacaoId: r.solicitacao_id }, transporte);
   }
 
-  async paciente(entrada: { medicoId: string; solicitacaoId: string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
+  async paciente(entrada: { medicoId: string; solicitacaoId: string; chaveReenvio?:string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
     const { medicoId, solicitacaoId } = entrada;
     try {
       const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, sn.origem,
@@ -263,7 +263,7 @@ export class ComunicacaoHomologacao {
       if (nota && (await this.permissoes?.ler?.(medicoId, 'entregar_paciente'))?.valor === 'so_medico') {
         if (!this.permitido(this.config.envioMedicoRealAtivo, nota.ambiente, nota.telefone_medico)) return this.simular('nota_medico');
         if (!nota.pdf_storage_path || !this.transporte.enviarPdf) return 'erro';
-        return await this.enviarUnico(medicoId, 'nota_medico', nota.nota_fiscal_id, async () => (await this.transporte.enviarPdf!({
+        return await this.enviarUnico(medicoId, 'nota_medico', entrada.chaveReenvio?JSON.stringify([nota.nota_fiscal_id,'reenvio',entrada.chaveReenvio]):nota.nota_fiscal_id, async () => (await this.transporte.enviarPdf!({
           instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: nota.telefone_medico,
           pdfPathOuUrl: nota.pdf_storage_path, nomeArquivo: 'DANFSe.pdf',
           legenda: 'Segue sua nota de homologação para você repassar. Documento sem valor fiscal.'
