@@ -16,7 +16,7 @@ function cenario(opcoes: { ativo?: boolean; ambiente?: string; allowlist?: strin
   const enviarPdf = vi.fn(async () => ({ sucesso: true }));
   const permissoes = { ler: async () => ({ valor: opcoes.escolha ?? 'so_medico' }), permite: async () => false, linkJaCriado: async () => true };
   const c = new ComunicacaoHomologacao({ query } as any, { ...carregarConfig({}), envioMedicoRealAtivo: opcoes.ativo ?? true,
-    envioPacienteRealAtivo: false, envioRealAllowlist: opcoes.allowlist ?? ['11888880000'] }, { enviarTexto: vi.fn() }, vi.fn(), permissoes as any);
+    envioPacienteRealAtivo: false, envioRealAllowlist: opcoes.allowlist ?? ['11888880000'] }, { enviarTexto: vi.fn(), enviarPdf }, vi.fn(), permissoes as any);
   return { c, enviarPdf, query };
 }
 it('so_medico entrega PDF ao médico mesmo sem contato/instância do paciente e não duplica em corrida', async () => {

@@ -70,7 +70,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao>, private readonly log: (texto: string) => void = console.info,
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & EnviarPdfDanfse>, private readonly log: (texto: string) => void = console.info,
     private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string;
@@ -243,8 +243,8 @@ export class ComunicacaoHomologacao {
       const nota = rows[0];
       if (nota && (await this.permissoes?.ler?.(medicoId, 'entregar_paciente'))?.valor === 'so_medico') {
         if (!this.permitido(this.config.envioMedicoRealAtivo, nota.ambiente, nota.telefone_medico)) return this.simular('nota_medico');
-        if (!nota.pdf_storage_path) return 'erro';
-        return await this.enviarUnico(medicoId, 'nota_medico', nota.nota_fiscal_id, async () => (await transporte.enviarPdf({
+        if (!nota.pdf_storage_path || !this.transporte.enviarPdf) return 'erro';
+        return await this.enviarUnico(medicoId, 'nota_medico', nota.nota_fiscal_id, async () => (await this.transporte.enviarPdf!({
           instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: nota.telefone_medico,
           pdfPathOuUrl: nota.pdf_storage_path, nomeArquivo: 'DANFSe.pdf',
           legenda: 'Segue sua nota de homologação para você repassar. Documento sem valor fiscal.'
