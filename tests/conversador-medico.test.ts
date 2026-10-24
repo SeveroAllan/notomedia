@@ -18,6 +18,18 @@ it('planner GPT-6 usa raciocinio medio sem temperature',async()=>{
  expect(opcoes).not.toHaveProperty('temperature');
 });
 
+it('modelo auxiliar barato fica restrito ao resumo',async()=>{
+ const completar=vi.fn()
+  .mockResolvedValueOnce('{"fala":["Oi!"],"acao":null}')
+  .mockResolvedValueOnce('{"resumo":"Resumo curto"}');
+ const conversador=new ConversadorMedico('k','gpt-6.1-sol',completar,'gpt-4o-mini');
+ await conversador.responder(entrada);
+ await conversador.resumir({resumo:null,mensagens:['Oi']});
+ expect(completar.mock.calls[0][1]).toBe('gpt-6.1-sol');
+ expect(completar.mock.calls[1][1]).toBe('gpt-4o-mini');
+ expect(completar.mock.calls[1][3]).toMatchObject({temperature:.1});
+});
+
 it.each(['{}','não JSON','{"fala":[]}',JSON.stringify({fala:['x'.repeat(501)]}),'{"fala":["a","b","c","d"]}'])('saída inválida %s usa só o erro técnico, sem segunda chamada',async texto=>{
  const completar=vi.fn(async()=>texto);expect((await new ConversadorMedico('k','m',completar).responder(entrada)).fala).toEqual([ERRO_CONVERSA]);expect(completar).toHaveBeenCalledOnce();
 });
