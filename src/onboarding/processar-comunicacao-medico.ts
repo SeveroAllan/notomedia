@@ -117,7 +117,7 @@ export async function processarComunicacaoMedico(
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
-      const reservaPosFerramenta=orcamento>2?2:0;
+      const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
