@@ -516,7 +516,9 @@ it('Amplimed: "quero emitir as notas dos últimos 7 dias" abre o lote (iniciar_l
  c.completar.mockImplementation(async()=>JSON.stringify({fala:['Certo, vou montar o resumo dos últimos 7 dias para você confirmar.'],acao:'iniciar_lote',parametros:{desde:'2026-10-14'}}));
  await c.turno('emitir','quero emitir as notas dos últimos 7 dias');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'iniciar_lote'});
- expect(PROMPT_CONVERSA).toMatch(/EMITIR notas[\s\S]*iniciar_lote[\s\S]*listar_pendencias só se pedir para ver/);
+ expect(PROMPT_CONVERSA).toContain('consultar_agenda lê a agenda em geral');
+ expect(PROMPT_CONVERSA).toContain('listar_pendencias lê somente consultas sem nota');
+ expect(PROMPT_CONVERSA).toContain('iniciar_lote prepara quantidade/total');
 });
 
 it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do último link é preservada',async()=>{
