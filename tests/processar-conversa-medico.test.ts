@@ -107,6 +107,20 @@ it('modo agente observa leitura e pode executar uma segunda ferramenta validada'
  expect(c.enviar.mock.calls.some(([fala])=>fala.includes('2 consultas sem nota desde 05/10/2026.'))).toBe(true);
 });
 
+it('replanejamento recusado não executa segunda ferramenta nem envia promessa rejeitada',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
+ c.completar
+  .mockResolvedValueOnce('{"fala":["Vou conferir."],"acao":"listar_pendencias"}')
+  .mockResolvedValueOnce('{"fala":["Vou conferir de novo."],"acao":"listar_pendencias"}')
+  .mockResolvedValueOnce('{"fala":["A conferência foi feita; não executei outra ação."],"acao":null}');
+ c.executar.mockResolvedValueOnce({dados:{ferramenta:'listar_pendencias',ok:true,total:2,desde:'2026-10-05'}});
+ await c.turno('recusa-loop','Confira as pendências.');
+ expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.completar).toHaveBeenCalledTimes(3);
+ expect(JSON.parse(c.completar.mock.calls[2][2][1].content).acoesPermitidas).toEqual([]);
+ expect(c.enviar.mock.calls.flatMap(([fala])=>fala)).not.toContain('Vou conferir de novo.');
+});
+
 it('N reentregas simultâneas mantêm um processamento, um par de falas e os ids originais',async()=>{
  const c=cenario();await Promise.all(Array.from({length:8},()=>c.turno('mesma','Oi')));
  expect(c.completar).toHaveBeenCalledOnce();expect(c.enviar).toHaveBeenCalledOnce();expect(c.banco.mensagens.map(m=>m.mensagemId)).toEqual(['medico:mesma','noto:mesma']);
