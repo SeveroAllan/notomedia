@@ -198,6 +198,7 @@ export class ConversadorMedico {
       if (!resposta.fala.length && !resposta.reacao && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');
       const desde=periodoDecisao(resposta,entrada.agora,entrada.texto);
       if(desde) resposta.parametros={...resposta.parametros,desde};
+      if(resposta.acao==='reenviar_nota_medico'&&entrada.resultadoFerramenta===undefined)resposta.parametros={...resposta.parametros,evidencia:entrada.texto.slice(0,300)};
       if (entrada.resultadoFerramenta!==undefined) resposta.acao = null;
       if (resposta.fala.some(t=>/\b(?:[A-Z][A-Z0-9]*_)+[A-Z0-9_]+\b/.test(t))) throw Error('CODIGO_NA_FALA');
       return { ...resposta, fala:resposta.fala.map(t=>sanitizarTextoMedico(t).replace(/\bcofre\b/gi,'link seguro')), acao:resposta.acao ?? null };
