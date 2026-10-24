@@ -11,6 +11,7 @@ import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-p
 import type { MemoriaConversa, PostgresMemoriaConversaMedico } from './memoria-conversa.js';
 import type { ReacaoMedico } from '../whatsapp/reagir-mensagem.js';
 import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
+import { planejarPorSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
@@ -29,7 +30,7 @@ export interface FerramentasConversa {
 }
 interface Dependencias {
   ativo:boolean; conversaLivreAtiva?:boolean; orcamentoChamadas?:number; memoriaPersistida?:PostgresMemoriaConversaMedico;
-  conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa;
+  conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa; interpretadorSemantico?:Pick<InterpretadorSemantico,'interpretar'>;
   aoReagir?:(reacao:ReacaoMedico)=>Promise<void>; aoConversar?:(fala:string[],chave:string,falaMemoria?:string[])=>Promise<void>;
   memoriaConversa?:MemoriaConversa; extratorResposta?:ExtratorRespostaMedico; historico:HistoricoComunicacaoRepositorio;
   lerEstado:(medicoId:string,agora:Date)=>Promise<EstadoComunicacaoMedico|null>;
@@ -120,9 +121,10 @@ export async function processarComunicacaoMedico(
       const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
+      let interpretacaoSemantica:InterpretacaoSemantica|null=null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao});
+        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao,interpretacaoSemantica});
         if(resposta.plano) {
           planoAtual=resposta.plano;
           await memoria.registrarPlano(medicoId,conversa,planoAtual);
@@ -131,7 +133,12 @@ export async function processarComunicacaoMedico(
       };
       const narrar=async (resultado:unknown) => chamadas>=orcamento ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
       const permitidas=deps.ferramentas.permitidas(fatos);
-      let decisao=await decidir(permitidas);
+      if(deps.interpretadorSemantico&&entrada.respostaMedico) {
+        if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
+        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora});
+      }
+      let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
+      if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
       // não é resposta à pergunta, então não força parametros.confirmacao.
