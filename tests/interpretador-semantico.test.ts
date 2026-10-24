@@ -8,7 +8,7 @@ const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:'amplimed',conect
 const frame:InterpretacaoSemantica={
   dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',
   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
-  restricoes:{naoEmitir:false,somenteLeitura:true},faltando:[],confianca:.98
+  restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[],confianca:.98
 };
 
 it('interpreta formulações linguísticas diferentes no mesmo frame sem regras de frase no código',async()=>{
