@@ -1,5 +1,5 @@
 import {expect,it,vi} from 'vitest';
-import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,type FatosConversa} from '../src/onboarding/conversador-medico.js';
+import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa} from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
@@ -221,4 +221,16 @@ it('turno de conclusão de conexão bloqueia só link novo; continuidade executa
  expect(validarAcaoConversa({fala:['Escolha:'],acao:'pedir_link_permissoes'},concluido,['pedir_link_permissoes'],'',agora)).toBe('CONCLUSAO_SEM_ACAO');
  expect(validarAcaoConversa({fala:['Vou listar.'],acao:'listar_pendencias'},{...concluido,agenda:{nome:'amplimed',conectada:true},eventoAgenda:{agenda:'amplimed',conectado:true}},['listar_pendencias'],'',agora)).not.toBe('CONCLUSAO_SEM_ACAO');
  expect(validarAcaoConversa({fala:['Não consegui conectar: confira login e senha na área segura. Se quiser, mando outro link.'],acao:null},concluido,['pedir_link_agenda'],'',agora)).toBeNull();
+});
+
+it('dia único pedido é extraído e validado deterministicamente; inválido/futuro/ausente => null',()=>{
+ expect(diaDecisao({fala:['Ok'],parametros:{dia:'2026-10-19'}},agora)).toBe('2026-10-19');
+ expect(diaDecisao({fala:['Ok'],parametros:{dia:'2026-10-22'}},agora)).toBeNull();
+ expect(diaDecisao({fala:['Ok'],parametros:{dia:'19/10'}},agora)).toBeNull();
+ expect(diaDecisao({fala:['Ok'],parametros:{}},agora)).toBeNull();
+});
+it('dia único válido supre PERIODO_NECESSARIO; dia inválido é PERIODO_INVALIDO',()=>{
+ const conectado={...fatos,agenda:{nome:'tribemd',conectada:true}};
+ expect(validarAcaoConversa({fala:['Ok'],acao:'iniciar_lote',parametros:{dia:'2026-10-19'}},conectado,['iniciar_lote'],'sim',agora)).toBeNull();
+ expect(validarAcaoConversa({fala:['Ok'],acao:'iniciar_lote',parametros:{dia:'2026-10-22'}},conectado,['iniciar_lote'],'sim',agora)).toBe('PERIODO_INVALIDO');
 });

@@ -56,7 +56,7 @@ import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
-import { ConversadorMedico, normalizarAgenda, periodoDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
+import { ConversadorMedico, normalizarAgenda, periodoDecisao, diaDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -407,7 +407,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         for(const [indice,texto] of fala.entries()) await memoriaPersistida?.registrarFala(c.medicoId,c.conversa,`noto:permissoes:link:${alvo}:${r.url.slice(-12)}:${indice}`,indice===fala.length-1?`${origemLinksSeguros}/p/[LINK_SEGURO]`:texto,'noto').catch(()=>{});
         return {jaRespondida:envio==='enviado'||envio==='simulado',dados:{ferramenta:'pedir_link_permissoes',ok:envio!=='erro',motivo:envio}};
       }
-      const desde=periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
+      // Dia único nomeado na mensagem vence o período salvo: nunca ampliar o pedido em silêncio.
+      const dia=diaDecisao(decisao,c.agora);
+      const desde=dia??periodoDecisao(decisao,c.agora,c.texto)??c.fatos.periodo.desde!;
+      const fimDoDia=dia?`${dia}T23:59:59.999-03:00`:undefined;
       if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
         // Amplimed v1: modo observação, dia a dia até 31 dias; nada vira nota.
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
@@ -423,7 +426,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
-        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde);
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd')?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);
         return {jaRespondida:true};
       }
       const r=await listarPendencias(c.medicoId,c.fatos.agenda,c.agora,desde);

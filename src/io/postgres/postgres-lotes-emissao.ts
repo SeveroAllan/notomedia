@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import type pg from 'pg';
 import { chaveConsulta } from '../../atendimento/comprovante.js';
+import { classificarRetomadaEmissao } from '../../fiscal/retomada-recusa.js';
 import type { InterpretacaoConfirmacao } from '../../onboarding/confirmacao-emissao-medico.js';
 import type { ConsultaLote, ContagemPeriodo, LoteRetroativo, RepositorioLotes } from '../../onboarding/lote-retroativo.js';
 
@@ -29,32 +30,44 @@ export class PostgresLotesEmissao implements RepositorioLotes {
     const { rows } = await this.pool.query<{ fonte: string; id_externo: string }>(`select fonte, id_externo
       from public.noto_consultas_sincronizadas where medico_id=$1 and fonte=$4 and status='realizada'
       and data_hora >= ($2::date::timestamp at time zone 'America/Sao_Paulo') and data_hora <= $3::timestamptz order by data_hora, id_externo`, [medicoId, desde, ate, fonteAgenda]);
-    const consultas: ConsultaLote[] = []; let totalCentavos = 0, totalConsultas = 0, semValor = 0;
+    const consultas: ConsultaLote[] = []; let totalCentavos = 0, totalConsultas = 0, semValor = 0, bloqueadas = 0;
     for (const r of rows) {
       if (!valoresAoVivo.has(r.id_externo)) continue;
       const chave = chaveConsulta(this.pepper, medicoId, r.fonte, r.id_externo);
-      const { rows: emitidas } = await this.pool.query(`select 1 from public.noto_emissoes_comprovantes where medico_id=$1 and consulta_chave=$2 and estado='nota_gerada'`, [medicoId, chave]);
-      if (emitidas.length) continue;
+      // Trava antirre-emissão: só volta a ser elegível quem nunca teve comprovante ativo ou cujas
+      // tentativas ativas são TODAS recusa definitiva comprovada (rejeição estruturada E#### +
+      // reconciliação HEAD /dps — ver fiscal/retomada-recusa.ts). Erro transitório, timeout ou
+      // qualquer tentativa sem recusa estruturada mantém a consulta bloqueada, não "pronta".
+      const { rows: ativas } = await this.pool.query(`select estado, recusa_definitiva, nota_fiscal_id from public.noto_emissoes_comprovantes
+        where medico_id=$1 and consulta_chave=$2 and substituida_em is null`, [medicoId, chave]);
+      const destinos = ativas.map(e => classificarRetomadaEmissao({ estado: e.estado, recusaDefinitiva: e.recusa_definitiva === true, notaFiscalId: e.nota_fiscal_id ?? null }));
+      if (destinos.includes('ja_faturada')) continue;
+      if (destinos.includes('repetida')) { bloqueadas++; continue; }
       const valor = valoresAoVivo.get(r.id_externo) ?? null;
       const temValor = Number.isSafeInteger(valor) && valor! > 0;
       if (temValor) { totalConsultas++; totalCentavos += valor!; } else semValor++;
       if (!Number.isSafeInteger(totalCentavos)) throw Error('TOTAL_LOTE_INVALIDO');
       consultas.push({ fonte: r.fonte, idExterno: r.id_externo, chave, assinatura: temValor ? this.assinatura(medicoId, r.fonte, r.id_externo, valor!) : null });
     }
-    return { consultas, totalConsultas, totalCentavos, semValor };
+    return { consultas, totalConsultas, totalCentavos, semValor, bloqueadas };
   }
-  async preparar(id: string, desde: string, contagem: ContagemPeriodo) {
+  async preparar(id: string, desde: string, contagem: ContagemPeriodo, fim?: string) {
     const client = await this.pool.connect();
     try {
       await client.query('begin');
+      // `ate` escopado (dia único) também persiste: a execução confere data_hora<=l.ate por item.
       const { rows } = await client.query(`update public.noto_lotes_emissao set desde=$2, total_consultas=$3, total_centavos=$4, sem_valor=$5,
-        estado=$6 where id=$1 and estado='aguardando_data_inicio' returning *, desde::text as desde`, [id, desde, contagem.totalConsultas, contagem.totalCentavos, contagem.semValor, contagem.totalConsultas ? 'aguardando_confirmacao_lote' : 'recusado']);
+        estado=$6, ate=coalesce($7::timestamptz, ate) where id=$1 and estado='aguardando_data_inicio' returning *, desde::text as desde`, [id, desde, contagem.totalConsultas, contagem.totalCentavos, contagem.semValor, contagem.totalConsultas ? 'aguardando_confirmacao_lote' : 'recusado', fim ?? null]);
       if (!rows[0]) throw Error('LOTE_ESTADO_DIVERGENTE');
       for (const c of contagem.consultas) await client.query(`insert into public.noto_lotes_itens
         (lote_id, medico_id, fonte, id_externo, consulta_chave, assinatura, estado) values ($1,$2,$3,$4,$5,$6,$7)`,
         [id, rows[0].medico_id, c.fonte, c.idExterno, c.chave, c.assinatura, c.assinatura ? 'pronto' : 'sem_valor']);
       await client.query('commit'); return lote(rows[0]);
     } catch (e) { await client.query('rollback'); throw e; } finally { client.release(); }
+  }
+  async abandonarPendentes(medicoId: string, excetoChave: string) {
+    await this.pool.query(`update public.noto_lotes_emissao set estado='recusado'
+      where medico_id=$1 and chave_evento<>$2 and estado in ('aguardando_data_inicio','aguardando_confirmacao_lote')`, [medicoId, excetoChave]);
   }
   async registrarPergunta(id: string, mensagemId: string, agora: Date) {
     await this.pool.query(`update public.noto_lotes_emissao set mensagem_confirmacao_id=$2, pergunta_em=$3
@@ -87,7 +100,13 @@ export class PostgresLotesEmissao implements RepositorioLotes {
       }
       await client.query(`update public.noto_lotes_emissao set estado='processando' where id=$1 and estado='confirmado'`, [id]);
       const { rows: itens } = await client.query(`select i.id, i.fonte, i.id_externo, i.consulta_chave, i.assinatura,
-        case when e.estado='nota_gerada' then 'emitida' else i.estado end as estado,
+        case when e.estado='nota_gerada' then 'emitida'
+          when exists (select 1 from public.noto_emissoes_comprovantes b
+            where b.medico_id=i.medico_id and b.consulta_chave=i.consulta_chave and b.substituida_em is null
+              and (b.lote_item_id is null or b.lote_item_id <> i.id)
+              and b.estado<>'nota_gerada' and b.nota_fiscal_id is null
+              and not (b.estado='erro' and b.recusa_definitiva)) then 'bloqueada'
+          else i.estado end as estado,
         exists (select 1 from public.noto_envios_homologacao v where v.medico_id=i.medico_id
           and v.acao='nota_paciente' and v.chave=e.nota_fiscal_id::text and v.estado='enviado') as entregue,
         (e.estado='nota_gerada' and s.contato_paciente_encriptado is null) as sem_contato

@@ -5,7 +5,7 @@ import { type InterpretacaoConfirmacao } from './confirmacao-emissao-medico.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 
 export interface ConsultaLote { fonte: string; idExterno: string; chave: string; assinatura: string | null }
-export interface ContagemPeriodo { consultas: ConsultaLote[]; totalConsultas: number; totalCentavos: number; semValor: number }
+export interface ContagemPeriodo { consultas: ConsultaLote[]; totalConsultas: number; totalCentavos: number; semValor: number; bloqueadas?: number }
 export interface ResultadoContagemLote {
   desde: string; ate: string; contagem: ContagemPeriodo; perguntaConfirmacao: string | null;
 }
@@ -18,7 +18,8 @@ export interface LoteRetroativo {
 export interface RepositorioLotes {
   abrir(medicoId: string, conversa: string, chave: string, agora: Date): Promise<LoteRetroativo | null>;
   ativo(medicoId: string): Promise<LoteRetroativo | null>;
-  preparar(id: string, desde: string, contagem: ContagemPeriodo): Promise<LoteRetroativo>;
+  preparar(id: string, desde: string, contagem: ContagemPeriodo, fim?: string): Promise<LoteRetroativo>;
+  abandonarPendentes(medicoId: string, excetoChave: string): Promise<void>;
   registrarPergunta(id: string, mensagemId: string, agora: Date): Promise<void>;
   confirmar(id: string, mensagemId: string, perguntaId: string, interpretacao: InterpretacaoConfirmacao, agora: Date): Promise<boolean>;
 }
@@ -41,10 +42,16 @@ export async function interpretarDataRetroativo(apiKey: string | undefined, mode
     return validarInicioRetroativo(r.desde, agora);
   } catch { return null; }
 }
-export function perguntaLote(lote: Pick<LoteRetroativo, 'desde' | 'totalConsultas' | 'totalCentavos'>): string {
+export function perguntaLote(lote: Pick<LoteRetroativo, 'desde' | 'ate' | 'totalConsultas' | 'totalCentavos'>): string {
   const data = lote.desde!.split('-').reverse().join('/');
   const valor = (lote.totalCentavos / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return `Desde ${data} achei ${lote.totalConsultas} ${lote.totalConsultas === 1 ? 'consulta' : 'consultas'} com valor, somando R$ ${valor}. Posso emitir ${lote.totalConsultas === 1 ? 'a nota dela' : 'as notas de todas'}?`;
+  const consultas = `${lote.totalConsultas} ${lote.totalConsultas === 1 ? 'consulta' : 'consultas'} com valor, somando R$ ${valor}`;
+  const emissao = lote.totalConsultas === 1 ? 'a nota dela' : 'as notas de todas';
+  // Escopo de dia único (pedido "a nota do dia X"): a pergunta precisa mostrar exatamente esse dia,
+  // nunca sugerir período maior que o pedido.
+  if (lote.ate && lote.desde === new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date(lote.ate)))
+    return `Em ${data} achei ${consultas}. Posso emitir ${emissao}?`;
+  return `Desde ${data} achei ${consultas}. Posso emitir ${emissao}?`;
 }
 export class ConversaLoteRetroativo {
   constructor(private readonly repo: RepositorioLotes, private readonly deps: {
@@ -60,13 +67,16 @@ export class ConversaLoteRetroativo {
     enviar: (medicoId: string, conversa: string, chave: string, fala: string[], aoEnviar?: (mensagemId: string) => Promise<void>) => Promise<void>;
     log: (mensagem: string) => void;
   }) {}
-  async iniciar(medicoId: string, conversa: string, chave: string, agora: Date, inicioConhecido?: string | null): Promise<boolean> {
+  async iniciar(medicoId: string, conversa: string, chave: string, agora: Date, inicioConhecido?: string | null, fimConhecido?: string): Promise<boolean> {
     if (!await this.deps.permitido(medicoId)) return false;
     const desde = validarInicioRetroativo(inicioConhecido ?? null, agora);
+    // Um novo pedido de emissão substitui propostas ainda sem resposta (de outra chave): a pergunta
+    // antiga deixa de ser confirmável — o CAS de confirmar exige aguardando_confirmacao_lote.
+    await this.repo.abandonarPendentes(medicoId, chave);
     const novo = await this.repo.abrir(medicoId, conversa, chave, agora);
     const lote = novo ?? (inicioConhecido !== undefined ? await this.repo.ativo(medicoId) : null);
     if (lote?.estado === 'aguardando_data_inicio' && desde) {
-      await this.propor(lote, desde, conversa, chave, agora, true);
+      await this.propor(lote, desde, conversa, chave, agora, true, fimConhecido);
       return true;
     }
     if (novo) await this.deps.enviar(medicoId, conversa, `lote:${novo.id}:data`, ['Desde quando você não emite notas?']);
@@ -77,20 +87,24 @@ export class ConversaLoteRetroativo {
     }
     return true;
   }
-  private async propor(lote: LoteRetroativo, desde: string, conversa: string, mensagemId: string, agora: Date, somenteContagem = false) {
+  private async propor(lote: LoteRetroativo, desde: string, conversa: string, mensagemId: string, agora: Date, somenteContagem = false, fimConhecido?: string) {
     const medicoId = lote.medicoId;
+    const fim = fimConhecido ?? lote.ate;
+    // Consulta que já teve tentativa de emissão não concluída não entra no lote (trava antirre-emissão):
+    // o médico precisa saber que ela ficou de fora, sem que a ausência pareça período errado.
+    const avisoBloqueadas = (n?: number) => !n ? [] as string[] : [`${n === 1 ? 'Uma consulta' : `${n} consultas`} do período já ${n === 1 ? 'teve' : 'tiveram'} uma tentativa de emissão que não concluiu e ${n === 1 ? 'fica' : 'ficam'} de fora desta proposta; antes de reemitir, preciso conciliar essa tentativa com a prefeitura.`];
     const propor = async (valoresAoVivo?: ReadonlyMap<string, number | null>) => {
-      const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, lote.ate, valoresAoVivo) : await this.deps.contar(medicoId, desde, lote.ate);
-      this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: lote.ate,
-        totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor }));
-      const preparado = await this.repo.preparar(lote.id, desde, contagem);
+      const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, fim, valoresAoVivo) : await this.deps.contar(medicoId, desde, fim);
+      this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: fim,
+        totalConsultas: contagem.totalConsultas, totalCentavos: contagem.totalCentavos, semValor: contagem.semValor, bloqueadas: contagem.bloqueadas ?? 0 }));
+      const preparado = await this.repo.preparar(lote.id, desde, contagem, fimConhecido);
       if (!preparado.totalConsultas) {
-        const fala = this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: lote.ate, contagem, perguntaConfirmacao: null })
-          : [`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`];
+        const fala = [...avisoBloqueadas(contagem.bloqueadas), ...(this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: fim, contagem, perguntaConfirmacao: null })
+          : [`Não encontrei consultas com valor nesse período.${contagem.semValor ? ` Há ${contagem.semValor} consultas sem valor; pode conferir os valores na agenda?` : ''}`])];
         await this.deps.enviar(medicoId, conversa, `lote:resposta:${mensagemId}`, fala); return;
       }
-      const fala = this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: lote.ate, contagem, perguntaConfirmacao: perguntaLote(preparado) })
-        : this.deps.comporContagem(preparado).fala;
+      const fala = [...avisoBloqueadas(contagem.bloqueadas), ...(this.deps.narrarContagem ? await this.deps.narrarContagem({ desde, ate: fim, contagem, perguntaConfirmacao: perguntaLote(preparado) })
+        : this.deps.comporContagem(preparado).fala)];
       await this.deps.enviar(medicoId, conversa, `lote:${lote.id}:confirmacao`, fala,
         id => this.repo.registrarPergunta(lote.id, id, agora));
     };

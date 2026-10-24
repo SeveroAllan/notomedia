@@ -9,7 +9,8 @@ function cenario() {
   const repo: RepositorioLotes = {
     abrir: vi.fn(async (medicoId, conversa, _chave, instante) => lote ??= { id: 'lote', medicoId, conversa, desde: null, ate: instante.toISOString(), totalConsultas: 0, totalCentavos: 0, semValor: 0, estado: 'aguardando_data_inicio', mensagemConfirmacaoId: null, perguntaEm: null }),
     ativo: vi.fn(async () => lote),
-    preparar: vi.fn(async (_id, desde, c) => { Object.assign(lote!, { desde, totalConsultas: c.totalConsultas, totalCentavos: c.totalCentavos, semValor: c.semValor, estado: 'aguardando_confirmacao_lote' }); return lote!; }),
+    preparar: vi.fn(async (_id, desde, c, fim?: string) => { Object.assign(lote!, { desde, ...(fim ? { ate: fim } : {}), totalConsultas: c.totalConsultas, totalCentavos: c.totalCentavos, semValor: c.semValor, estado: 'aguardando_confirmacao_lote' }); return lote!; }),
+    abandonarPendentes: vi.fn(async () => {}),
     registrarPergunta: vi.fn(async (_id, id, instante) => { Object.assign(lote!, { mensagemConfirmacaoId: id, perguntaEm: instante.toISOString() }); }),
     confirmar: vi.fn(async (_id, _msg, pergunta, i) => {
       if (lote!.estado !== 'aguardando_confirmacao_lote' || pergunta !== lote!.mensagemConfirmacaoId) return false;
@@ -265,7 +266,7 @@ it.each([0, 2])('texto/resultado apenas: expõe contagem %i sem alterar preparo,
   const conversa = new ConversaLoteRetroativo(c.repo, {...c.deps,narrarContagem});
   await conversa.iniciar('m','c','evento',agora,'2026-10-01');
   expect(c.deps.contar).toHaveBeenCalledExactlyOnceWith('m','2026-10-01',agora.toISOString());
-  expect(c.repo.preparar).toHaveBeenCalledExactlyOnceWith('lote','2026-10-01',dados);
+  expect(c.repo.preparar).toHaveBeenCalledExactlyOnceWith('lote','2026-10-01',dados,undefined);
   expect(narrarContagem).toHaveBeenCalledExactlyOnceWith({desde:'2026-10-01',ate:agora.toISOString(),contagem:dados,
     perguntaConfirmacao:totalConsultas?perguntaLote(c.lote()):null});
   expect(c.falas).toEqual([`Conferi ${totalConsultas} consultas no período.`]);
@@ -277,4 +278,28 @@ it('confirmação e fechamento não usam a frase antiga de autorização', async
  const {readFile}=await import('node:fs/promises');
  const antiga=['Autorização registrada para emitir somente essas consultas em homologação.', 'A entrega depende das permissões de envio.'].join(' ');
  for(const arquivo of ['src/onboarding/lote-retroativo.ts','src/worker/processar-lote-retroativo.ts']) expect(await readFile(arquivo,'utf8')).not.toContain(antiga);
+});
+
+it('escopo de dia único: conta e pergunta só o dia pedido, nunca o resto do mês', async () => {
+  const c = cenario();
+  await c.conversa.iniciar('m', 'c', 'pedido-dia', agora, '2026-10-19', '2026-10-19T23:59:59.999-03:00');
+  expect(c.deps.contar).toHaveBeenCalledWith('m', '2026-10-19', '2026-10-19T23:59:59.999-03:00');
+  expect(c.repo.preparar).toHaveBeenCalledWith('lote', '2026-10-19', expect.anything(), '2026-10-19T23:59:59.999-03:00');
+  expect(c.falas[0]).toContain('Em 19/10/2026 achei 1 consulta'); expect(c.falas[0]).not.toContain('Desde');
+});
+it('pergunta de dia único diz "Em DD/MM"; período maior segue "Desde"', () => {
+  expect(perguntaLote({ desde: '2026-10-19', ate: '2026-10-19T23:59:59.999-03:00', totalConsultas: 1, totalCentavos: 30000 })).toContain('Em 19/10/2026');
+  expect(perguntaLote({ desde: '2026-10-05', ate: '2026-10-20T15:00Z', totalConsultas: 3, totalCentavos: 73000 })).toContain('Desde 05/10/2026');
+});
+it('novo pedido abandona propostas pendentes de outra chave antes de abrir', async () => {
+  const c = cenario();
+  await c.conversa.iniciar('m', 'c', 'pedido-novo', agora, '2026-10-19', '2026-10-19T23:59:59.999-03:00');
+  expect(c.repo.abandonarPendentes).toHaveBeenCalledWith('m', 'pedido-novo');
+});
+it('consulta bloqueada por tentativa não concluída é avisada, sem parecer período errado', async () => {
+  const c = cenario(); c.deps.contar.mockResolvedValue({ consultas: [], totalConsultas: 0, totalCentavos: 0, semValor: 0, bloqueadas: 2 });
+  await c.conversa.iniciar('m', 'c', 'pedido', agora, '2026-10-16');
+  expect(c.falas[0]).toContain('2 consultas do período já tiveram uma tentativa de emissão que não concluiu');
+  expect(c.falas.some(f => /conciliar essa tentativa/.test(f))).toBe(true);
+  expect(c.falas.some(f => /Não encontrei consultas com valor/.test(f))).toBe(true);
 });

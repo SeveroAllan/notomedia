@@ -9,8 +9,8 @@ it('contar_consultas_periodo usa médico/período/realizada e exclui faturada po
       expect(p).toEqual(['m', '2026-10-01', '2026-10-20T15:00Z', 'tribemd']);
       return { rows: [{ fonte: 'tribemd', id_externo: '1', valor_consulta_centavos: 30000 }, { fonte: 'tribemd', id_externo: '2', valor_consulta_centavos: null }, { fonte: 'tribemd', id_externo: '3', valor_consulta_centavos: 40000 }] };
     }
-    expect(sql).toContain("estado='nota_gerada'");
-    return { rows: p?.[1] === chaveConsulta('pepper', 'm', 'tribemd', '3') ? [{}] : [] };
+    expect(sql).toContain('noto_emissoes_comprovantes'); expect(sql).toContain('substituida_em is null');
+    return { rows: p?.[1] === chaveConsulta('pepper', 'm', 'tribemd', '3') ? [{ estado: 'nota_gerada', recusa_definitiva: false, nota_fiscal_id: 'nf-1' }] : [] };
   });
   const c = await new PostgresLotesEmissao({ query } as any, 'pepper').contarConsultasPeriodo('m', '2026-10-01', '2026-10-20T15:00Z', new Map([['1',30000],['2',null],['3',40000]]));
   expect(c).toMatchObject({ totalConsultas: 1, totalCentavos: 30000, semValor: 1 });
@@ -152,4 +152,51 @@ it('fonte do lote: padrão tribemd; amplimed só quando pedida, sempre como par�
   await repo.contarConsultasPeriodo('m', '2026-10-01', '2026-10-20T15:00Z', new Map(), 'amplimed');
   expect((query.mock.calls[0] as any)[1][3]).toBe('tribemd'); expect((query.mock.calls[1] as any)[1][3]).toBe('amplimed');
   expect((query.mock.calls[0] as any)[0]).not.toMatch(/'tribemd'|'amplimed'/);
+});
+
+it('antirre-emissão: erro sem recusa definitiva volta BLOQUEADO, nunca pronto (regressão das chaves 19/21/22)', async () => {
+  const query = vi.fn(async (sql: string) => {
+    if (sql.includes('from public.noto_consultas_sincronizadas'))
+      return { rows: ['19','21','22'].map(id => ({ fonte: 'tribemd', id_externo: id, valor_consulta_centavos: 30000 })) };
+    expect(sql).toContain('substituida_em is null');
+    return { rows: [{ estado: 'erro', recusa_definitiva: false, nota_fiscal_id: null }] };
+  });
+  const c = await new PostgresLotesEmissao({ query } as any, 'pepper').contarConsultasPeriodo('m', '2026-10-16', '2026-10-23T15:00Z', new Map([['19',30000],['21',18000],['22',25000]]));
+  expect(c).toMatchObject({ totalConsultas: 0, totalCentavos: 0, bloqueadas: 3 }); expect(c.consultas).toEqual([]);
+});
+it('recusa definitiva comprovada reabre; tentativa ativa não resolvida bloqueia; nota_gerada fica fora', async () => {
+  const chave = (id: string) => chaveConsulta('pepper', 'm', 'tribemd', id);
+  const query = vi.fn(async (sql: string, p?: unknown[]) => {
+    if (sql.includes('from public.noto_consultas_sincronizadas'))
+      return { rows: ['1','2','3'].map(id => ({ fonte: 'tribemd', id_externo: id, valor_consulta_centavos: 30000 })) };
+    if (p?.[1] === chave('1')) return { rows: [{ estado: 'erro', recusa_definitiva: true, nota_fiscal_id: null }] };
+    if (p?.[1] === chave('2')) return { rows: [{ estado: 'erro', recusa_definitiva: true, nota_fiscal_id: null }, { estado: 'erro', recusa_definitiva: false, nota_fiscal_id: null }] };
+    return { rows: [{ estado: 'nota_gerada', recusa_definitiva: false, nota_fiscal_id: null }] };
+  });
+  const c = await new PostgresLotesEmissao({ query } as any, 'pepper').contarConsultasPeriodo('m', '2026-10-16', '2026-10-23T15:00Z', new Map([['1',30000],['2',30000],['3',30000]]));
+  expect(c.consultas.map(x => x.idExterno)).toEqual(['1']); expect(c.bloqueadas).toBe(1); expect(c.totalConsultas).toBe(1);
+});
+it('abandonarPendentes recusa só lotes pendentes de OUTRA chave, sem tocar em concluídos', async () => {
+  const query = vi.fn(async () => ({ rows: [] }));
+  await new PostgresLotesEmissao({ query } as any, 'pepper').abandonarPendentes('m', 'chave-nova');
+  const [sql, p] = query.mock.calls[0] as [string, unknown[]];
+  expect(sql).toContain("set estado='recusado'"); expect(sql).toContain('chave_evento<>$2');
+  expect(sql).toContain("estado in ('aguardando_data_inicio','aguardando_confirmacao_lote')"); expect(p).toEqual(['m', 'chave-nova']);
+});
+it('reservar rebaixa para bloqueada o item cuja chave tem tentativa ativa não concluída de outro item', async () => {
+  const calls: string[] = [];
+  const query = vi.fn(async (sql: string) => {
+    calls.push(sql);
+    if (sql.includes('join medico_perfil_fiscal')) return { rows: [{ id: 'l', medico_id: 'm', conversa: 'c', desde: '2026-10-16', ate: '2026-10-23T15:00Z', total_consultas: 1, total_centavos: 30000, sem_valor: 0, estado: 'confirmado', mensagem_confirmacao_id: null, pergunta_em: null }] };
+    if (sql.includes('pg_try_advisory_lock')) return { rows: [{ reservada: true }] };
+    if (sql.includes('from public.noto_lotes_itens')) return { rows: [{ id: 'i', fonte: 'tribemd', id_externo: '19', consulta_chave: 'k', assinatura: 'a', estado: 'bloqueada', entregue: false, sem_contato: false }] };
+    return { rows: [] };
+  });
+  const client = { query, release: vi.fn() };
+  const repo = new PostgresLotesEmissao({ connect: async () => client } as any, 'pepper');
+  const r = await repo.reservar();
+  const itensSql = calls.find(x => x.includes('from public.noto_lotes_itens'))!;
+  expect(itensSql).toContain("b.estado<>'nota_gerada'"); expect(itensSql).toContain('b.recusa_definitiva'); expect(itensSql).toContain('substituida_em is null');
+  expect(r?.itens[0]).toMatchObject({ estado: 'bloqueada', idExterno: '19' });
+  await repo.liberarReserva('l');
 });

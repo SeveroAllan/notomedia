@@ -344,6 +344,7 @@ it('wiring do lote pós-sync interpreta data, vincula o sim Evolution e executa 
   enviosEsperados = 7;
   let atual: any;
   vi.spyOn(PostgresLotesEmissao.prototype, 'abrir').mockImplementation(async (medicoId, conversa, _chave, agora) => atual = { id: 'lote-servidor', medicoId, conversa, ate: agora.toISOString(), desde: null, estado: 'aguardando_data_inicio', totalConsultas: 0, totalCentavos: 0, semValor: 0 });
+  vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue(undefined);
   vi.spyOn(PostgresLotesEmissao.prototype, 'ativo').mockImplementation(async () => atual);
   const snapshot = [{ fonte: 'tribemd', idExterno: '12', chave: 'hmac', assinatura: 'hmac-valor' }, { fonte: 'tribemd', idExterno: '13', chave: 'semvalor', assinatura: null }];
   const contar = vi.spyOn(PostgresLotesEmissao.prototype, 'contarConsultasPeriodo').mockResolvedValue({ consultas: snapshot, totalConsultas: 1, totalCentavos: 30000, semValor: 1 });
@@ -397,6 +398,7 @@ it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as
  let atual:any=null;
  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>atual);
  const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>atual={id:'lote-pedido',medicoId,conversa,ate:agora.toISOString(),desde:null,estado:'aguardando_data_inicio',totalConsultas:0,totalCentavos:0,semValor:0,mensagemConfirmacaoId:null,perguntaEm:null});
+ vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue(undefined);
  const snapshot=Array.from({length:173},(_,i)=>({fonte:'tribemd',idExterno:String(i),chave:`chave-${i}`,assinatura:`assinatura-${i}`}));
  const contar=vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:snapshot,totalConsultas:173,totalCentavos:5190000,semValor:0});
  vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockImplementation(async(_id,desde,c)=>Object.assign(atual,{desde,totalConsultas:c.totalConsultas,totalCentavos:c.totalCentavos,estado:'aguardando_confirmacao_lote'}));
@@ -477,6 +479,7 @@ it.each([0,3])('resultado do lote distingue %i consultas no período de todas j�
  let lote:any=null;
  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>lote);
  vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>lote={id:'lote-vazio',medicoId,conversa,desde:null,ate:agora.toISOString(),estado:'aguardando_data_inicio',totalConsultas:0,totalCentavos:0,semValor:0});
+ vi.spyOn(PostgresLotesEmissao.prototype,'abandonarPendentes').mockResolvedValue(undefined);
  vi.spyOn(PostgresLotesEmissao.prototype,'contarConsultasPeriodo').mockResolvedValue({consultas:[],totalConsultas:0,totalCentavos:0,semValor:0});
  vi.spyOn(PostgresLotesEmissao.prototype,'preparar').mockImplementation(async(_id,desde,c)=>Object.assign(lote,{desde,...c,estado:'recusado'}));
  const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar');
