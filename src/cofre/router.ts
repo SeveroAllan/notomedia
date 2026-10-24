@@ -3,6 +3,7 @@ import { criarRouterLinksCofre } from './links-router.js';
 import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDoIdAmplimed, tomadorAmplimedAoVivo } from '../agenda/amplimed-lote.js';
 import { lerEventosAgendaAmplimed, verificarLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
@@ -54,6 +55,8 @@ export function criarCofreContas(deps: {
         cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
         const chromiumAmplimed = env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
         const dir2fa = env.NOTO_AMPLIMED_2FA_DIRETORIO || undefined;
+        // O diretório é local ao container (some a cada deploy): recria a cada boot, restrito ao serviço.
+        if (dir2fa) mkdirSync(dir2fa, { recursive: true, mode: 0o700 });
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
             verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
             pedirCodigo2fa: dir2fa ? id => pedirCodigo2faPorArquivo(dir2fa, id) : undefined });

@@ -64,6 +64,13 @@ export function dataDoCabecalhoAmplimed(texto: string): string | null {
   const mes = m ? MESES[m[2]!] : undefined;
   return m && mes ? `${m[3]}-${mes}-${m[1]!.padStart(2, '0')}` : null;
 }
+/** Data esperada `diasAtras` dias antes de `hoje` (aaaa-mm-dd), sem depender de fuso do processo. */
+export function dataEsperadaAtras(hoje: string, diasAtras: number): string {
+  const d = new Date(hoje + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() - diasAtras);
+  return d.toISOString().slice(0, 10);
+}
+
 /** Dias de hoje até `desde`, do mais recente para o mais antigo, com teto. */
 export function diasAtrasAmplimed(hoje: string, desde: string, teto = 31): number | null {
   const n = Math.round((Date.parse(hoje) - Date.parse(desde)) / 86400000);

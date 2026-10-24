@@ -1,5 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { dataDoCabecalhoAmplimed, lerDetalheAmplimedTexto } from '../agenda/amplimed-leitor.js';
+import { dataDoCabecalhoAmplimed, dataEsperadaAtras, lerDetalheAmplimedTexto } from '../agenda/amplimed-leitor.js';
 import { statusAmplimedPorCor } from '../agenda/amplimed-mapeamento.js';
 import { dominioAprovado } from '../agenda/agendas-suportadas.js';
 import type { EstadoNavegador } from './tribemd-perfil.js';
@@ -247,15 +247,26 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(2500);
     profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
+    // A agenda reabre na última data vista na conta, não necessariamente em "hoje": ancorar no dia pedido
+    // (hoje em America/Sao_Paulo, como todo o resto do sistema) antes de ler, senão a leitura sai do dia errado em silêncio.
+    const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     let data: string | null = await cabecalho(page);
     if (!data) { console.warn('AMPLIMED_PERIODO cabecalho_ilegivel texto=' + JSON.stringify(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 120)`))); return; }
+    if (data !== hoje) {
+      console.warn('AMPLIMED_PERIODO ancorando esperado=' + hoje + ' cabecalho=' + data);
+      try { await page.locator('.fc-today-button').first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
+      for (let t = 0; t < 10 && data !== hoje; t++) { await page.waitForTimeout(500); data = await cabecalho(page) ?? data; }
+      if (data !== hoje) { console.warn('AMPLIMED_PERIODO ancora_falhou esperado=' + hoje + ' lido=' + data); return; } // não afirma o que não leu
+      await page.waitForTimeout(1200);
+    }
     dias.push({ data, eventos: await comDetalhes(page, await eventosDaTela(page)) });
     for (let i = 0; i < total; i++) {
+      const esperado = dataEsperadaAtras(hoje, i + 1);
       const anterior: string = data;
       await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
       let atual: string = anterior;
-      for (let t = 0; t < 8 && atual === anterior; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? anterior; }
-      if (atual === anterior) { console.warn('AMPLIMED_PERIODO nao_navegou passo=' + i + ' data=' + anterior + ' bloqueados=' + JSON.stringify(ultimosBloqueadosAmplimed.slice(-4))); return; } // não navegou: não afirma o que não leu
+      for (let t = 0; t < 10 && atual !== esperado; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? anterior; }
+      if (atual !== esperado) { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + i + ' esperado=' + esperado + ' lido=' + atual); return; } // não afirma o que não leu
       await page.waitForTimeout(1200);
       data = atual;
       dias.push({ data: atual, eventos: await comDetalhes(page, await eventosDaTela(page)) });

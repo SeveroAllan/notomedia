@@ -50,3 +50,15 @@ describe('regra confirmada pelo Allan (22/10): atendido = finalizado; cortesia/R
     expect(r.foraCortesia).toBe(2);
   });
 });
+
+describe('dataEsperadaAtras', () => {
+  it('subtrai dias sem depender do fuso do processo', async () => {
+    const { dataEsperadaAtras } = await import('../src/agenda/amplimed-leitor.js');
+    expect(dataEsperadaAtras('2026-10-24', 0)).toBe('2026-10-24');
+    expect(dataEsperadaAtras('2026-10-24', 1)).toBe('2026-10-23');
+    expect(dataEsperadaAtras('2026-10-24', 22)).toBe('2026-10-02');
+    expect(dataEsperadaAtras('2026-11-01', 1)).toBe('2026-10-31');
+    expect(dataEsperadaAtras('2027-01-01', 1)).toBe('2026-12-31');
+    expect(dataEsperadaAtras('2026-03-01', 1)).toBe('2026-02-28');
+  });
+});

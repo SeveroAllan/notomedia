@@ -59,3 +59,12 @@ it('reverificar usa a credencial guardada e não a devolve', async () => {
   const r = await amp.reverificar(id);
   expect(recebido).toBe('a@b.com'); expect(r.estado).toBe('conectado'); expect(JSON.stringify(r)).not.toMatch(/a@b|"x"/);
 });
+
+it('serializa tentativas de acesso do mesmo médico (um desafio 2FA por vez)', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cofre-'));
+  let ativas = 0, pico = 0;
+  const amp = new CofreAmplimed({ diretorio: dir, chave, verificar: async () => { ativas++; pico = Math.max(pico, ativas); await new Promise(r => setTimeout(r, 30)); ativas--; return 'CONECTADO'; } });
+  await amp.iniciar(id, { email: 'a@b.com', senha: 'x' });
+  await Promise.all([amp.reverificar(id), amp.reverificar(id), amp.reverificar(id)]);
+  expect(pico).toBe(1);
+});

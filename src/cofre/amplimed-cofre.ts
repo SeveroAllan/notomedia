@@ -22,6 +22,16 @@ export class CofreAmplimed {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
+    private trancas = new Map<string, Promise<unknown>>();
+    /** Uma tentativa de acesso por médico por vez neste processo: o desafio de 2FA consome um arquivo
+     *  transitório único por médico; tentativas concorrentes disputariam o mesmo código. */
+    private tranca<T>(id: string, fn: () => Promise<T>): Promise<T> {
+        const anterior = this.trancas.get(id) ?? Promise.resolve();
+        const atual = anterior.catch(() => {}).then(fn);
+        this.trancas.set(id, atual);
+        void atual.finally(() => { if (this.trancas.get(id) === atual) this.trancas.delete(id); });
+        return atual;
+    }
     /** Lê a sessão guardada e devolve os ganchos de sessão/2FA para uma tentativa de acesso. */
     private async ganchosSessao(id: string) {
         const p = await this.perfis.ler(this.chave(id));
@@ -72,11 +82,13 @@ export class CofreAmplimed {
         p.email = ''; p.senha = '';
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.lerEventos>>>;
         const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
-        try { r = await this.opcoes.lerEventos({ ...credencial, ...ganchos }, diasAtras, comDetalhes); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        try { r = await this.tranca(id, () => this.opcoes.lerEventos!({ ...credencial, ...ganchos }, diasAtras, comDetalhes)); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
+        // Defesa em profundidade: o primeiro dia lido tem que ser o "hoje" pedido (a agenda pode reabrir em outra data).
+        if (r.dias[0]?.data !== hoje) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
         const dias: { data: string; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
         for (const d of r.dias) {
             const leitura = montarLeituraAmplimed(d.eventos, { data: d.data, profissional: r.profissional });
@@ -90,7 +102,7 @@ export class CofreAmplimed {
     private async verificarEmSegundoPlano(id: string, credencial: { email: string; senha: string }) {
         let codigo: CodigoLoginAmplimed = 'TEMPO_ESGOTADO';
         const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
-        try { codigo = await this.opcoes.verificar!({ ...credencial, ...ganchos }); } catch { /* estado de instabilidade */ }
+        try { codigo = await this.tranca(id, () => this.opcoes.verificar!({ ...credencial, ...ganchos })); } catch { /* estado de instabilidade */ }
         finally { credencial.email = ''; credencial.senha = ''; }
         const conectado = codigo === 'CONECTADO';
         const p = await this.perfis.ler(this.chave(id));
