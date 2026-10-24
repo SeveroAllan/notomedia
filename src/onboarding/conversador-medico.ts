@@ -48,7 +48,7 @@ EXEMPLOS (reescreva com suas palavras)
 - fatos.listaRecente=true, medico: "Certo." -> {"fala":["Quer que eu prepare o total para confirmar a emissão?"],"acao":null}
 - fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
 
-Correção: corrija o motivo, sem narrar validações.
+Corrija o motivo sem narrar validações.
 SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano"?:{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano guarda objetivo/passos, nunca autoriza ação. Máx 3 falas/500 chars. Ações só de acoesPermitidas. Após ferramenta acao=null; só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
 const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
