@@ -608,6 +608,30 @@ it('fato inventado após correção de anúncio também é recusado sem narrador
  expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toMatch(/Preciso consultar/);expect(c.completar).toHaveBeenCalledTimes(2);
 });
 
+it('regressão 24/10: "me fale sobre minhas consultas dessa semana" não pede dia e horário',async()=>{
+ const c=cenario();
+ c.fatos.agenda={nome:'amplimed',conectada:true};
+ c.fatos.periodo={desde:null,origem:null};
+ Object.assign(c.deps,{orcamentoChamadas:2});
+ c.executar.mockResolvedValueOnce({
+   dados:{ferramenta:'listar_pendencias',ok:true,total:2,desde:'2026-10-19'},
+   falaAssinada:['De 19/10/2026 até hoje encontrei 2 atendimentos para conferir.']
+ });
+ c.completar
+   .mockResolvedValueOnce(JSON.stringify({fala:['Para conferir suas consultas dessa semana, preciso que você me diga o dia e horário da consulta que deseja verificar.'],acao:null}))
+   .mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir suas consultas dessa semana agora.'],acao:'listar_pendencias'}));
+
+ await c.turno('semana-atual-real','Me fale sobre minhas consultas dessa semana.');
+
+ expect(c.completar).toHaveBeenCalledTimes(2);
+ expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0]![0].acao).toBe('listar_pendencias');
+ expect(c.executar.mock.calls[0]![0].parametros?.desde).toBe('2026-10-19');
+ expect(c.guardarPeriodo).toHaveBeenCalledWith('m','2026-10-19');
+ const falas=c.enviar.mock.calls.flatMap(([fala])=>fala).join(' ');
+ expect(falas).not.toMatch(/diga o dia|dia e hor[aá]rio/i);
+});
+
 // Pedido concreto atual vence a explicação anterior, sem forçar consulta em perguntas de funcionamento.
 it.each(['Na consulta de hoje do Paciente Teste Um, quero olhar só a das 9h. Mostre primeiro qual você encontrou e o valor, sem preparar nem emitir.', 'Confira os atendimentos particulares de ontem, sem emitir.', 'Mostre as consultas desta semana.'])('consulta atual não vira oferta futura: %s',async texto=>{
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-20',origem:'contexto_salvo'};Object.assign(c.deps,{orcamentoChamadas:3});
