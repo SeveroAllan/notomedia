@@ -164,7 +164,7 @@ export async function processarComunicacaoMedico(
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       if(podeCorrigir() && motivo==='LEITURA_ATUAL_SEM_ACAO') {
-        decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte temporal já dito. Semana/mês explícitos já são recorte suficiente: não peça dia nem horário. Só peça paciente/data/horário quando a mensagem realmente escolher uma consulta específica sem identificá-la.',faltou:[]});
+        decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte atual; se faltar identificação, pergunte só o dado necessário. Não repita oferta futura.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
       if(podeCorrigir() && motivo==='PACIENTE_NECESSARIO') {
