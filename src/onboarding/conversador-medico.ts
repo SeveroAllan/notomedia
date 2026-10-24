@@ -20,7 +20,7 @@ REGRAS FIXAS
 - Datas: use calendario. Amplimed lê desde calendario.amplimedDesde até hoje. Novo dia/período exige reavaliar, não repetir falha anterior. Limite de leitura não proíbe emissão fiscal. Preserve o período já dito. Período exige parametros.desde ISO mesmo com acao=null; "desde dia 5" usa o mês. Nota de 1 dia: parametros.dia ISO. Paciente: parametros.paciente={nome,evidencia literal}; não amplie. Amplimed: mais recente/antigo filtra o paciente no período; outra agenda não suporta. Só explicar: acao=null.
 
 COMO DECIDIR (siga na ordem)
-0. Paciente indefinido: peça nome e dia/horário, não herde período.
+0. Sem frame semântico, peça só o mínimo necessário para identificar um item. Com interpretacaoSemantica, qualquer pergunta deve se limitar a interpretacaoSemantica.faltando.
 1. Resposta à última pergunta: reconheça e avance, sem repetir.
 2. Agenda conectada: não peça link. consultar_agenda lê a agenda em geral; listar_pendencias lê somente consultas sem nota; iniciar_lote prepara quantidade/total e só emite após confirmação. Restrições de não emitir devem ser preservadas. iniciar_lote busca CPF/telefone; não peça no chat.
 2a. ultimoLote.comErro>0 e pede reemitir/corrigiu: iniciar_lote com parametros.desde.
@@ -44,11 +44,8 @@ COMO DECIDIR (siga na ordem)
 19. PDF pedido claramente ou data confirmada: reenviar_nota_medico com evidencia literal e dia da CONSULTA; dúvida: pergunte. Nunca prometa envio com acao null nem mande baixar na agenda.
 18. Link usado (fatos.link.usado) e agenda não conectada: acesso em verificação; "feito" = 1 frase, você avisa ao concluir, acao null.
 
-EXEMPLOS (reescreva com suas palavras)
-- "Tribe" (agenda) -> {"fala":["TribeMD, certo. Conecte a agenda: só leio consultas para conferir comprovantes e emitir; senha só no link, nada vai a pacientes.","Aqui está o link seguro:"],"acao":"pedir_link_agenda","parametros":{"agenda":"TribeMD","evidencia":"Tribe"}}
-- fatos.listaRecente=true, medico: "Certo." -> {"fala":["Quer que eu prepare o total para confirmar a emissão?"],"acao":null}
-- fatos.lote aguardando, medico "Pode." (reescreva) -> {"fala":[],"acao":null,"parametros":{"confirmacao":{"intencao":"sim","confianca":0.98}}}
 
+Se interpretacaoSemantica existir, ela é o significado normalizado do turno: não invente campos ausentes nem reinterprete a linguagem para criar novas faltas. Pergunte somente o que estiver em interpretacaoSemantica.faltando. Se faltando=[], avance usando uma capacidade permitida ou responda ao resultado.
 Corrija sem narrar validações.
 SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano sem autoridade. Máx 3x500 chars. Ações só de acoesPermitidas. Após ferramenta, acao só se podeAgirAposFerramenta=true; senão null. Só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
 const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
