@@ -53,7 +53,7 @@ export async function processarOnboardingXml(
     await client.query('select id from medicos where id = $1 for update', [medicoId]);
     if (deps.somenteReferencia) {
       await client.query(`update medico_perfil_fiscal set dados_reforma_tributaria = $2,
-        xml_nota_referencia_url = $3, atualizado_em = now() where medico_id = $1`,
+        xml_nota_referencia_url = coalesce(xml_nota_referencia_url, $3), atualizado_em = now() where medico_id = $1`,
         [medicoId, JSON.stringify(parametros.dadosReformaTributaria), xmlStorageUrl]);
     } else {
       await salvarParametrosFiscais(client, {
