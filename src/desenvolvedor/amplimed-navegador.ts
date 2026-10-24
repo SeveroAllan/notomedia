@@ -269,16 +269,34 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
       await page.waitForTimeout(1200);
     }
     dias.push({ data, eventos: await comDetalhes(page, await eventosDaTela(page)) });
-    for (let i = 0; i < total; i++) {
-      const esperado = dataEsperadaAtras(hoje, i + 1);
-      const anterior: string = data;
+    // A navegação é dia a dia com "prev", mas a conta pode não exibir alguns dias (visto: domingo 18/10/2026
+    // pulado pela agenda: prev de 19 cai em 17). `posicao` é a posição física do calendário; quando prev e next
+    // pulam o mesmo dia dos dois lados, o dia não é exibível — registrado como vazio verificado (sem consultas).
+    let posicao: string = data;
+    let lidos = 0;
+    while (lidos < total) {
+      const esperado = dataEsperadaAtras(hoje, lidos + 1);
       await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
-      let atual: string = anterior;
-      for (let t = 0; t < 10 && atual !== esperado; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? anterior; }
-      if (atual !== esperado) { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + i + ' esperado=' + esperado + ' lido=' + atual); return; } // não afirma o que não leu
+      let atual: string = posicao;
+      for (let t = 0; t < 12 && atual === posicao; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? posicao; }
+      if (atual !== esperado && atual < esperado) {
+        await page.locator('.fc-next-button').first().click({ timeout: 5000 });
+        let volta: string = atual;
+        for (let t = 0; t < 12 && volta === atual; t++) { await page.waitForTimeout(500); volta = await cabecalho(page) ?? atual; }
+        if (volta === esperado) { atual = esperado; }
+        else if (volta === posicao) {
+          console.warn('AMPLIMED_PERIODO dia_nao_exibido data=' + esperado);
+          dias.push({ data: esperado, eventos: [] });
+          lidos++;
+          continue;
+        }
+        else { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + lidos + ' esperado=' + esperado + ' lido=' + atual + ' volta=' + volta); return; } // não afirma o que não leu
+      }
+      if (atual !== esperado) { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + lidos + ' esperado=' + esperado + ' lido=' + atual); return; } // não afirma o que não leu
       await page.waitForTimeout(1200);
-      data = atual;
-      dias.push({ data: atual, eventos: await comDetalhes(page, await eventosDaTela(page)) });
+      posicao = esperado;
+      dias.push({ data: esperado, eventos: await comDetalhes(page, await eventosDaTela(page)) });
+      lidos++;
     }
     completo = true;
   } }, signal);
