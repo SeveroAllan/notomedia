@@ -29,3 +29,11 @@ describe('catálogo de ferramentas da conversa',()=>{
   expect(new Set(CATALOGO_FERRAMENTAS.map(t=>t.nome)).size).toBe(CATALOGO_FERRAMENTAS.length);
  });
 });
+it('reenvio só aparece em homolog com escolha só médico, nunca durante emissão',()=>{
+ const f={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+ permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}} satisfies FatosConversa;
+ expect(ferramentasLiberadas(f,{lote:true})).toContain('reenviar_nota_medico');
+ expect(ferramentasLiberadas({...f,lote:{estado:'processando'}},{lote:true})).not.toContain('reenviar_nota_medico');
+ expect(ferramentasLiberadas({...f,ambiente:'producao'},{lote:true})).not.toContain('reenviar_nota_medico');
+ expect(ferramentasLiberadas({...f,permissoes:{...f.permissoes,entregarPaciente:'paciente'}},{lote:true})).not.toContain('reenviar_nota_medico');
+});

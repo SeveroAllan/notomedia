@@ -399,6 +399,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
+      if(decisao.acao==='reenviar_nota_medico') {
+        const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined);
+        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Já existe uma tentativa de envio deste PDF. Vou preservar a nota sem repetir o envio; o recebimento ainda precisa ser conferido.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
+        await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala]});
+        return {jaRespondida:true};
+      }
       if(decisao.acao==='pedir_link_agenda') {
         await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
         const agendaAlvo=normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??c.fatos.link.agenda??undefined);

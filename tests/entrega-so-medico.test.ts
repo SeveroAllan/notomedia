@@ -45,3 +45,13 @@ it('porta sem contato recusa escolha paciente antes de tentar entrega', async ()
   expect(await c.entregarAoMedicoSemContato('m','s',{enviarPdf})).toBe('sem_permissao');
   expect(enviarPdf).not.toHaveBeenCalled();expect(query).not.toHaveBeenCalled();
 });
+it('pedido de reenvio ambíguo não escolhe nota nem chama transporte',async()=>{
+ const {c,enviarPdf,query}=cenario();
+ query.mockImplementation(async(sql:string)=>({rows:sql.includes('select sn.id as solicitacao_id')?[{solicitacao_id:'s1'},{solicitacao_id:'s2'}]:[]}));
+ expect(await c.reenviarNotaMedico('m',{enviarPdf})).toBe('ambiguo');expect(enviarPdf).not.toHaveBeenCalled();
+});
+it('pedido de reenvio único não repete envio já reservado e não reemite',async()=>{
+ const {c,enviarPdf}=cenario();
+ expect(await c.reenviarNotaMedico('m',{enviarPdf})).toBe('enviado');
+ expect(await c.reenviarNotaMedico('m',{enviarPdf})).toBe('repetido');expect(enviarPdf).toHaveBeenCalledTimes(1);
+});

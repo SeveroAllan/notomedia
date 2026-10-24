@@ -218,6 +218,20 @@ export class ComunicacaoHomologacao {
     return this.paciente({ medicoId, solicitacaoId }, transporte);
   }
 
+  async reenviarNotaMedico(medicoId: string, transporte: EnviarPdfDanfse, dia?: string): Promise<string> {
+    if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return 'sem_permissao';
+    const data = dia ? dia.split('-').reverse().join('/') : null;
+    const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn
+      join notas_fiscais nf on nf.solicitacao_id=sn.id and nf.medico_id=sn.medico_id
+      join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id=nf.id and ec.medico_id=sn.medico_id
+      where sn.medico_id=$1 and nf.status='autorizada' and ec.estado='nota_gerada'
+        and ($2::text is null or sn.datas_consulta_texto=$2)
+      order by nf.criado_em limit 2`, [medicoId, data]);
+    if (!rows.length) return 'ausente';
+    if (rows.length > 1) return 'ambiguo';
+    return this.paciente({ medicoId, solicitacaoId: rows[0].solicitacao_id }, transporte);
+  }
+
   async retomarEntregaMedico(medicoId: string, transporte: EnviarPdfDanfse): Promise<void> {
     if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return;
     const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn

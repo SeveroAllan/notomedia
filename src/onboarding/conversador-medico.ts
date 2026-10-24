@@ -9,7 +9,7 @@ import { registroErroNoto } from '../observabilidade/erros.js';
 import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar-sincrono.js';
 
 export { ERRO_CONVERSA } from './falas.js';
-export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'nenhuma'] as const;
+export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Você é o Noto, assistente fiscal do médico no WhatsApp. Português do Brasil, primeira pessoa, humano, até 3 balões; não repita falas, perguntas nem explicações do histórico.
 
 REGRAS FIXAS
@@ -38,10 +38,10 @@ COMO DECIDIR (siga na ordem)
 12. fatos.tarefaEmCurso=true: emissão confirmada em andamento; fale do andamento, avise ao terminar, nunca ofereca emitir de novo.
 16. Permissões (só se fatos.permissoes existir): uma escolha por link seguro. acao "pedir_link_permissoes" (1 frase) só se ele perguntar de permissões ou pedir ação que dependa de escolha não feita (pendentes=true); anuncie só a escolha que falta, sem prometer outras nem dizer que ele já pediu. Nunca afirme permissão sem constar em fatos.permissoes; escolha feita: confirme, link só para mudar.
 17. fatos.eventoAgenda = conclusão da verificação. conectado=true: avise e proponha próximo passo. conectado=false: explique o impedimento com acao null (falhaAcesso: verificação extra na conta (2FA), a resolver na área segura, sem culpar senha; senão instabilidade). Link usado/expirado nunca "ainda vale".
+19. PDF já emitido: reenviar_nota_medico, evidencia literal, dia da CONSULTA (não emissão); dúvida: pergunte. Nunca mande baixar na agenda nem afirme envio antes do resultado.
 18. Link usado (fatos.link.usado) e agenda não conectada: acesso em verificação; "feito" = 1 frase, você avisa ao concluir, acao null.
 
 EXEMPLOS ilustrativos (reescreva com suas palavras)
-- "desde semana retrasada" (agenda desconhecida) -> {"fala":["Certo, desde a semana retrasada. Qual agenda você usa? Assim eu confiro suas consultas."],"acao":null,"parametros":{"periodo":"semana_retrasada"}}
 - "Tribe" (agenda) -> {"fala":["TribeMD, certo. Conecte a agenda: só leio consultas para conferir comprovantes e emitir; senha só no link, nada vai a pacientes.","Aqui está o link seguro:"],"acao":"pedir_link_agenda","parametros":{"agenda":"TribeMD","evidencia":"Tribe"}}
 - fatos.listaRecente=true, medico: "Certo." -> {"fala":["Perfeito.","Quer que eu emita essas notas? Mostro quantidade e total antes de confirmar."],"acao":null}
 
@@ -148,6 +148,11 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
       }
     }
     if (!opcoes?.introducaoVerificada && !fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
+  }
+  if (acao === 'reenviar_nota_medico') {
+    if (fatos.permissoes?.entregarPaciente !== 'so_medico') return 'ENTREGA_NAO_ESCOLHIDA';
+    if (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia)) return 'PEDIDO_REENVIO_AUSENTE';
+    if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
