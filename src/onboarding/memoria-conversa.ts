@@ -27,7 +27,7 @@ export type PlanoConversa = {
 export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   constructor(private readonly pool: pg.Pool) {}
 
-  async lerContextoParaModelo(medicoId: string, conversa: string) {
+  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa }> {
     const historicoRecente = await this.ler(medicoId, conversa);
     const marcas = {
       semAgendaDigital: await this.semAgendaDigital(medicoId, conversa),
