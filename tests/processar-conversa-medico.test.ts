@@ -613,11 +613,12 @@ it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e hor�
  c.fatos.agenda={nome:'amplimed',conectada:true};
  c.fatos.periodo={desde:null,origem:null};
  c.deps.orcamentoChamadas=6;
- c.deps.interpretadorSemantico={interpretar:vi.fn(async()=>({
-   dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',
-   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
-   restricoes:{naoEmitir:false,somenteLeitura:true},faltando:[],confianca:.98
- }))};
+ const interpretar=vi.fn(async()=>({
+   dominio:'agenda' as const,objetivo:'consultar' as const,objeto:'consultas' as const,granularidade:'colecao' as const,
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito' as const},paciente:null,
+   restricoes:{naoEmitir:false,somenteLeitura:true},faltando:[] as const,confianca:.98
+ }));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
  c.executar.mockResolvedValueOnce({
    dados:{ferramenta:'consultar_agenda',ok:true,total:2,desde:'2026-10-19',ate:'2026-10-21'},
    falaAssinada:['Na sua agenda de 19/10/2026 a 21/10/2026 encontrei 2 consultas.']
@@ -626,7 +627,7 @@ it('regressão 24/10: semântica coletiva consulta a agenda sem pedir dia e hor�
 
  await c.turno('semana-atual-real','Me fale sobre minhas consultas dessa semana.');
 
- expect(c.deps.interpretadorSemantico.interpretar).toHaveBeenCalledOnce();
+ expect(interpretar).toHaveBeenCalledOnce();
  expect(c.executar).toHaveBeenCalledOnce();
  expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
  expect(c.guardarPeriodo).toHaveBeenCalledWith('m','2026-10-19');
