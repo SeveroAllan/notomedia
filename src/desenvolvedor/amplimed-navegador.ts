@@ -274,6 +274,45 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     // pulam o mesmo dia dos dois lados, o dia não é exibível — registrado como vazio verificado (sem consultas).
     let posicao: string = data;
     let lidos = 0;
+    // Âncora reutilizável: navega dia a dia até `alvo` conferindo o cabeçalho a cada passo.
+    const ancorarEm = async (alvo: string): Promise<string | null> => {
+      let d = await cabecalho(page);
+      let passos = 0;
+      while (d && d !== alvo && passos < 62) {
+        const botao = d < alvo ? '.fc-next-button' : '.fc-prev-button';
+        try { await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
+        const ant: string = d;
+        for (let t = 0; t < 10 && d === ant; t++) { await page.waitForTimeout(400); d = await cabecalho(page) ?? ant; }
+        if (d === ant) break;
+        passos++;
+      }
+      return d === alvo ? d : null;
+    };
+    // Um dia que prev e next pulam NÃO está automaticamente vazio: pular só prova que a visão diária não o
+    // exibe (esta conta oculta domingos, hiddenDays=[0]). A evidência aceita é o próprio feed da agenda:
+    // abrir a visão mensal (que baixa o mês inteiro) e consultar os eventos do dia exato via clientEvents.
+    // Verificado contra positivos conhecidos: os eventos dos dias 19/21/22 aparecem na consulta.
+    const verificarDiaSemEventos = async (alvo: string): Promise<boolean | null> => {
+      try {
+        await page.locator('.fc-month-button').first().click({ timeout: 5000 });
+        await page.waitForTimeout(1500);
+        const total_eventos = await page.evaluate(`(async () => {
+          const jq = window.jQuery || window.$; const el = document.querySelector('.fc');
+          if (!jq || !el) return null;
+          jq(el).fullCalendar('gotoDate', '${alvo}');
+          await new Promise(r => setTimeout(r, 2500));
+          const v = jq(el).fullCalendar('getView');
+          if (!v || v.name !== 'month') return null;
+          const evs = jq(el).fullCalendar('clientEvents', e => e.start && e.start.format('YYYY-MM-DD') === '${alvo}');
+          return evs.length;
+        })()`) as number | null;
+        return typeof total_eventos === 'number' ? total_eventos === 0 : null;
+      } catch { return null; }
+      finally {
+        try { await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* reancora decide */ }
+        await page.waitForTimeout(1200);
+      }
+    };
     while (lidos < total) {
       const esperado = dataEsperadaAtras(hoje, lidos + 1);
       await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
@@ -285,10 +324,18 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
         for (let t = 0; t < 12 && volta === atual; t++) { await page.waitForTimeout(500); volta = await cabecalho(page) ?? atual; }
         if (volta === esperado) { atual = esperado; }
         else if (volta === posicao) {
-          console.warn('AMPLIMED_PERIODO dia_nao_exibido data=' + esperado);
-          dias.push({ data: esperado, eventos: [] });
-          lidos++;
-          continue;
+          const semEventos = await verificarDiaSemEventos(esperado);
+          if (semEventos === true) {
+            console.warn('AMPLIMED_PERIODO dia_verificado_vazio data=' + esperado + ' via=feed_mensal');
+            dias.push({ data: esperado, eventos: [] });
+            lidos++;
+            const reancora = await ancorarEm(posicao);
+            if (!reancora) { console.warn('AMPLIMED_PERIODO reancora_falhou alvo=' + posicao); return; } // não afirma o que não leu
+            continue;
+          }
+          // Lacuna real ou verificação indisponível: o dia segue NÃO lido e a leitura incompleta.
+          console.warn('AMPLIMED_PERIODO dia_nao_lido data=' + esperado + ' motivo=' + (semEventos === false ? 'eventos_no_feed' : 'verificacao_falhou'));
+          return;
         }
         else { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + lidos + ' esperado=' + esperado + ' lido=' + atual + ' volta=' + volta); return; } // não afirma o que não leu
       }
