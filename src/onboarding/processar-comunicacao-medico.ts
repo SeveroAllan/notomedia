@@ -138,6 +138,16 @@ export async function processarComunicacaoMedico(
         interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora});
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
+      if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
+        planoAtual={
+          objetivo:[interpretacaoSemantica.objetivo,interpretacaoSemantica.objeto].filter(Boolean).join(':'),
+          etapa:decisao?.acao?'executar_capacidade':'resolver_faltantes',
+          faltando:[...interpretacaoSemantica.faltando],
+          proximosPassos:decisao?.acao?[decisao.acao]:[],
+          aguardando:interpretacaoSemantica.faltando[0]??null
+        };
+        await memoria.registrarPlano(medicoId,conversa,planoAtual);
+      }
       if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
@@ -299,7 +309,7 @@ export async function processarComunicacaoMedico(
       } catch {deps.log('erro','CONVERSA_RESUMO_FALHOU');}
       deps.log('info',`CONVERSA_CHAMADAS ${chamadas}`);
       // Observação (passo 4): só metadados, sem texto do médico, para achar padrões de erro depois. Não altera a resposta.
-      deps.log('info','CONVERSA_OBSERVACAO '+JSON.stringify({chamadas,ferramentasExecutadas,acao:decisao.acao??'nenhuma',recusa:motivo??null,loteEstado:fatos.lote?.estado??null,listaRecente:fatos.listaRecente===true,tarefaEmCurso:fatos.tarefaEmCurso===true}));
+      deps.log('info','CONVERSA_OBSERVACAO '+JSON.stringify({chamadas,ferramentasExecutadas,acao:decisao.acao??'nenhuma',recusa:motivo??null,loteEstado:fatos.lote?.estado??null,listaRecente:fatos.listaRecente===true,tarefaEmCurso:fatos.tarefaEmCurso===true,semantica:interpretacaoSemantica?{dominio:interpretacaoSemantica.dominio,objetivo:interpretacaoSemantica.objetivo,objeto:interpretacaoSemantica.objeto,granularidade:interpretacaoSemantica.granularidade,confianca:interpretacaoSemantica.confianca,faltando:interpretacaoSemantica.faltando}:null}));
       return {tipo:'nenhuma'};
     } catch (erro) {
       if(!deps.conversaLivreAtiva) {deps.log('erro','COMUNICACAO_ESTADO_FALHOU');return {tipo:'nenhuma'};}
