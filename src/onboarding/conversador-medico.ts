@@ -10,7 +10,7 @@ import { registrarLinhaSincronaConsoleAviso } from '../observabilidade/registrar
 import type { PlanoConversa } from './memoria-conversa.js';
 
 export { ERRO_CONVERSA } from './falas.js';
-export const ACOES_CONVERSA = ['pedir_link_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
+export const ACOES_CONVERSA = ['pedir_link_agenda', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Noto, assistente fiscal no WhatsApp. Português, primeira pessoa, até 3 balões.
 
 REGRAS FIXAS
@@ -50,7 +50,7 @@ EXEMPLOS (reescreva com suas palavras)
 
 Corrija sem narrar validações.
 SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano sem autoridade. Máx 3x500 chars. Ações só de acoesPermitidas. Após ferramenta, acao só se podeAgirAposFerramenta=true; senão null. Só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
-const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), dia: z.string().optional(),
+const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
@@ -169,6 +169,13 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if (!d.parametros?.evidencia || !texto.includes(d.parametros.evidencia) ||
         !/(?:envi[ae]|reenvi|mand[ae]|receber|quero.*(?:pdf|nota)|baixar)/i.test(d.parametros.evidencia)) return 'PEDIDO_REENVIO_AUSENTE';
     if (d.parametros.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
+  }
+  if (acao === 'consultar_agenda') {
+    const ag=normalizarAgenda(fatos.agenda.nome??undefined);
+    if(!fatos.agenda.conectada||fatos.semAgendaDigital||!(ag==='tribemd'||ag==='amplimed'))return 'AGENDA_NAO_CONECTADA';
+    const desde=validarInicioRetroativo(d.parametros?.desde??null,agora), ate=d.parametros?.ate??calendarioConversa(agora).hoje;
+    if(!desde||!/^\d{4}-\d{2}-\d{2}$/.test(ate)||ate<desde)return 'PERIODO_INVALIDO';
+    return null;
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     if(consultaNaoIdentificada(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
