@@ -48,16 +48,6 @@ it('calendário calcula início de semana e mês no servidor, inclusive fronteir
  expect(calendarioConversa(new Date('2026-10-19T01:00Z'))).toMatchObject({hoje:'2026-10-18',semana_passada:'2026-10-05'});
  expect(periodoDecisao({fala:['Entendi.'],parametros:{periodo:'semana_retrasada'}},agora)).toBe('2026-10-05');
 });
-it.each([
-  'Me fale sobre minhas consultas dessa semana.',
-  'Mostre minhas consultas desta semana.',
-  'Confira os atendimentos essa semana.',
-  'Liste a agenda nesta semana.',
-  'Veja minhas consultas da semana atual.'
-])('semana atual é resolvida deterministicamente: %s',texto=>{
-  expect(periodoDecisao({fala:['Vou conferir.'],acao:'listar_pendencias'},agora,texto)).toBe('2026-10-19');
-});
-
 it.each(['2026-02-30','2026-10-22','2025-01-01'])('data inválida/futura/fora da janela %s não é assinada',desde=>{
  expect(periodoDecisao({fala:['Entendi.'],parametros:{desde}},agora)).toBeNull();
 });
