@@ -254,3 +254,10 @@ it('evidência literal de emissão não autoriza entrega da nota existente',()=>
  const f={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}};
  expect(validarAcaoConversa({fala:['Vou buscar.'],acao:'reenviar_nota_medico',parametros:{evidencia:'Pode emitir?'}},f,['reenviar_nota_medico'],'Pode emitir?',agora)).toBe('PEDIDO_REENVIO_AUSENTE');
 });
+it('limite do leitor Amplimed é explicado como janela, não proibição fiscal do mês inteiro',async()=>{
+ const completar=vi.fn();const r=await new ConversadorMedico('k','m',completar).responder({...entrada,resultadoFerramenta:{ferramenta:'listar_pendencias',ok:false,motivo:'PERIODO_FORA_DO_LIMITE',desde:'2026-09-01',limiteLeitura:{desde:'2026-09-23',ate:'2026-10-24'}}});
+ expect(r.fala.join(' ')).toContain('23/09/2026');expect(r.fala.join(' ')).toContain('24/10/2026');expect(r.fala.join(' ')).not.toContain('emitir notas');expect(completar).not.toHaveBeenCalled();
+});
+it('calendário informa limite real de leitura sem excluir30setembro',()=>{
+ const c=calendarioConversa(new Date('2026-10-24T15:00Z'));expect(c.amplimedDesde).toBe('2026-09-23');
+});

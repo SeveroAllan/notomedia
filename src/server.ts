@@ -58,7 +58,7 @@ import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
 import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
-import { ConversadorMedico, normalizarAgenda, periodoDecisao, diaDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
+import { ConversadorMedico, normalizarAgenda, periodoDecisao, calendarioConversa, diaDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -311,7 +311,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const hoje = agora.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
         const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true);
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
-        if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
+        if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo, limiteLeitura:{desde:calendarioConversa(agora).amplimedDesde,ate:hoje} }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
         const diasSelecionados=selecionarDias(a.dias,selecao??{});
         if(selecao?.paciente&&new Set(diasSelecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota; preciso identificar qual paciente você quer.']});return;}
         const p = prepararLoteAmplimed(diasSelecionados);
@@ -455,7 +455,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
         const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,!!selecao.paciente);
         console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,dias:a.ok?a.dias.length:undefined,total:a.ok?a.dias.reduce((n,d)=>n+d.elegiveis.length,0):undefined}));
-        if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo}};
+        if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
         const br=(d:string)=>d.split('-').reverse().join('/');
         const selecionados=selecionarDias(a.dias,selecao);
         if(selecao.paciente&&new Set(selecionados.flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1)return {falaAssinada:['Há cadastros diferentes com esse nome. Preciso identificar o paciente antes de preparar notas.'],dados:{ok:false,motivo:'PACIENTE_AMBIGUO'}};
