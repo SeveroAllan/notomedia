@@ -1,4 +1,4 @@
-import {selecionarDias,selecaoConsultas,pacienteLiteralDaConsulta, confirmaSelecaoAnterior,type SelecaoConsultas} from './agenda/selecao-consultas.js';
+import {selecionarDias,horarioConsulta,selecaoConsultas,pacienteLiteralDaConsulta, confirmaSelecaoAnterior,type SelecaoConsultas} from './agenda/selecao-consultas.js';
 import { origemWebhookConfigurada } from './onboarding/io/origem-webhook.js';
 import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
 import { contemCredencialAgenda } from './cofre/links.js';
@@ -440,11 +440,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const dia=diaDecisao(decisao,c.agora);
       let selecao:SelecaoConsultas;
       try{selecao=selecaoConsultas(c.texto,dia,decisao.parametros?.paciente);}catch{return {falaAssinada:['Preciso confirmar qual paciente você quer, antes de preparar as notas. Qual é o nome na agenda?'],dados:{ok:false,motivo:'PACIENTE_NAO_RESOLVIDO'}};}
-      if(selecao.paciente&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Ainda não consigo separar um paciente nessa agenda com segurança. Não preparei notas de outras pessoas.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
+      if((selecao.paciente||selecao.horario)&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Ainda não consigo separar um paciente nessa agenda com segurança. Não preparei notas de outras pessoas.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
       // A seleção específica sobrevive ao próximo 'pode preparar'; não cai no lote de todos.
       if(!selecao.paciente&&!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&!/\b(?:todos|todas|qualquer paciente)\b/i.test(c.texto)){
         const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
-        if(rows[0])try{const anterior=JSON.parse(rows[0].texto);if(anterior.paciente)selecao.paciente=anterior.paciente;if(anterior.desde)selecao.desde=anterior.desde;if(anterior.ate)selecao.ate=anterior.ate;if(!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&anterior.dia)selecao.dia=anterior.dia;}catch{return {dados:{ok:false,motivo:'SELECAO_NAO_RESOLVIDA'},falaAssinada:['Qual paciente você quer conferir? Não preparei notas de outras pessoas.']};}
+        if(rows[0])try{const anterior=JSON.parse(rows[0].texto);if(anterior.paciente)selecao.paciente=anterior.paciente;if(anterior.desde)selecao.desde=anterior.desde;if(anterior.ate)selecao.ate=anterior.ate;if(!selecao.horario&&anterior.horario)selecao.horario=anterior.horario;if(!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&anterior.dia)selecao.dia=anterior.dia;}catch{return {dados:{ok:false,motivo:'SELECAO_NAO_RESOLVIDA'},falaAssinada:['Qual paciente você quer conferir? Não preparei notas de outras pessoas.']};}
       }
       const diaSelecionado=selecao.dia;
       const desde=diaSelecionado??periodoDecisao(decisao,c.agora,c.texto)??selecao.desde??c.fatos.periodo.desde!;
@@ -473,7 +473,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           d.elegiveis=pendentes;
         }
         const total=selecionados.reduce((n,d)=>n+d.elegiveis.length,0);
-        const porDia=[...selecionados].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>e.paciente).join(', ')}`);
+        const porDia=[...selecionados].reverse().filter(d=>d.elegiveis.length).map(d=>`${br(d.data)}: ${d.elegiveis.map(e=>`${e.paciente} às ${horarioConsulta(e.dataHora)??'horário não identificado'} - ${(e.valorCentavos/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}`).join(', ')}`);
         const escopo=diaSelecionado?`Em ${br(diaSelecionado)}`:`De ${br(desde)} a ${br(fimPeriodo??hoje)}`;
         const alvo=selecao.paciente?` do paciente ${selecao.paciente.nome}`:"";
         const fala=total

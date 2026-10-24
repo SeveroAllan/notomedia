@@ -40,3 +40,16 @@ it('dia diferente e seleção anterior ausente não podem confirmar outra propos
  expect(confirmaSelecaoAnterior({dia:'2026-10-23',paciente},{dia:'2026-10-24',paciente})).toBe(false);
  expect(confirmaSelecaoAnterior({paciente},undefined)).toBe(false);
 });
+
+it.each(['às 9h','às 09:00','às 9h00'])('horário literal separa duas consultas no mesmo dia: %s',hora=>{
+ const consultas=[{data:'2026-10-24',elegiveis:[{...e('Teste Um','cedo'),dataHora:'2026-10-24T08:30:00-03:00'},{...e('Teste Um','certa'),dataHora:'2026-10-24T12:00:00Z'}]}];
+ const sel=selecaoConsultas(`consulta do Teste Um de hoje ${hora}`,'2026-10-24',{nome:'Teste Um',evidencia:'Teste Um'});
+ expect(sel.horario).toBe('09:00');expect(selecionarDias(consultas,sel)[0].elegiveis.map(x=>x.idExterno)).toEqual(['certa']);
+ expect(prepararLoteAmplimed(selecionarDias(consultas,sel)).consultas.map(x=>x.idExterno)).toEqual(['certa']);
+});
+it('hora inexistente não volta a todas e duas horas pedem esclarecimento',()=>{
+ expect(selecionarDias(dias,{horario:'09:00'})[0].elegiveis).toEqual([]);
+ expect(()=>selecaoConsultas('a das 9h ou 10h')).toThrow('HORARIO_AMBIGUO');
+ expect(()=>selecaoConsultas('a das 25h')).toThrow('HORARIO_AMBIGUO');
+ expect(confirmaSelecaoAnterior({paciente:{nome:'Teste Um',evidencia:'Teste Um'},horario:'10:00'},{paciente:{nome:'Teste Um',evidencia:'Teste Um'},horario:'09:00'})).toBe(false);
+});
