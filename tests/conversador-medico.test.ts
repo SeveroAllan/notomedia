@@ -10,6 +10,14 @@ it('prompt estruturado, uma chamada sem regeneração, histórico/resumo/fatos s
  const dados=JSON.parse(completar.mock.calls[0][2][1].content);expect(dados.mensagens).toEqual(['Pergunta anterior','Resposta anterior']);expect(dados.resumo).toContain('período');expect(dados.calendario.hoje).toBe('2026-10-21');
  expect(completar.mock.calls[0][3]).toMatchObject({formatoJson:true,temperature:.1,tentativasMax:2});
 });
+it('planner GPT-6 usa raciocinio medio sem temperature',async()=>{
+ const completar=vi.fn(async()=>'{"fala":["Oi!"],"acao":null}');
+ await new ConversadorMedico('k','gpt-6.1-sol',completar).responder(entrada);
+ const opcoes=completar.mock.calls[0][3];
+ expect(opcoes).toMatchObject({formatoJson:true,reasoningEffort:'medium',tentativasMax:2});
+ expect(opcoes).not.toHaveProperty('temperature');
+});
+
 it.each(['{}','não JSON','{"fala":[]}',JSON.stringify({fala:['x'.repeat(501)]}),'{"fala":["a","b","c","d"]}'])('saída inválida %s usa só o erro técnico, sem segunda chamada',async texto=>{
  const completar=vi.fn(async()=>texto);expect((await new ConversadorMedico('k','m',completar).responder(entrada)).fala).toEqual([ERRO_CONVERSA]);expect(completar).toHaveBeenCalledOnce();
 });
