@@ -20,7 +20,7 @@ function cenario() {
  const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi! O que você precisa?"],"acao":null}');
  const enviar=vi.fn(async(_fala:string[],_chave:string,_memoria?:string[])=>{}),executar=vi.fn<FerramentasConversa['executar']>(async()=>({dados:{ok:true}}));
  const guardarPeriodo=vi.fn(async(_id:string,desde:string)=>{fatos.periodo={desde,origem:'contexto_salvo'};});
- const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda']:[],guardarPeriodo,executar};
+ const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda',...(f.permissoes?.pendentes?['pedir_link_permissoes' as const]:[])]:[],guardarPeriodo,executar};
  const deps={ativo:true,conversaLivreAtiva:true,orcamentoChamadas:undefined as number|undefined,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
    historico:new HistoricoComunicacaoEmMemoria(),lerEstado:async()=>({estado:{agora,fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:fatos.agenda,ultimaNota:null}}),aoConversar:enviar,log:vi.fn(),aoReagir:vi.fn()};
  const turno=(chave:string,texto:string)=>processarComunicacaoMedico({medicoId:'m',chaveProcessamento:chave,chaveConversa:'c',agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
@@ -39,6 +39,37 @@ it('data já dita → Tribe → Pelo tribemd: reconhece, guarda 05/10, envia pri
  expect(c.guardarPeriodo).toHaveBeenCalledExactlyOnceWith('m','2026-10-05');expect(c.executar).toHaveBeenCalledOnce();expect(c.completar).toHaveBeenCalledTimes(3);
  const falas=c.enviar.mock.calls.flatMap(([f])=>f);expect(falas.filter(t=>/qual.*agenda|qual você usa/i.test(t))).toHaveLength(1);expect(falas.join(' ')).not.toMatch(/Desde quando|novo link|cofre/);
 });
+it('semântica de escolha pendente oferece link de permissões no momento necessário',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;
+ c.fatos.permissoes={emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente']};
+ const interpretar=vi.fn(async()=>({dominio:'permissoes' as const,objetivo:'configurar' as const,objeto:'permissoes' as const,granularidade:'indefinida' as const,medida:'lista' as const,permissaoNecessaria:'entregar_paciente' as const,periodo:{inicio:null,fim:null,referencia:'nenhum' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:['permissao'] as const,confianca:.99}));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.executar.mockResolvedValueOnce({jaRespondida:true});
+ await c.turno('entrega','Quero definir como as notas serão entregues ao paciente.');
+ expect(interpretar).toHaveBeenCalledOnce();expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'pedir_link_permissoes',parametros:{permissao:'entregar_paciente'}});
+});
+
+it('plano não fica com faltando vazio quando há período mas ainda falta resolver a fonte',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;c.fatos.agenda={nome:null,conectada:false};
+ const interpretar=vi.fn(async()=>({dominio:'fiscal' as const,objetivo:'emitir' as const,objeto:'notas' as const,granularidade:'colecao' as const,medida:'lista' as const,permissaoNecessaria:null,periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99}));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.interpretacaoSemantica.faltando).toContain('agenda');return JSON.stringify({fala:['Qual agenda você usa para eu continuar?'],acao:null});});
+ await c.turno('continua','Desde segunda.');
+ const contexto=await c.memoria.lerContextoParaModelo('m','c');expect(contexto.plano?.faltando).toContain('agenda');
+ expect(c.executar).not.toHaveBeenCalled();
+});
+
+it('modo manual substitui pendência de agenda por dados da consulta e nunca oferece conexão',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;await c.memoria.registrarMarca('m','c','sem_agenda_digital');
+ const interpretar=vi.fn(async()=>({dominio:'fiscal' as const,objetivo:'emitir' as const,objeto:'notas' as const,granularidade:'item' as const,medida:'lista' as const,permissaoNecessaria:null,periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99}));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.fatos.semAgendaDigital).toBe(true);expect(d.interpretacaoSemantica.faltando).toContain('dados_consulta');expect(d.interpretacaoSemantica.faltando).not.toContain('agenda');expect(d.acoesPermitidas).not.toContain('pedir_link_agenda');return JSON.stringify({fala:['Me passe o próximo dado da consulta para eu continuar.'],acao:null});});
+ await c.turno('manual-cont','A data é 20/10.');
+ const contexto=await c.memoria.lerContextoParaModelo('m','c');expect(contexto.plano?.faltando).toContain('dados_consulta');
+ expect(c.executar).not.toHaveBeenCalled();expect(JSON.stringify(c.enviar.mock.calls)).not.toMatch(/conectar|link.*agenda/i);
+});
+
 it('papel: declaração atual vira marca, explicação uma vez e depois pede só um dado que falta',async()=>{
  const c=cenario();
  c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));return JSON.stringify(d.fatos.semAgendaDigital
