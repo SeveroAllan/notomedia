@@ -1,0 +1,44 @@
+name: Homologacao ponta a ponta
+
+on:
+  push:
+    branches:
+      - fix/homologacao-ponta-a-ponta
+  pull_request:
+    branches:
+      - feat/conversa-v2
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Bateria curta
+        run: |
+          npx vitest run             tests/lote-retroativo.test.ts             tests/processar-conversa-medico.test.ts             tests/servidor-conversa-livre.test.ts             tests/cofre-links.test.ts             tests/conversador-medico.test.ts             tests/interpretador-semantico.test.ts             tests/ferramentas-conversa.test.ts
+      - name: Suite completa
+        run: npm test
+      - name: Diff check
+        run: git diff --check origin/feat/conversa-v2...HEAD
+
+  tribemd-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright-core install --with-deps chromium
+      - name: TribeMD browser
+        run: npm run test:tribemd-browser
