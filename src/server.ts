@@ -84,6 +84,8 @@ import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onbo
 import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
+import { listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, resolverMedicosPorNomes } from './conta/medicos-conta.js';
+import { filtrarConsultasDoProfissional, profissionaisIdentificados } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
 import { HubDesenvolvedorCpfClient } from './io/hubdodesenvolvedor/hub-desenvolvedor-cpf-client.js';
 import { AdnNfseClient } from './io/fiscal/adn-nfse-client.js';
