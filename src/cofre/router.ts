@@ -146,6 +146,14 @@ export function criarCofreContas(deps: {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
         return cofre.detalheAoVivo(medicoId, atendimentoId);
     }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => cofre ? cofre.fonteAgenda.consultar(entrada) : { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const } }, encerrar: async () => { await cofre?.encerrar(); },
+        statusAgendas: async (medicoId: string) => {
+            if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
+            const status = await cofre.status(medicoId);
+            const tribe = { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(medicoId) };
+            const a = cofreAmplimed ? await cofreAmplimed.status(medicoId) : null;
+            const amplimed = { salvo: !!a?.salvo, conectada: !!a?.salvo && !!a?.ativo && a?.estado === 'conectado', consentimentoEm: a?.consentimentoEm ?? null };
+            return { tribemd: tribe, amplimed };
+        },
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
             const status = await cofre.status(medicoId);
