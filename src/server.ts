@@ -226,8 +226,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if (rows[0]?.ambiente !== 'homologacao') return { tipo: 'erro' as const, codigo: 'FONTE_INDISPONIVEL' as const };
         if (!Number.isInteger(janelaDias) || janelaDias < 1 || janelaDias > 365) throw Error('JANELA_AGENDA_INVALIDA');
         const repo = new PostgresConsultasSincronizadas(pool);
-        const resultado = await cacheAgenda.consultar(medicoId, janelaDias, () => sincronizarAgenda({ medicoId, referenciaCofre: medicoId, janelaDias, agora }, cofres.fonteAgenda, repo,
-          (id, consulta) => repo.resolverPaciente(id, consulta)));
+        const medicosConta=await listarMedicosDaConta(pool,medicoId);
+        const medicoAtual=medicosConta.find(m=>m.id===medicoId);
+        if(!medicoAtual)return {tipo:'erro' as const,codigo:'PROFISSIONAL_AMBIGUO' as const};
+        const exigirProfissional=medicosConta.length>1;
+        const resultado = await cacheAgenda.consultar(medicoId, janelaDias, () => sincronizarAgenda(
+          { medicoId, referenciaCofre: medicoId, janelaDias, agora },
+          cofres.fonteAgenda,
+          repo,
+          (id, consulta) => repo.resolverPaciente(id, consulta),
+          consultas => {
+            const filtradas=filtrarConsultasDoProfissional(consultas,medicoAtual.nomeCompleto,exigirProfissional);
+            return filtradas.ok ? {ok:true,consultas:filtradas.consultas} : {ok:false,codigo:filtradas.motivo};
+          }
+        ));
         if (resultado.tipo === 'erro') console.warn(registroErroNoto(resultado.codigo, 'tecnico', { medicoId, etapa: 'sincronizacao' }));
         return resultado;
       } catch (e) {
