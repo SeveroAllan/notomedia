@@ -10,6 +10,7 @@ import { lerEventosAgendaAmplimed, verificarLoginAmplimed } from '../desenvolved
 import { CofreAmplimed } from './amplimed-cofre.js';
 import { pedirCodigo2faPorArquivo } from './codigo-2fa-arquivo.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
+import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
@@ -71,7 +72,12 @@ export function criarCofreContas(deps: {
                 res.status(401).json({ ok: false, codigo: 'SESSAO_INVALIDA' });
                 return;
             }
-            const dono = (await deps.pool.query('select m.id from medicos m join usuarios u on u.id=m.usuario_id where u.auth_user_id=$1 and u.ativo=true limit 1', [authId])).rows[0];
+            const dono = (await deps.pool.query(`
+                select m.id
+                from usuarios u join medicos m on m.conta_id=u.conta_id
+                where u.auth_user_id=$1 and u.ativo=true
+                order by m.criado_em,m.id
+                limit 1`, [authId])).rows[0];
             if (!dono || !z.string().uuid().safeParse(dono.id).success) {
                 res.status(403).json({ ok: false, codigo: 'CONTA_INDISPONIVEL' });
                 return;
@@ -142,36 +148,50 @@ export function criarCofreContas(deps: {
     app.delete('/amplimed', rota(async (req, res) => { vazio.parse(req.body); if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL'); res.json({ ok: true, cofre: await cofreAmplimed.excluir(res.locals.dono) }); }));
     app.use((_req, res) => res.status(404).json({ ok: false, codigo: 'COFRE_ROTA_INVALIDA' }));
     app.use((_erro: unknown, req: Request, res: Response, _next: unknown) => { apagar(req); res.status(400).json({ ok: false, codigo: 'ENTRADA_INVALIDA' }); });
+    const referencia = (medicoId:string,agenda:'tribemd'|'amplimed') =>
+        resolverReferenciaAgendaConta(deps.pool,medicoId,agenda).catch(()=>medicoId);
     return { app, links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
-        return cofre.detalheAoVivo(medicoId, atendimentoId);
-    }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => cofre ? cofre.fonteAgenda.consultar(entrada) : { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const } }, encerrar: async () => { await cofre?.encerrar(); },
+        return cofre.detalheAoVivo(await referencia(medicoId,'tribemd'), atendimentoId);
+    }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
+        if(!cofre)return { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const };
+        const ref=await referencia(entrada.medicoId,'tribemd');
+        return cofre.fonteAgenda.consultar({...entrada,medicoId:ref,referenciaCofre:ref});
+    } }, encerrar: async () => { await cofre?.encerrar(); },
         statusAgendas: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
-            const status = await cofre.status(medicoId);
-            const tribe = { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(medicoId) };
-            const a = cofreAmplimed ? await cofreAmplimed.status(medicoId) : null;
+            const refTribe=await referencia(medicoId,'tribemd');
+            const refAmplimed=await referencia(medicoId,'amplimed');
+            const status = await cofre.status(refTribe);
+            const tribe = { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(refTribe) };
+            const a = cofreAmplimed ? await cofreAmplimed.status(refAmplimed) : null;
             const amplimed = { salvo: !!a?.salvo, conectada: !!a?.salvo && !!a?.ativo && a?.estado === 'conectado', consentimentoEm: a?.consentimentoEm ?? null };
             return { tribemd: tribe, amplimed };
         },
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
-            const status = await cofre.status(medicoId);
+            const refTribe=await referencia(medicoId,'tribemd');
+            const refAmplimed=await referencia(medicoId,'amplimed');
+            const status = await cofre.status(refTribe);
             if (cofreAmplimed) {
-                const a = await cofreAmplimed.status(medicoId);
+                const a = await cofreAmplimed.status(refAmplimed);
                 const escolha = escolherAgendaAtiva(
-                    { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(medicoId) },
+                    { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(refTribe) },
                     { salvo: a.salvo, conectada: a.salvo && a.ativo && a.estado === 'conectado', consentimentoEm: a.consentimentoEm });
                 if (escolha === 'amplimed') return { nome: 'amplimed' as string | null, conectada: a.salvo && a.ativo && a.estado === 'conectado' };
             }
             return mapearStatusAgenda(status);
         },
-        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false) => cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(medicoId, desde, hoje, comDetalhes) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' },
+        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false) => {
+            const ref=await referencia(medicoId,'amplimed');
+            return cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(ref, desde, hoje, comDetalhes) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+        },
         detalheAmplimedAoVivo: async (medicoId: string, idExterno: string) => {
             const data = dataDoIdAmplimed(idExterno);
             if (!cofreAmplimed || !data) throw new ErroCofre('SEM_AGENDA_CONECTADA');
             const hoje = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
-            const r = await cofreAmplimed.lerAgendaPeriodo(medicoId, data, hoje, true);
+            const ref=await referencia(medicoId,'amplimed');
+            const r = await cofreAmplimed.lerAgendaPeriodo(ref, data, hoje, true);
             if (!r.ok) throw new ErroCofre('DETALHES_NAO_CONCLUIDOS');
             return tomadorAmplimedAoVivo(r.dias, idExterno);
         }
