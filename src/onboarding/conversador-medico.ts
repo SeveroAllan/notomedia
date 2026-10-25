@@ -13,7 +13,7 @@ import { PROMPT_STANDARD } from './prompt-standard.js';
 
 export { ERRO_CONVERSA } from './falas.js';
 export { PROMPT_STANDARD };
-export const ACOES_CONVERSA = ['pedir_link_agenda', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
+export const ACOES_CONVERSA = ['pedir_link_agenda', 'pedir_link_certificado', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Noto is a fiscal assistant on WhatsApp.
 
 LANGUAGE
@@ -37,6 +37,11 @@ FACTS AND SAFETY
 - Use calendario for dates. Amplimed reads from calendario.amplimedDesde through today.
 - Keep periods. Use ISO in parametros.desde/dia.
 - Use patient scope {nome,evidencia literal}. Do not expand it.
+- One WhatsApp operates one account. fatos.medicosConta contains only account doctors and each doctor's certificate state.
+- When agenda discovery returns modo='descoberta_medicos', present only professional names and ask which doctors the account wants to issue for. Never expose patient data during discovery.
+- After the user explicitly selects doctor names, use pedir_link_certificado only for selected doctors whose certificado='pendente'. Use parametros.medicos with exact names from fatos.medicosConta.
+- A pending certificate blocks only that doctor. Doctors with certificado='ok' remain usable.
+- Never guess a doctor from an ambiguous name. Keep each consultation, certificate and invoice scoped to its selected doctor.
 
 DECISION PROCEDURE
 0. Use interpretacaoSemantica when it exists. Ask only for fields in faltando.
@@ -78,6 +83,7 @@ DECISION PROCEDURE
    For a past-delivery question, use fatos.entregasRecentes with acao=null. Do not resend or read the agenda.
 18. If fatos.link.usado=true and the agenda is not connected, say that access verification is in progress.
    If the doctor says "feito", use one short sentence and acao=null.
+19. Account-level choices are not physician-specific preferences. Do not describe them as a preference of the focused doctor.
 
 MEASURES
 - ValuesAgenda uses cents and proves neither payment nor invoice. Answer only the requested measure.
@@ -97,6 +103,7 @@ Return strict JSON:
 
 const parametrosSchema = z.object({ medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).optional(), paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
+  medicos: z.array(z.string().trim().min(1).max(150)).min(1).max(12).optional(),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
   pedidoExplicito: z.object({evidencia:z.string().trim().min(1).max(300),confianca:z.number().min(0).max(1)}).strict().optional(),
@@ -145,6 +152,8 @@ export interface FatosConversa {
   link: { ativo: boolean; enviados: number; agenda?: string | null; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
   periodo: { desde: string | null; origem: string | null };
   semAgendaDigital: boolean;
+  medicoFoco?: string | null;
+  medicosConta?: Array<{nome:string;certificado:'ok'|'pendente'}>;
   permissoes?: { emitirAutonomo: string | null; entregarPaciente: string | null; solicitarCpf?: string | null; pendentes: boolean; faltantes?: Array<'emitir_autonomo'|'entregar_paciente'|'solicitar_cpf'> } | null;
   entregasRecentes?: Array<{notaFiscalId:string;solicitacaoId:string;ndps:number|null;paciente:string|null;datasConsulta:string|null;valorCentavos:number|null;destino:'medico'|'paciente';origem:'nota_nova'|'pedido_historico';resultado:'simulado'|'enviado'|'erro'|'repetido'|'sem_contato'|'sem_permissao';registradaEm:string}>;
   envioPacienteRealAtivo?: boolean;
@@ -235,6 +244,17 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
       }
     }
     if (!opcoes?.introducaoVerificada && !fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
+  }
+  if (acao === 'pedir_link_certificado') {
+    const nomes=d.parametros?.medicos??[];
+    if(!nomes.length)return 'MEDICO_NECESSARIO';
+    const disponiveis=fatos.medicosConta??[];
+    for(const nome of nomes){
+      const n=nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().trim();
+      const correspondentes=disponiveis.filter(m=>m.nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().trim()===n);
+      if(correspondentes.length!==1)return correspondentes.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO';
+    }
+    return null;
   }
   if (acao === 'reenviar_nota_medico') {
     if (fatos.permissoes?.entregarPaciente !== 'so_medico') return 'ENTREGA_NAO_ESCOLHIDA';
