@@ -399,6 +399,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     guardarPeriodo:(id,desde)=>contextoPendencias.definirInicio(id,desde),
     executar:async (decisao,c) => {
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId,c.contatoOperador)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
+      const agendaAcao=normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined);
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
         const pacienteConfirmacao=pacienteLiteralDaConsulta(c.texto);
         if(pacienteConfirmacao&&confirmacaoDaDecisao(decisao).intencao!=='nao') {
@@ -414,10 +415,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(decisao.acao!=='iniciar_lote'||negacao.intencao!=='nao'||negacao.confianca<.9) return {jaRespondida:true};
         const diaTroca=diaDecisao(decisao,c.agora);
         let selecaoTroca:SelecaoConsultas;try{selecaoTroca=selecaoConsultas(c.texto,diaTroca,decisao.parametros?.paciente);}catch{return {falaAssinada:['Qual é o nome do paciente na agenda?'],dados:{ok:false,motivo:'PACIENTE_NAO_RESOLVIDO'}};}
-        if(selecaoTroca.paciente&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Não preparei notas de outras pessoas. Preciso confirmar o paciente nessa agenda.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
+        if(selecaoTroca.paciente&&agendaAcao!=='amplimed')return {falaAssinada:['Não preparei notas de outras pessoas. Preciso confirmar o paciente nessa agenda.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
         const desdeTroca=diaTroca??periodoDecisao(decisao,c.agora,c.texto);
         if(!desdeTroca) return {jaRespondida:true};
-        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd',selecaoTroca)
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,agendaAcao==='amplimed'?'amplimed':'tribemd',selecaoTroca)
           ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
@@ -440,7 +441,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           if(ordenadas.length>itens.length){const aviso=`Mostrei as primeiras ${itens.length}; há mais ${ordenadas.length-itens.length} nesse período.`;if(baloes.length<3)baloes.push(aviso);}
           return baloes.slice(0,3);
         };
-        if(c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
+        if(agendaAcao==='amplimed') {
           const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,false);
           console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'consultar_agenda',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo}));
           if(!a.ok)return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
@@ -486,7 +487,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const dia=diaDecisao(decisao,c.agora);
       let selecao:SelecaoConsultas;
       try{selecao=selecaoConsultas(c.texto,dia,decisao.parametros?.paciente);}catch{return {falaAssinada:['Preciso confirmar qual paciente você quer, antes de preparar as notas. Qual é o nome na agenda?'],dados:{ok:false,motivo:'PACIENTE_NAO_RESOLVIDO'}};}
-      if((selecao.paciente||selecao.horario)&&c.fatos.agenda.nome?.toLowerCase()!=='amplimed')return {falaAssinada:['Ainda não consigo separar um paciente nessa agenda com segurança. Não preparei notas de outras pessoas.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
+      if((selecao.paciente||selecao.horario)&&agendaAcao!=='amplimed')return {falaAssinada:['Ainda não consigo separar um paciente nessa agenda com segurança. Não preparei notas de outras pessoas.'],dados:{ok:false,motivo:'SELECAO_NAO_SUPORTADA'}};
       // A seleção específica sobrevive ao próximo 'pode preparar'; não cai no lote de todos.
       if(!selecao.paciente&&!dia&&!periodoDecisao(decisao,c.agora,c.texto)&&!/\b(?:todos|todas|qualquer paciente)\b/i.test(c.texto)){
         const {rows}=await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:selecao:%' order by id desc limit 1",[c.medicoId,c.conversa]);
@@ -498,7 +499,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if(fimPeriodo){selecao.desde=desde;selecao.ate=fimPeriodo;}
       const fimDoDia=(diaSelecionado??fimPeriodo)?`${diaSelecionado??fimPeriodo}T23:59:59.999-03:00`:undefined;
       await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:selecao:${c.chave}`,JSON.stringify(selecao),'noto');
-      if(decisao.acao==='listar_pendencias' && c.fatos.agenda.nome?.toLowerCase()==='amplimed') {
+      if(decisao.acao==='listar_pendencias' && agendaAcao==='amplimed') {
         // Amplimed v1: modo observação, dia a dia até 31 dias; nada vira nota.
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
         const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,!!selecao.paciente);
@@ -530,11 +531,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde,jaFaturadas,bloqueadas},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
-        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,c.fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':'tribemd',selecao)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);
+        await criarRetroativo(c.narrar,decisao,c.medicoId,undefined,agendaAcao==='amplimed'?'amplimed':'tribemd',selecao)?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desde,fimDoDia);
         return {jaRespondida:true};
       }
-      const r=await listarPendencias(c.medicoId,c.fatos.agenda,c.agora,desde);
-      console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',ok:r.ok,total:'total' in r?r.total:undefined}));
+      const r=await listarPendencias(c.medicoId,{nome:agendaAcao,conectada:true},c.agora,desde);
+      console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:agendaAcao,ok:r.ok,total:'total' in r?r.total:undefined}));
       if(!r.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:r.motivo}};
       const lista=formatarPendencias(r,desde,'',2);
       return {dados:{ferramenta:'listar_pendencias',ok:true,total:'total' in r?r.total:undefined,desde},falaAssinada:lista.fala,falaMemoria:lista.falaMemoria};
