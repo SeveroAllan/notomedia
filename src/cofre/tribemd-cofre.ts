@@ -222,7 +222,7 @@ export class CofreTribemd {
                 if (!c.pacienteId || !c.atendimentoId || !c.dataConsultaObservada || c.dados?.codigo) throw new ErroCofre('LEITURA_INCOMPLETA');
                 const valor = c.dados?.valorConsulta;
                 const cobrado = c.dados?.valorCobrado;
-                return { valorCobradoAoVivoCentavos: cobrado && /^\d+\.\d{2}$/.test(cobrado) ? Number(cobrado.replace('.', '')) : null, nomeAoVivo: c.nome?.trim() || c.dados?.nomeCompleto?.trim() || null, profissional: c.profissional?.trim() || null, pacienteId: c.pacienteId, idExterno: c.atendimentoId, dataHora: c.dataConsultaObservada,
+                return { valorCobradoAoVivoCentavos: cobrado && /^\d+\.\d{2}$/.test(cobrado) ? Number(cobrado.replace('.', '')) : null, nomeAoVivo: c.nome?.trim() || c.dados?.nomeCompleto?.trim() || null, ...(c.profissional?.trim() ? { profissional: c.profissional.trim() } : {}), pacienteId: c.pacienteId, idExterno: c.atendimentoId, dataHora: c.dataConsultaObservada,
                     telefonePaciente: c.dados?.contato.celular ?? c.dados?.contato.telefone ?? undefined,
                     status: 'realizada' as const, valorConsultaCentavos: valor && /^\d+\.\d{2}$/.test(valor) ? Number(valor.replace('.', '')) : null };
             }) };
