@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
-import {ConversadorMedico,PROMPT_CONVERSA,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta} from '../src/onboarding/conversador-medico.js';
+import {ConversadorMedico,PROMPT_CONVERSA,PROMPT_STANDARD,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta} from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
@@ -118,13 +118,23 @@ it('ação fiscal inválida não fornece interpretação utilizável para libera
  expect(confirmacaoDaDecisao({fala:['Ok.'],acao:'iniciar_lote'})).toEqual({intencao:'duvida',confianca:0});
 });
 
+it('prompt central usa instruções em inglês, saída pt-BR e padrão ASD-STE100 documentado',()=>{
+ expect(PROMPT_STANDARD).toEqual(expect.objectContaining({instructionLanguage:'en',conversationLocale:'pt-BR',writingStandard:'ASD-STE100 Issue 9'}));
+ expect(PROMPT_CONVERSA).toContain('Write all user-visible text in Brazilian Portuguese (pt-BR).');
+ expect(PROMPT_CONVERSA).toContain('DECISION PROCEDURE');
+ expect(PROMPT_CONVERSA).not.toContain('REGRAS FIXAS');
+ expect(PROMPT_CONVERSA).not.toContain('COMO DECIDIR');
+ expect(PROMPT_CONVERSA).not.toContain('SAÍDA JSON');
+ expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);
+});
+
 it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
  for(const alias of ['Tribe','tribe md','o tribe']) expect(PROMPT_CONVERSA).toContain('"'+alias+'"');
  for(let passo=1;passo<=8;passo++) expect(PROMPT_CONVERSA).toMatch(new RegExp('^'+passo+'\\. ', 'm'));
 });
 
 it('prompt não depende de exemplo Tribe embutido; contrato real continua validando a introdução',()=>{
- expect(PROMPT_CONVERSA).not.toContain('EXEMPLOS');
+ expect(PROMPT_CONVERSA).not.toContain('EXAMPLES');
  expect(PROMPT_CONVERSA).not.toMatch(/^- "Tribe" .* -> \{/m);
  const decisao={fala:['TribeMD, certo. Vou enviar o link seguro para conectar a agenda.','Eu só leio as consultas; login e senha ficam no link seguro e nada é enviado a pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'TribeMD',evidencia:'Tribe'}};
  expect(validarAcaoConversa(decisao,fatos,['pedir_link_agenda'],'Tribe',agora)).toBeNull();
@@ -181,24 +191,24 @@ it('sem lista recente a leitura continua permitida; lista recente não bloqueia 
 });
 
 it('prompt mantém o contrato de lista recente sem exemplo textual embutido',()=>{
- expect(PROMPT_CONVERSA).toContain('2b. Pedido atual vence histórico/resumo.');
+ expect(PROMPT_CONVERSA).toContain('2b. If the doctor asks to check data now');
  expect(PROMPT_CONVERSA).toContain('parametros.pedidoExplicito=');
- expect(PROMPT_CONVERSA).not.toContain('medico: "Certo." ->');
+ expect(PROMPT_CONVERSA).not.toContain('doctor: "Certo." ->');
 });
 it('prompt pede correção em UMA frase curta e respeita o teto atualizado',()=>{
- expect(PROMPT_CONVERSA).toContain('UMA frase curta');
- expect(PROMPT_CONVERSA).toContain('9. Se voce perceber');
+ expect(PROMPT_CONVERSA).toContain('one short sentence');
+ expect(PROMPT_CONVERSA).toContain('9. If history contains');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
 
 });
 
 it('prompt orienta anúncio e próximo passo sem exemplos ou frases fixas',()=>{
- expect(PROMPT_CONVERSA).toContain('com suas palavras');
- expect(PROMPT_CONVERSA).toContain('quem faz o que a seguir');
+ expect(PROMPT_CONVERSA).toContain('Before an action');
+ expect(PROMPT_CONVERSA).toContain('who will do what next');
  expect(PROMPT_CONVERSA).not.toContain('Vou conferir sua agenda');
  expect(PROMPT_CONVERSA).not.toContain('Vou te enviar um link');
- expect(PROMPT_CONVERSA).not.toContain('EXEMPLOS');
- expect(PROMPT_CONVERSA).not.toContain('reescreva com suas palavras');
+ expect(PROMPT_CONVERSA).not.toContain('EXAMPLES');
+ expect(PROMPT_CONVERSA).not.toContain('rewrite with your own words');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
 });
 it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('ação %s sem fala exige anúncio antes de validar seu conteúdo',async acao=>{
@@ -218,9 +228,9 @@ it('STEER 20: confirmação estruturada permite fala vazia somente com pergunta 
  expect((await c.responder(entrada)).fala).toEqual([ERRO_CONVERSA]);
 });
 it('STEER 20: prompt exige interpretar a confirmação em vez de inventar falta de permissão',()=>{
- expect(PROMPT_CONVERSA).toContain('DEVE preencher parametros.confirmacao');
- expect(PROMPT_CONVERSA).not.toContain('Nenhuma acao disponivel emite nota');
- expect(PROMPT_CONVERSA).not.toContain('Nenhuma ação disponível emite nota');
+ expect(PROMPT_CONVERSA).toContain('always set parametros.confirmacao');
+ expect(PROMPT_CONVERSA).not.toContain('No available action issues an invoice');
+ expect(PROMPT_CONVERSA).not.toContain('No action can issue an invoice');
  expect(PROMPT_CONVERSA.length).toBeLessThan(6500);
 });
 
@@ -285,6 +295,14 @@ it('reenvio exige pedido literal, escolha só médico e dia válido de consulta'
  expect(validarAcaoConversa(d,f,['reenviar_nota_medico'],'Pode emitir?',agora)).toBe('PEDIDO_REENVIO_AUSENTE');
  expect(validarAcaoConversa(d,{...f,permissoes:{...f.permissoes,entregarPaciente:'paciente'}},['reenviar_nota_medico'],'me envia o PDF',agora)).toBe('ENTREGA_NAO_ESCOLHIDA');
 });
+it('pedido histórico explícito sem data não envia coleção inteira',()=>{
+ const f={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}};
+ const d={fala:['Vou buscar a nota pedida.'],acao:'reenviar_nota_medico',parametros:{evidencia:'Me manda minhas notas'}};
+ expect(validarAcaoConversa(d,f,['reenviar_nota_medico'],'Me manda minhas notas',agora)).toBe('PERIODO_NECESSARIO');
+ const comDia={...d,parametros:{...d.parametros,dia:'2026-10-20'}};
+ expect(validarAcaoConversa(comDia,f,['reenviar_nota_medico'],'Me manda minhas notas',agora)).toBeNull();
+});
+
 it('evidência literal de emissão não autoriza entrega da nota existente',()=>{
  const f={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}};
  expect(validarAcaoConversa({fala:['Vou buscar.'],acao:'reenviar_nota_medico',parametros:{evidencia:'Pode emitir?'}},f,['reenviar_nota_medico'],'Pode emitir?',agora)).toBe('PEDIDO_REENVIO_AUSENTE');
@@ -315,10 +333,10 @@ it.each(['Hoje só há uma consulta sem nota, mas ela está bloqueada para emiss
 });
 
 it('contratos distinguem consulta, pendência e preparação fiscal',()=>{
- expect(PROMPT_CONVERSA).toContain('consultar_agenda lê a agenda em geral');
- expect(PROMPT_CONVERSA).toContain('listar_pendencias lê somente consultas sem nota');
- expect(PROMPT_CONVERSA).toContain('iniciar_lote prepara quantidade/total');
- expect(PROMPT_CONVERSA).toContain('Restrições de não emitir devem ser preservadas');
+ expect(PROMPT_CONVERSA).toContain('Use consultar_agenda for general agenda data');
+ expect(PROMPT_CONVERSA).toContain('listar_pendencias for consultations without an invoice');
+ expect(PROMPT_CONVERSA).toContain('iniciar_lote for quantity and total');
+ expect(PROMPT_CONVERSA).toContain('Preserve "do not issue" restrictions');
 });
 it.each([['da semana passada','2026-10-18'],['da semana retrasada','2026-10-11'],['do mês passado','2026-09-30'],['desde a semana passada',null]])('fecha período natural sem ampliar até hoje: %s',async(texto,fim)=>{
  const {fimPeriodoDecisao}=await import('../src/onboarding/conversador-medico.js');
