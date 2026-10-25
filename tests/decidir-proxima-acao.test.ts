@@ -253,9 +253,9 @@ it('boas-vindas respeitam escolha salva e capacidade real de envio ao paciente',
  const base=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'paciente',envioPacienteRealAtivo:false});
  expect(base[2]).toContain('está salva');expect(base[2]).toContain('desligado');expect(base[2]).toContain('não envio');
  const soMedico=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'so_medico',envioPacienteRealAtivo:true});
- expect(soMedico[2]).toContain('só por aqui');expect(soMedico[2]).toContain('não envio ao paciente');
+ expect(soMedico[2]).toContain('só por aqui');expect(soMedico[2]).toContain('Não envio ao paciente');
  const pendente=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:null,envioPacienteRealAtivo:true});
- expect(pendente[2]).toContain('preciso da sua escolha');expect(pendente[2]).toContain('sem ela, não envio');
+ expect(pendente[2]).toContain('preciso da sua escolha');expect(pendente[2]).toContain('Sem ela, não envio');
  const liberado=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'paciente',envioPacienteRealAtivo:true});
  expect(liberado[2]).toContain('permite entrega ao paciente');expect(liberado[2]).toContain('depende das travas');
 });
