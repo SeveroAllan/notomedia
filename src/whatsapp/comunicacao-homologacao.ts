@@ -243,17 +243,24 @@ export class ComunicacaoHomologacao {
     const { medicoId, solicitacaoId } = entrada;
     try {
       const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, nf.ndps, nf.valor_servicos_centavos, sn.origem, sn.datas_consulta_texto, p.nome as paciente_nome,
-        u.telefone as telefone_medico, case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
-          when sn.origem='lote' then null else p.telefone end as contato_telefone, pf.ambiente, wi.nome_instancia,
-        wi.medico_id as instancia_medico_id, wi.status as instancia_status
+        coalesce(op.telefone,u.telefone) as telefone_medico, case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
+          when sn.origem='lote' then null else p.telefone end as contato_telefone, pf.ambiente, m.conta_id as medico_conta_id, wi.nome_instancia,
+        wi.medico_id as instancia_medico_id, wi.conta_id as instancia_conta_id, wi.status as instancia_status
         from notas_fiscais nf join solicitacoes_nota sn on (sn.id = nf.solicitacao_id or (sn.origem='lote' and sn.nota_reenvio_id=nf.id))
         join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id = nf.id and ec.estado = 'nota_gerada'
         join pacientes p on p.id = sn.paciente_id and p.medico_id = sn.medico_id
         join medico_perfil_fiscal pf on pf.medico_id = sn.medico_id
-        join medicos m on m.id=sn.medico_id join usuarios u on u.id=m.usuario_id and u.ativo=true
-        left join lateral (select nome_instancia, medico_id, status from whatsapp_instancias
-          where medico_id = sn.medico_id and oficial = false and status = 'conectado'
-            and nome_instancia <> $3 and nome_instancia <> $4 order by criado_em desc limit 1) wi on true
+        join medicos m on m.id=sn.medico_id left join usuarios u on u.id=m.usuario_id and u.ativo=true
+        left join lateral (
+          select case when count(distinct c.numero_whatsapp)=1 then min(c.numero_whatsapp) end as telefone
+          from medicos mm
+          join noto_whatsapps_medicos wm on wm.medico_id=mm.id
+          join noto_whatsapps_conectados c on c.id=wm.whatsapp_conectado_id
+          where mm.conta_id=m.conta_id
+        ) op on true
+        left join lateral (select nome_instancia, medico_id, conta_id, status from whatsapp_instancias
+          where (conta_id=m.conta_id or medico_id = sn.medico_id) and oficial = false and status = 'conectado'
+            and nome_instancia <> $3 and nome_instancia <> $4 order by conectado_em desc nulls last, criado_em desc limit 1) wi on true
         where sn.id = $1 and sn.medico_id = $2 and nf.medico_id = $2 and nf.status = 'autorizada'`,
         [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName, this.config.encryptionKey]);
       const nota = rows[0];
@@ -303,7 +310,8 @@ export class ComunicacaoHomologacao {
       if (!this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone) || !this.config.envioPacienteRealAtivo) {
         const resultado=this.simular('nota_paciente');await registrarEntrega('paciente',resultado);return resultado;
       }
-      const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
+      const propria = nota.nome_instancia && nota.instancia_status === 'conectado' &&
+        (nota.instancia_conta_id === nota.medico_conta_id || nota.instancia_medico_id === medicoId) &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {
         if (nota.origem !== 'lote') await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
@@ -347,8 +355,8 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select pf.ambiente, wi.nome_instancia from medicos m
         left join medico_perfil_fiscal pf on pf.medico_id = m.id
         left join lateral (select nome_instancia from whatsapp_instancias
-          where medico_id = m.id and oficial = false and status = 'conectado'
-            and nome_instancia <> $2 and nome_instancia <> $3 order by criado_em desc limit 1) wi on true
+          where (conta_id=m.conta_id or medico_id=m.id) and oficial = false and status = 'conectado'
+            and nome_instancia <> $2 and nome_instancia <> $3 order by conectado_em desc nulls last, criado_em desc limit 1) wi on true
         where m.id = $1`, [medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName]);
       const r = rows[0];
       if (!r?.nome_instancia) return 'sem_instancia';
