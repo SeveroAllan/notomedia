@@ -17,7 +17,7 @@ export function profissionaisIdentificados(consultas: readonly ConsultaComProfis
     const chave = nome ? normalizar(nome) : '';
     if (chave && !porChave.has(chave)) porChave.set(chave, nome!);
   }
-  return [...porChave.values()].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+  return [...porChave.values()];
 }
 
 export function consultaPertenceAoProfissional(consulta: ConsultaComProfissional, nomeMedico: string): boolean {
