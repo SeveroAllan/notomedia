@@ -60,3 +60,17 @@ it('link de certificado aponta ao painel existente e carrega médico alvo',()=>{
   expect(url.searchParams.get('medicoId')).toBe('00000000-0000-4000-8000-000000000001');
   expect(url.searchParams.get('etapa')).toBe('certificado');
 });
+
+it('certificados são independentes por médico da mesma conta',async()=>{
+  const query=vi.fn(async()=>({rows:[
+    {id:'m1',nome_completo:'Ana Lima',crm:null,certificado_valido:true},
+    {id:'m2',nome_completo:'Bruno Souza',crm:null,certificado_valido:false}
+  ]}));
+  const {listarMedicosDaConta}=await import('../src/conta/medicos-conta.js');
+  expect(await listarMedicosDaConta({query} as unknown as pg.Pool,'m1')).toEqual([
+    {id:'m1',nomeCompleto:'Ana Lima',crm:null,certificadoValido:true},
+    {id:'m2',nomeCompleto:'Bruno Souza',crm:null,certificadoValido:false}
+  ]);
+  expect(String(query.mock.calls[0]![0])).toContain('c.medico_id=m.id');
+});
+
