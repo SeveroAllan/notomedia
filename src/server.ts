@@ -456,7 +456,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);
-        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Já existe uma tentativa de envio deste PDF. Vou preservar a nota sem repetir o envio. O recebimento ainda precisa ser conferido.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
+        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Esse PDF já teve uma tentativa de envio. A nota continua preservada. Posso conferir o registro desse envio para você.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
         await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala]});
         return {jaRespondida:true};
       }
@@ -523,7 +523,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ? [`${escopo} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
           : [`${escopo} não encontrei atendimento finalizado com cobrança particular${alvo} sem nota e livre para preparar na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
         if(jaFaturadas)fala.push(jaFaturadas===1?'1 já tem nota autorizada e ficou fora da lista.':`${jaFaturadas} já têm nota autorizada e ficaram fora da lista.`);
-        if(bloqueadas)fala.push(bloqueadas===1?'1 tem tentativa anterior que precisa ser conciliada. Não vou emitir de novo.':`${bloqueadas} têm tentativas anteriores que precisam ser conciliadas. Não vou emitir de novo.`);
+        if(bloqueadas)fala.push(bloqueadas===1?'1 atendimento já tem uma tentativa de emissão registrada. A nota existente continua preservada. Se quiser, posso conferir o status dessa tentativa para você.':`${bloqueadas} atendimentos já têm tentativas de emissão registradas. As notas existentes continuam preservadas. Se quiser, posso conferir o status dessas tentativas para você.`);
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde,jaFaturadas,bloqueadas},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
