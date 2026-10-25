@@ -50,6 +50,7 @@ it('pedido histórico envia somente a data pedida e a mesma chave não repete PD
   expect(await c.comunicacao.reenviarNotaMedico(medico,{enviarPdf:c.enviarPdf},'2026-10-21','pedido-21')).toBe('ausente');
   expect(c.enviarPdf).toHaveBeenCalledTimes(1);
   expect(c.query.mock.calls.filter(([sql])=>String(sql).includes('select sn.id as solicitacao_id')).map(([,p])=>p[1])).toEqual(['20/10/2026','20/10/2026','21/10/2026']);
+  expect(c.contextos.map(x=>JSON.parse(x.texto).resultado)).toEqual(['enviado','repetido']);
 });
 
 it('resultado do PDF histórico fica registrado com nota, destino, momento e sucesso',async()=>{
