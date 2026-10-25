@@ -637,11 +637,11 @@ it('lista assinada explica tentativa anterior sem tom defensivo nem jargão',asy
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-21',origem:'contexto_salvo'};
  c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir a agenda.'],acao:'listar_pendencias',parametros:{desde:'2026-10-21'}}))
  .mockResolvedValueOnce(JSON.stringify({fala:['Hoje só há uma consulta sem nota, mas ela está bloqueada para emissão.'],acao:null}));
- const assinada=['Vi 1 atendimento livre.','1 atendimento já tem uma tentativa de emissão registrada. A nota existente continua preservada. Se quiser, posso conferir o status dessa tentativa para você.'];
+ const assinada=['Vi 1 atendimento livre.','1 atendimento já tem uma tentativa de emissão registrada. Posso conferir agora se ela foi autorizada, recusada ou se ainda precisa de atenção.'];
  c.executar.mockResolvedValue({dados:{ferramenta:'listar_pendencias',ok:true,total:1,bloqueadas:1},falaAssinada:assinada,falaMemoria:assinada} as never);
  await c.turno('conferir','Confira as consultas desde 21/10, sem emitir.');
  expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(assinada);
- const textoFinal=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');expect(textoFinal).not.toMatch(/bloquead|conciliad|não vou emitir de novo/i);expect(textoFinal).toContain('continua preservada');expect(textoFinal).toContain('posso conferir o status');
+ const textoFinal=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');expect(textoFinal).not.toMatch(/bloquead|conciliad|não vou emitir de novo|preservada/i);expect(textoFinal).toContain('tentativa de emissão registrada');expect(textoFinal).toContain('Posso conferir agora');
 });
 
 it.each(['Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?','Meu paciente teve várias consultas. Como escolho só uma?'])('correção de ação não pode escapar para fato herdado: %s',async texto=>{
