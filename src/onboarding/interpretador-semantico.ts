@@ -138,7 +138,7 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
     return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
   }
   if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&fatos.agenda.nome&&permitidas.includes('pedir_link_agenda')){
-    return {fala:['Para continuar, vou te mandar o link seguro para conectar sua agenda.'],acao:'pedir_link_agenda',parametros:{agenda:fatos.agenda.nome}};
+    return {fala:['Para continuar, preciso conectar sua agenda só para leitura.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:fatos.agenda.nome}};
   }
   if(faltaPermissao&&permitidas.includes('pedir_link_permissoes')){
     return {fala:['Antes de continuar, preciso da sua escolha no link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
