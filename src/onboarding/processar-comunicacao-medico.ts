@@ -184,10 +184,6 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
-      if(motivo==='CONFIRMACAO_EXIGE_MEDICO'){
-        await enviar(['A proposta está pronta, mas a autorização de emissão precisa vir do médico responsável. Você pode continuar conferindo dados e pendências por aqui.']);
-        return {tipo:'nenhuma'};
-      }
       if(podeCorrigir() && motivo==='LEITURA_ATUAL_SEM_ACAO') {
         decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte atual; se faltar identificação, pergunte só o dado necessário. Não repita oferta futura.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
