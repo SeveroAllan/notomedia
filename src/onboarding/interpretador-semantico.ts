@@ -204,7 +204,7 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
     const conectada=fatos.agendas?.[agendaAlvo]?.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agendaAlvo);
     const nome=agendaAlvo==='amplimed'?'Amplimed':'TribeMD';
     if(conectada)return {fala:[`${nome} já está conectada. Posso usar essa agenda quando você pedir uma consulta.`],acao:null};
-    if(permitidas.includes('pedir_link_agenda'))return {fala:[`Vou te mandar o link seguro para conectar a ${nome} também.`, 'Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:agendaAlvo}};
+    if(permitidas.includes('pedir_link_agenda'))return {fala:[`Vou te mandar o link seguro para conectar a ${nome} também.`, 'O acesso é só de leitura. Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:agendaAlvo}};
     return null;
   }
   if(faltaPermissao&&permissaoNecessaria&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
