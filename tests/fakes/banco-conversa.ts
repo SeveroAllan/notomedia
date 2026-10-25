@@ -18,7 +18,11 @@ export class BancoConversaFalso {
     if (sql.startsWith('insert into conversa_mensagens')) {
       const existente = this.mensagens.find(m => m.medico === medico && m.mensagemId === terceiro);
       if (existente) {
-        if (sql.includes('do update set texto=excluded.texto, papel=excluded.papel')) { existente.texto = quarto; existente.papel = papel; }
+        if (sql.includes("do update set conversa=excluded.conversa,texto=excluded.texto,papel='noto'")) {
+          existente.conversa=conversa;existente.texto=quarto;existente.papel='noto';
+        } else if (sql.includes('do update set texto=excluded.texto, papel=excluded.papel')) {
+          existente.texto = quarto; existente.papel = papel;
+        }
         return { rows: [] };
       }
       this.mensagens.push({ id: String(this.mensagens.length + 1), medico, conversa, mensagemId: terceiro, texto: quarto, papel });
@@ -27,6 +31,7 @@ export class BancoConversaFalso {
     if (sql.startsWith('select 1 from conversa_mensagens')) return { rows: this.mensagens.filter(m => m.medico === medico && m.mensagemId === terceiro).map(() => ({ existe: 1 })) };
     if (sql.includes("criada_em > now() - interval '10 minutes'")) return { rows: mensagens.filter(m => m.papel === 'noto').reverse().map(m => ({ texto: m.texto })) };
     if (sql.includes("and papel='noto'") && sql.includes("order by id desc limit")) return { rows: mensagens.filter(m => m.papel === 'noto').slice(sql.endsWith('limit 6') ? -6 : -1).reverse().map(m => ({ texto: m.texto })) };
+    if(sql.includes("mensagem_id like 'contexto:entrega_nota:%'"))return {rows:this.mensagens.filter(m=>m.medico===medico&&m.conversa===conversa&&m.mensagemId.startsWith('contexto:entrega_nota:')).slice(-8).reverse().map(m=>({texto:m.texto}))};
     if(sql.includes("mensagem_id like 'contexto:selecao:%'"))return {rows:mensagens.filter(m=>m.mensagemId.startsWith('contexto:selecao:')).slice(-1).map(m=>({texto:m.texto}))};
     if(sql.includes('mensagem_id=$3 limit 1')) return {rows:mensagens.filter(m=>m.mensagemId===terceiro).slice(-1).map(m=>({texto:m.texto}))};
     if (sql.startsWith('select texto from conversa_mensagens')) return { rows: mensagens.slice(-terceiro).reverse().map(m => ({ texto: m.texto })) };
