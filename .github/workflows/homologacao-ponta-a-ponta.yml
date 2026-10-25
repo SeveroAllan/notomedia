@@ -33,6 +33,7 @@ jobs:
             tests/migracao-medicos-conta.test.ts \
             tests/conta-multimedico-modelo.test.ts \
             tests/profissionais-agenda-multimedico.test.ts \
+            tests/referencia-agenda-conta.test.ts \
             tests/projeto-homolog-migrations.test.ts \
             tests/mensagem-falha-emissao.test.ts \
             tests/processar-conversa-medico.test.ts \
