@@ -15,7 +15,7 @@ it('zero explícito é conhecido, soma insegura é recusada',()=>{
 });
 
 import {resultadoConsultaAgenda} from '../src/onboarding/resumo-valores-agenda.js';
-it.each(['valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido'])('handler preserva medida %s e não bloqueia fala final com lista assinada',medida=>{
+it.each(['quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido'])('handler preserva medida estruturada %s e não bloqueia fala final com lista assinada',medida=>{
  const r=resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:null},{status:'cancelada',valorCentavos:10000}],desde:'2026-10-19',ate:'2026-10-24',medida,fala:['Lista antiga']});
  expect(r).not.toHaveProperty('falaAssinada');expect(r.dados.medida).toBe(medida);
  expect(r.dados.valoresAgenda.realizadas.totalCentavos).toBeNull();expect(r.dados.valoresAgenda.recebido.disponivel).toBe(false);

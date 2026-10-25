@@ -28,6 +28,17 @@ it('interpreta formulações linguísticas diferentes no mesmo frame sem regras 
   expect(completar.mock.calls[0]![3]).toMatchObject({reasoningEffort:'medium',formatoJson:true});
 });
 
+it('entrega plano anterior ao interpretador para resolver referência financeira contextual',async()=>{
+  const completar=vi.fn<typeof completarOpenAi>(async()=>JSON.stringify({...frame,dominio:'fiscal',medida:'valor_realizado',periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'}}));
+  const i=new InterpretadorSemantico('k','gpt-6.1-sol',completar);
+  const plano={objetivo:'consultar:consultas',etapa:'executar_capacidade',faltando:[],proximosPassos:['consultar_agenda'],aguardando:null};
+  const r=await i.interpretar({texto:'Quanto foi faturado?',mensagens:['Na sua agenda desta semana encontrei 11 consultas.'],resumo:null,plano,fatos,agora});
+  expect(r?.medida).toBe('valor_realizado');
+  const payload=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
+  expect(payload.plano).toEqual(plano);
+  expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('a leitura dominante é valor_realizado');
+});
+
 it('planner mapeia significado de agenda para consultar_agenda, não listar_pendencias',()=>{
   const d=planejarPorSemantica(frame,fatos,['nenhuma','consultar_agenda','listar_pendencias']);
   expect(d).toMatchObject({acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});

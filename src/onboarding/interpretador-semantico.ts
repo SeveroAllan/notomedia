@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import type { DecisaoConversa, FatosConversa } from './conversador-medico.js';
+import type { PlanoConversa } from './memoria-conversa.js';
 
 const periodoSchema = z.object({
   inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
@@ -30,10 +31,13 @@ export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaS
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interprete a mensagem do médico pelo significado, não por palavras-chave.
 Você NÃO executa ações, NÃO responde ao médico e NÃO decide política de segurança. Produza apenas a representação semântica JSON.
 
-Use texto, histórico, resumo, fatos e calendario para resolver referências temporais, anafóricas e contextuais naturais.
+Use texto, histórico, resumo, plano anterior, fatos e calendario para resolver referências temporais, anafóricas e contextuais naturais.
 "consultas" significa agenda em geral. "pendencias_fiscais" significa consultas sem nota/pendentes para emissão.
 Preserve a medida pedida: lista, quantidade ou valor. Não reduza uma pergunta financeira a listar consultas.
-Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscais são métricas distintas. Se o sentido financeiro não estiver definido pelo turno ou contexto, use valor_indefinido; não escolha uma métrica por conta própria.
+Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscais são métricas distintas.
+Resolva ambiguidade pelo contexto antes de perguntar. Quando uma pergunta financeira curta é continuação imediata de uma consulta/lista de agenda (por histórico ou plano anterior consultar:consultas) e não há evidência de recebimento/pagamento nem de notas fiscais, a leitura dominante é valor_realizado: o valor registrado nas consultas com status realizada. Isso não prova dinheiro recebido nem nota fiscal emitida.
+Use valor_recebido quando o sentido for dinheiro efetivamente recebido; valor_notas quando o sentido for notas fiscais; valor_agenda quando pedir os valores registrados na agenda independentemente do status.
+Use valor_indefinido somente quando o contexto não tornar uma dessas leituras claramente dominante ou quando duas leituras materiais continuarem igualmente plausíveis. Não peça esclarecimento por ambiguidade apenas teórica.
 Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
 Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
 Restrições como "sem emitir", "só conferir", "não prepare" devem ser preservadas.
@@ -74,12 +78,13 @@ function calendarioSemantico(agora: Date) {
 
 export class InterpretadorSemantico {
   constructor(private readonly apiKey:string|undefined,private readonly modelo:string|undefined,private readonly completar:typeof completarOpenAi){}
-  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
+  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;plano?:PlanoConversa|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
     if(!this.apiKey?.trim()||!this.modelo?.trim())return null;
     const seguro=JSON.parse(JSON.stringify({
       texto:sanitizarTextoMedico(entrada.texto),
       mensagens:entrada.mensagens.map(sanitizarTextoMedico),
       resumo:entrada.resumo?sanitizarTextoMedico(entrada.resumo):null,
+      plano:entrada.plano??null,
       fatos:entrada.fatos,
       calendario:calendarioSemantico(entrada.agora)
     }));

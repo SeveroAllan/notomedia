@@ -22,5 +22,6 @@ export function resumirValoresAgenda(consultas: readonly ConsultaValorAgenda[]) 
 export function resultadoConsultaAgenda(entrada:{consultas:readonly ConsultaValorAgenda[];desde:string;ate:string;medida?:string;fala:string[]}) {
   const dados={ferramenta:'consultar_agenda',ok:true,total:entrada.consultas.length,
     desde:entrada.desde,ate:entrada.ate,medida:entrada.medida??'lista',valoresAgenda:resumirValoresAgenda(entrada.consultas)};
-  return {dados,...(entrada.medida?.startsWith('valor_')?{}:{falaAssinada:entrada.fala,falaMemoria:entrada.fala})};
+  const respostaEstruturada=entrada.medida==='quantidade'||entrada.medida?.startsWith('valor_');
+  return {dados,...(respostaEstruturada?{}:{falaAssinada:entrada.fala,falaMemoria:entrada.fala})};
 }

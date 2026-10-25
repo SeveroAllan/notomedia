@@ -685,24 +685,46 @@ it('conversa contínua alterna explicação, leitura concreta e escolha sem herd
  expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.at(-1)?.[0].join(' ')).toMatch(/nome e a data/);
 });
 
-it('pergunta financeira após lista recebe resultado financeiro e resposta final, sem repetir lista ou preparar',async()=>{
+it('pergunta financeira curta após lista usa contexto como valor realizado, sem repetir lista ou preparar',async()=>{
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
  await c.memoria.registrarFala('m','c','noto:lista-anterior','Encontrei 11 consultas nesta semana.','noto');
  Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({
-   dominio:'fiscal',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'valor_indefinido',
+   dominio:'fiscal',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'valor_realizado',
    periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'},paciente:null,
    restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.98
  }))}});
- c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'cancelada',valorCentavos:10000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Encontrei 2 consultas.']}));
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'cancelada',valorCentavos:10000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Encontrei 2 consultas.','Paciente Teste Cinco (realizada)']}));
  c.completar.mockImplementation(async(_k,_m,msgs)=>{
    const d=JSON.parse(String(msgs[1]!.content));expect(d.acoesPermitidas).toEqual(['nenhuma']);
+   expect(d.interpretacaoSemantica.medida).toBe('valor_realizado');
    expect(d.resultadoFerramenta.valoresAgenda.realizadas.totalCentavos).toBe(25000);
-   return JSON.stringify({fala:['Você quer o valor das consultas realizadas na agenda, o dinheiro recebido ou o total em notas fiscais?'],acao:null});
+   return JSON.stringify({fala:['Pelos valores registrados na agenda, as consultas realizadas somam R$ 250,00. Isso não confirma dinheiro recebido nem total de notas fiscais.'],acao:null});
  });
  await c.turno('quanto-faturado','Quanto foi faturado?');
- expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'valor_indefinido'}});
- expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).toContain('dinheiro recebido');
- expect(c.enviar.mock.calls.flatMap(([f])=>f).join(' ')).not.toContain('Encontrei 11 consultas');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'valor_realizado'}});
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');
+ expect(falas).toContain('R$ 250,00');
+ expect(falas).toContain('não confirma dinheiro recebido');
+ expect(falas).not.toContain('Encontrei 11 consultas');
+ expect(falas).not.toContain('Paciente Teste Cinco');
+ expect(c.executar.mock.calls[0]![0].acao).not.toBe('iniciar_lote');
+});
+
+it('quantidade responde a contagem sem expor a lista de pacientes',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({
+   dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'quantidade',
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
+   restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.99
+ }))}});
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'cancelada',valorCentavos:10000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Paciente Um (realizada)','Paciente Dois (cancelada)']}));
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.resultadoFerramenta.total).toBe(2);return JSON.stringify({fala:['Foram 2 consultas nesse período.'],acao:null});});
+ await c.turno('quantidade','Quantas consultas tive nesse período?');
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'quantidade'}});
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');
+ expect(falas).toContain('Foram 2 consultas');
+ expect(falas).not.toContain('Paciente Um');
+ expect(falas).not.toContain('Paciente Dois');
 });
 
 it.each(['valor_realizado','valor_recebido','valor_notas'] as const)('frame→handler→resposta preserva %s sem efeito fiscal',async medida=>{
