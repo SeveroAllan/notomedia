@@ -1627,6 +1627,8 @@
       if (salva?.usuario && typeof salva.tokenAcesso === 'string' && salva.tokenAcesso) sessaoAtual = salva;
       else localStorage.removeItem('notomed_sessao');
     } catch { localStorage.removeItem('notomed_sessao'); }
+    const medicoIdAlvoUrl = new URLSearchParams(window.location.search).get('medicoId');
+    const medicoIdSelecionado = () => medicoIdAlvoUrl || sessaoAtual?.usuario?.medicoId || sessaoAtual?.usuario?.usuarioId || null;
     let certArquivoBase64 = '';
     let certNomeArquivo = '';
     let telefoneAtual = '';
@@ -1897,7 +1899,8 @@
       if (!sessaoAtual?.usuario || !sessaoAtual.tokenAcesso) { efetuarLogout(); return; }
       cardOnboarding.classList.add('hidden');
 
-      const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
+      const medicoId = medicoIdSelecionado();
+      if(!medicoId){efetuarLogout();return;}
       try {
         const res = await fetch(`/api/onboarding/status?medicoId=${medicoId}`, {
           headers: { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }
@@ -1912,8 +1915,8 @@
           cardAuth.classList.add('hidden');
           cardOnboarding.classList.remove('hidden');
           if (data.medicoId || data.status.medicoId) {
-            sessaoAtual.usuario.medicoId = data.medicoId || data.status.medicoId;
-            if (data.status.nomeUsuario) sessaoAtual.usuario.nome = data.status.nomeUsuario;
+            if(!medicoIdAlvoUrl)sessaoAtual.usuario.medicoId = data.medicoId || data.status.medicoId;
+            if (!medicoIdAlvoUrl && data.status.nomeUsuario) sessaoAtual.usuario.nome = data.status.nomeUsuario;
             localStorage.setItem('notomed_sessao', JSON.stringify(sessaoAtual));
           }
           renderizarPassos(data.status);
@@ -2327,14 +2330,15 @@
         showAlert('Selecione o arquivo do certificado e digite a senha.', true, alertOnboarding);
         return;
       }
-      const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
+      const medicoId = medicoIdSelecionado();
+      if(!medicoId){showAlert('Médico não identificado.',true,alertOnboarding);return;}
       const btn = document.getElementById('btnSalvarCertificado');
       btn.disabled = true;
       btn.textContent = 'Buscando última NFS-e...';
       try {
         const res = await fetch('/api/onboarding/certificado', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify({
             medicoId,
             arquivoBase64: certArquivoBase64,
