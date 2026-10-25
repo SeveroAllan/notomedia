@@ -47,16 +47,17 @@ const mensagensFalha: Record<string, string> = {
   E0160: 'O cadastro do consultório está diferente do registrado no serviço de emissão; peça ao seu contador para conferir.',
   E0676: 'O cadastro do consultório está diferente do registrado no serviço de emissão; peça ao seu contador para conferir.',
   E0710: 'O cadastro do consultório está diferente do registrado no serviço de emissão; peça ao seu contador para conferir.',
-  FALHA_ENTREGA_PDF: 'A nota foi emitida, mas não consegui entregar o documento; confira a conexão do WhatsApp e peça o reenvio, sem emitir outra nota.',
-  INSTANCIA_INDISPONIVEL: 'A nota foi emitida, mas seu WhatsApp está desconectado; conecte-o e peça o reenvio, sem emitir outra nota.',
+  FALHA_ENTREGA_PDF: 'A nota já foi emitida, mas não consegui entregar o documento. Confira a conexão do WhatsApp e peça apenas o reenvio do PDF.',
+  INSTANCIA_INDISPONIVEL: 'A nota já foi emitida, mas seu WhatsApp está desconectado. Conecte-o e peça apenas o reenvio do PDF.',
   PERSISTENCIA_COMPROVANTE_PENDENTE: 'A emissão foi autorizada, mas o registro precisa de conferência; aguarde o suporte e não peça outra emissão para a mesma consulta.'
 };
 
 /** Nunca usa mensagens técnicas ou texto livre para construir a fala ao médico. */
 export function traduzirFalhaEmissao(codigo: unknown): string {
-  if (typeof codigo === 'string' && ['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT'].includes(codigo)) return `${MENSAGEM_INSTABILIDADE} Não vou tentar emitir novamente sozinho.`;
-  if (typeof codigo === 'string' && Object.hasOwn(mensagensFalha, codigo)) return `${mensagensFalha[codigo]} Não vou tentar emitir novamente sozinho.`;
-  return `${MENSAGEM_INSTABILIDADE} Não vou tentar emitir novamente sozinho.`;
+  const orientarConferencia = `${MENSAGEM_INSTABILIDADE} Antes de uma nova tentativa, confira se essa emissão foi autorizada, recusada ou ficou pendente.`;
+  if (typeof codigo === 'string' && ['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT'].includes(codigo)) return orientarConferencia;
+  if (typeof codigo === 'string' && Object.hasOwn(mensagensFalha, codigo)) return mensagensFalha[codigo]!;
+  return orientarConferencia;
 }
 
 export function categoriaFalhaEmissao(codigo: unknown): 'tecnico' | 'acionavel' {
