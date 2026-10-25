@@ -21,7 +21,7 @@ const textos: Record<AcaoMedico, string> = {
   entrega_sem_permissao: 'Doutor(a), a primeira nota está pronta para envio. Preciso saber para quem enviar: direto ao paciente pelo seu WhatsApp ou só para você. Envio o link seguro de escolha a seguir.',
   entrega_sem_permissao_link: '',
   instancia_indisponivel: 'Doutor(a), a nota foi gerada, mas não consegui entregá-la. Confira se seu WhatsApp próprio está conectado e me oriente.',
-  falha_entrega: 'Doutor(a), a nota foi gerada, mas houve uma falha ao preparar ou entregar o documento. Pode conferir? A nota será preservada sem nova emissão.'
+  falha_entrega: 'Doutor(a), a nota foi gerada, mas o documento não chegou a ser entregue. A emissão já está registrada. Posso tentar entregar o PDF novamente ou conferir o registro do envio.'
 };
 const duvidas: Record<string, string> = {
   LEITURA_INDISPONIVEL: 'Não consegui ler o comprovante. Pode conferir e me orientar?',
@@ -42,7 +42,7 @@ const duvidas: Record<string, string> = {
   COMPROVANTE_SEM_AUDITORIA_PRONTA: 'Não encontrei a conferência deste comprovante. Pode revisar antes de emitir?',
   CADASTRO_OU_CONSULTA_DIVERGENTE: 'Os dados mudaram depois da conferência do comprovante. Pode revisar?',
   PEDIDO_DIVERGENTE: 'O pedido está diferente da conferência do comprovante. Pode revisar?',
-  EMISSAO_COMPROVANTE_BLOQUEADA: 'Este comprovante já tem uma emissão bloqueada ou com erro. Pode revisar como prosseguir?',
+  EMISSAO_COMPROVANTE_BLOQUEADA: 'Este comprovante já tem uma tentativa de emissão registrada. Posso conferir se ela foi autorizada, recusada ou se ainda precisa de atenção.',
   AMBIENTE_NAO_HOMOLOGACAO: 'A emissão de teste exige ambiente de homologação. Pode conferir a configuração?',
   PERFIL_FISCAL_INCOMPLETO: 'Faltam dados fiscais para emitir a nota de teste. Pode conferir?',
   ENFILEIRAMENTO_COMPROVANTE_FALHOU: 'Não consegui registrar o pedido de emissão. Pode revisar antes de prosseguir?'
