@@ -50,7 +50,7 @@ DECISION PROCEDURE
 1. Give the current request priority. Continue from a direct answer. Do not repeat the same question.
 2. If the requested agenda is already connected, do not ask for a new link.
    If one supported agenda is connected and the doctor explicitly asks to add the other supported agenda, use pedir_link_agenda for the other agenda.
-   Never switch the active agenda silently.
+   If both are connected, use parametros.agenda for the source named or clearly established in context. If the source is not clear, ask which agenda. Never switch the source silently.
    Use consultar_agenda for general agenda data, listar_pendencias for consultations without an invoice, and iniciar_lote for quantity and total.
    iniciar_lote can issue only after confirmation. Preserve "do not issue" restrictions.
    iniciar_lote can get CPF and phone data. Do not ask for them first.
@@ -212,6 +212,10 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
   if(fatos.operadorTipo==='secretaria'&&acao==='iniciar_lote'&&d.parametros?.confirmacao?.intencao==='sim')return 'CONFIRMACAO_EXIGE_MEDICO';
+  const agendaDaAcao=normalizarAgenda(d.parametros?.agenda??fatos.agenda.nome??undefined);
+  const agendaDaAcaoConectada=agendaDaAcao
+    ? fatos.agendas?.[agendaDaAcao]?.conectada ?? (fatos.agenda.conectada&&normalizarAgenda(fatos.agenda.nome??undefined)===agendaDaAcao)
+    : false;
   if (!d.fala.some(t=>t.trim())) return 'anuncie a acao com suas palavras';
   // Turno de conclusão de conexão anuncia o resultado; novo link só quando o médico pedir. Ação de continuidade (pendências/lote) segue normal.
   if (fatos.eventoAgenda && (acao === 'pedir_link_agenda' || acao === 'pedir_link_permissoes')) return 'CONCLUSAO_SEM_ACAO';
@@ -246,8 +250,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     if (!d.parametros.dia || !diaDecisao(d, agora)) return 'PERIODO_NECESSARIO';
   }
   if (acao === 'consultar_agenda') {
-    const ag=normalizarAgenda(fatos.agenda.nome??undefined);
-    if(!fatos.agenda.conectada||fatos.semAgendaDigital||!(ag==='tribemd'||ag==='amplimed'))return 'AGENDA_NAO_CONECTADA';
+    const ag=agendaDaAcao;
+    if(!agendaDaAcaoConectada||fatos.semAgendaDigital||!(ag==='tribemd'||ag==='amplimed'))return 'AGENDA_NAO_CONECTADA';
     const calendario=calendarioConversa(agora),desde=validarInicioRetroativo(d.parametros?.desde??null,agora),ate=d.parametros?.ate??calendario.hoje;
     const dataAte=/^\d{4}-\d{2}-\d{2}$/.test(ate)&&new Date(ate+'T12:00:00Z').toISOString().slice(0,10)===ate;
     if(!desde||!dataAte||ate<desde||ate>calendario.hoje)return 'PERIODO_INVALIDO';
@@ -255,8 +259,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   }
   if (acao === 'listar_pendencias' || acao === 'iniciar_lote') {
     if(consultaNaoIdentificada(texto)&&!d.parametros?.paciente)return 'PACIENTE_NECESSARIO';
-    { const ag = normalizarAgenda(fatos.agenda.nome ?? undefined);
-      if (!fatos.agenda.conectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed')) return 'AGENDA_NAO_CONECTADA'; }
+    { const ag = agendaDaAcao;
+      if (!agendaDaAcaoConectada || fatos.semAgendaDigital || !(ag === 'tribemd' || ag === 'amplimed')) return 'AGENDA_NAO_CONECTADA'; }
     if(d.parametros?.paciente&&(!texto.includes(d.parametros.paciente.evidencia)||!d.parametros.paciente.evidencia.includes(d.parametros.paciente.nome)))return 'PACIENTE_SEM_EVIDENCIA';
     if (d.parametros?.dia && !diaDecisao(d, agora)) return 'PERIODO_INVALIDO';
     if ((d.parametros?.desde || d.parametros?.periodo) && !periodoDecisao(d,agora,texto)) return 'PERIODO_INVALIDO';
