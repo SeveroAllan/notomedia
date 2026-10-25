@@ -43,6 +43,26 @@ describe('leitura de período do Amplimed (observação)', () => {
       expect(r.dias[2]!.consultas).toEqual([expect.objectContaining({paciente:'Paciente Passado',status:'cancelada'})]);
     }
   });
+  it('domingo oculto confirmado pelo feed cobre hoje e preserva valor/id mesmo se vier fora de ordem', async () => {
+    const domingo={ texto:'10:00 - 10:30\nPaciente Domingo | Avaliação | Particular | R$ 321,45 | 51990000009', cor:'green' };
+    const c = await criar(async () => ({ codigo:'CONECTADO', profissional:prof, completo:true, dias:[
+      {data:'2026-10-24',eventos:[]},
+      {data:'2026-10-25',eventos:[domingo]}
+    ] }));
+    const r=await c.lerAgendaPeriodo(id,'2026-10-24','2026-10-25');
+    expect(r.ok).toBe(true);
+    if(r.ok){
+      expect(r.dias.map(d=>d.data)).toEqual(['2026-10-25','2026-10-24']);
+      expect(r.dias[0]!.consultas).toEqual([expect.objectContaining({paciente:'Paciente Domingo',valorCentavos:32145})]);
+      expect(r.dias[0]!.elegiveis).toEqual([expect.objectContaining({idExterno:'2026-10-25T10:00|51990000009',valorCentavos:32145})]);
+    }
+  });
+  it('mesmo com quantidade certa, data duplicada ou fora do período mantém leitura incompleta', async () => {
+    const c = await criar(async () => ({ codigo:'CONECTADO', profissional:prof, completo:true, dias:[
+      {data:'2026-10-24',eventos:[]},{data:'2026-10-24',eventos:[]}
+    ] }));
+    expect(await c.lerAgendaPeriodo(id,'2026-10-24','2026-10-25')).toMatchObject({ok:false,motivo:'LEITURA_INCOMPLETA'});
+  });
   it('não navegou até o fim: leitura incompleta, nada é afirmado', async () => {
     const c = await criar(async () => ({ codigo: 'CONECTADO', profissional: prof, completo: false, dias: [{ data: '2026-10-22', eventos: [] }] }));
     expect(await c.lerAgendaPeriodo(id, '2026-10-20', '2026-10-22')).toMatchObject({ ok: false, motivo: 'LEITURA_INCOMPLETA' });
