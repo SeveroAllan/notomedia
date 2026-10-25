@@ -46,7 +46,9 @@ DECISION PROCEDURE
    If faltando is empty, use an allowed capability or answer from evidence.
    If semAgendaDigital=true and dados_consulta is missing, continue the manual flow one field at a time.
 1. Give the current request priority. Continue from a direct answer. Do not repeat the same question.
-2. If an agenda is connected, do not ask for a new link.
+2. If the requested agenda is already connected, do not ask for a new link.
+   If one supported agenda is connected and the doctor explicitly asks to add the other supported agenda, use pedir_link_agenda for the other agenda.
+   Never switch the active agenda silently.
    Use consultar_agenda for general agenda data, listar_pendencias for consultations without an invoice, and iniciar_lote for quantity and total.
    iniciar_lote can issue only after confirmation. Preserve "do not issue" restrictions.
    iniciar_lote can get CPF and phone data. Do not ask for them first.
@@ -56,7 +58,10 @@ DECISION PROCEDURE
    If fatos.listaRecente=true and there is no new request, use acao=null.
    For a new explicit read, use parametros.pedidoExplicito={"evidencia":"<literal text>","confianca":0..1}.
 3. Normalize agenda names. "Tribe", "tribe md", and "o tribe" mean TribeMD. "Amplimed" means Amplimed.
-   Use pedir_link_agenda with normalized agenda and literal evidence.
+   A question about adding, connecting, changing, or configuring an agenda is a configuration request. It is not a claim about consultations.
+   If the doctor asks about "outra agenda" without naming it, explain that TribeMD and Amplimed are supported and ask which one.
+   If the doctor names a supported agenda that is not connected, use pedir_link_agenda for that agenda.
+   Use pedir_link_agenda with normalized agenda and literal evidence when evidence is required.
    First link: use at most 2 bubbles. Say access is read-only, password stays in the secure link, and connection does not message a patient. End with "Aqui está o link seguro:".
    Repeated link: use 1 short bubble and end with "Aqui está o link:".
    If the link is active, say it is valid. Never write the URL.
@@ -139,6 +144,7 @@ export function normalizarBaloesSemPontoEVirgula(falas:readonly string[],maxBalo
 export interface FatosConversa {
   ambiente: string | null;
   agenda: { nome: string | null; conectada: boolean };
+  agendas?: { tribemd: { salva: boolean; conectada: boolean }; amplimed: { salva: boolean; conectada: boolean } };
   link: { ativo: boolean; enviados: number; agenda?: string | null; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
   periodo: { desde: string | null; origem: string | null };
   semAgendaDigital: boolean;
@@ -211,9 +217,14 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'pedir_link_permissoes' && emVerificacao && !/permiss|autonom|entreg|sozinho/i.test(texto)) return 'CONEXAO_EM_VERIFICACAO';
   if (acao === 'pedir_link_agenda') {
     if(!opcoes?.introducaoVerificada && d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
-    if (fatos.agenda.conectada || fatos.link.ativo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
-    if (!agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined))) return 'AGENDA_NAO_SUPORTADA';
-    if (!fatos.agenda.nome) {
+    const agendaAlvo=normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined);
+    if (!agendaSuportada(agendaAlvo)) return 'AGENDA_NAO_SUPORTADA';
+    const alvoConectado=agendaAlvo
+      ? fatos.agendas?.[agendaAlvo]?.conectada ?? (normalizarAgenda(fatos.agenda.nome??undefined)===agendaAlvo&&fatos.agenda.conectada)
+      : false;
+    const linkMesmoAlvo=!!fatos.link.ativo&&(!fatos.link.agenda||normalizarAgenda(fatos.link.agenda)===agendaAlvo);
+    if (alvoConectado || linkMesmoAlvo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
+    if (!fatos.agenda.nome && !fatos.agendas) {
       const evidenciaValida = !!d.parametros?.evidencia && texto.includes(d.parametros.evidencia) && !!agendaSuportada(normalizarAgenda(d.parametros.evidencia));
       if (!evidenciaValida) {
         // Renovação contextual: a agenda do último link é a agenda já escolhida pelo médico, não um palpite.
