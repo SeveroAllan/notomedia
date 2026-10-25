@@ -17,17 +17,18 @@ const casos: Array<[string[], string]> = [
   [['SEFIN_TIMEOUT'], 'O serviço de emissão demorou a responder; aguarde a conferência do resultado antes de pedir nova tentativa.'],
   [['E0014'], 'A numeração informada já está em uso; aguarde o suporte conferir para evitar uma nota duplicada.'],
   [['E0160', 'E0676', 'E0710'], 'O cadastro do consultório está diferente do registrado no serviço de emissão; peça ao seu contador para conferir.'],
-  [['FALHA_ENTREGA_PDF'], 'A nota foi emitida, mas não consegui entregar o documento; confira a conexão do WhatsApp e peça o reenvio, sem emitir outra nota.'],
-  [['INSTANCIA_INDISPONIVEL'], 'A nota foi emitida, mas seu WhatsApp está desconectado; conecte-o e peça o reenvio, sem emitir outra nota.'],
+  [['FALHA_ENTREGA_PDF'], 'A nota já foi emitida, mas não consegui entregar o documento. Confira a conexão do WhatsApp e peça apenas o reenvio do PDF.'],
+  [['INSTANCIA_INDISPONIVEL'], 'A nota já foi emitida, mas seu WhatsApp está desconectado. Conecte-o e peça apenas o reenvio do PDF.'],
   [['PERSISTENCIA_COMPROVANTE_PENDENTE'], 'A emissão foi autorizada, mas o registro precisa de conferência; aguarde o suporte e não peça outra emissão para a mesma consulta.']
 ];
 for (const [codigos, texto] of casos) it.each(codigos)('traduz %s sem código ou detalhe técnico', codigo => {
   const interno = ['PREPARACAO_NECESSARIA', 'AMBIENTE_FISCAL_BLOQUEADO', 'INTEGRACAO_FISCAL_INDISPONIVEL', 'SEFIN_INDISPONIVEL', 'SEFIN_TIMEOUT'].includes(codigo);
-  expect(traduzirFalhaEmissao(codigo)).toBe(interno ? 'Tive uma instabilidade e não consegui concluir agora. Não vou tentar emitir novamente sozinho.' : `${texto} Não vou tentar emitir novamente sozinho.`);
+  expect(traduzirFalhaEmissao(codigo)).toBe(interno ? 'Tive uma instabilidade e não consegui concluir agora. Antes de uma nova tentativa, confira se essa emissão foi autorizada, recusada ou ficou pendente.' : texto);
   expect(traduzirFalhaEmissao(codigo)).not.toContain(codigo);
+  expect(traduzirFalhaEmissao(codigo)).not.toMatch(/não vou (?:tentar )?emitir|conciliar|bloquead/i);
 });
 it.each([undefined, '__proto__', 'E9999 senha=privado CPF 52998224725', { erro: 'privado' }])('desconhecido %j usa frase fixa segura', codigo => {
-  expect(traduzirFalhaEmissao(codigo)).toBe('Tive uma instabilidade e não consegui concluir agora. Não vou tentar emitir novamente sozinho.');
+  expect(traduzirFalhaEmissao(codigo)).toBe('Tive uma instabilidade e não consegui concluir agora. Antes de uma nova tentativa, confira se essa emissão foi autorizada, recusada ou ficou pendente.');
 });
 it('registro de erro é estruturado, marcado e sanitizado para consumo futuro', async () => {
   const { registroErroNoto } = await import('../src/observabilidade/erros.js');
