@@ -44,7 +44,7 @@ describe('leitura de período do Amplimed (observação)', () => {
     }
   });
   it('domingo oculto confirmado pelo feed cobre hoje e preserva valor/id mesmo se vier fora de ordem', async () => {
-    const domingo={ texto:'10:00 - 10:30\\nPaciente Domingo | Avaliação | Particular | R$ 321,45 | 51990000009', cor:'green' };
+    const domingo={ texto:'10:00 - 10:30\nPaciente Domingo | Avaliação | Particular | R$ 321,45 | 51990000009', cor:'green' };
     const c = await criar(async () => ({ codigo:'CONECTADO', profissional:prof, completo:true, dias:[
       {data:'2026-10-24',eventos:[]},
       {data:'2026-10-25',eventos:[domingo]}
