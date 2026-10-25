@@ -3,7 +3,7 @@ import {CATALOGO_FERRAMENTAS,ferramentasLiberadas} from '../src/onboarding/ferra
 import type {FatosConversa} from '../src/onboarding/conversador-medico.js';
 // Regra anterior (inline no server.ts), mantida aqui como referência de equivalência.
 const anterior=(fatos:FatosConversa,retroativo:boolean)=>fatos.ambiente!=='homologacao'?[]:['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??'')?['nenhuma']:
-  ['nenhuma',...(!fatos.agenda.conectada?['registrar_modo_sem_agenda']:[]),
+  ['nenhuma',...(!fatos.agenda.conectada&&!fatos.semAgendaDigital?['registrar_modo_sem_agenda']:[]),
    ...(!fatos.agenda.conectada&&!fatos.link.ativo&&!fatos.semAgendaDigital?['pedir_link_agenda']:[]),
    ...(fatos.agenda.conectada&&!fatos.semAgendaDigital?['consultar_agenda','listar_pendencias',...(retroativo?['iniciar_lote']:[])]:[])];
 describe('catálogo de ferramentas da conversa',()=>{
@@ -29,6 +29,19 @@ describe('catálogo de ferramentas da conversa',()=>{
   expect(new Set(CATALOGO_FERRAMENTAS.map(t=>t.nome)).size).toBe(CATALOGO_FERRAMENTAS.length);
  });
 });
+it('link de permissões só aparece quando o módulo existe e há escolha realmente faltante',()=>{
+ const base={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false} as FatosConversa;
+ expect(ferramentasLiberadas(base,{lote:true})).not.toContain('pedir_link_permissoes');
+ expect(ferramentasLiberadas({...base,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente']}},{lote:true})).toContain('pedir_link_permissoes');
+ expect(ferramentasLiberadas({...base,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'paciente',pendentes:false,faltantes:[]}},{lote:true})).not.toContain('pedir_link_permissoes');
+});
+
+it('modo manual persistido não volta a oferecer registro nem conexão de agenda',()=>{
+ const f={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:true} as FatosConversa;
+ const liberadas=ferramentasLiberadas(f,{lote:true});
+ expect(liberadas).not.toContain('registrar_modo_sem_agenda');expect(liberadas).not.toContain('pedir_link_agenda');
+});
+
 it('reenvio só aparece em homolog com escolha só médico, nunca durante emissão',()=>{
  const f={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
  permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}} satisfies FatosConversa;
