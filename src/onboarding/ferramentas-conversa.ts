@@ -23,7 +23,7 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
   {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar uma agenda suportada que ainda não esteja conectada; nunca recebe senha pelo chat.',
     liberada:podeConectarOutraAgenda},
   {nome:'pedir_link_certificado',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar um link do painel existente para cadastrar o A1 de cada médico explicitamente escolhido e ainda sem certificado.',
-    liberada:f=>(f.medicosConta??[]).some(m=>m.certificado==='pendente')},
+    liberada:f=>(f.medicosConta??[]).length>0},
   {nome:'consultar_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Consultar as consultas da agenda no período, independentemente de situação fiscal.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
