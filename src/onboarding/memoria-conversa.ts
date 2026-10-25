@@ -77,7 +77,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return { ...base, ...(linhaDoTempo.length ? { linhaDoTempo } : {}), ...(memoriasSemanticas.length ? { memoriasSemanticas } : {}) };
   }
 
-  registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico', origemOperador?:'medico'|'secretaria'): Promise<boolean> {
+  registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico', origemOperador?:'medico'|'secretaria'|'conta'): Promise<boolean> {
     return this.registrar(medicoId, conversa, id, texto, papel, origemOperador);
   }
 
@@ -237,7 +237,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return rows.flatMap(m => sanitizarTextoMedico(m.texto).split('\n')).slice(0, 6);
   }
 
-  async registrar(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico', origemOperador?:'medico'|'secretaria'): Promise<boolean> {
+  async registrar(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico', origemOperador?:'medico'|'secretaria'|'conta'): Promise<boolean> {
     const origem=papel==='medico' ? (origemOperador??'medico') : null;
     const { rows } = await this.pool.query(
       'insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel, origem_operador) values ($1,$2,$3,$4,$5,$6) on conflict do nothing returning id',
@@ -282,8 +282,8 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return rows[0] ? { resumo: sanitizarTextoMedico(rows[0].resumo), ateId: rows[0].ate_id } : null;
   }
 
-  async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string; papel?: 'medico'|'noto'; origemOperador?:'medico'|'secretaria'|null }>> {
-    const { rows } = await this.pool.query<{ id: string; texto: string; papel?: 'medico'|'noto'; origem_operador?:'medico'|'secretaria'|null }>(
+  async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string; papel?: 'medico'|'noto'; origemOperador?:'medico'|'secretaria'|'conta'|null }>> {
+    const { rows } = await this.pool.query<{ id: string; texto: string; papel?: 'medico'|'noto'; origem_operador?:'medico'|'secretaria'|'conta'|null }>(
       `select id::text, texto, papel, origem_operador from (select id, texto, papel, origem_operador from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id not like 'contexto:%'
         order by id desc offset $4) antigas where id > $3::bigint order by antigas.id asc`,
       [medicoId, conversa, ateId, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
