@@ -30,7 +30,7 @@ export interface FerramentasConversa {
 }
 interface Dependencias {
   ativo:boolean; conversaLivreAtiva?:boolean; orcamentoChamadas?:number; memoriaPersistida?:PostgresMemoriaConversaMedico;
-  conversador?:Pick<ConversadorMedico,'responder'|'resumir'>; ferramentas?:FerramentasConversa; interpretadorSemantico?:Pick<InterpretadorSemantico,'interpretar'>;
+  conversador?:Pick<ConversadorMedico,'responder'|'resumir'> & Partial<Pick<ConversadorMedico,'compactar'>>; ferramentas?:FerramentasConversa; interpretadorSemantico?:Pick<InterpretadorSemantico,'interpretar'>;
   aoReagir?:(reacao:ReacaoMedico)=>Promise<void>; aoConversar?:(fala:string[],chave:string,falaMemoria?:string[])=>Promise<void>;
   memoriaConversa?:MemoriaConversa; extratorResposta?:ExtratorRespostaMedico; historico:HistoricoComunicacaoRepositorio;
   lerEstado:(medicoId:string,agora:Date)=>Promise<EstadoComunicacaoMedico|null>;
@@ -121,6 +121,8 @@ export async function processarComunicacaoMedico(
         .some(t=>/homologa[cç][aã]o|[eé] teste/i.test(t));
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
+      const linhaDoTempo=(contexto.linhaDoTempo??[]).map(c=>c.resumo);
+      const memoriasSemanticas=(contexto.memoriasSemanticas??[]).map(({chave,categoria,valor})=>({chave,categoria,valor}));
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
       const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
@@ -128,7 +130,7 @@ export async function processarComunicacaoMedico(
       let interpretacaoSemantica:InterpretacaoSemantica|null=null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao,interpretacaoSemantica});
+        const resposta=await deps.conversador!.responder({texto,mensagens,resumo:contexto.resumo?.resumo??null,linhaDoTempo,memoriasSemanticas,plano:planoAtual,fatos,agora,acoesPermitidas,resultadoFerramenta,podeAgirAposFerramenta,correcao,interpretacaoSemantica});
         if(resposta.plano) {
           planoAtual=resposta.plano;
           await memoria.registrarPlano(medicoId,conversa,planoAtual);
@@ -139,7 +141,7 @@ export async function processarComunicacaoMedico(
       let permitidas=deps.ferramentas.permitidas(fatos);
       if(deps.interpretadorSemantico&&entrada.respostaMedico) {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:contexto.plano??null,fatos,agora});
+        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,linhaDoTempo,memoriasSemanticas,plano:contexto.plano??null,fatos,agora});
         if(interpretacaoSemantica)interpretacaoSemantica=reconciliarInterpretacaoSemantica(interpretacaoSemantica,fatos);
         if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
       }
@@ -252,6 +254,9 @@ export async function processarComunicacaoMedico(
       let fala=decisao.fala, falaMemoria:string[]|undefined, ferramentasExecutadas=0;
       if(motivo) {
         deps.log('erro',`CONVERSA_ACAO_RECUSADA ${motivo}`);
+        if(decisao.acao&&decisao.acao!=='nenhuma') {
+          try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,decisao.acao,'recusada',{motivo}); } catch { /* Enriquecimento opcional em rolling deploy. */ }
+        }
         fala=motivo==='PACIENTE_NECESSARIO'?['Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.']:motivo==='LEITURA_ATUAL_SEM_ACAO'?['Não consegui iniciar a conferência desse pedido. Não preparei nem emiti nada.']:motivo==='FATO_AGENDA_NAO_VERIFICADO' ? [consultaNaoIdentificada(texto)?'Qual é o nome do paciente e a data ou horário da consulta que você quer escolher? Não preparei nem emiti nada.':'Preciso consultar a agenda antes de afirmar o estado dessa consulta. Não preparei nem emiti nada.'] : motivo==='PEDIDO_REENVIO_AUSENTE'||motivo==='ENVIO_SEM_ACAO'?['Não fiz nenhum envio. Qual é a data da consulta cujo PDF você quer receber?']:corrigirIntroducao ? [ERRO_CONVERSA] : await narrar({ok:false,motivo,executada:false});
       } else {
         const desde=periodoDecisao(decisao,agora,texto);
@@ -265,7 +270,21 @@ export async function processarComunicacaoMedico(
             atual={...atual,fala:normalizarBaloesSemPontoEVirgula(atual.fala,limiteBaloes)};
             if(['consultar_agenda','listar_pendencias','iniciar_lote'].includes(atual.acao??'')) await enviar(atual.fala.slice(0,1),undefined,sufixo);
             ferramentasExecutadas++;
-            return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),contatoOperador:entrada.contatoOperador,fatos,narrar});
+            const ferramenta=atual.acao??'nenhuma';
+            const parametros=atual.parametros??{};
+            const metaEntrada=Object.fromEntries(Object.entries({
+              agenda:parametros.agenda,medida:parametros.medida,desde:parametros.desde,ate:parametros.ate,dia:parametros.dia,permissao:parametros.permissao
+            }).filter(([,v])=>v!==undefined));
+            try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'iniciada',metaEntrada); } catch { /* Enriquecimento opcional. */ }
+            try {
+              const resultado=await deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),contatoOperador:entrada.contatoOperador,fatos,narrar});
+              const dados=resultado.dados as {ok?:boolean;motivo?:string}|undefined;
+              try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'concluida',{...metaEntrada,...(typeof dados?.ok==='boolean'?{ok:dados.ok}:{}),...(dados?.motivo?{motivo:sanitizarTextoMedico(dados.motivo)}:{})}); } catch { /* Enriquecimento opcional. */ }
+              return resultado;
+            } catch(erro) {
+              try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'falhou',metaEntrada); } catch { /* Enriquecimento opcional. */ }
+              throw erro;
+            }
           };
           const decisaoExecutada=decisao;
           const r=await executarFerramenta(decisaoExecutada,':anuncio');
@@ -325,8 +344,28 @@ export async function processarComunicacaoMedico(
         const anterior=await memoria.lerResumo(medicoId,conversa);
         const antigas=await memoria.lerAntigas(medicoId,conversa,anterior?.ateId??'0');
         if(antigas.length>20) {
-          const resumo=await deps.conversador.resumir({resumo:anterior?.resumo??null,mensagens:antigas.map(m=>m.texto)});
-          if(resumo!==null) await memoria.registrarResumo(medicoId,conversa,resumo,antigas.at(-1)!.id);
+          const compactacao=deps.conversador.compactar ? await deps.conversador.compactar({resumo:anterior?.resumo??null,mensagens:antigas}) : null;
+          const resumo=compactacao?.resumo ?? await deps.conversador.resumir({resumo:anterior?.resumo??null,mensagens:antigas.map(m=>m.texto)});
+          if(resumo!==null) {
+            const inicioId=antigas[0]!.id,fimId=antigas.at(-1)!.id;
+            await memoria.registrarResumo(medicoId,conversa,resumo,fimId);
+            try {
+              await memoria.registrarChunk(medicoId,conversa,0,inicioId,fimId,compactacao?.chunk??resumo);
+              if(compactacao) {
+                const fontesMedico=new Set(antigas.filter(m=>m.papel==='medico'||m.papel===undefined).map(m=>m.id));
+                for(const m of compactacao.memorias) if(fontesMedico.has(m.origemId))
+                  await memoria.registrarMemoriaSemantica(medicoId,{chave:m.chave,categoria:m.categoria,valor:m.valor,origemConversa:conversa,origemMensagemId:m.origemId,confianca:m.confianca});
+              }
+              // Compactação fractal: no máximo um merge por turno para limitar custo.
+              for(let nivel=0;nivel<8;nivel++) {
+                const candidatos=await memoria.lerChunksParaConsolidar(medicoId,conversa,nivel,4);
+                if(candidatos.length<4) continue;
+                const consolidado=await deps.conversador.resumir({resumo:null,mensagens:candidatos.map(c=>c.resumo)});
+                if(consolidado) await memoria.registrarChunk(medicoId,conversa,nivel+1,candidatos[0]!.inicioId,candidatos.at(-1)!.fimId,consolidado,candidatos.map(c=>c.id));
+                break;
+              }
+            } catch { deps.log('erro','CONVERSA_MEMORIA_LONGA_FALHOU'); }
+          }
         }
       } catch {deps.log('erro','CONVERSA_RESUMO_FALHOU');}
       deps.log('info',`CONVERSA_CHAMADAS ${chamadas}`);
