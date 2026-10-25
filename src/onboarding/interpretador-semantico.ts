@@ -16,13 +16,14 @@ export const interpretacaoSemanticaSchema = z.object({
   objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','agenda','permissoes','outro']).nullable(),
   granularidade: z.enum(['colecao','item','indefinida']),
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
+  permissaoNecessaria: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).nullable().default(null),
   periodo: periodoSchema,
   paciente: z.string().trim().min(1).max(150).nullable(),
   restricoes: z.object({
     naoEmitir: z.boolean(),
     somenteLeitura: z.boolean()
   }).strict(),
-  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','confirmacao'])).max(5),
+  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','confirmacao','permissao','dados_consulta'])).max(7),
   confianca: z.number().min(0).max(1)
 }).strict();
 
@@ -38,6 +39,7 @@ Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscai
 Resolva ambiguidade pelo contexto antes de perguntar. Quando uma pergunta financeira curta é continuação imediata de uma consulta/lista de agenda (por histórico ou plano anterior consultar:consultas) e não há evidência de recebimento/pagamento nem de notas fiscais, a leitura dominante é valor_realizado: o valor registrado nas consultas com status realizada. Isso não prova dinheiro recebido nem nota fiscal emitida.
 Use valor_recebido quando o sentido for dinheiro efetivamente recebido; valor_notas quando o sentido for notas fiscais; valor_agenda quando pedir os valores registrados na agenda independentemente do status.
 Use valor_indefinido somente quando o contexto não tornar uma dessas leituras claramente dominante ou quando duas leituras materiais continuarem igualmente plausíveis. Não peça esclarecimento por ambiguidade apenas teórica.
+Se o objetivo depender de uma escolha configurável, preencha permissaoNecessaria: emitir_autonomo para autonomia de emissão, entregar_paciente para destino da nota e solicitar_cpf para quem deve fornecer CPF ausente. Não invente necessidade de permissão em consultas/leitura.
 Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
 Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
 Restrições como "sem emitir", "só conferir", "não prepare" devem ser preservadas.
@@ -50,6 +52,7 @@ SAÍDA JSON estrita:
  "objeto":"consultas|pendencias_fiscais|notas|pdf|agenda|permissoes|outro"|null,
  "granularidade":"colecao|item|indefinida",
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
+ "permissaoNecessaria":"emitir_autonomo|entregar_paciente|solicitar_cpf"|null,
  "periodo":{"inicio":"YYYY-MM-DD"|null,"fim":"YYYY-MM-DD"|null,"referencia":"explicito|contextual|nenhum"},
  "paciente":string|null,
  "restricoes":{"naoEmitir":boolean,"somenteLeitura":boolean},
@@ -95,14 +98,51 @@ export class InterpretadorSemantico {
       const bruto=await this.completar(this.apiKey,this.modelo,[{role:'system',content:PROMPT_INTERPRETACAO_SEMANTICA},{role:'user',content:JSON.stringify(seguro)}],opcoes);
       const r=interpretacaoSemanticaSchema.parse(JSON.parse(bruto));
       if(r.periodo.inicio&&r.periodo.fim&&r.periodo.fim<r.periodo.inicio)return null;
-      return r;
+      return reconciliarInterpretacaoSemantica(r,entrada.fatos);
     }catch{return null;}
   }
+}
+
+function permissaoEscolhida(fatos:FatosConversa,permissao:NonNullable<InterpretacaoSemantica['permissaoNecessaria']>):boolean {
+  const p=fatos.permissoes;
+  if(!p)return false;
+  if(permissao==='emitir_autonomo')return p.emitirAutonomo!==null;
+  if(permissao==='entregar_paciente')return p.entregarPaciente!==null;
+  return p.solicitarCpf!==null&&p.solicitarCpf!==undefined;
+}
+
+export function reconciliarInterpretacaoSemantica(i:InterpretacaoSemantica,fatos:FatosConversa):InterpretacaoSemantica {
+  const faltando=new Set(i.faltando);
+  const dependeDeConsulta=['consultar','preparar','emitir'].includes(i.objetivo)&&
+    ['consultas','pendencias_fiscais','notas'].includes(i.objeto??'');
+  if(dependeDeConsulta&&!fatos.agenda.conectada){
+    if(fatos.semAgendaDigital){
+      faltando.delete('agenda');
+      faltando.add('dados_consulta');
+    }else faltando.add('agenda');
+  }else if(fatos.agenda.conectada)faltando.delete('agenda');
+
+  if(i.permissaoNecessaria){
+    if(permissaoEscolhida(fatos,i.permissaoNecessaria))faltando.delete('permissao');
+    else faltando.add('permissao');
+  }else faltando.delete('permissao');
+
+  return {...i,faltando:[...faltando]};
 }
 
 /** Mapeia significado estruturado para capacidade; não interpreta linguagem. */
 export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConversa,permitidas:readonly string[]):DecisaoConversa|null{
   if(i.confianca<.8)return null;
+  const faltaPermissao=i.permissaoNecessaria&&i.faltando.includes('permissao');
+  if(faltaPermissao&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
+    return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
+  }
+  if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&fatos.agenda.nome&&permitidas.includes('pedir_link_agenda')){
+    return {fala:['Para continuar, vou te mandar o link seguro para conectar sua agenda.'],acao:'pedir_link_agenda',parametros:{agenda:fatos.agenda.nome}};
+  }
+  if(faltaPermissao&&permitidas.includes('pedir_link_permissoes')){
+    return {fala:['Antes de continuar, preciso da sua escolha no link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
+  }
   if((i.dominio==='agenda'||i.dominio==='fiscal')&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
     return {fala:[i.medida?.startsWith('valor_')?'Vou conferir os valores disponíveis na agenda nesse período.':'Vou conferir sua agenda nesse período.'],acao:'consultar_agenda',parametros:{medida:i.medida??'lista',desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
