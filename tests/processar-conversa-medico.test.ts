@@ -49,6 +49,19 @@ it('permissão pendente não expõe link em turno semanticamente não relacionad
  expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledOnce();
 });
 
+it('pergunta de configuração conecta a segunda agenda sem cair no guard de consulta',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;
+ c.fatos.agenda={nome:'tribemd',conectada:true};
+ c.fatos.agendas={tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}};
+ const interpretar=vi.fn(async()=>({dominio:'conexao' as const,objetivo:'configurar' as const,objeto:'agenda' as const,granularidade:'indefinida' as const,medida:'lista' as const,permissaoNecessaria:null,agendaAlvo:'amplimed' as const,periodo:{inicio:null,fim:null,referencia:'nenhum' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99}));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.executar.mockResolvedValueOnce({jaRespondida:true});
+ await c.turno('segunda-agenda','Tem como adicionar outra agenda? Quero conectar a Amplimed.');
+ expect(interpretar).toHaveBeenCalledOnce();expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'amplimed'}});
+ expect(c.completar).not.toHaveBeenCalled();
+});
+
 it('semântica de escolha pendente oferece link de permissões no momento necessário',async()=>{
  const c=cenario();c.deps.orcamentoChamadas=6;
  c.fatos.permissoes={emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente']};
