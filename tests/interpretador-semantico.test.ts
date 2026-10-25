@@ -122,3 +122,21 @@ it('configuração sem nome da outra agenda não adivinha alvo',()=>{
  const i:InterpretacaoSemantica={...frame,dominio:'conexao',objetivo:'configurar',objeto:'agenda',agendaAlvo:null,periodo:{inicio:null,fim:null,referencia:'nenhum'}};
  expect(planejarPorSemantica(i,f,['nenhuma','pedir_link_agenda'])).toBeNull();
 });
+
+
+it('com duas agendas conectadas não escolhe fonte silenciosamente',()=>{
+ const duas:FatosConversa={...fatos,agenda:{nome:'amplimed',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:true,conectada:true}}};
+ const semAlvo=reconciliarInterpretacaoSemantica({...frame,agendaAlvo:null},duas);
+ expect(semAlvo.faltando).toContain('agenda_foco');
+ expect(planejarPorSemantica(semAlvo,duas,['nenhuma','consultar_agenda'])).toMatchObject({acao:null});
+ const tribe=reconciliarInterpretacaoSemantica({...frame,agendaAlvo:'tribemd'},duas);
+ expect(tribe.faltando).not.toContain('agenda_foco');
+ expect(planejarPorSemantica(tribe,duas,['nenhuma','consultar_agenda'])).toMatchObject({acao:'consultar_agenda',parametros:{agenda:'tribemd'}});
+});
+
+it('agenda alvo desconectada pede conexão mesmo quando a outra está ativa',()=>{
+ const uma:FatosConversa={...fatos,agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}}};
+ const alvo=reconciliarInterpretacaoSemantica({...frame,agendaAlvo:'amplimed'},uma);
+ expect(alvo.faltando).toContain('agenda');
+ expect(planejarPorSemantica(alvo,uma,['nenhuma','pedir_link_agenda','consultar_agenda'])).toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'amplimed'}});
+});
