@@ -39,6 +39,16 @@ it('data já dita → Tribe → Pelo tribemd: reconhece, guarda 05/10, envia pri
  expect(c.guardarPeriodo).toHaveBeenCalledExactlyOnceWith('m','2026-10-05');expect(c.executar).toHaveBeenCalledOnce();expect(c.completar).toHaveBeenCalledTimes(3);
  const falas=c.enviar.mock.calls.flatMap(([f])=>f);expect(falas.filter(t=>/qual.*agenda|qual você usa/i.test(t))).toHaveLength(1);expect(falas.join(' ')).not.toMatch(/Desde quando|novo link|cofre/);
 });
+it('permissão pendente não expõe link em turno semanticamente não relacionado',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;
+ c.fatos.permissoes={emitirAutonomo:null,entregarPaciente:null,pendentes:true,faltantes:['emitir_autonomo','entregar_paciente']};
+ const interpretar=vi.fn(async()=>({dominio:'conversa' as const,objetivo:'conversar' as const,objeto:'outro' as const,granularidade:'indefinida' as const,medida:'lista' as const,permissaoNecessaria:null,periodo:{inicio:null,fim:null,referencia:'nenhum' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99}));
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.acoesPermitidas).not.toContain('pedir_link_permissoes');return JSON.stringify({fala:['Posso ajudar com suas notas.'],acao:null});});
+ await c.turno('papo-perm','Oi, tudo bem?');
+ expect(c.executar).not.toHaveBeenCalled();expect(c.completar).toHaveBeenCalledOnce();
+});
+
 it('semântica de escolha pendente oferece link de permissões no momento necessário',async()=>{
  const c=cenario();c.deps.orcamentoChamadas=6;
  c.fatos.permissoes={emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente']};
