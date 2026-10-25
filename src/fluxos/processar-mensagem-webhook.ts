@@ -106,7 +106,7 @@ export async function processarMensagemWebhook(
           : null;
         if(operador){
           origemOperador='conta';
-          contatoOperador=telefone;
+          contatoOperador=operador.telefone;
           const multiplos=resolverMedicosMencionados(texto,operador.medicos);
           let alvo=resolverMedicoMencionado(texto,operador.medicos);
           const mencaoInconclusiva=multiplos.length<2&&!alvo&&mensagemPedeTrocaDeMedico(texto);
