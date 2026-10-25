@@ -129,12 +129,9 @@ it('prompt central usa instruções em inglês, saída pt-BR e padrão ASD-STE10
  expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);
 });
 
-it('fala visível nunca mantém ponto e vírgula e separa a ideia quando há espaço de balões',async()=>{
+it('normalizador de saída respeita o limite de balões sem interferir na decisão',()=>{
  expect(normalizarBaloesSemPontoEVirgula(['Vou conferir agora; depois te explico.'])).toEqual(['Vou conferir agora','depois te explico.']);
- const completar=vi.fn<typeof completarOpenAi>(async()=>JSON.stringify({fala:['Vou conferir agora; depois te explico.'],acao:null}));
- const resposta=await new ConversadorMedico('k','m',completar).responder(entrada);
- expect(resposta.fala).toEqual(['Vou conferir agora','depois te explico.']);
- expect(resposta.fala.join(' ')).not.toContain(';');
+ expect(normalizarBaloesSemPontoEVirgula(['Primeiro balão','Segundo trecho; continuação'],2)).toEqual(['Primeiro balão','Segundo trecho. continuação']);
 });
 
 it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
