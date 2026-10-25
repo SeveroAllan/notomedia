@@ -129,10 +129,10 @@ export function confirmacaoDaDecisao(d:DecisaoConversa) {
   // qualquer outra ação não carrega interpretação utilizável.
   return !d.acao || d.acao==='nenhuma' || d.acao==='iniciar_lote' ? d.parametros?.confirmacao??{intencao:'duvida' as const,confianca:0} : {intencao:'duvida' as const,confianca:0};
 }
-export function normalizarBaloesSemPontoEVirgula(falas:readonly string[]):string[] {
+export function normalizarBaloesSemPontoEVirgula(falas:readonly string[],maxBaloes=3):string[] {
   const partes=falas.flatMap(f=>f.split(';').map(x=>x.trim()).filter(Boolean));
-  if(partes.length<=3)return partes;
-  return falas.map(f=>f.replace(/\s*;\s*/g,'. ').replace(/\.\s*\./g,'. ').trim()).filter(Boolean).slice(0,3);
+  if(partes.length<=maxBaloes)return partes;
+  return falas.map(f=>f.replace(/\s*;\s*/g,'. ').replace(/\.\s*\./g,'. ').trim()).filter(Boolean).slice(0,maxBaloes);
 }
 
 export interface FatosConversa {
@@ -275,7 +275,6 @@ export class ConversadorMedico {
       // O link é gerado e anexado pelo sistema: a fala nunca carrega URL (o histórico sanitizado pode induzir eco do placeholder).
       if ((resposta.acao ?? null) === 'pedir_link_agenda')
         resposta.fala = resposta.fala.map(t => t.replace(/https?:\/\/\S+/gi, '').replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
-      resposta.fala=normalizarBaloesSemPontoEVirgula(resposta.fala);
       // Rascunho de ação sem anúncio volta ao decisor uma vez antes de qualquer efeito.
       const confirmacaoPendente=entrada.fatos.lote?.estado==='aguardando_confirmacao_lote' && resposta.parametros?.confirmacao && (!resposta.acao || resposta.acao==='nenhuma') && entrada.resultadoFerramenta===undefined;
       if (!resposta.fala.length && !resposta.reacao && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');
