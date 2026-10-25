@@ -29,6 +29,17 @@ $func$;
 revoke execute on function public.medicos_visiveis_para(uuid) from public, anon;
 grant execute on function public.medicos_visiveis_para(uuid) to authenticated, service_role;
 
+create table if not exists public.noto_medico_agenda_referencias (
+  medico_id uuid not null references public.medicos(id) on delete cascade,
+  agenda text not null check (agenda in ('tribemd','amplimed')),
+  referencia_medico_id uuid not null references public.medicos(id) on delete cascade,
+  atualizado_em timestamptz not null default now(),
+  primary key (medico_id,agenda)
+);
+
+alter table public.noto_medico_agenda_referencias enable row level security;
+revoke all on table public.noto_medico_agenda_referencias from anon, authenticated;
+
 do $medicos_conta$
 begin
   if exists (
@@ -72,6 +83,34 @@ begin
 
   if has_function_privilege('anon','public.medicos_visiveis_para(uuid)','EXECUTE') then
     raise exception 'anon não pode executar medicos_visiveis_para';
+  end if;
+
+  if not exists (
+    select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname='noto_medico_agenda_referencias'
+      and c.relkind='r' and c.relrowsecurity
+  ) then
+    raise exception 'RLS não habilitada em public.noto_medico_agenda_referencias';
+  end if;
+
+  if has_table_privilege('anon','public.noto_medico_agenda_referencias','SELECT')
+    or has_table_privilege('anon','public.noto_medico_agenda_referencias','INSERT')
+    or has_table_privilege('anon','public.noto_medico_agenda_referencias','UPDATE')
+    or has_table_privilege('anon','public.noto_medico_agenda_referencias','DELETE')
+    or has_table_privilege('authenticated','public.noto_medico_agenda_referencias','SELECT')
+    or has_table_privilege('authenticated','public.noto_medico_agenda_referencias','INSERT')
+    or has_table_privilege('authenticated','public.noto_medico_agenda_referencias','UPDATE')
+    or has_table_privilege('authenticated','public.noto_medico_agenda_referencias','DELETE')
+  then
+    raise exception 'Acesso de cliente residual em public.noto_medico_agenda_referencias';
+  end if;
+
+  if not (
+    has_table_privilege(current_user,'public.noto_medico_agenda_referencias','SELECT')
+    and has_table_privilege(current_user,'public.noto_medico_agenda_referencias','INSERT')
+    and has_table_privilege(current_user,'public.noto_medico_agenda_referencias','UPDATE')
+  ) then
+    raise exception 'Role do backend % perdeu acesso às referências de agenda', current_user;
   end if;
 
   if not (
