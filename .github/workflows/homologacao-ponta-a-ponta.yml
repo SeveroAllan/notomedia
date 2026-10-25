@@ -29,6 +29,7 @@ jobs:
             tests/lote-retroativo.test.ts \
             tests/memoria-conversa-continua.test.ts \
             tests/migracao-operador-seguranca.test.ts \
+            tests/projeto-homolog-migrations.test.mjs \
             tests/mensagem-falha-emissao.test.ts \
             tests/processar-conversa-medico.test.ts \
             tests/servidor-conversa-livre.test.ts \
