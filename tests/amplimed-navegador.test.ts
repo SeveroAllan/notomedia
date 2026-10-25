@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, filtrarEstadoAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
+import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, eventoAgendaAmplimedDoFeed, filtrarEstadoAmplimed, navegacaoPulouDataAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
+import { montarLeituraAmplimed } from '../src/agenda/amplimed-leitor.js';
 
 describe('guarda de rede do Amplimed', () => {
   it('POST só uma vez, no domínio aprovado, com envio liberado', () => {
@@ -74,5 +75,29 @@ describe('filtrarEstadoAmplimed', () => {
     });
     expect(estado.cookies.map(c => c.name)).toEqual(['a', 'b']);
     expect(estado.origins.map(o => o.origin)).toEqual(['https://app.amplimed.com.br']);
+  });
+});
+
+
+describe('evento de dia oculto vindo do feed mensal',()=>{
+  it('preserva paciente, valor e identificação no mesmo contrato da visão Dia',()=>{
+    const ev=eventoAgendaAmplimedDoFeed({titulo:'Paciente Domingo | Avaliação | Particular | R$ 321,45 | 51990000009',inicio:'10:00',fim:'10:30',cor:'green'});
+    expect(ev).not.toBeNull();
+    const leitura=montarLeituraAmplimed([ev!],{data:'2026-10-25',profissional:'Allan Severo (teste Noto)'});
+    expect(leitura.confiavel).toBe(true);
+    expect(leitura.consultas).toEqual([expect.objectContaining({pacienteNome:'Paciente Domingo',valorCentavos:32145,idExterno:'2026-10-25T10:00|51990000009'})]);
+  });
+  it('não transforma evento incompleto do feed em dia vazio',()=>{
+    expect(eventoAgendaAmplimedDoFeed({titulo:'Paciente X | Avaliação | Particular | R$ 100,00 | 51990000009',inicio:'10:00',fim:null,cor:'green'})).toBeNull();
+    expect(eventoAgendaAmplimedDoFeed({titulo:'',inicio:'10:00',fim:'10:30',cor:'green'})).toBeNull();
+  });
+});
+
+
+describe('âncora em dia oculto',()=>{
+  it('detecta sábado→segunda e segunda→sábado cruzando domingo, sem oscilação',()=>{
+    expect(navegacaoPulouDataAmplimed('2026-10-24','2026-10-26','2026-10-25')).toBe(true);
+    expect(navegacaoPulouDataAmplimed('2026-10-26','2026-10-24','2026-10-25')).toBe(true);
+    expect(navegacaoPulouDataAmplimed('2026-10-24','2026-10-25','2026-10-25')).toBe(false);
   });
 });
