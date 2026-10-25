@@ -4,7 +4,7 @@ import { registroErroNoto } from '../observabilidade/erros.js';
 import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
 import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
 import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { AppConfig } from '../config.js';
 import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
@@ -256,7 +256,7 @@ export class ComunicacaoHomologacao {
         if(!nota?.nota_fiscal_id||!nota?.telefone_medico)return;
         const conversa=createHash('sha256').update(JSON.stringify([this.config.evolutionAssistantInstanceName,String(nota.telefone_medico).replace(/\D/g,'')])).digest('hex');
         const registradaEm=new Date().toISOString();
-        const chave=createHmac('sha256',this.config.appPepper).update(JSON.stringify([nota.nota_fiscal_id,destino,origemEntrega,entrada.chaveReenvio??'nova',resultado,registradaEm])).digest('hex');
+        const chave=createHmac('sha256',this.config.appPepper).update(JSON.stringify([nota.nota_fiscal_id,destino,origemEntrega,entrada.chaveReenvio??'nova',resultado,registradaEm,randomUUID()])).digest('hex');
         await new PostgresMemoriaConversaMedico(this.pool).registrarEntregaNota(medicoId,conversa,chave,{
           notaFiscalId:nota.nota_fiscal_id,solicitacaoId,paciente:nota.paciente_nome??null,datasConsulta:nota.datas_consulta_texto??null,
           ndps:Number.isInteger(nota.ndps)?Number(nota.ndps):null,valorCentavos:Number.isInteger(nota.valor_servicos_centavos)?Number(nota.valor_servicos_centavos):null,
