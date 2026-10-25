@@ -39,29 +39,48 @@ export class Permissoes {
 
     private hash(token: string) { return createHash('sha256').update(token).digest('hex'); }
 
-    /** Conta (WhatsApp conectado) de um médico, via vínculo conta↔médicos. Provisiona 1 médico = 1 conta
-     * na primeira passagem; contas com vários médicos entram por vínculo explícito. A escolha é da conta:
-     * vale para todos os médicos dela e nunca atravessa para outra conta. */
+    /** WhatsApp da conta do médico. O vínculo de qualquer médico da mesma conta
+     * pode ser reutilizado; papel do usuário não participa da autorização. */
     private async contaDo(medicoId: string): Promise<{ id: string; numero_whatsapp: string; operador: string | null } | null> {
         const porVinculo = `select c.id, c.numero_whatsapp, c.operador
             from noto_whatsapps_medicos m join noto_whatsapps_conectados c on c.id=m.whatsapp_conectado_id
             where m.medico_id=$1`;
         const existente = (await this.deps.pool.query(porVinculo, [medicoId])).rows[0];
         if (existente) return existente;
-        const medico = (await this.deps.pool.query(
-            'select u.telefone from medicos m join usuarios u on u.id=m.usuario_id where m.id=$1 and u.ativo=true and u.telefone is not null', [medicoId])).rows[0];
-        if (!medico?.telefone?.trim()) return null;
-        const numero = medico.telefone.replace(/\D/g, '');
+
+        const compartilhados=(await this.deps.pool.query(`
+            select distinct c.id,c.numero_whatsapp,c.operador
+            from medicos alvo
+            join medicos outro on outro.conta_id=alvo.conta_id
+            join noto_whatsapps_medicos wm on wm.medico_id=outro.id
+            join noto_whatsapps_conectados c on c.id=wm.whatsapp_conectado_id
+            where alvo.id=$1
+            order by c.id
+            limit 2`,[medicoId])).rows;
+        if(compartilhados.length>1)return null;
+        if(compartilhados.length===1){
+            await this.deps.pool.query(
+                'insert into noto_whatsapps_medicos (whatsapp_conectado_id, medico_id) values ($1,$2) on conflict (medico_id) do nothing',
+                [compartilhados[0].id,medicoId]);
+            return (await this.deps.pool.query(porVinculo,[medicoId])).rows[0]??null;
+        }
+
+        const telefones=(await this.deps.pool.query(`
+            select distinct regexp_replace(u.telefone,'\\D','','g') as telefone
+            from medicos alvo join usuarios u on u.conta_id=alvo.conta_id
+            where alvo.id=$1 and u.ativo=true and u.telefone is not null
+              and regexp_replace(u.telefone,'\\D','','g')<>''
+            limit 2`,[medicoId])).rows;
+        if(telefones.length!==1)return null;
+        const numero=telefones[0].telefone;
         const conta = (await this.deps.pool.query(
             `insert into noto_whatsapps_conectados (numero_whatsapp) values ($1)
              on conflict (numero_whatsapp) do update set numero_whatsapp=excluded.numero_whatsapp
              returning id, numero_whatsapp, operador`, [numero])).rows[0];
         if (!conta) return null;
-        // do nothing: se outra transação vinculou este médico a outra conta, o vínculo existente vence.
         await this.deps.pool.query(
             'insert into noto_whatsapps_medicos (whatsapp_conectado_id, medico_id) values ($1,$2) on conflict (medico_id) do nothing',
             [conta.id, medicoId]);
-        // Re-resolve pelo vínculo: a conta autoritativa é a do vínculo, não a recém-criada.
         return (await this.deps.pool.query(porVinculo, [medicoId])).rows[0] ?? null;
     }
 
