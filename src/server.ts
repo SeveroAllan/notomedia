@@ -62,6 +62,7 @@ import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js
 import { PostgresMemoriaConversaMedico } from './onboarding/memoria-conversa.js';
 import { ConversadorMedico, normalizarAgenda, periodoDecisao, fimPeriodoDecisao, calendarioConversa, diaDecisao, confirmacaoDaDecisao, type DecisaoConversa } from './onboarding/conversador-medico.js';
 import { InterpretadorSemantico } from './onboarding/interpretador-semantico.js';
+import { perguntaSelecaoMedico } from './onboarding/operador-medico.js';
 import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
 import { processarComunicacaoMedico, type FerramentasConversa, type ContextoAcaoConversa } from './onboarding/processar-comunicacao-medico.js';
 import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
@@ -132,7 +133,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const cacheAgenda = new CacheAgendaProcesso();
   const cofres = criarCofreContas({
     aoAlterarAcesso: id => cacheAgenda.invalidar(id),
-    pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
+    pool, enviarCofre: (id, texto, contato) => comunicacaoHomologacao.cofre(id, texto, contato),
     registrarTextoLink: async entrada => {
       if (!memoriaPersistida) return;
       const chave = createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, entrada.telefoneMedico.replace(/\D/g, '')])).digest('hex');
@@ -143,12 +144,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     aoConcluirAgenda: async (medicoId, evento) => {
       cacheAgenda.invalidar(medicoId);
       try {
-        if (!config.comunicacaoMedicoAtiva || !config.conversaLivreAtiva || !await comunicacaoHomologacao.medicoPermitido(medicoId)) return;
+        if (!config.comunicacaoMedicoAtiva || !config.conversaLivreAtiva) return;
         const { rows } = await pool.query(`select u.telefone from medicos m join usuarios u on u.id=m.usuario_id where m.id=$1 and u.ativo=true`, [medicoId]);
-        const telefone = rows[0]?.telefone;
-        if (typeof telefone !== 'string') return;
+        const telefone = evento.contatoTelefone ?? rows[0]?.telefone;
+        if (typeof telefone !== 'string' || !await comunicacaoHomologacao.medicoPermitido(medicoId, telefone)) return;
         const chavesConversa = gerarVariantesTelefoneBrasileiro(telefone).map(t => createHash('sha256').update(JSON.stringify([config.evolutionAssistantInstanceName, t])).digest('hex'));
-        await comunicarMedico(medicoId, `agenda:${evento.chave}`, undefined, undefined, chavesConversa[0], undefined, { ...evento, chavesConversa });
+        await comunicarMedico(medicoId, `agenda:${evento.chave}`, undefined, undefined, chavesConversa[0], undefined, { ...evento, chavesConversa }, undefined, undefined, telefone);
       } catch (e) { console.warn(registroErroNoto('CONCLUSAO_AGENDA_FALHOU', 'tecnico', { medicoId, etapa: 'conclusao', detalhe: e instanceof Error ? e.message : String(e) })); }
     },
     autenticar: async token => {
@@ -397,7 +398,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     permitidas: fatos => ferramentasLiberadas(fatos,{lote:!!retroativo}),
     guardarPeriodo:(id,desde)=>contextoPendencias.definirInicio(id,desde),
     executar:async (decisao,c) => {
-      if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
+      if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId,c.contatoOperador)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
         const pacienteConfirmacao=pacienteLiteralDaConsulta(c.texto);
         if(pacienteConfirmacao&&confirmacaoDaDecisao(decisao).intencao!=='nao') {
@@ -459,13 +460,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);
         const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Esse PDF já tem um envio registrado. Posso conferir como esse envio ficou e te dizer o próximo passo.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota já emitida continua registrada. Posso tentar o envio novamente ou conferir o registro para você.';
-        await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala]});
+        await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala],contatoTelefone:c.contatoOperador});
         return {jaRespondida:true};
       }
       if(decisao.acao==='pedir_link_agenda') {
         await memoriaPersistida!.registrarMarca(c.medicoId,c.conversa,'link_agenda_solicitado');
         const agendaAlvo=normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??c.fatos.link.agenda??undefined);
-        const r=agendaAlvo?await cofres.links?.solicitarLinkCofre(c.medicoId,agendaAlvo,{reenvio:c.fatos.link.enviados>0,fala:decisao.fala})??{ok:false,motivo:'AGENDA_INDISPONIVEL'}:{ok:false,motivo:'AGENDA_NAO_INFORMADA'};
+        const r=agendaAlvo?await cofres.links?.solicitarLinkCofre(c.medicoId,agendaAlvo,{reenvio:c.fatos.link.enviados>0,fala:decisao.fala,contatoTelefone:c.contatoOperador})??{ok:false,motivo:'AGENDA_INDISPONIVEL'}:{ok:false,motivo:'AGENDA_NAO_INFORMADA'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
       if(decisao.acao==='pedir_link_permissoes') {
@@ -477,7 +478,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=await permissoesNoto.criarLink(c.medicoId,alvo).catch(()=>null);
         if(!r||'erro' in r) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:r&&'erro' in r?r.erro:'FALHA'}};
         const fala=[...decisao.fala.filter(t=>t.trim()).slice(0,2), r.url];
-        const envio=await comunicacaoHomologacao.conversa({medicoId:c.medicoId,chave:`link_permissoes:${alvo}:${r.url.slice(-12)}`,fala,conversa:c.conversa,falaMemoria:fala.map((t,i)=>i===fala.length-1?'[LINK_SEGURO]':t)});
+        const envio=await comunicacaoHomologacao.conversa({medicoId:c.medicoId,chave:`link_permissoes:${alvo}:${r.url.slice(-12)}`,fala,conversa:c.conversa,falaMemoria:fala.map((t,i)=>i===fala.length-1?'[LINK_SEGURO]':t),contatoTelefone:c.contatoOperador});
         for(const [indice,texto] of fala.entries()) await memoriaPersistida?.registrarFala(c.medicoId,c.conversa,`noto:permissoes:link:${alvo}:${r.url.slice(-12)}:${indice}`,indice===fala.length-1?`${origemLinksSeguros}/p/[LINK_SEGURO]`:texto,'noto').catch(()=>{});
         return {jaRespondida:envio==='enviado'||envio==='simulado',dados:{ferramenta:'pedir_link_permissoes',ok:envio!=='erro',motivo:envio}};
       }
@@ -540,24 +541,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   };
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null) => {
+  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null, contatoOperador?:string, operadorTipo?:'medico'|'secretaria') => {
     const agora = new Date();
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta,
+    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, operadorTipo,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
     }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, interpretadorSemantico, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
-      aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao); } : undefined,
-      aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria }); },
+      aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao, contatoOperador); } : undefined,
+      aoConversar: async (fala, chave, falaMemoria) => { await comunicacaoHomologacao.conversa({ medicoId, fala, chave, conversa: chaveConversa, falaMemoria, contatoTelefone:contatoOperador }); },
       extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
-      tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
-        textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
+      tratarCofre: async (id, mensagem, contato) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
+        textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro),contato) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
         if (acao.tipo === 'boas_vindas' && contexto?.nomeMedico) {
-          const resultado = await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota });
+          const resultado = await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota, contatoTelefone:contatoOperador });
           if (resultado === 'enviado') await contextoPendencias.perguntarData(medicoId);
           return;
         }
-        if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }
-        if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
+        if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd',{contatoTelefone:contatoOperador}); return; }
+        if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave, contatoTelefone:contatoOperador });
       } : undefined,
       lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),
       log: (nivel, mensagem) => nivel === 'info' ? console.info(mensagem) : registrarLinhaSincrona(mensagem)
