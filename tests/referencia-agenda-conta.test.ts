@@ -5,7 +5,7 @@ import {resolverReferenciaAgendaConta,vincularReferenciaAgendaConta} from '../sr
 it('resolve conexão-fonte da agenda para o médico selecionado',async()=>{
  const query=vi.fn(async()=>({rows:[{referencia_medico_id:'fonte'}]}));
  expect(await resolverReferenciaAgendaConta({query} as unknown as pg.Pool,'alvo','tribemd')).toBe('fonte');
- expect(String(query.mock.calls[0]![0])).toMatch(/fonte\.conta_id=alvo\.conta_id/);
+ expect(String((query.mock.calls as unknown as any[][])[0]![0])).toMatch(/fonte\.conta_id=alvo\.conta_id/);
 });
 
 it('sem vínculo explícito usa o próprio médico como referência',async()=>{
