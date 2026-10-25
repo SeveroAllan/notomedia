@@ -47,4 +47,3 @@ export function descobrirProfissionaisParaConta(
   const nomes=profissionaisIdentificados(consultas);
   return nomes.length?{tipo:'profissionais',nomes}:{tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};
 }
-
