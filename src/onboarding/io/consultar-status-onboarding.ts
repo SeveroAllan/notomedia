@@ -12,7 +12,7 @@ import { validarReferenciaFiscal } from '../../fiscal/preparacao/validar-referen
 
 export type StatusOnboardingMedico = {
   medicoId: string;
-  usuarioId: string;
+  usuarioId: string | null;
   nomeUsuario: string;
   crm?: string | null;
   rqe?: string | null;
@@ -78,17 +78,17 @@ export async function consultarStatusOnboarding(
       pf.dados_reforma_tributaria,
       msf.aliquota_iss,
       to_jsonb(msf)->'parametros_emissao' as parametros_emissao,
-      (select w.numero_telefone from whatsapp_instancias w where w.medico_id = m.id and w.status = 'conectado' order by w.conectado_em desc nulls last limit 1) as numero_whatsapp,
+      (select w.numero_telefone from whatsapp_instancias w where (w.conta_id = m.conta_id or w.medico_id = m.id) and w.status = 'conectado' order by w.conectado_em desc nulls last limit 1) as numero_whatsapp,
       (select to_jsonb(t) from cadastro_certificado_trabalhos t
-        where t.medico_id=m.id and u.ativo=true and t.certificado_id=(
+        where t.medico_id=m.id and t.certificado_id=(
           select c.id from medico_certificados c where c.medico_id=m.id and c.status='ativo'
           order by c.criado_em desc,c.id desc limit 1
         ) limit 1) as revisao_profissional,
       (select count(*) from medico_certificados c where c.medico_id = m.id and c.status = 'ativo') as cert_ativos,
-      (select count(*) from whatsapp_instancias w where w.medico_id = m.id and w.status = 'conectado') as whats_conectados,
-      exists(select 1 from whatsapp_instancias w where w.medico_id = m.id and w.oficial = false and w.conectado_em is not null) as whatsapp_vinculado
+      (select count(*) from whatsapp_instancias w where (w.conta_id = m.conta_id or w.medico_id = m.id) and w.status = 'conectado') as whats_conectados,
+      exists(select 1 from whatsapp_instancias w where (w.conta_id = m.conta_id or w.medico_id = m.id) and w.oficial = false and w.conectado_em is not null) as whatsapp_vinculado
     from medicos m
-    join usuarios u on u.id = m.usuario_id
+    left join usuarios u on u.id = m.usuario_id
     left join medico_perfil_fiscal pf on pf.medico_id = m.id
     left join medico_servicos_fiscais msf on msf.medico_id = m.id and msf.padrao = true and msf.ativo = true
     where m.id = $1
