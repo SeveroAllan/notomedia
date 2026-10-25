@@ -8,6 +8,8 @@ export async function confirmarEscolhaPermissao(
 ):Promise<void>{
   const rotulo=ROTULOS[r.permissao as keyof typeof ROTULOS];
   if(!r.medicoId||!rotulo)return;
+  const textoBotao=(rotulo.botoes as Record<string,string>)[r.valor];
+  if(!textoBotao)return;
   if(r.permissao==='solicitar_cpf')await deps.pool.query(
     `update medicos m set solicitar_cpf_direto_paciente=$2, atualizado_em=now()
      from noto_whatsapps_medicos wm join noto_whatsapps_conectados c on c.id=wm.whatsapp_conectado_id
@@ -17,6 +19,6 @@ export async function confirmarEscolhaPermissao(
   await deps.confirmar({
     medicoId:r.medicoId,
     chave:`permissao_escolhida:${r.linkId}`,
-    fala:[`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Isso só define sua preferência; não envia notas antigas. Se quiser mudar depois, é só me pedir.`]
+    fala:[`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${textoBotao}. Isso só define sua preferência; não envia notas antigas. Se quiser mudar depois, é só me pedir.`]
   });
 }
