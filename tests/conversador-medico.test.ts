@@ -64,8 +64,8 @@ it('ação inválida, não permitida ou sem agenda/período nunca é assinada',(
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},fatos,['listar_pendencias'],'sim',agora)).toBe('AGENDA_NAO_CONECTADA');
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},{...fatos,agenda:{nome:'tribemd',conectada:true}},['listar_pendencias'],'sim',agora)).toBe('PERIODO_NECESSARIO');
 });
-it.each(['leitura','senha','pacientes'])('primeiro link sem o fato %s é recusado antes do envio',ausente=>{
- const fala=['O link conecta só a agenda, em leitura das consultas para cruzar comprovantes e emitir notas. Login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'.replace(ausente==='senha'?/senha|login/gi:new RegExp(ausente,'g'),'')];
+it.each(['leitura','senha'])('primeiro link sem o fato %s é recusado antes do envio',ausente=>{
+ const fala=['O link conecta só a agenda, em leitura das consultas. Login e senha vão só no link seguro; não recebo senha pela conversa. Aqui está o link seguro:'.replace(ausente==='senha'?/senha|login/gi:new RegExp(ausente,'g'),'')];
  expect(validarAcaoConversa({fala,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}},fatos,['pedir_link_agenda'],'Tribe',agora)).toBe('INTRODUCAO_INCOMPLETA');
 });
 it.each([.5,.89,.9,1])('modo sem agenda exige declaração literal atual e confiança >=.9 (%s)',confianca=>{
@@ -87,6 +87,10 @@ it('período literal corrige dia da semana indevidamente calculado pelo modelo',
  expect(periodoDecisao({fala:['Entendi.'],parametros:{desde:'2026-10-07'}},agora,'Desde semana retrasada.')).toBe('2026-10-05');
 });
 
+it('introdução da agenda não precisa prometer regra global de entrega ao paciente',()=>{
+ const d={fala:['Eu só leio a agenda. Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'TribeMD'}};
+ expect(validarAcaoConversa(d,fatos,['pedir_link_agenda'],'Uso TribeMD',agora)).toBeNull();
+});
 it('URL ocupa o último balão: introdução de três balões é recusada antes do link',()=>{
  expect(validarAcaoConversa({fala:['a','b','c'],acao:'pedir_link_agenda'},{...fatos,agenda:{nome:'tribemd',conectada:false}},['pedir_link_agenda'],'Tribe',agora)).toBe('BALOES_LINK_EXCEDIDOS');
 });
