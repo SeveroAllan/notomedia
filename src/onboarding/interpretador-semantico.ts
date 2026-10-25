@@ -17,6 +17,7 @@ export const interpretacaoSemanticaSchema = z.object({
   granularidade: z.enum(['colecao','item','indefinida']),
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   permissaoNecessaria: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).nullable().default(null),
+  agendaAlvo: z.enum(['tribemd','amplimed']).nullable().optional(),
   periodo: periodoSchema,
   paciente: z.string().trim().min(1).max(150).nullable(),
   restricoes: z.object({
@@ -27,7 +28,7 @@ export const interpretacaoSemanticaSchema = z.object({
   confianca: z.number().min(0).max(1)
 }).strict();
 
-export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria']};
+export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'|'agendaAlvo'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria'];agendaAlvo?:'tribemd'|'amplimed'|null};
 
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interpret the doctor's message by meaning. Do not use keyword matching as the primary method.
 
@@ -67,6 +68,13 @@ MEANING
 - Use medida='valor_indefinido' only when context does not make one financial measure dominant.
 - Do not ask for clarification for a theoretical ambiguity when context gives a safe dominant meaning.
 
+AGENDA CONFIGURATION
+- Treat questions about adding, connecting, changing, or configuring an agenda as configuration requests. They are not claims about consultations.
+- Use objetivo='configurar' or objetivo='conectar' with objeto='agenda' for these requests.
+- Set agendaAlvo='tribemd' or 'amplimed' only when the doctor explicitly identifies that supported agenda.
+- "outra agenda" without a supported agenda name means agendaAlvo=null. Do not guess the other agenda from history alone.
+- A connected agenda does not prevent the doctor from connecting the other supported agenda.
+
 PERMISSIONS
 - Set permissaoNecessaria only when the goal depends on a configurable choice.
 - Use emitir_autonomo for autonomous issue permission.
@@ -95,6 +103,7 @@ Return strict JSON:
  "granularidade":"colecao|item|indefinida",
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "permissaoNecessaria":"emitir_autonomo|entregar_paciente|solicitar_cpf"|null,
+ "agendaAlvo":"tribemd|amplimed"|null,
  "periodo":{"inicio":"YYYY-MM-DD"|null,"fim":"YYYY-MM-DD"|null,"referencia":"explicito|contextual|nenhum"},
  "paciente":string|null,
  "restricoes":{"naoEmitir":boolean,"somenteLeitura":boolean},
@@ -178,6 +187,15 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
   if(i.confianca<.8)return null;
   const permissaoNecessaria=i.permissaoNecessaria??null;
   const faltaPermissao=permissaoNecessaria!==null&&i.faltando.includes('permissao');
+  const agendaAlvo=i.agendaAlvo??null;
+  if((i.dominio==='agenda'||i.dominio==='conexao')&&i.objeto==='agenda'&&(i.objetivo==='configurar'||i.objetivo==='conectar')){
+    if(!agendaAlvo)return null;
+    const conectada=fatos.agendas?.[agendaAlvo]?.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agendaAlvo);
+    const nome=agendaAlvo==='amplimed'?'Amplimed':'TribeMD';
+    if(conectada)return {fala:[`${nome} já está conectada. Posso usar essa agenda quando você pedir uma consulta.`],acao:null};
+    if(permitidas.includes('pedir_link_agenda'))return {fala:[`Vou te mandar o link seguro para conectar a ${nome} também.`, 'Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:agendaAlvo}};
+    return null;
+  }
   if(faltaPermissao&&permissaoNecessaria&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
     return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
