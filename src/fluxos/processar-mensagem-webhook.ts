@@ -100,14 +100,14 @@ export async function processarMensagemWebhook(
       try {
         const medico = await deps.repositorio.buscarMedicoPorTelefone(telefone);
         let medicoId=medico?.id??null;
-        let operadorTipo:'medico'|'secretaria'|undefined=medico?'medico':undefined;
+        let operadorTipo:'medico'|'secretaria'|undefined;
         let contatoOperador:string|undefined;
         if(!medicoId&&deps.repositorio.buscarOperadorPorTelefone){
           const operador=await deps.repositorio.buscarOperadorPorTelefone(telefone);
           if(operador){
-            operadorTipo=operador.tipo;
             if(operador.tipo==='medico'&&operador.medicos.length===1) medicoId=operador.medicos[0]!.id;
             if(operador.tipo==='secretaria'){
+              operadorTipo='secretaria';
               let alvo=resolverMedicoMencionado(texto,operador.medicos);
               const mencaoInconclusiva=!alvo&&mensagemPedeTrocaDeMedico(texto);
               if(!alvo&&!mencaoInconclusiva&&deps.repositorio.lerFocoOperador){
