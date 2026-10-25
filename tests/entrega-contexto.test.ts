@@ -43,6 +43,14 @@ function cenario() {
   return {comunicacao,enviarPdf,query,contextos};
 }
 
+it('nota nova autorizada continua pelo fluxo normal e fica registrada como nota_nova',async()=>{
+  const c=cenario();
+  expect(await c.comunicacao.paciente({medicoId:medico,solicitacaoId:solicitacao},{enviarPdf:c.enviarPdf})).toBe('enviado');
+  expect(c.enviarPdf).toHaveBeenCalledTimes(1);
+  expect(c.contextos).toHaveLength(1);
+  expect(JSON.parse(c.contextos[0]!.texto)).toMatchObject({notaFiscalId:notaId,destino:'medico',origem:'nota_nova',resultado:'enviado'});
+});
+
 it('pedido histórico envia somente a data pedida e a mesma chave não repete PDF',async()=>{
   const c=cenario();
   expect(await c.comunicacao.reenviarNotaMedico(medico,{enviarPdf:c.enviarPdf},'2026-10-20','pedido-20')).toBe('enviado');
