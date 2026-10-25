@@ -36,3 +36,15 @@ export function filtrarConsultasDoProfissional<T extends ConsultaComProfissional
   if (!filtradas.length && consultas.length) return { ok: false, motivo: 'PROFISSIONAL_AMBIGUO' };
   return { ok: true, consultas: filtradas };
 }
+
+export function descobrirProfissionaisParaConta(
+  fonte:'tribemd'|'amplimed',
+  consultas:readonly ConsultaComProfissional[],
+  contaMultiMedico:boolean
+): {tipo:'nao_necessaria'}|{tipo:'profissionais';nomes:string[]}|{tipo:'bloqueada';motivo:'PROFISSIONAL_NAO_IDENTIFICADO'} {
+  if(!contaMultiMedico)return {tipo:'nao_necessaria'};
+  if(fonte==='amplimed')return {tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};
+  const nomes=profissionaisIdentificados(consultas);
+  return nomes.length?{tipo:'profissionais',nomes}:{tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};
+}
+
