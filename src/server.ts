@@ -169,9 +169,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       [r.medicoId, r.valor === 'paciente']).catch(() => {});
     await comunicacaoHomologacao.conversa({ medicoId: r.medicoId,
       chave: `permissao_escolhida:${r.linkId}`,
-      fala: [`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Se quiser mudar depois, é só me pedir.`] });
-    if (r.permissao === 'entregar_paciente' && r.valor === 'so_medico')
-      await comunicacaoHomologacao.retomarEntregaMedico(r.medicoId, evolutionClient);
+      fala: [`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Isso só define sua preferência; não envia notas antigas. Se quiser mudar depois, é só me pedir.`] });
   }));
   app.locals.encerrarCofres = cofres.encerrar;
   app.use(
