@@ -14,7 +14,7 @@ const tarefaOcupada=(f:FatosConversa)=>['aguardando_confirmacao_lote','confirmad
 export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
   {nome:'nenhuma',tipo:'sem_efeito',exigeConfirmacaoDoMedico:false,descricao:'Só conversar, explicar ou responder à confirmação pendente.',liberada:()=>true},
   {nome:'registrar_modo_sem_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Registrar que o médico declarou não usar agenda digital.',
-    liberada:f=>!f.agenda.conectada},
+    liberada:f=>!f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar a agenda; nunca recebe senha pelo chat.',
     liberada:f=>!f.agenda.conectada&&!f.link.ativo&&!f.semAgendaDigital},
   {nome:'consultar_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Consultar as consultas da agenda no período, independentemente de situação fiscal.',
@@ -22,7 +22,7 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'pedir_link_permissoes',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para o médico escolher permissões com botões (emissão autônoma; entrega ao paciente; a quem pedir CPF ausente).',
-    liberada:f=>f.permissoes?.pendentes===true},
+    liberada:f=>!!f.permissoes&&((f.permissoes.faltantes?.length??0)>0||f.permissoes.pendentes===true)},
   {nome:'reenviar_nota_medico',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Entregar ao médico uma única nota já autorizada pedida explicitamente. Nunca emite outra nota.',
     liberada:f=>f.permissoes?.entregarPaciente==='so_medico'},
   {nome:'iniciar_lote',tipo:'escrita',exigeConfirmacaoDoMedico:true,descricao:'Preparar o lote de notas; só emite depois do "pode" sobre a proposta.',
