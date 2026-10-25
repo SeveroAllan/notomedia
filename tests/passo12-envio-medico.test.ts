@@ -203,7 +203,7 @@ it.each([
   const entrada = { medicoId: 'm', acao: 'falha_emissao' as const, chave: 'sol', motivo: 'CERTIFICADO_AUSENTE' };
   expect(await c.medico(entrada)).toBe(ativo && permitir && ambiente === 'homologacao' ? 'enviado' : 'simulado');
   if (ativo && permitir && ambiente === 'homologacao') {
-    expect(enviarTexto.mock.calls[0]).toEqual([{ instanciaNome: carregarConfig({}).evolutionAssistantInstanceName, contatoTelefone: '+5551993527271', texto: 'Não encontrei um certificado digital ativo; cadastre um certificado válido antes de pedir uma nova tentativa. Não vou tentar emitir novamente sozinho.' }]);
+    expect(enviarTexto.mock.calls[0]).toEqual([{ instanciaNome: carregarConfig({}).evolutionAssistantInstanceName, contatoTelefone: '+5551993527271', texto: 'Não encontrei um certificado digital ativo; cadastre um certificado válido antes de pedir uma nova tentativa.' }]);
     expect(await c.medico(entrada)).toBe('repetido'); expect(enviarTexto).toHaveBeenCalledOnce();
   } else expect(enviarTexto).not.toHaveBeenCalled();
 });
