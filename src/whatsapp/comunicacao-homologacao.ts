@@ -73,15 +73,15 @@ export class ComunicacaoHomologacao {
     private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & EnviarPdfDanfse>, private readonly log: (texto: string) => void = console.info,
     private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
-  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string;
+  async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string; contatoTelefone?: string;
     detalhe?: { pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
     detalheNota?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null } }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, acao, chave, motivo, detalhe, detalheNota } = entrada;
     if (!this.config.envioMedicoRealAtivo) return this.simular(acao);
     try {
-      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      const { rows } = await this.pool.query(`select u.telefone as telefone_medico, pf.ambiente from medicos m
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
-      const destino = rows[0];
+      const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone_medico};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
       const texto = entrada.texto ?? (acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
         ? montarPerguntaMultiplasConsultas(detalhe)
@@ -94,18 +94,18 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async medicoPermitido(medicoId: string): Promise<boolean> {
+  async medicoPermitido(medicoId: string, contatoTelefone?:string): Promise<boolean> {
     if (!this.config.envioMedicoRealAtivo) return false;
-    const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+    const { rows } = await this.pool.query(`select u.telefone as telefone_medico, pf.ambiente from medicos m
       join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
-    return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, rows[0]?.telefone);
+    return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, contatoTelefone??rows[0]?.telefone_medico);
   }
 
-  async marcarLida(medicoId: string, chave: ChaveMensagemLeitura): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async marcarLida(medicoId: string, chave: ChaveMensagemLeitura, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('mensagem_lida');
     if (!chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return 'erro';
     try {
-      if (!await this.medicoPermitido(medicoId)) return this.simular('mensagem_lida');
+      if (!await this.medicoPermitido(medicoId,contatoTelefone)) return this.simular('mensagem_lida');
       const resultado = await this.enviarUnico(medicoId, 'mensagem_lida', JSON.stringify([chave.remoteJid, chave.id]), async () =>
         (await this.transporte.marcarLida?.({ instanciaNome: this.config.evolutionAssistantInstanceName,
           mensagemId: chave.id, contatoTelefone: chave.remoteJid.split('@')[0], chaveMensagem: chave }))?.sucesso === true);
@@ -114,12 +114,12 @@ export class ComunicacaoHomologacao {
     } catch { this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' })); return 'erro'; }
   }
 
-  async reagir(medicoId: string, chave: ChaveMensagemLeitura, reacao: unknown): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async reagir(medicoId: string, chave: ChaveMensagemLeitura, reacao: unknown, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     if (!REACOES_PERMITIDAS.includes(reacao as ReacaoMedico)) return 'simulado';
     if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('reacao');
     if (!chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return 'erro';
     try {
-      if (!await this.medicoPermitido(medicoId)) return this.simular('reacao');
+      if (!await this.medicoPermitido(medicoId,contatoTelefone)) return this.simular('reacao');
       const resultado = await this.enviarUnico(medicoId, 'reacao', JSON.stringify([chave.remoteJid, chave.id, reacao]), async () =>
         (await this.transporte.enviarReacao?.({ instanciaNome: this.config.evolutionAssistantInstanceName, chave, reacao: reacao as ReacaoMedico }))?.sucesso === true);
       if (resultado === 'erro') this.log(registroErroNoto('REACAO_FALHOU', 'tecnico', { medicoId, etapa: 'reacao' }));
@@ -149,15 +149,15 @@ export class ComunicacaoHomologacao {
     } catch { this.log('CONFIRMACAO_EMISSAO_ENVIO_FALHOU'); return { resultado: 'erro' }; }
   }
 
-  async boasVindas(entrada: { medicoId: string; nomeMedico?: string; ultimaNota: Parameters<typeof montarBoasVindas>[1];
+  async boasVindas(entrada: { medicoId: string; nomeMedico?: string; ultimaNota: Parameters<typeof montarBoasVindas>[1]; contatoTelefone?:string;
     aoEnviar?: (telefone: string, baloes: string[]) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, nomeMedico, ultimaNota } = entrada;
     if (!nomeMedico?.trim()) return 'erro';
     if (!this.config.envioMedicoRealAtivo) return this.simular('boas_vindas');
     try {
-      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      const { rows } = await this.pool.query(`select u.telefone as telefone_medico, pf.ambiente from medicos m
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
-      const destino = rows[0];
+      const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone_medico};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
       const escolhaEntrega=this.permissoes?await this.permissoes.ler(medicoId,'entregar_paciente').catch(()=>null):null;
       const baloes = montarBoasVindas(nomeMedico, ultimaNota, {
@@ -179,14 +179,14 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string; aoEnviar?: (mensagemId: string) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
+  async conversa(entrada: { medicoId: string; chave: string; fala: string[]; falaMemoria?: string[]; conversa?: string; contatoTelefone?:string; aoEnviar?: (mensagemId: string) => Promise<void> }): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
     const { medicoId, chave, fala } = entrada;
     if (!fala.length || fala.length > 3 || fala.some(texto => !texto.trim() || texto.length > 500)) return 'erro';
     if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
     try {
-      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      const { rows } = await this.pool.query(`select u.telefone as telefone_medico, pf.ambiente from medicos m
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
-      const destino = rows[0];
+      const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone_medico};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
       if (!await this.reservarMensagem(medicoId, destino.telefone, chave, entrada.falaMemoria ?? fala, entrada.conversa)) return 'repetido';
       return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
@@ -204,12 +204,13 @@ export class ComunicacaoHomologacao {
     } catch { this.log('COMUNICACAO_HOMOLOGACAO_FALHOU'); return 'erro'; }
   }
 
-  async cofre(medicoId: string, texto: string): Promise<'simulado' | 'enviado' | 'erro'> {
+  async cofre(medicoId: string, texto: string, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro'> {
     if (!this.config.envioMedicoRealAtivo) return this.simular('cofre');
     try {
-      const destino = (await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+      const base = (await this.pool.query(`select u.telefone as telefone_medico, pf.ambiente from medicos m
         join usuarios u on u.id=m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id=m.id
         where m.id=$1 and u.ativo=true`, [medicoId])).rows[0];
+      const destino={...base,telefone:contatoTelefone??base?.telefone_medico};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('cofre');
       // Não gravar o texto: ele pode conter um link de uso único.
       const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
