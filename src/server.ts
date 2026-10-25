@@ -359,7 +359,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const ferramentasConversa: FerramentasConversa = {
     lerFatos: async (medicoId,agora) => {
       const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
-      const agendaAtiva=await cofres.statusAgenda(medicoId);
+      const agendaAtiva=(await cofres.statusAgenda(medicoId))??{nome:null,conectada:false};
       const agendas=typeof (cofres as {statusAgendas?:unknown}).statusAgendas==='function'
         ? await cofres.statusAgendas(medicoId)
         : {
