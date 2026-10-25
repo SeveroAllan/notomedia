@@ -4,14 +4,15 @@ import {ConversadorMedico} from '../src/onboarding/conversador-medico.js';
 import {InterpretadorSemantico} from '../src/onboarding/interpretador-semantico.js';
 import {PostgresMemoriaConversaMedico} from '../src/onboarding/memoria-conversa.js';
 
-it('memória semântica exige confiança alta, preserva proveniência e sanitiza o valor',async()=>{
+it('memória semântica exige confiança alta, proveniência e conteúdo durável seguro',async()=>{
  const query=vi.fn(async(sql:string,_p:unknown[]=[])=>({rows:sql.includes('returning id::text')?[{id:'9'}]:[]}));
  const memoria=new PostgresMemoriaConversaMedico({query} as unknown as pg.Pool);
- await memoria.registrarMemoriaSemantica('m',{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Usa Amplimed e CPF 529.982.247-25',origemConversa:'c',origemMensagemId:'42',confianca:.89});
+ await memoria.registrarMemoriaSemantica('m',{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Prefere Amplimed',origemConversa:'c',origemMensagemId:'42',confianca:.89});
+ await memoria.registrarMemoriaSemantica('m',{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Paciente Ana prefere Amplimed',origemConversa:'c',origemMensagemId:'42',confianca:.97});
  expect(query).not.toHaveBeenCalled();
- await memoria.registrarMemoriaSemantica('m',{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Usa Amplimed e CPF 529.982.247-25',origemConversa:'c',origemMensagemId:'42',confianca:.97});
+ await memoria.registrarMemoriaSemantica('m',{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Prefere Amplimed',origemConversa:'c',origemMensagemId:'42',confianca:.97});
  expect(query).toHaveBeenCalledOnce();
- expect(query.mock.calls[0]![1]).toEqual(['m','agenda_preferida','preferencia_agenda','Usa Amplimed e CPF [OCULTO]','c','42',.97]);
+ expect(query.mock.calls[0]![1]).toEqual(['m','agenda_preferida','preferencia_agenda','Prefere Amplimed','c','42',.97]);
 });
 
 it('work log guarda apenas metadados fornecidos e não entra na conversa',async()=>{
