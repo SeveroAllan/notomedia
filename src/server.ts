@@ -1247,7 +1247,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                 await comunicacaoHomologacao.medicoPermitido(contexto.medicoId, contexto.contatoOperador), c?.perguntaChave ?? '', contexto.chavePergunta);
               if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
                 const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: unica.id,
-                  chaveDisparo: `${unica.id}:${contexto.chaveMensagem}`, paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta });
+                  chaveDisparo: `${unica.id}:${contexto.chaveMensagem}`, paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta,
+                  contatoTelefone: contexto.contatoOperador });
                 await emissaoComprovante.registrarPergunta(contexto.medicoId, unica.id, envio.resultado, envio.chaveMensagem, new Date());
                 return;
               }
