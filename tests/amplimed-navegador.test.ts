@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, eventoAgendaAmplimedDoFeed, filtrarEstadoAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
+import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, eventoAgendaAmplimedDoFeed, filtrarEstadoAmplimed, navegacaoPulouDataAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
 import { montarLeituraAmplimed } from '../src/agenda/amplimed-leitor.js';
 
 describe('guarda de rede do Amplimed', () => {
@@ -90,5 +90,14 @@ describe('evento de dia oculto vindo do feed mensal',()=>{
   it('não transforma evento incompleto do feed em dia vazio',()=>{
     expect(eventoAgendaAmplimedDoFeed({titulo:'Paciente X | Avaliação | Particular | R$ 100,00 | 51990000009',inicio:'10:00',fim:null,cor:'green'})).toBeNull();
     expect(eventoAgendaAmplimedDoFeed({titulo:'',inicio:'10:00',fim:'10:30',cor:'green'})).toBeNull();
+  });
+});
+
+
+describe('âncora em dia oculto',()=>{
+  it('detecta sábado→segunda e segunda→sábado cruzando domingo, sem oscilação',()=>{
+    expect(navegacaoPulouDataAmplimed('2026-10-24','2026-10-26','2026-10-25')).toBe(true);
+    expect(navegacaoPulouDataAmplimed('2026-10-26','2026-10-24','2026-10-25')).toBe(true);
+    expect(navegacaoPulouDataAmplimed('2026-10-24','2026-10-25','2026-10-25')).toBe(false);
   });
 });
