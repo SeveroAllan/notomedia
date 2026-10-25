@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { completarOpenAi } from '../io/nvidia/chat-client.js';
 import { sanitizarTextoMedico } from './contexto-conversa-medico.js';
 import type { DecisaoConversa, FatosConversa } from './conversador-medico.js';
-import type { PlanoConversa } from './memoria-conversa.js';
+import type { PlanoConversa, MemoriaSemantica } from './memoria-conversa.js';
 
 const periodoSchema = z.object({
   inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(),
@@ -41,7 +41,8 @@ ROLE
 - Return only the semantic JSON object.
 
 CONTEXT
-- Use texto, mensagens, resumo, plano, fatos, and calendario.
+- Use texto, mensagens, resumo, linhaDoTempo, memoriasSemanticas, plano, fatos, and calendario.
+- linhaDoTempo and memoriasSemanticas are historical claims only. fatos is the current operational authority and always wins.
 - Resolve natural time references.
 - Resolve pronouns and references from context.
 - Give the current request priority over stale context.
@@ -136,12 +137,14 @@ function calendarioSemantico(agora: Date) {
 
 export class InterpretadorSemantico {
   constructor(private readonly apiKey:string|undefined,private readonly modelo:string|undefined,private readonly completar:typeof completarOpenAi){}
-  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;plano?:PlanoConversa|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
+  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;linhaDoTempo?:readonly string[];memoriasSemanticas?:readonly Pick<MemoriaSemantica,'chave'|'categoria'|'valor'>[];plano?:PlanoConversa|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
     if(!this.apiKey?.trim()||!this.modelo?.trim())return null;
     const seguro=JSON.parse(JSON.stringify({
       texto:sanitizarTextoMedico(entrada.texto),
       mensagens:entrada.mensagens.map(sanitizarTextoMedico),
       resumo:entrada.resumo?sanitizarTextoMedico(entrada.resumo):null,
+      linhaDoTempo:entrada.linhaDoTempo?.map(sanitizarTextoMedico)??[],
+      memoriasSemanticas:entrada.memoriasSemanticas?.map(m=>({...m,valor:sanitizarTextoMedico(m.valor)}))??[],
       plano:entrada.plano??null,
       fatos:entrada.fatos,
       calendario:calendarioSemantico(entrada.agora)
