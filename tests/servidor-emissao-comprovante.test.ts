@@ -51,6 +51,7 @@ function sqlServidor(sql: string, valores: any[], base?: { query: (s: string, p?
   if (s.includes('from pacientes p')) return resultado([{ ...banco.paciente }]);
   if (s.startsWith('select 1 from public.noto_emissoes_comprovantes')) return resultado(banco.emissoes.filter(e => e.medico_id === valores[0] && e.consulta_chave === valores[1] && e.estado === 'nota_gerada'));
   if (s.includes('from medicos m') && s.includes('cclass_trib_padrao')) return resultado([{ medico_id: 'medico', nome_completo: 'Clara Almeida Ficticia', crm: '12345/SC', confirmado_pelo_medico: true, ctrib_nac: '040101', cnbs: '122051000' }]);
+  if (s.includes('from medicos m') && s.includes('where m.conta_id=(select conta_id from medicos where id=$1)')) return resultado([{ id:'medico', nome_completo:'Clara Almeida Ficticia', crm:'12345/SC', certificado_valido:true }]);
   if (s.startsWith('with proximo as')) {
     const sol = banco.solicitacoes.find(sol => !sol.aguardando_confirmacao_medico && !sol.bloqueada && banco.emissoes.some(e => e.solicitacao_id === sol.id && e.estado === 'enfileirada'));
     if (!sol) return resultado(); sol.bloqueada = true;
@@ -108,6 +109,11 @@ beforeEach(() => {
   borda.extrair.mockResolvedValue(JSON.stringify({ tipo: 'extraido', campos: { valorCentavos: 20000, dataPagamento: '2026-10-18', nomePagador: nome, nomeFavorecido: 'Clara Almeida Ficticia', confianca: { valorCentavos: 1, dataPagamento: 1, nomePagador: 1, nomeFavorecido: 1 } } }));
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarInstanciaPorNome').mockResolvedValue({ id: 'inst', medicoId: 'medico', nomeInstancia: 'clinica', oficial: false });
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarMedicoPorTelefone').mockImplementation(async telefone => telefone === '5551993527271' ? { id: 'medico', nomeCompleto: 'Clara', telefone } as any : null);
+  vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarOperadorPorTelefone').mockImplementation(async telefone => telefone === '5551993527271' ? {
+    usuarioId:'usuario',contaId:'conta',telefone:'+5551993527271',medicos:[{id:'medico',nomeCompleto:'Clara Almeida Ficticia',crm:'12345/SC'}]
+  } : null);
+  vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'lerFocoOperador').mockResolvedValue('medico');
+  vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'salvarFocoOperador').mockResolvedValue(true);
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'buscarOuCriarConversa').mockResolvedValue({ id: 'conversa', medicoId: 'medico', pacienteId: 'paciente', instanciaId: 'inst', contatoTelefone: '5511999990000', aguardandoCpfDesde: null });
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'criarPacienteMinimo').mockResolvedValue({ id: 'paciente', medicoId: 'medico', nome, telefone: '5511999990000', cpfHash: null });
   vi.spyOn(PostgresAtendimentoRepositorio.prototype, 'salvarMensagem').mockResolvedValue();
