@@ -27,6 +27,12 @@ function queryFalsa(sql: string, valores: any[] = []): Promise<{ rows: any[] }> 
         const c = v && contas.find(c => c.id === v.conta);
         return Promise.resolve({ rows: c ? [{ id: c.id, numero_whatsapp: c.numero_whatsapp, operador: c.operador }] : [] });
     }
+    if (sql.includes('select distinct c.id,c.numero_whatsapp,c.operador')) {
+        return Promise.resolve({ rows: [] });
+    }
+    if (sql.includes("select distinct regexp_replace(u.telefone")) {
+        return Promise.resolve({ rows: medicoTelefone ? [{ telefone: medicoTelefone.replace(/\D/g,'') }] : [] });
+    }
     if (sql.includes('select u.telefone from medicos')) {
         return Promise.resolve({ rows: medicoTelefone ? [{ telefone: medicoTelefone }] : [] });
     }
