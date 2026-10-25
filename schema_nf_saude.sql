@@ -123,13 +123,14 @@ create table otp_verificacoes (
 );
 create index idx_otp_telefone on otp_verificacoes(telefone, criado_em desc);
 
--- Médico = o "prestador" da NFS-e. Um usuário com papel 'medico' tem
--- exatamente um registro aqui. O CPF do médico não é guardado aqui em texto
--- puro — vive só em `medico_perfil_fiscal.cpf_cnpj_encriptado` (evita ter
--- duas cópias do mesmo dado sensível, uma delas sem criptografia).
+-- Médico = o "prestador" da NFS-e e pertence obrigatoriamente a uma conta.
+-- usuario_id é opcional: um médico pode ter login próprio ou ser administrado
+-- pela conta (ex.: clínica) sem criar um usuário fictício.
+-- O CPF do médico não é guardado aqui em texto puro — vive só em
+-- `medico_perfil_fiscal.cpf_cnpj_encriptado`.
 create table medicos (
   id                uuid primary key default gen_random_uuid(),
-  usuario_id        uuid not null unique references usuarios(id) on delete cascade,
+  usuario_id        uuid unique references usuarios(id) on delete set null,
   conta_id          uuid not null references contas(id) on delete cascade,
   nome_completo     text not null,
   crm               text,      -- Conselho Regional de Medicina
