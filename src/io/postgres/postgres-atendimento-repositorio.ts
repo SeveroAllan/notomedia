@@ -235,40 +235,30 @@ export class PostgresAtendimentoRepositorio implements AtendimentoRepositorio, L
     const variantes = gerarVariantesTelefoneBrasileiro(telefone);
     if (variantes.length === 0) return null;
     const { rows: usuarios } = await this.pool.query(`
-      select id, telefone from usuarios
+      select id, conta_id, telefone from usuarios
       where ativo=true and regexp_replace(telefone, '\\D', '', 'g') = any($1::text[])
       limit 2
     `, [variantes]);
     if (usuarios.length !== 1) return null;
     const usuario=usuarios[0];
-    const { rows: proprios } = await this.pool.query(`
-      select id, nome_completo, crm from medicos where usuario_id=$1 order by nome_completo, id
-    `, [usuario.id]);
-    if (proprios.length) return { usuarioId:usuario.id, tipo:'medico', telefone:usuario.telefone,
-      medicos:proprios.map(m=>({id:m.id,nomeCompleto:m.nome_completo,crm:m.crm})) };
-    const { rows: vinculados } = await this.pool.query(`
-      select m.id, m.nome_completo, m.crm
-      from secretarias s join secretaria_medico sm on sm.secretaria_id=s.id
-      join medicos m on m.id=sm.medico_id
-      where s.usuario_id=$1
-      order by m.nome_completo, m.id
-    `, [usuario.id]);
-    if (!vinculados.length) return null;
-    return { usuarioId:usuario.id, tipo:'secretaria', telefone:usuario.telefone,
-      medicos:vinculados.map(m=>({id:m.id,nomeCompleto:m.nome_completo,crm:m.crm})) };
+    const { rows: medicos } = await this.pool.query(`
+      select id, nome_completo, crm
+      from medicos
+      where conta_id=$1
+      order by nome_completo, id
+    `, [usuario.conta_id]);
+    if (!medicos.length) return null;
+    return { usuarioId:usuario.id, contaId:usuario.conta_id, telefone:usuario.telefone,
+      medicos:medicos.map(m=>({id:m.id,nomeCompleto:m.nome_completo,crm:m.crm})) };
   }
 
   async lerFocoOperador(usuarioId: string): Promise<string | null> {
     const { rows } = await this.pool.query(`
       select f.medico_id
       from public.noto_operador_foco f
-      where f.usuario_id=$1 and (
-        exists (select 1 from medicos m where m.id=f.medico_id and m.usuario_id=f.usuario_id)
-        or exists (
-          select 1 from secretarias s join secretaria_medico sm on sm.secretaria_id=s.id
-          where s.usuario_id=f.usuario_id and sm.medico_id=f.medico_id
-        )
-      )
+      join usuarios u on u.id=f.usuario_id and u.ativo=true
+      join medicos m on m.id=f.medico_id and m.conta_id=u.conta_id
+      where f.usuario_id=$1
       limit 1
     `, [usuarioId]);
     return rows[0]?.medico_id ?? null;
@@ -277,12 +267,10 @@ export class PostgresAtendimentoRepositorio implements AtendimentoRepositorio, L
   async salvarFocoOperador(usuarioId: string, medicoId: string): Promise<boolean> {
     const { rows } = await this.pool.query(`
       with permitido as (
-        select $2::uuid as medico_id where exists (select 1 from medicos m where m.id=$2 and m.usuario_id=$1)
-        union
-        select $2::uuid where exists (
-          select 1 from secretarias s join secretaria_medico sm on sm.secretaria_id=s.id
-          where s.usuario_id=$1 and sm.medico_id=$2
-        )
+        select m.id as medico_id
+        from usuarios u
+        join medicos m on m.conta_id=u.conta_id
+        where u.id=$1 and u.ativo=true and m.id=$2
       )
       insert into public.noto_operador_foco (usuario_id, medico_id, atualizado_em)
       select $1, medico_id, now() from permitido
