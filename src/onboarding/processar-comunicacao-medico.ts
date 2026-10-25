@@ -52,7 +52,7 @@ export function dadoCadastralIsolado(texto:string):boolean {
 const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
-  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;contatoOperador?:string;eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
+  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;contatoOperador?:string;operadorTipo?:'medico'|'secretaria';eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
 ):Promise<ProximaAcaoNoto> {
   if(!deps.ativo) return {tipo:'nenhuma'};
   const executar = async ():Promise<ProximaAcaoNoto> => {
@@ -108,6 +108,7 @@ export async function processarComunicacaoMedico(
       }
       const contexto=await memoria.lerContextoParaModelo(medicoId,conversa);
       const fatos=await deps.ferramentas.lerFatos(medicoId,agora);
+      if(entrada.operadorTipo)fatos.operadorTipo=entrada.operadorTipo;
       if(fatos.ambiente!=='homologacao') return {tipo:'nenhuma'};
       fatos.semAgendaDigital=contexto.marcas.semAgendaDigital && !fatos.agenda.conectada;
       fatos.entregasRecentes=contexto.entregasRecentes;
@@ -182,6 +183,10 @@ export async function processarComunicacaoMedico(
         }
       }
       let motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
+      if(motivo==='CONFIRMACAO_EXIGE_MEDICO'){
+        await enviar(['A proposta está pronta, mas a autorização de emissão precisa vir do médico responsável. Você pode continuar conferindo dados e pendências por aqui.']);
+        return {tipo:'nenhuma'};
+      }
       if(podeCorrigir() && motivo==='LEITURA_ATUAL_SEM_ACAO') {
         decisao=await decidir(permitidas,undefined,{motivo:'o pedido atual é conferir consultas, não uma pergunta de funcionamento. Use listar_pendencias com o recorte atual; se faltar identificação, pergunte só o dado necessário. Não repita oferta futura.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
