@@ -125,7 +125,6 @@ export async function processarMensagemWebhook(
         } else {
           const medico=await deps.repositorio.buscarMedicoPorTelefone(telefone);
           medicoId=medico?.id??null;
-          if(medicoId)origemOperador='medico';
         }
         if (medicoId) {
           if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medicoId, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
