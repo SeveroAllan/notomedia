@@ -13,6 +13,22 @@ alter table public.medicos
   add constraint medicos_usuario_id_fkey
   foreign key (usuario_id) references public.usuarios(id) on delete set null;
 
+-- RLS também segue a conta: papel do usuário não limita quais médicos da
+-- própria conta ele pode operar.
+create or replace function public.medicos_visiveis_para(p_auth_user_id uuid)
+returns setof uuid
+language sql stable security definer
+set search_path = public
+as $func$
+  select m.id
+  from public.usuarios u
+  join public.medicos m on m.conta_id=u.conta_id
+  where u.auth_user_id=p_auth_user_id and u.ativo=true
+$func$;
+
+revoke execute on function public.medicos_visiveis_para(uuid) from public, anon;
+grant execute on function public.medicos_visiveis_para(uuid) to authenticated, service_role;
+
 do $medicos_conta$
 begin
   if exists (
@@ -47,6 +63,15 @@ begin
       and con.contype='f' and con.confdeltype='n'
   ) then
     raise exception 'FK medicos.usuario_id precisa usar ON DELETE SET NULL';
+  end if;
+
+  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
+      !~ 'join public\\.medicos m on m\\.conta_id=u\\.conta_id' then
+    raise exception 'medicos_visiveis_para não está escopada pela conta';
+  end if;
+
+  if has_function_privilege('anon','public.medicos_visiveis_para(uuid)','EXECUTE') then
+    raise exception 'anon não pode executar medicos_visiveis_para';
   end if;
 
   if not (
