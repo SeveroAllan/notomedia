@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
-import {ConversadorMedico,PROMPT_CONVERSA,PROMPT_STANDARD,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta} from '../src/onboarding/conversador-medico.js';
+import {ConversadorMedico,PROMPT_CONVERSA,PROMPT_STANDARD,ERRO_CONVERSA,calendarioConversa,normalizarAgenda,validarAcaoConversa,periodoDecisao,diaDecisao,type FatosConversa,afirmaFatoDaAgendaSemFerramenta,normalizarBaloesSemPontoEVirgula} from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const entrada={texto:'Oi',mensagens:[],resumo:null,fatos,agora,acoesPermitidas:['nenhuma']};
@@ -119,13 +119,22 @@ it('ação fiscal inválida não fornece interpretação utilizável para libera
 });
 
 it('prompt central usa instruções em inglês, saída pt-BR e padrão ASD-STE100 documentado',()=>{
- expect(PROMPT_STANDARD).toEqual(expect.objectContaining({instructionLanguage:'en',conversationLocale:'pt-BR',writingStandard:'ASD-STE100 Issue 9'}));
- expect(PROMPT_CONVERSA).toContain('Write all user-visible text in Brazilian Portuguese (pt-BR).');
+ expect(PROMPT_STANDARD).toEqual(expect.objectContaining({instructionLanguage:'en',conversationLocale:'pt-BR',writingStandard:'ASD-STE100 Issue 9',ste100Application:.8,conversationStyle:'natural_professional',forbiddenVisiblePunctuation:[';']}));
+ expect(PROMPT_CONVERSA).toContain('Write user-visible text in natural pt-BR.');
+ expect(PROMPT_CONVERSA).toContain("Never use ';' in fala.");
  expect(PROMPT_CONVERSA).toContain('DECISION PROCEDURE');
  expect(PROMPT_CONVERSA).not.toContain('REGRAS FIXAS');
  expect(PROMPT_CONVERSA).not.toContain('COMO DECIDIR');
  expect(PROMPT_CONVERSA).not.toContain('SAÍDA JSON');
  expect(PROMPT_CONVERSA.length).toBeLessThanOrEqual(6500);
+});
+
+it('fala visível nunca mantém ponto e vírgula e separa a ideia quando há espaço de balões',async()=>{
+ expect(normalizarBaloesSemPontoEVirgula(['Vou conferir agora; depois te explico.'])).toEqual(['Vou conferir agora','depois te explico.']);
+ const completar=vi.fn<typeof completarOpenAi>(async()=>JSON.stringify({fala:['Vou conferir agora; depois te explico.'],acao:null}));
+ const resposta=await new ConversadorMedico('k','m',completar).responder(entrada);
+ expect(resposta.fala).toEqual(['Vou conferir agora','depois te explico.']);
+ expect(resposta.fala.join(' ')).not.toContain(';');
 });
 
 it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
