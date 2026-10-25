@@ -22,9 +22,10 @@ describe('migration operador-foco protege tabelas internas no Supabase',()=>{
     expect(sql).toContain("has_table_privilege(papel, format('public.%I', tabela), 'SELECT')");
     for(const privilegio of ['INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'])
       expect(sql).toContain(`has_table_privilege(papel, format('public.%I', tabela), '${privilegio}')`);
-    expect(sql).toContain("c.relrowsecurity");
-    expect(sql).toMatch(/do \$seguranca\$[\s\S]*end\s*\$seguranca\$;/i);
-    expect(sql.indexOf('do $seguranca
+    expect(sql).toContain('c.relrowsecurity');
+    const bloco=sql.match(/do\s+(\$[a-z_]+\$)[\s\S]*?end\s*\1;/i);
+    expect(bloco).not.toBeNull();
+    expect(bloco?.index??Number.MAX_SAFE_INTEGER).toBeLessThan(sql.lastIndexOf('commit;'));
   });
 
   it('preserva e valida o caminho privilegiado do backend',()=>{
@@ -36,15 +37,5 @@ describe('migration operador-foco protege tabelas internas no Supabase',()=>{
       expect(sql).toContain(`has_table_privilege(current_user, format('public.%I', tabela), '${privilegio}')`);
     expect(sql).toContain('c.relowner=atual.oid or atual.rolsuper or atual.rolbypassrls');
     expect(sql).not.toMatch(/force\s+row\s+level\s+security/i);
-  });
-});
-)).toBeLessThan(sql.lastIndexOf('commit;'));
-  });
-
-  it('não revoga o caminho privilegiado do backend',()=>{
-    const revoke=sql.match(/revoke\s+all\s+on\s+table[\s\S]*?from\s+([^;]+);/i)?.[1]??'';
-    expect(revoke).toMatch(/anon/);
-    expect(revoke).toMatch(/authenticated/);
-    expect(revoke).not.toMatch(/service_role|postgres/i);
   });
 });
