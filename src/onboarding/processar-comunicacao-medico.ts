@@ -102,7 +102,7 @@ export async function processarComunicacaoMedico(
         if(!historico.boasVindasComunicadas) {
           const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
           await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
-          if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
+          if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');
           if(acao.tipo==='boas_vindas') return acao;
         }
       }
@@ -161,7 +161,7 @@ export async function processarComunicacaoMedico(
         await memoria.registrarPlano(medicoId,conversa,planoAtual);
       }
       if(!decisao) decisao=await decidir(permitidas);
-      if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto);
+      if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
       // não é resposta à pergunta, então não força parametros.confirmacao.
       const trocaEscopo=decisao.acao==='iniciar_lote'&&permitidas.includes('iniciar_lote')
@@ -353,7 +353,7 @@ export async function processarComunicacaoMedico(
             try {
               await memoria.registrarChunk(medicoId,conversa,0,inicioId,fimId,compactacao?.chunk??resumo);
               if(compactacao) {
-                const fontesMedico=new Set(antigas.filter(m=>m.papel==='medico'||m.papel===undefined).map(m=>m.id));
+                const fontesMedico=new Set(antigas.filter(m=>(m.papel==='medico'||m.papel===undefined)&&(m.origemOperador===undefined||m.origemOperador==='medico')).map(m=>m.id));
                 for(const m of compactacao.memorias) if(fontesMedico.has(m.origemId))
                   await memoria.registrarMemoriaSemantica(medicoId,{chave:m.chave,categoria:m.categoria,valor:m.valor,origemConversa:conversa,origemMensagemId:m.origemId,confianca:m.confianca});
               }
@@ -380,7 +380,7 @@ export async function processarComunicacaoMedico(
       const mensagem=sanitizarErroFiscal(erro instanceof Error?erro.message:erro,identificadores).replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi,'[OCULTO]');
       deps.log('erro','CONVERSA_FALHA_TECNICA '+JSON.stringify({nome,mensagem}));
       if(entrada.respostaMedico && conversa && memoria) {
-        try {await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto));} catch { /* Best effort. */ }
+        try {await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto),'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');} catch { /* Best effort. */ }
       }
       try {await enviar([ERRO_CONVERSA]);} catch {deps.log('erro','CONVERSA_FALLBACK_FALHOU');}
       return {tipo:'nenhuma'};
