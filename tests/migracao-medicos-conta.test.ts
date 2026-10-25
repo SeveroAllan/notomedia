@@ -40,4 +40,3 @@ it('referência de agenda é interna e protegida por RLS e revoke',()=>{
   expect(sql).toContain("has_table_privilege('anon','public.noto_medico_agenda_referencias','SELECT')");
   expect(sql).toContain("has_table_privilege(current_user,'public.noto_medico_agenda_referencias','INSERT')");
 });
-
