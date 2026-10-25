@@ -80,7 +80,7 @@ export class ComunicacaoHomologacao {
     if (!this.config.envioMedicoRealAtivo) return this.simular(acao);
     try {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+        left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
       const texto = entrada.texto ?? (acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
@@ -97,7 +97,7 @@ export class ComunicacaoHomologacao {
   async medicoPermitido(medicoId: string, contatoTelefone?:string): Promise<boolean> {
     if (!this.config.envioMedicoRealAtivo) return false;
     const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-      join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
     return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, contatoTelefone??rows[0]?.telefone);
   }
 
@@ -127,13 +127,13 @@ export class ComunicacaoHomologacao {
     } catch { this.log(registroErroNoto('REACAO_FALHOU', 'tecnico', { medicoId, etapa: 'reacao' })); return 'erro'; }
   }
 
-  async confirmarEmissao(entrada: { medicoId: string; solicitacaoId: string; chaveDisparo?: string; paciente: string; dataEnvioPagamento: string; dataConsulta: string }):
+  async confirmarEmissao(entrada: { medicoId: string; solicitacaoId: string; chaveDisparo?: string; paciente: string; dataEnvioPagamento: string; dataConsulta: string; contatoTelefone?: string }):
     Promise<{ resultado: 'simulado' | 'enviado' | 'erro' | 'repetido'; chaveMensagem?: string }> {
     if (!this.config.envioMedicoRealAtivo) return { resultado: this.simular('confirmar_emissao') };
     try {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [entrada.medicoId]);
-      const destino = rows[0];
+        left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [entrada.medicoId]);
+      const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return { resultado: this.simular('confirmar_emissao') };
       const envio = new Date(entrada.dataEnvioPagamento), consulta = new Date(entrada.dataConsulta);
       if (!Number.isFinite(envio.getTime()) || !Number.isFinite(consulta.getTime()) || !entrada.paciente.trim()) return { resultado: 'erro' };
@@ -156,7 +156,7 @@ export class ComunicacaoHomologacao {
     if (!this.config.envioMedicoRealAtivo) return this.simular('boas_vindas');
     try {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+        left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
       const escolhaEntrega=this.permissoes?await this.permissoes.ler(medicoId,'entregar_paciente').catch(()=>null):null;
@@ -185,7 +185,7 @@ export class ComunicacaoHomologacao {
     if (!this.config.envioMedicoRealAtivo) return this.simular('conversa_livre');
     try {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-        join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+        left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
       if (!await this.reservarMensagem(medicoId, destino.telefone, chave, entrada.falaMemoria ?? fala, entrada.conversa)) return 'repetido';
@@ -208,8 +208,8 @@ export class ComunicacaoHomologacao {
     if (!this.config.envioMedicoRealAtivo) return this.simular('cofre');
     try {
       const base = (await this.pool.query(`select u.telefone, pf.ambiente from medicos m
-        join usuarios u on u.id=m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id=m.id
-        where m.id=$1 and u.ativo=true`, [medicoId])).rows[0];
+        left join usuarios u on u.id=m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id=m.id
+        where m.id=$1`, [medicoId])).rows[0];
       const destino={...base,telefone:contatoTelefone??base?.telefone};
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('cofre');
       // Não gravar o texto: ele pode conter um link de uso único.
