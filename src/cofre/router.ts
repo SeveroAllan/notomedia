@@ -37,7 +37,7 @@ export function criarCofreContas(deps: {
     aoConcluirAgenda?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
     obterWhatsappAssistente?: () => Promise<string | null>;
     registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
-    enviarCofre?: (medicoId: string, texto: string) => Promise<'simulado' | 'enviado' | 'erro'>;
+    enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
 }) {
     const env = deps.env ?? process.env, app = express();
     app.disable('x-powered-by');
