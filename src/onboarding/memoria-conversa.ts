@@ -179,7 +179,9 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   }
 
   async registrarMemoriaSemantica(medicoId:string,memoria:MemoriaSemantica):Promise<void> {
-    if(!/^[a-z0-9_:-]{3,80}$/.test(memoria.chave)||memoria.confianca<.9)return;
+    const categoriasAutomaticas:readonly CategoriaMemoriaSemantica[]=['preferencia_agenda','preferencia_comunicacao','rotina'];
+    if(!/^[a-z0-9_:-]{3,80}$/.test(memoria.chave)||memoria.confianca<.9||!categoriasAutomaticas.includes(memoria.categoria))return;
+    if(/\b(?:paciente|cpf|cnpj|telefone|e-?mail|nota\s+(?:do|da)|consulta\s+(?:do|da))\b|@/i.test(memoria.valor))return;
     await this.pool.query(`
       insert into conversa_memorias_semanticas
         (medico_id,chave,categoria,valor,origem_conversa,origem_mensagem_id,confianca)
