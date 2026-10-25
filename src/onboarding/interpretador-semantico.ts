@@ -13,7 +13,7 @@ const periodoSchema = z.object({
 export const interpretacaoSemanticaSchema = z.object({
   dominio: z.enum(['agenda','fiscal','documento','conexao','permissoes','conversa','outro']),
   objetivo: z.enum(['consultar','preparar','emitir','reenviar','conectar','configurar','responder','conversar','desconhecido']),
-  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','agenda','permissoes','outro']).nullable(),
+  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','entregas','agenda','permissoes','outro']).nullable(),
   granularidade: z.enum(['colecao','item','indefinida']),
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   permissaoNecessaria: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).nullable().default(null),
@@ -29,27 +29,69 @@ export const interpretacaoSemanticaSchema = z.object({
 
 export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria']};
 
-export const PROMPT_INTERPRETACAO_SEMANTICA = `Interprete a mensagem do médico pelo significado, não por palavras-chave.
-Você NÃO executa ações, NÃO responde ao médico e NÃO decide política de segurança. Produza apenas a representação semântica JSON.
+export const PROMPT_INTERPRETACAO_SEMANTICA = `Interpret the doctor's message by meaning. Do not use keyword matching as the primary method.
 
-Use texto, histórico, resumo, plano anterior, fatos e calendario para resolver referências temporais, anafóricas e contextuais naturais.
-"consultas" significa agenda em geral. "pendencias_fiscais" significa consultas sem nota/pendentes para emissão.
-Preserve a medida pedida: lista, quantidade ou valor. Não reduza uma pergunta financeira a listar consultas.
-Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscais são métricas distintas.
-Resolva ambiguidade pelo contexto antes de perguntar. Quando uma pergunta financeira curta é continuação imediata de uma consulta/lista de agenda (por histórico ou plano anterior consultar:consultas) e não há evidência de recebimento/pagamento nem de notas fiscais, a leitura dominante é valor_realizado: o valor registrado nas consultas com status realizada. Isso não prova dinheiro recebido nem nota fiscal emitida.
-Use valor_recebido quando o sentido for dinheiro efetivamente recebido; valor_notas quando o sentido for notas fiscais; valor_agenda quando pedir os valores registrados na agenda independentemente do status.
-Use valor_indefinido somente quando o contexto não tornar uma dessas leituras claramente dominante ou quando duas leituras materiais continuarem igualmente plausíveis. Não peça esclarecimento por ambiguidade apenas teórica.
-Se o objetivo depender de uma escolha configurável, preencha permissaoNecessaria: emitir_autonomo para autonomia de emissão, entregar_paciente para destino da nota e solicitar_cpf para quem deve fornecer CPF ausente. Não invente necessidade de permissão em consultas/leitura.
-Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
-Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
-Restrições como "sem emitir", "só conferir", "não prepare" devem ser preservadas.
-Datas devem ser YYYY-MM-DD e derivadas do calendario fornecido. A leitura disponível vai até hoje; em períodos ainda em curso use o limite até hoje fornecido no calendario. Não invente fatos da agenda.
+ROLE
+- The doctor's conversation is in Brazilian Portuguese (pt-BR).
+- Read pt-BR naturally.
+- Do not answer the doctor.
+- Do not execute an action.
+- Do not decide safety policy.
+- Return only the semantic JSON object.
 
-SAÍDA JSON estrita:
+CONTEXT
+- Use texto, mensagens, resumo, plano, fatos, and calendario.
+- Resolve natural time references.
+- Resolve pronouns and references from context.
+- Give the current request priority over stale context.
+- Do not invent a fact that is not in the input.
+
+MEANING
+- Use objeto='consultas' for general agenda consultations.
+- Use objeto='pendencias_fiscais' for consultations that do not have an invoice and are pending fiscal work.
+- Use objeto='entregas' when the doctor asks about PDFs or invoices that Noto sent, tried to send, resent, or delivered and fatos.entregasRecentes can answer the question.
+- For objeto='entregas', do not create a need to read the agenda.
+- For objeto='entregas', do not change the request into a new resend request.
+- Preserve the requested measure.
+- Use medida='lista' for a list.
+- Use medida='quantidade' for a count.
+- Do not change a financial question into a request for a consultation list.
+- Keep agenda value, completed-consultation value, received money, and invoice value as different measures.
+- Use medida='valor_realizado' when a short financial question continues a recent agenda consultation context and there is no evidence for payment or invoices.
+- valor_realizado means the value recorded for consultations with status realizada.
+- valor_realizado does not prove received money.
+- valor_realizado does not prove an issued invoice.
+- Use medida='valor_recebido' when the doctor asks about money that was received.
+- Use medida='valor_notas' when the doctor asks about invoice values.
+- Use medida='valor_agenda' when the doctor asks for values recorded in the agenda without a status restriction.
+- Use medida='valor_indefinido' only when context does not make one financial measure dominant.
+- Do not ask for clarification for a theoretical ambiguity when context gives a safe dominant meaning.
+
+PERMISSIONS
+- Set permissaoNecessaria only when the goal depends on a configurable choice.
+- Use emitir_autonomo for autonomous issue permission.
+- Use entregar_paciente for invoice delivery destination.
+- Use solicitar_cpf for the source of a missing CPF.
+- Do not invent a permission requirement for a read-only agenda request.
+
+SCOPE
+- Do not change a collection request into an item request.
+- If the doctor asks for consultations in a period, use granularidade='colecao'.
+- Do not invent a patient, date, or time.
+- Add a field to faltando only when the goal cannot run without that field.
+- Keep restrictions such as "sem emitir", "só conferir", and "não prepare".
+- Use YYYY-MM-DD dates.
+- Derive relative dates from calendario.
+- The available read range ends today.
+- For a current period, use today's limit from calendario.
+- Do not invent agenda facts.
+
+OUTPUT
+Return strict JSON:
 {
  "dominio":"agenda|fiscal|documento|conexao|permissoes|conversa|outro",
  "objetivo":"consultar|preparar|emitir|reenviar|conectar|configurar|responder|conversar|desconhecido",
- "objeto":"consultas|pendencias_fiscais|notas|pdf|agenda|permissoes|outro"|null,
+ "objeto":"consultas|pendencias_fiscais|notas|pdf|entregas|agenda|permissoes|outro"|null,
  "granularidade":"colecao|item|indefinida",
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "permissaoNecessaria":"emitir_autonomo|entregar_paciente|solicitar_cpf"|null,
@@ -59,6 +101,7 @@ SAÍDA JSON estrita:
  "faltando":[],
  "confianca":0..1
 }`;
+
 
 function calendarioSemantico(agora: Date) {
   const hoje=agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
