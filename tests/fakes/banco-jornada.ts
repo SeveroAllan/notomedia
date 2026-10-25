@@ -42,6 +42,7 @@ export class BancoJornada {
     if (s.startsWith('insert into medicos')) { this.medico={id:randomUUID(),usuario_id:p[0],conta_id:p[1],nome_completo:p[2],crm:null,rqe:null,especialidade:null};return ret([this.medico]); }
     if (s.startsWith('select id from medicos where id')) return ret(this.medico?.id===p[0]?[{id:this.medico.id}]:[]);
     if (s.startsWith('select m.id from medicos m join usuarios')) { const vinculado=p.length===2?this.medico?.id===p[0]&&this.usuario?.auth_user_id===p[1]:this.usuario?.auth_user_id===p[0];return ret(vinculado?[{id:this.medico.id}]:[]); }
+    if (s.startsWith('select 1 from usuarios u join medicos m on m.conta_id=u.conta_id')) return ret(this.usuario?.auth_user_id===p[1]&&this.usuario?.ativo&&this.medico?.id===p[0]&&this.medico?.conta_id===this.usuario?.conta_id?[{'?column?':1}]:[]);
     if (s.startsWith('update usuarios set nome')) {this.usuario.nome=p[1];return ret();}
     if (s.startsWith('update medicos set nome_completo=$2')) { Object.assign(this.medico,{nome_completo:p[1],crm:p[2],rqe:p[3]});return ret(); }
     if (s.startsWith('update medicos set nome_completo = $2')) {this.medico.nome_completo=p[1];return ret();}
@@ -83,8 +84,10 @@ export class BancoJornada {
     if (s.startsWith('select md5(')) return ret([{versao:this.versao()}]);
     if (s.startsWith('select m.nome_completo as nome,m.crm,m.rqe,to_jsonb(t)')) return ret([{nome:this.medico.nome_completo,crm:this.medico.crm,rqe:this.medico.rqe,trabalho:this.trabalho(),versao:this.versao(),whatsapp_conectado:this.whatsapp?.status==='conectado'}]);
     if (s.includes('as cert_ativos')) return ret([{...this.perfil,...this.medico,medico_id:this.medico.id,usuario_id:this.usuario.id,medico_nome:this.medico.nome_completo,usuario_nome:this.usuario.nome,telefone:this.usuario.telefone,email:this.usuario.email,parametros_emissao:this.servico?.parametros_emissao,aliquota_iss:this.servico?.aliquota_iss,revisao_profissional:this.trabalho(),cert_ativos:this.certificados.filter(c=>c.status==='ativo').length,whats_conectados:this.whatsapp?.status==='conectado'?1:0,whatsapp_vinculado:!!this.whatsapp?.conectado_em}]);
+    if (s.startsWith('select m.conta_id,')&&s.includes('from medicos m where m.id=$1')) return ret(this.medico?.id===p[0]?[{conta_id:this.medico.conta_id,nome_instancia:this.whatsapp?.nome_instancia??null,telefone_conta:this.usuario?.telefone??null}]:[]);
+    if (s.startsWith('select w.nome_instancia from medicos m join whatsapp_instancias w')) return ret(this.medico?.id===p[0]&&this.whatsapp?[{nome_instancia:this.whatsapp.nome_instancia}]:[]);
     if (s.startsWith('select u.telefone from medicos')) return ret([{telefone:this.usuario.telefone}]);
-    if (s.startsWith('insert into whatsapp_instancias')) {this.whatsapp={id:randomUUID(),medico_id:p[0],nome_instancia:p[1],status:p[2],conectado_em:p[3],webhook_configurado:p[4]};return ret([this.whatsapp]);}
+    if (s.startsWith('insert into whatsapp_instancias')) {this.whatsapp={id:randomUUID(),medico_id:p[0],conta_id:this.medico?.conta_id,nome_instancia:p[1],status:p[2],conectado_em:p[3],webhook_configurado:p[4]};return ret([this.whatsapp]);}
     if (s.startsWith('update whatsapp_instancias set status')) {if(this.whatsapp){this.whatsapp.status='conectado';this.whatsapp.conectado_em??=new Date();}return ret();}
     if (s.startsWith('select id, medico_id, nome_instancia, oficial from whatsapp_instancias')) return ret(this.whatsapp?.nome_instancia===p[0]?[{...this.whatsapp,oficial:false}]:[]);
     if (s.startsWith('select nome_instancia from whatsapp_instancias')) return ret(this.whatsapp?.status==='conectado'?[this.whatsapp]:[]);
