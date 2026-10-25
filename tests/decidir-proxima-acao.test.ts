@@ -220,7 +220,7 @@ describe('boas-vindas com última nota em cinco balões', () => {
       expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
         'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
         'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
-        'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.',
+        'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.',
         `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}.`,
         'Desde quando você não emite notas?'
       ]);
@@ -243,7 +243,7 @@ describe('boas-vindas sem última nota com paciente conhecido', () => {
     expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
       'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
       'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
-      'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.',
+      'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.',
       'Desde quando você não emite notas?'
     ]);
   });
