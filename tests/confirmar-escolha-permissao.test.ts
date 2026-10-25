@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { confirmarEscolhaPermissao } from '../src/permissoes/confirmar-escolha.js';
 
 it('salvar ou trocar destino só confirma preferência e não possui caminho de PDF',async()=>{
-  const query=vi.fn(async()=>({rows:[]}));
+  const query=vi.fn(async(_sql:string,_params?:unknown[])=>({rows:[]}));
   const confirmar=vi.fn(async()=>undefined);
   const enviarPdf=vi.fn();
   await confirmarEscolhaPermissao(
@@ -18,7 +18,7 @@ it('salvar ou trocar destino só confirma preferência e não possui caminho de 
 });
 
 it('escolha de CPF ainda atualiza apenas a preferência auxiliar e confirma',async()=>{
-  const query=vi.fn(async()=>({rows:[]}));
+  const query=vi.fn(async(_sql:string,_params?:unknown[])=>({rows:[]}));
   const confirmar=vi.fn(async()=>undefined);
   await confirmarEscolhaPermissao(
     {permissao:'solicitar_cpf',valor:'paciente',medicoId:'m',linkId:'l2'},
