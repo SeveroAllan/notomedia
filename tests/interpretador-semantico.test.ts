@@ -106,3 +106,19 @@ it.each(['valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_
  expect(d).toMatchObject({acao:'consultar_agenda',parametros:{medida,desde:'2026-10-19'}});
  expect(d?.acao).not.toBe('iniciar_lote');
 });
+
+
+it('configuração de segunda agenda não vira consulta e conecta apenas o alvo ainda ausente',()=>{
+ const f:FatosConversa={...fatos,agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}}};
+ const i:InterpretacaoSemantica={...frame,dominio:'conexao',objetivo:'configurar',objeto:'agenda',agendaAlvo:'amplimed',periodo:{inicio:null,fim:null,referencia:'nenhum'}};
+ const d=planejarPorSemantica(i,f,['nenhuma','pedir_link_agenda','consultar_agenda']);
+ expect(d).toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'amplimed'}});
+ expect(d?.acao).not.toBe('consultar_agenda');
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('adding, connecting, changing, or configuring an agenda');
+});
+
+it('configuração sem nome da outra agenda não adivinha alvo',()=>{
+ const f:FatosConversa={...fatos,agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}}};
+ const i:InterpretacaoSemantica={...frame,dominio:'conexao',objetivo:'configurar',objeto:'agenda',agendaAlvo:null,periodo:{inicio:null,fim:null,referencia:'nenhum'}};
+ expect(planejarPorSemantica(i,f,['nenhuma','pedir_link_agenda'])).toBeNull();
+});
