@@ -22,6 +22,7 @@ import {
   ehEventoSincronizacaoAuxiliar
 } from '../whatsapp/payload-historico-webhook-schema.js';
 import { processarHistoricoWebhook } from './processar-historico-webhook.js';
+import { mensagemPedeTrocaDeMedico, resolverMedicoMencionado, type MedicoOperavel } from '../onboarding/operador-medico.js';
 
 
 export interface ProcessarWebhookDeps {
@@ -33,7 +34,8 @@ export interface ProcessarWebhookDeps {
   instanciaAssistenteNome?: string;
   comunicacaoMedicoAtiva?: boolean;
   reservarMensagemMedico?: (medicoId: string, instancia: string, mensagemId: string) => Promise<boolean>;
-  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null; enviadaEm?: string | null }) => Promise<unknown>;
+  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null; enviadaEm?: string | null; contatoOperador?: string; operadorTipo?: 'medico'|'secretaria' }) => Promise<unknown>;
+  aoSolicitarMedicoOperador?: (contexto:{usuarioId:string;telefone:string;medicos:readonly MedicoOperavel[]})=>Promise<void>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
   aoReceberRespostaCpf?: (contexto: { medicoId: string; pacienteId: string; texto: string }) => Promise<unknown>;
@@ -97,8 +99,34 @@ export async function processarMensagemWebhook(
     if (deps.comunicacaoMedicoAtiva && !payload.data.key.fromMe && tipo === 'texto' && deps.aoReceberMensagemMedico) {
       try {
         const medico = await deps.repositorio.buscarMedicoPorTelefone(telefone);
-        if (medico) {
-          if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medico.id, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
+        let medicoId=medico?.id??null;
+        let operadorTipo:'medico'|'secretaria'|undefined=medico?'medico':undefined;
+        let contatoOperador:string|undefined;
+        if(!medicoId&&deps.repositorio.buscarOperadorPorTelefone){
+          const operador=await deps.repositorio.buscarOperadorPorTelefone(telefone);
+          if(operador){
+            operadorTipo=operador.tipo;
+            if(operador.tipo==='medico'&&operador.medicos.length===1) medicoId=operador.medicos[0]!.id;
+            if(operador.tipo==='secretaria'){
+              let alvo=resolverMedicoMencionado(texto,operador.medicos);
+              const mencaoInconclusiva=!alvo&&mensagemPedeTrocaDeMedico(texto);
+              if(!alvo&&!mencaoInconclusiva&&deps.repositorio.lerFocoOperador){
+                const foco=await deps.repositorio.lerFocoOperador(operador.usuarioId).catch(()=>null);
+                alvo=operador.medicos.find(m=>m.id===foco)??null;
+              }
+              if(!alvo&&operador.medicos.length===1)alvo=operador.medicos[0]!;
+              if(!alvo){
+                await deps.aoSolicitarMedicoOperador?.({usuarioId:operador.usuarioId,telefone,medicos:operador.medicos});
+                return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
+              }
+              if(deps.repositorio.salvarFocoOperador&&!await deps.repositorio.salvarFocoOperador(operador.usuarioId,alvo.id))
+                return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
+              medicoId=alvo.id;contatoOperador=telefone;
+            }
+          }
+        }
+        if (medicoId) {
+          if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medicoId, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
           const bruto = payload.data.messageTimestamp;
           const numero = typeof bruto === 'number' ? bruto : typeof bruto === 'string' && bruto.trim() ? Number(bruto) : NaN;
           const data = new Date(numero > 1e11 ? numero : numero * 1000);
@@ -106,7 +134,7 @@ export async function processarMensagemWebhook(
           const chaveConversa = createHash('sha256').update(JSON.stringify([payload.instance, telefone])).digest('hex');
           const referencia = payload.data.message?.extendedTextMessage?.contextInfo;
           const chavePergunta = referencia && typeof referencia === 'object' && 'stanzaId' in referencia && typeof referencia.stanzaId === 'string' ? referencia.stanzaId : undefined;
-          await deps.aoReceberMensagemMedico({ medicoId: medico.id, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, enviadaEm: Number.isFinite(data.getTime()) ? data.toISOString() : null, ...(chavePergunta ? { chavePergunta } : {}) });
+          await deps.aoReceberMensagemMedico({ medicoId, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, enviadaEm: Number.isFinite(data.getTime()) ? data.toISOString() : null, ...(chavePergunta ? { chavePergunta } : {}), ...(contatoOperador?{contatoOperador}:{}), ...(operadorTipo?{operadorTipo}:{}) });
         }
       } catch { console.error('COMUNICACAO_MEDICO_CICLO_FALHOU'); }
     }
