@@ -10,7 +10,7 @@ import {HistoricoComunicacaoEmMemoria} from '../src/onboarding/historico-comunic
 import {BancoConversaFalso} from './fakes/banco-conversa.js';
 const agora=new Date('2026-10-21T15:00Z');
 const introducao=['Entendi, você usa TribeMD. O link conecta só a agenda em leitura para conferir consultas.',
- 'Login e senha vão só no link seguro; não recebo senha pela conversa. Conectar a agenda não envia mensagem a pacientes. Aqui está o link seguro:'];
+ 'Login e senha vão só no link seguro. Não recebo senha pela conversa. Conectar a agenda não envia mensagem a pacientes. Aqui está o link seguro:'];
 let rede:ReturnType<typeof vi.spyOn>;
 beforeEach(()=>{rede=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('REDE_PROIBIDA'));});
 afterEach(()=>{expect(rede).not.toHaveBeenCalled();vi.restoreAllMocks();});
@@ -32,7 +32,7 @@ it('data já dita → Tribe → Pelo tribemd: reconhece, guarda 05/10, envia pri
   const d=JSON.parse(String(msgs[1]!.content));
   if(d.texto==='Desde semana retrasada.') return JSON.stringify({fala:['Para conferir as consultas e emitir suas notas, preciso ver sua agenda. Qual você usa?'],acao:null,parametros:{periodo:'semana_retrasada'}});
   expect(d.fatos.periodo.desde).toBe('2026-10-05');
-  return JSON.stringify(d.fatos.link.ativo?{fala:['O link continua válido; pode usar o mesmo.'],acao:null}:{fala:introducao,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}});
+  return JSON.stringify(d.fatos.link.ativo?{fala:['O link continua válido. Pode usar o mesmo.'],acao:null}:{fala:introducao,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}});
  });
  c.executar.mockImplementation(async(d,ctx)=>{expect(d.fala).toEqual(introducao);c.fatos.link={ativo:true,enviados:1};await c.enviar(d.fala,ctx.chave);return {jaRespondida:true};});
  await c.turno('data','Desde semana retrasada.');await c.turno('agenda','Tribe');await c.turno('agenda2','Pelo tribemd');
@@ -84,7 +84,7 @@ it('papel: declaração atual vira marca, explicação uma vez e depois pede só
  const c=cenario();
  c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));return JSON.stringify(d.fatos.semAgendaDigital
   ? {fala:['Me mande o CPF do primeiro paciente.'],acao:null}
-  : d.texto.includes('papel')?{fala:['Entendi. Não vejo o histórico antigo do seu WhatsApp para retroativas. Podemos conferir um paciente por vez; me mande o CPF primeiro.'],acao:'registrar_modo_sem_agenda',parametros:{evidencia:'uso papel',confianca:1}}
+  : d.texto.includes('papel')?{fala:['Entendi. Não vejo o histórico antigo do seu WhatsApp para retroativas. Podemos conferir um paciente por vez. Me mande o CPF primeiro.'],acao:'registrar_modo_sem_agenda',parametros:{evidencia:'uso papel',confianca:1}}
   : {fala:['Oi! O que você precisa?'],acao:null});});
  await c.turno('oi','oioi');expect(await c.memoria.semAgendaDigital('m','c')).toBe(false);
  await c.turno('papel','Eu uso papel');await c.turno('como','Como faço então?');
@@ -102,7 +102,7 @@ it.each(['Agora não','O que achou do jogo?'])('recusa/fora de escopo %s não ex
 });
 it('sync parcial: resultado real chega à segunda chamada; não alega zero nem dispara link',async()=>{
  const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
- c.completar.mockResolvedValueOnce('{"fala":["Vou conferir."],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":["A leitura ainda não foi concluída; não posso confirmar as pendências."],"acao":null}');
+ c.completar.mockResolvedValueOnce('{"fala":["Vou conferir."],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":["A leitura ainda não foi concluída. Não posso confirmar as pendências."],"acao":null}');
  c.executar.mockResolvedValue({dados:{ok:false,motivo:'SINCRONIZACAO_INCOMPLETA'}});
  await c.turno('listar','Veja minhas pendências');expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();
  const d=JSON.parse(String(c.completar.mock.calls[1]![2][1]!.content));expect(d.acoesPermitidas).toEqual([]);expect(d.resultadoFerramenta.motivo).toBe('SINCRONIZACAO_INCOMPLETA');
@@ -157,7 +157,7 @@ it('replanejamento recusado não executa segunda ferramenta nem envia promessa r
  c.completar
   .mockResolvedValueOnce('{"fala":["Vou conferir."],"acao":"listar_pendencias"}')
   .mockResolvedValueOnce('{"fala":["Vou conferir de novo."],"acao":"listar_pendencias"}')
-  .mockResolvedValueOnce('{"fala":["A conferência foi feita; não executei outra ação."],"acao":null}');
+  .mockResolvedValueOnce('{"fala":["A conferência foi feita. Não executei outra ação."],"acao":null}');
  c.executar.mockResolvedValueOnce({dados:{ferramenta:'listar_pendencias',ok:true,total:2,desde:'2026-10-05'}});
  await c.turno('recusa-loop','Confira as pendências.');
  expect(c.executar).toHaveBeenCalledOnce();
@@ -295,7 +295,7 @@ it('sim sem lote pendente não executa ação mesmo se o modelo produzir interpr
 });
 
 it('agenda não suportada oferece conferência manual pelo contexto sem inventar ausência de agenda ou enviar link',async()=>{
- const c=cenario();c.completar.mockResolvedValueOnce('{"fala":["Por enquanto conecto TribeMD. Para sua outra agenda, podemos conferir um paciente por vez; me mande o CPF primeiro."],"acao":null}')
+ const c=cenario();c.completar.mockResolvedValueOnce('{"fala":["Por enquanto conecto TribeMD. Para sua outra agenda, podemos conferir um paciente por vez. Me mande o CPF primeiro."],"acao":null}')
   .mockImplementationOnce(async(_k,_m,msgs)=>{expect(JSON.parse(String(msgs[1]!.content)).mensagens.join(' ')).toContain('iClinic');return '{"fala":["Pode começar pelo CPF do primeiro paciente."],"acao":null}';});
  await c.turno('outra','Minha agenda é iClinic');await c.turno('como','Como faço assim?');
  expect(c.executar).not.toHaveBeenCalled();expect(await c.memoria.semAgendaDigital('m','c')).toBe(false);expect(c.completar).toHaveBeenCalledTimes(2);
@@ -311,7 +311,7 @@ it('corrige introdução uma vez com motivo e faltas, revalida e envia sem narra
  const c=cenario();const d={fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}};
  c.completar.mockResolvedValueOnce(JSON.stringify(d)).mockImplementationOnce(async(_k,_m,msgs)=>{
   const dados=JSON.parse(String(msgs[1]!.content));expect(dados.correcao.motivo).toBe('INTRODUCAO_INCOMPLETA');expect(dados.correcao.faltou).toHaveLength(2);expect(dados.resultadoFerramenta).toBeUndefined();
-  return JSON.stringify({...d,fala:['Eu só leio a agenda; sua senha fica só no link seguro.']});
+  return JSON.stringify({...d,fala:['Eu só leio a agenda. Sua senha fica só no link seguro.']});
  });
  c.executar.mockResolvedValue({jaRespondida:true});await c.turno('link','Uso o tribemd');
  expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].fala[0]).toContain('só leio');expect(c.enviar).not.toHaveBeenCalled();
@@ -415,7 +415,7 @@ it('lista fora das seis falas recentes não mantém o bloqueio',async()=>{
 
 it.each(['listar_pendencias','pedir_link_agenda','iniciar_lote'])('rascunho %s sem anúncio corrige uma vez e só então executa',async acao=>{
  const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:acao!=='pedir_link_agenda'};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
- const fala=acao==='pedir_link_agenda'?introducao:['Estou verificando o período informado; você não precisa fazer nada agora.'];
+ const fala=acao==='pedir_link_agenda'?introducao:['Estou verificando o período informado. Você não precisa fazer nada agora.'];
  c.completar.mockResolvedValueOnce(JSON.stringify({fala:[],acao})).mockResolvedValueOnce(JSON.stringify({fala,acao}));
  c.executar.mockImplementation(async d=>{
   expect(c.completar).toHaveBeenCalledTimes(2);expect(d.fala).toEqual(fala);
@@ -435,7 +435,7 @@ it('dois rascunhos sem fala recusam a ação sem terceiro pedido nem efeito',asy
 });
 it('anúncio vem antes da leitura, tem chave própria e reentrega não repete nenhum envio',async()=>{
  const c=cenario();c.fatos.agenda={nome:'tribemd',conectada:true};c.fatos.periodo={desde:'2026-10-05',origem:'contexto_salvo'};
- c.completar.mockResolvedValueOnce('{"fala":["Estou conferindo esse período; aguarde o resultado."],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":["Conferência terminada; você pode escolher o próximo passo."],"acao":null}');
+ c.completar.mockResolvedValueOnce('{"fala":["Estou conferindo esse período. Aguarde o resultado."],"acao":"listar_pendencias"}').mockResolvedValueOnce('{"fala":["Conferência terminada. Você pode escolher o próximo passo."],"acao":null}');
  c.executar.mockImplementation(async()=>{expect(c.enviar).toHaveBeenCalledOnce();return{dados:{ok:true,total:0}};});
  await c.turno('ordem','Confira');await c.turno('ordem','Confira');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.map(([,chave])=>chave)).toEqual(['ordem:anuncio','ordem']);
@@ -459,7 +459,7 @@ it.each([0,1,2])('STEER 20: confirmação pendente com %i omissões não envia a
 });
 it('estado do lote vira fatos para o decisor: tarefa em curso e proposta pendente',async()=>{
  const c=cenario(); const vistos:Array<Record<string,unknown>>=[];
- c.completar.mockImplementation(async(_k,_m,msgs)=>{vistos.push(JSON.parse(String(msgs[1]!.content)).fatos);return '{"fala":["Estou emitindo as notas; aviso quando terminar."],"acao":null}';});
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{vistos.push(JSON.parse(String(msgs[1]!.content)).fatos);return '{"fala":["Estou emitindo as notas. Aviso quando terminar."],"acao":null}';});
  c.fatos.lote={estado:'processando'}; await c.turno('t1','E aí?');
  c.fatos.lote={estado:'aguardando_confirmacao_lote',pergunta:'Posso emitir todas?',perguntaId:'p1'};
  c.completar.mockImplementation(async(_k,_m,msgs)=>{vistos.push(JSON.parse(String(msgs[1]!.content)).fatos);return '{"fala":["Retomando a pergunta."],"acao":null,"parametros":{"confirmacao":{"intencao":"duvida","confianca":0.9}}}';});
@@ -629,7 +629,7 @@ it('lista assinada exclui moldura que inventa bloqueio por extenso (real 24/10 1
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.fatos.periodo={desde:'2026-10-21',origem:'contexto_salvo'};
  c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir a agenda.'],acao:'listar_pendencias',parametros:{desde:'2026-10-21'}}))
  .mockResolvedValueOnce(JSON.stringify({fala:['Hoje só há uma consulta sem nota, mas ela está bloqueada para emissão.'],acao:null}));
- const assinada=['Vi 1 atendimento livre.','1 tem tentativa anterior que precisa ser conciliada; não vou emitir de novo.'];
+ const assinada=['Vi 1 atendimento livre.','1 tem tentativa anterior que precisa ser conciliada. Não vou emitir de novo.'];
  c.executar.mockResolvedValue({dados:{ferramenta:'listar_pendencias',ok:true,total:1,bloqueadas:1},falaAssinada:assinada,falaMemoria:assinada} as never);
  await c.turno('conferir','Confira as consultas desde 21/10, sem emitir.');
  expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(assinada);
@@ -790,7 +790,7 @@ it.each(['valor_realizado','valor_recebido','valor_notas'] as const)('frame→ha
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
  Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({dominio:'fiscal',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida,periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'},paciente:null,restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:1}))}});
  c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'realizada',valorCentavos:null},{status:'cancelada',valorCentavos:90000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Lista não pedida']}));
- const resposta=medida==='valor_realizado'?'Há R$ 250,00 conhecidos em consultas realizadas, mas falta um valor; não tenho o total completo.':'A agenda não comprova esse valor; não tenho dados de recebimento ou de notas fiscais nesta leitura.';
+ const resposta=medida==='valor_realizado'?'Há R$ 250,00 conhecidos em consultas realizadas, mas falta um valor. Não tenho o total completo.':'A agenda não comprova esse valor. Não tenho dados de recebimento ou de notas fiscais nesta leitura.';
  c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.resultadoFerramenta.medida).toBe(medida);expect(d.resultadoFerramenta.valoresAgenda.realizadas).toMatchObject({subtotalCentavos:25000,totalCentavos:null,semValor:1});expect(d.acoesPermitidas).toEqual(['nenhuma']);return JSON.stringify({fala:[resposta],acao:null});});
  await c.turno('financeiro-'+medida,'Confira esse valor, sem preparar nem emitir.');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].acao).toBe('consultar_agenda');
