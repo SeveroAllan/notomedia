@@ -171,18 +171,18 @@ export class LinksCofre {
         if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
         await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}: o serviço está exigindo uma etapa de verificação a mais na sua conta (como a verificação em duas etapas, 2FA). Sem concluir essa etapa na área segura da sua conta, não consigo acessar.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.', link.contatoTelefone);
     }
-    async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>) {
+    async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>, contatoTelefone?:string) {
         const credencial = contemCredencialAgenda(texto);
         // Enquanto há link pendente, nem uma senha sem rótulo segue para memória ou IA.
         const pendente = (await this.deps.pool.query(`select id from cofre_links where medico_id=$1
             and usado_em is null and expira_em>now() limit 1`, [medicoId])).rows[0];
         if (credencial || pendente) {
-            await this.solicitarLinkCofre(medicoId, 'tribemd');
+            await this.solicitarLinkCofre(medicoId, 'tribemd',{contatoTelefone});
             return true;
         }
         const agenda = await classificar(texto);
         if (!agenda) return false;
-        await this.solicitarLinkCofre(medicoId, agenda);
+        await this.solicitarLinkCofre(medicoId, agenda,{contatoTelefone});
         return true;
     }
 }
