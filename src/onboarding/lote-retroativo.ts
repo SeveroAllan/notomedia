@@ -92,7 +92,9 @@ export class ConversaLoteRetroativo {
     const fim = fimConhecido ?? lote.ate;
     // Consulta que já teve tentativa de emissão não concluída não entra no lote (trava antirre-emissão):
     // o médico precisa saber que ela ficou de fora, sem que a ausência pareça período errado.
-    const avisoBloqueadas = (n?: number) => !n ? [] as string[] : [`${n === 1 ? 'Uma consulta' : `${n} consultas`} do período já ${n === 1 ? 'teve' : 'tiveram'} uma tentativa de emissão que não concluiu e ${n === 1 ? 'fica' : 'ficam'} de fora desta proposta; antes de reemitir, preciso conciliar essa tentativa com a prefeitura.`];
+    const avisoBloqueadas = (n?: number) => !n ? [] as string[] : [n===1
+      ? 'Uma consulta do período já tem uma tentativa de emissão registrada e ficou fora desta proposta. Posso conferir agora se ela foi autorizada, recusada ou se ainda precisa de atenção.'
+      : `${n} consultas do período já têm tentativas de emissão registradas e ficaram fora desta proposta. Posso conferir agora como elas ficaram e quais ainda precisam de atenção.`];
     const propor = async (valoresAoVivo?: ReadonlyMap<string, number | null>) => {
       const contagem = valoresAoVivo ? await this.deps.contar(medicoId, desde, fim, valoresAoVivo) : await this.deps.contar(medicoId, desde, fim);
       this.deps.log(JSON.stringify({ evento: 'CONTAR_CONSULTAS_PERIODO', medicoId, desde, ate: fim,
@@ -140,12 +142,12 @@ export class ConversaLoteRetroativo {
     }
     const interpretacao = limitarConfirmacaoEmissao(texto, await this.deps.interpretarConfirmacao(texto, perguntaLote(lote)));
     if (interpretacao.intencao === 'duvida' || interpretacao.intencao === 'outro_assunto') {
-      await enviar(['Tudo bem, não vou emitir sem sua confirmação da proposta. Vou aguardar.']); return true;
+      await enviar(['Tudo bem. Essa proposta continua aguardando sua confirmação. Quando quiser retomar, posso te mostrar o período e o total de novo.']); return true;
     }
     const confirmou = await this.repo.confirmar(lote.id, mensagemId, pergunta, interpretacao, agora);
     this.deps.log(JSON.stringify({ evento: 'CONFIRMACAO_LOTE', medicoId, loteId: lote.id, ...interpretacao, confirmou }));
     await enviar([confirmou ? `Pronto, já estou emitindo ${lote.totalConsultas === 1 ? 'a nota' : `as ${lote.totalConsultas} notas`}. Te aviso por aqui quando terminar.`
-      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem, não vou seguir com esse lote.' : 'Não tenho certeza se você quer seguir. Posso emitir as notas de todas essas consultas?']);
+      : interpretacao.intencao === 'nao' && interpretacao.confianca >= .9 ? 'Tudo bem. Essa proposta ficou sem autorização. Se quiser, posso ajustar o período ou os atendimentos e preparar outra proposta.' : 'Não tenho certeza se você quer seguir. Posso emitir as notas de todas essas consultas?']);
     return true;
   }
 }
