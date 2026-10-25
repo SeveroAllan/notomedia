@@ -57,3 +57,10 @@ it('com uma agenda conectada ainda libera conexão da outra suportada',()=>{
  expect(ferramentasLiberadas(f,{lote:true})).toContain('pedir_link_agenda');
  expect(ferramentasLiberadas({...f,agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:true,conectada:true}}},{lote:true})).not.toContain('pedir_link_agenda');
 });
+
+
+it('secretária não recebe ferramenta para alterar permissões do médico',()=>{
+ const f={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,operadorTipo:'secretaria' as const,
+  permissoes:{emitirAutonomo:null,entregarPaciente:null,pendentes:true,faltantes:['emitir_autonomo','entregar_paciente'] as const}} satisfies FatosConversa;
+ expect(ferramentasLiberadas(f,{lote:true})).not.toContain('pedir_link_permissoes');
+});
