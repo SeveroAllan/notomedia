@@ -73,4 +73,3 @@ it('certificados são independentes por médico da mesma conta',async()=>{
   ]);
   expect(String((query.mock.calls as unknown as any[][])[0]![0])).toContain('c.medico_id=m.id');
 });
-
