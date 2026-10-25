@@ -9,8 +9,8 @@ import {PostgresMemoriaConversaMedico} from '../src/onboarding/memoria-conversa.
 import {HistoricoComunicacaoEmMemoria} from '../src/onboarding/historico-comunicacao-repositorio.js';
 import {BancoConversaFalso} from './fakes/banco-conversa.js';
 const agora=new Date('2026-10-21T15:00Z');
-const introducao=['Entendi, você usa TribeMD. O link conecta só a agenda em leitura para conferir consultas com comprovantes e emitir as notas.',
- 'Login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes por isso. Aqui está o link seguro:'];
+const introducao=['Entendi, você usa TribeMD. O link conecta só a agenda em leitura para conferir consultas.',
+ 'Login e senha vão só no link seguro; não recebo senha pela conversa. Conectar a agenda não envia mensagem a pacientes. Aqui está o link seguro:'];
 let rede:ReturnType<typeof vi.spyOn>;
 beforeEach(()=>{rede=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('REDE_PROIBIDA'));});
 afterEach(()=>{expect(rede).not.toHaveBeenCalled();vi.restoreAllMocks();});
@@ -300,8 +300,8 @@ it.each([true,false])('evento do acesso conectado=%s continua sem mensagem do m�
 it('corrige introdução uma vez com motivo e faltas, revalida e envia sem narrar falta de permissão',async()=>{
  const c=cenario();const d={fala:['Vou enviar.'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}};
  c.completar.mockResolvedValueOnce(JSON.stringify(d)).mockImplementationOnce(async(_k,_m,msgs)=>{
-  const dados=JSON.parse(String(msgs[1]!.content));expect(dados.correcao.motivo).toBe('INTRODUCAO_INCOMPLETA');expect(dados.correcao.faltou).toHaveLength(3);expect(dados.resultadoFerramenta).toBeUndefined();
-  return JSON.stringify({...d,fala:['Eu só leio a agenda; sua senha fica só no link e nada é enviado aos pacientes.']});
+  const dados=JSON.parse(String(msgs[1]!.content));expect(dados.correcao.motivo).toBe('INTRODUCAO_INCOMPLETA');expect(dados.correcao.faltou).toHaveLength(2);expect(dados.resultadoFerramenta).toBeUndefined();
+  return JSON.stringify({...d,fala:['Eu só leio a agenda; sua senha fica só no link seguro.']});
  });
  c.executar.mockResolvedValue({jaRespondida:true});await c.turno('link','Uso o tribemd');
  expect(c.completar).toHaveBeenCalledTimes(2);expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].fala[0]).toContain('só leio');expect(c.enviar).not.toHaveBeenCalled();
