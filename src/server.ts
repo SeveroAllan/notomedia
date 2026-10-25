@@ -115,7 +115,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   );
   const evolutionAssistantClient = new EvolutionApiClient(
     config.evolutionAssistantUrl, config.evolutionAssistantApiKey, config.evolutionAssistantInstanceName, config.evolutionOfficialInstanceName);
-  const origemLinksSeguros = process.env['COFRE_ORIGEM'] || '';
+  const origemLinksSeguros = config.appPublicOrigin ?? '';
   const permissoesNoto = config.permissoesAtiva && origemLinksSeguros ? new Permissoes({ pool, origem: origemLinksSeguros }) : undefined;
   // solicitar_cpf só entra em operação quando a migração que alarga os CHECKs está aplicada.
   const permissoesCpfAtivaP: Promise<boolean> = permissoesNoto ? pool.query(
@@ -379,14 +379,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         left join public.noto_lotes_itens i on i.lote_id=l.id group by l.estado`,[medicoId]).then(r=>r.rows[0]).catch(()=>undefined) : undefined;
       const enviados = await pool.query(`select count(*)::int as total from cofre_links l join cofre_links_auditoria a on a.link_id=l.id
         where l.medico_id=$1 and a.evento='enviado'`,[medicoId]);
+      const cpfEscolhivel=permissoesNoto?await permissoesCpfAtivaP:false;
+      const escopoPermissoes=(cpfEscolhivel?['emitir_autonomo','entregar_paciente','solicitar_cpf']:['emitir_autonomo','entregar_paciente']) as const;
+      const [emitirAutonomo,entregarPaciente,solicitarCpf,faltantes]=permissoesNoto?await Promise.all([
+        permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null),
+        permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null),
+        cpfEscolhivel?permissoesNoto.ler(medicoId,'solicitar_cpf').catch(()=>null):Promise.resolve(null),
+        permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[])
+      ]):[null,null,null,[]];
       return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           agenda:conexao?.link?.agenda??null,
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
-        permissoes:permissoesNoto?{emitirAutonomo:(await permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null))?.valor??null,
-          entregarPaciente:(await permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null))?.valor??null,
-          pendentes:(await permissoesNoto.faltantes(medicoId,['emitir_autonomo']).catch(()=>[])).length>0}:null,
+        permissoes:permissoesNoto?{emitirAutonomo:emitirAutonomo?.valor??null,entregarPaciente:entregarPaciente?.valor??null,
+          solicitarCpf:solicitarCpf?.valor??null,pendentes:faltantes.length>0,faltantes}:null,
+        envioPacienteRealAtivo:config.envioPacienteRealAtivo===true,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
         homologacaoInformada:false};
