@@ -17,8 +17,9 @@ function resolverChromium(): string | undefined {
   return candidatos.find(existsSync);
 }
 
-const chromiumExecutavel = resolverChromium();
-if (process.env['TRIBEMD_BROWSER_REQUIRED'] === '1' && !chromiumExecutavel) {
+const browserObrigatorio = process.env['TRIBEMD_BROWSER_REQUIRED'] === '1';
+const chromiumExecutavel = browserObrigatorio ? resolverChromium() : undefined;
+if (browserObrigatorio && !chromiumExecutavel) {
   it('Chromium obrigatório está disponível para validar a janela TribeMD', () => {
     throw new Error('CHROMIUM_NAO_DISPONIVEL: instale com "npx playwright-core install chromium" ou defina CHROMIUM_EXECUTABLE_PATH.');
   });
