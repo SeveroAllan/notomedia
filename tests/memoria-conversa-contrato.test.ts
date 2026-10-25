@@ -71,5 +71,5 @@ it('documenta a exceção legada da marca de pedido de link sem alterar a leitur
   const contexto = await memoria.lerContextoParaModelo('m', 'c');
   expect(contexto.marcas.linkAgendaSolicitado).toBe(true);
   expect(contexto.historicoRecente).toEqual(await memoria.ler('m', 'c'));
-  expect(contexto.historicoRecente).toEqual(['O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.']);
+  expect(contexto.historicoRecente).toEqual(['O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.']);
 });
