@@ -25,7 +25,7 @@ import { aposEnfileirarComprovante } from './fluxos/apos-enfileirar-comprovante.
 import { extrairTelefoneJid } from './whatsapp/extrair-telefone-jid.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
-import { Permissoes, ROTULOS } from './permissoes/permissoes.js';
+import { Permissoes, ROTULOS, type Permissao } from './permissoes/permissoes.js';
 import { criarRouterPermissoes } from './permissoes/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
 import { CadastroCertificado } from './cadastro/cadastro-certificado.js';
@@ -379,21 +379,26 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         left join public.noto_lotes_itens i on i.lote_id=l.id group by l.estado`,[medicoId]).then(r=>r.rows[0]).catch(()=>undefined) : undefined;
       const enviados = await pool.query(`select count(*)::int as total from cofre_links l join cofre_links_auditoria a on a.link_id=l.id
         where l.medico_id=$1 and a.evento='enviado'`,[medicoId]);
-      const cpfEscolhivel=permissoesNoto?await permissoesCpfAtivaP:false;
-      const escopoPermissoes=(cpfEscolhivel?['emitir_autonomo','entregar_paciente','solicitar_cpf']:['emitir_autonomo','entregar_paciente']) as const;
-      const [emitirAutonomo,entregarPaciente,solicitarCpf,faltantes]=permissoesNoto?await Promise.all([
-        permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null),
-        permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null),
-        cpfEscolhivel?permissoesNoto.ler(medicoId,'solicitar_cpf').catch(()=>null):Promise.resolve(null),
-        permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[])
-      ]):[null,null,null,[]];
+      let emitirAutonomoValor:string|null=null,entregarPacienteValor:string|null=null,solicitarCpfValor:string|null=null;
+      let faltantes:Permissao[]=[];
+      if(permissoesNoto){
+        const cpfEscolhivel=await permissoesCpfAtivaP;
+        const escopoPermissoes:Permissao[]=cpfEscolhivel?['emitir_autonomo','entregar_paciente','solicitar_cpf']:['emitir_autonomo','entregar_paciente'];
+        const [emitir,entregar,cpf]=await Promise.all([
+          permissoesNoto.ler(medicoId,'emitir_autonomo').catch(()=>null),
+          permissoesNoto.ler(medicoId,'entregar_paciente').catch(()=>null),
+          cpfEscolhivel?permissoesNoto.ler(medicoId,'solicitar_cpf').catch(()=>null):Promise.resolve(null)
+        ]);
+        emitirAutonomoValor=emitir?.valor??null;entregarPacienteValor=entregar?.valor??null;solicitarCpfValor=cpf?.valor??null;
+        faltantes=await permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[]);
+      }
       return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           agenda:conexao?.link?.agenda??null,
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
-        permissoes:permissoesNoto?{emitirAutonomo:emitirAutonomo?.valor??null,entregarPaciente:entregarPaciente?.valor??null,
-          solicitarCpf:solicitarCpf?.valor??null,pendentes:faltantes.length>0,faltantes}:null,
+        permissoes:permissoesNoto?{emitirAutonomo:emitirAutonomoValor,entregarPaciente:entregarPacienteValor,
+          solicitarCpf:solicitarCpfValor,pendentes:faltantes.length>0,faltantes}:null,
         envioPacienteRealAtivo:config.envioPacienteRealAtivo===true,
         lote:lote?{estado:lote.estado,pergunta:lote.desde?perguntaLote(lote):undefined,perguntaId:lote.mensagemConfirmacaoId}:null,
         ultimoLote:ultimo?{comErro:Number(ultimo.com_erro),emitidas:Number(ultimo.emitidas)}:null,
