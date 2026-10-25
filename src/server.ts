@@ -456,7 +456,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);
-        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Esse PDF já teve uma tentativa de envio. A nota continua preservada. Posso conferir o registro desse envio para você.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota continua preservada. Se quiser, posso tentar o envio novamente.';
+        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Esse PDF já tem um envio registrado. Posso conferir como esse envio ficou e te dizer o próximo passo.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota continua preservada. Se quiser, posso tentar o envio novamente.';
         await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala]});
         return {jaRespondida:true};
       }
@@ -523,7 +523,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ? [`${escopo} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
           : [`${escopo} não encontrei atendimento finalizado com cobrança particular${alvo} sem nota e livre para preparar na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
         if(jaFaturadas)fala.push(jaFaturadas===1?'1 já tem nota autorizada e ficou fora da lista.':`${jaFaturadas} já têm nota autorizada e ficaram fora da lista.`);
-        if(bloqueadas)fala.push(bloqueadas===1?'1 atendimento já tem uma tentativa de emissão registrada. A nota existente continua preservada. Se quiser, posso conferir o status dessa tentativa para você.':`${bloqueadas} atendimentos já têm tentativas de emissão registradas. As notas existentes continuam preservadas. Se quiser, posso conferir o status dessas tentativas para você.`);
+        if(bloqueadas)fala.push(bloqueadas===1?'1 atendimento já tem uma tentativa de emissão registrada. Posso conferir agora se ela foi autorizada, recusada ou se ainda precisa de atenção.':`${bloqueadas} atendimentos já têm tentativas de emissão registradas. Posso conferir agora como essas tentativas ficaram e quais ainda precisam de atenção.`);
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde,jaFaturadas,bloqueadas},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
@@ -1141,7 +1141,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                 return;
               }
               const fala = resultado.liberada ? 'Confirmação registrada. A emissão está liberada para processamento.'
-                : resultado.motivo === 'RECUSADA' ? 'Não vou emitir essa nota.'
+                : resultado.motivo === 'RECUSADA' ? 'Certo. Essa nota ficou sem autorização para emissão. Se quiser, posso revisar os dados com você antes de uma nova decisão.'
                 : resultado.motivo === 'EXPIRADA' ? 'A confirmação dessa oportunidade venceu após 48 horas. Não liberei a emissão.'
                 : resultado.motivo === 'MULTIPLAS_PENDENTES' ? 'Há mais de uma nota aguardando confirmação. Preciso que elas sejam conferidas antes de liberar uma emissão.'
                 : 'Não consegui confirmar sua autorização com segurança. Você autoriza a emissão da nota dessa oportunidade?';
