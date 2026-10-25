@@ -11,7 +11,7 @@ import type { ProximaAcaoNoto, ExtratorRespostaMedico } from './regras/decidir-p
 import type { MemoriaConversa, PostgresMemoriaConversaMedico } from './memoria-conversa.js';
 import type { ReacaoMedico } from '../whatsapp/reagir-mensagem.js';
 import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
-import { planejarPorSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
+import { planejarPorSemantica, reconciliarInterpretacaoSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
@@ -136,6 +136,7 @@ export async function processarComunicacaoMedico(
       if(deps.interpretadorSemantico&&entrada.respostaMedico) {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
         interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:contexto.plano??null,fatos,agora});
+        if(interpretacaoSemantica)interpretacaoSemantica=reconciliarInterpretacaoSemantica(interpretacaoSemantica,fatos);
         if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
