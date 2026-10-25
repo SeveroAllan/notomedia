@@ -28,7 +28,14 @@ export function mensagemPedeTrocaDeMedico(texto:string):boolean {
 }
 
 export function perguntaSelecaoMedico(medicos:readonly MedicoOperavel[]):string {
-  const nomes=medicos.slice(0,6).map(m=>m.crm?`${m.nomeCompleto} (${m.crm})`:m.nomeCompleto);
-  const lista=nomes.join(', ');
-  return `Qual médico você quer atender agora? Tenho acesso a: ${lista}. Depois que você escolher, mantenho esse médico em foco até você trocar.`;
+  const nomes=medicos.slice(0,6).map(m=>m.nomeCompleto);
+  return `Qual médico você quer atender agora? Tenho acesso a: ${nomes.join(', ')}. Depois que você escolher, mantenho esse médico em foco até você trocar.`;
+}
+
+export function resolverMedicosMencionados(texto:string,medicos:readonly MedicoOperavel[]):MedicoOperavel[] {
+  const t=` ${normalizar(texto)} `;
+  return medicos.filter(m=>{
+    const nome=normalizar(m.nomeCompleto);
+    return !!nome&&t.includes(` ${nome} `);
+  });
 }
