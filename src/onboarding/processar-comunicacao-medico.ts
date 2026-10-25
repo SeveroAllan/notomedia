@@ -49,7 +49,7 @@ export function dadoCadastralIsolado(texto:string):boolean {
   }
   return /^(?:\+?55\s?)?\(?\d{2}\)?\s?9?\d{4}-?\d{4}$/.test(t) || /^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(t) || /^R\$\s?\d[\d.]*(?:,\d{2})?$/.test(t);
 }
-const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.';
+const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
   entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
