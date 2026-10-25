@@ -39,3 +39,10 @@ export function resolverMedicosMencionados(texto:string,medicos:readonly MedicoO
     return !!nome&&t.includes(` ${nome} `);
   });
 }
+
+export function mensagemSelecionaVariosMedicos(texto:string):boolean {
+  const t=normalizar(texto);
+  return /\b(?:emitir|emissao|nota|notas)\s+(?:para|pros?|pelos?)\b/.test(t) && /\s+e\s+/.test(t)
+    || /\b(?:medicos|medicas|profissionais)\b/.test(t);
+}
+
