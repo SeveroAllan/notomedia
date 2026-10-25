@@ -567,8 +567,8 @@ it('Amplimed: "quero emitir as notas dos últimos 7 dias" abre o lote (iniciar_l
  await c.turno('emitir','quero emitir as notas dos últimos 7 dias');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'iniciar_lote'});
  expect(PROMPT_CONVERSA).toContain('Use consultar_agenda for general agenda data');
- expect(PROMPT_CONVERSA).toContain('listar_pendencias lê somente consultas sem nota');
- expect(PROMPT_CONVERSA).toContain('iniciar_lote prepara quantidade/total');
+ expect(PROMPT_CONVERSA).toContain('listar_pendencias for consultations without an invoice');
+ expect(PROMPT_CONVERSA).toContain('iniciar_lote for quantity and total');
 });
 
 it('link expirado: eco de URL do histórico sanitizado sai da fala e a agenda do último link é preservada',async()=>{
