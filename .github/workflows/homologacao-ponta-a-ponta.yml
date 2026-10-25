@@ -27,6 +27,7 @@ jobs:
         run: |
           npx vitest run \
             tests/lote-retroativo.test.ts \
+            tests/memoria-conversa-continua.test.ts \
             tests/mensagem-falha-emissao.test.ts \
             tests/processar-conversa-medico.test.ts \
             tests/servidor-conversa-livre.test.ts \
