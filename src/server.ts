@@ -426,6 +426,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     executar:async (decisao,c) => {
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId,c.contatoOperador)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       const agendaAcao=normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined);
+      const contaMulti=(c.fatos.medicosConta?.length??0)>1;
+      if(contaMulti&&agendaAcao==='amplimed'&&(decisao.acao==='listar_pendencias'||decisao.acao==='iniciar_lote')){
+        return {falaAssinada:['Nesta integração da Amplimed eu ainda não consigo provar qual profissional atende cada consulta. Para não misturar médicos, não vou preparar nem emitir por essa agenda em conta multi-médico.'],dados:{ferramenta:decisao.acao,ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'}};
+      }
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
         const pacienteConfirmacao=pacienteLiteralDaConsulta(c.texto);
         if(pacienteConfirmacao&&confirmacaoDaDecisao(decisao).intencao!=='nao') {
