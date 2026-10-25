@@ -44,7 +44,7 @@ export interface MedicoDadosRegistro {
 
 export interface OperadorMedicoRegistro {
   usuarioId: string;
-  tipo: 'medico' | 'secretaria';
+  contaId: string;
   telefone: string;
   medicos: Array<{ id: string; nomeCompleto: string; crm: string | null }>;
 }
