@@ -43,7 +43,7 @@ from anon, authenticated;
 
 -- Postcondições: se o ambiente não terminar exatamente protegido, a migration
 -- aborta antes do commit. Não há policies de cliente de propósito.
-do $
+do $seguranca$
 declare
   tabela text;
   papel text;
@@ -73,7 +73,29 @@ begin
         raise exception 'Privilégio residual de % em public.%', papel, tabela;
       end if;
     end loop;
+
+    if not (
+      has_table_privilege(current_user, format('public.%I', tabela), 'SELECT')
+      and has_table_privilege(current_user, format('public.%I', tabela), 'INSERT')
+      and has_table_privilege(current_user, format('public.%I', tabela), 'UPDATE')
+      and has_table_privilege(current_user, format('public.%I', tabela), 'DELETE')
+    ) then
+      raise exception 'Role do backend % perdeu CRUD em public.%', current_user, tabela;
+    end if;
+
+    if not exists (
+      select 1
+      from pg_class c
+      join pg_namespace n on n.oid=c.relnamespace
+      join pg_roles atual on atual.rolname=current_user
+      where n.nspname='public' and c.relname=tabela
+        and (c.relowner=atual.oid or atual.rolsuper or atual.rolbypassrls)
+    ) then
+      raise exception 'Role do backend % seria bloqueada pela RLS em public.%', current_user, tabela;
+    end if;
   end loop;
-end $;
+end
+$seguranca$;
 
 commit;
+
