@@ -198,7 +198,7 @@ export async function processarComunicacaoMedico(
       if(podeCorrigir() && motivo==='LISTA_EM_VEZ_DE_LOTE' && permitidas.includes('iniciar_lote')) {
         // Lote anterior terminou com erro: listar de novo não destrava; a releitura ao vivo vem do iniciar_lote (o médico confirma antes).
         deps.log('info','CONVERSA_LISTA_EM_VEZ_DE_LOTE');
-        decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'o último lote terminou com erro; se o médico quer emitir de novo, use iniciar_lote anunciando; se só conversa, acao null',faltou:[]});
+        decisao=await decidir(permitidas.filter(a=>a!=='listar_pendencias'),undefined,{motivo:'The last batch ended with an error. If the doctor wants to try again, use iniciar_lote and announce the action. Otherwise use acao=null.',faltou:[]});
         motivo=validarAcaoConversa(decisao,fatos,permitidas,texto,agora);
       }
       if(podeCorrigir() && (motivo==='ENVIO_SEM_ACAO'||motivo==='PEDIDO_REENVIO_AUSENTE')) {
