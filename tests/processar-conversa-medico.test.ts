@@ -685,6 +685,24 @@ it('conversa contínua alterna explicação, leitura concreta e escolha sem herd
  expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.at(-1)?.[0].join(' ')).toMatch(/nome e a data/);
 });
 
+it('explica PDFs enviados pelo contexto real sem consultar agenda ou reenviar',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;
+ await c.memoria.registrarEntregaNota('m','c','envio-1',{notaFiscalId:'nf-1',solicitacaoId:'sol-1',ndps:42,paciente:'Paciente Teste',datasConsulta:'20/10/2026',valorCentavos:25000,destino:'medico',origem:'pedido_historico',resultado:'enviado',registradaEm:'2026-10-25T09:00:00.000Z'});
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({
+   dominio:'documento',objetivo:'consultar',objeto:'entregas',granularidade:'colecao',medida:'lista',
+   periodo:{inicio:null,fim:null,referencia:'nenhum'},paciente:null,
+   restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.99
+ }))}});
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+   const d=JSON.parse(String(msgs[1]!.content));
+   expect(d.fatos.entregasRecentes).toEqual([expect.objectContaining({ndps:42,paciente:'Paciente Teste',datasConsulta:'20/10/2026',destino:'medico',resultado:'enviado'})]);
+   return JSON.stringify({fala:['Foi a nota 42, da consulta de 20/10/2026 do Paciente Teste, enviada para você com sucesso.'],acao:null});
+ });
+ await c.turno('que-notas','Que notas são essas?');
+ expect(c.executar).not.toHaveBeenCalled();
+ expect(c.enviar.mock.calls.at(-1)?.[0]).toEqual(['Foi a nota 42, da consulta de 20/10/2026 do Paciente Teste, enviada para você com sucesso.']);
+});
+
 it('pergunta financeira curta após lista usa contexto como valor realizado, sem repetir lista ou preparar',async()=>{
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
  await c.memoria.registrarFala('m','c','noto:lista-anterior','Encontrei 11 consultas nesta semana.','noto');
