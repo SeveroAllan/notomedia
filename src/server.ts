@@ -810,11 +810,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const { data: identidade, error: erroAuth } = await authAdminService.supabaseClient.auth.getUser(token);
       if (erroAuth || !identidade.user) return res.status(401).json({ ok: false, detalhe: 'Sessão inválida' });
       const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const vinculo = await pool.query(
-        'select m.id from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1 and u.auth_user_id = $2 and u.ativo = true',
-        [medicoId, identidade.user.id]
-      );
-      if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
+      if (!await medicoPertenceAContaDoUsuario(pool,medicoId,identidade.user.id))
+        return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
       res.setHeader('Cache-Control', 'no-store');
       let status = await consultarStatusOnboarding(pool, medicoId, config.preparacaoFiscalAtiva);
       // Reconcile an outdated local record before asking an already linked user to pair again.
@@ -1011,7 +1008,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw || !arquivoBase64 || !senha) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId, arquivo e senha são obrigatórios' });
       }
+      const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
+      if(!token)return res.status(401).json({ok:false,detalhe:'Autenticação necessária'});
+      const {data:identidade,error:erroAuth}=await authAdminService.supabaseClient.auth.getUser(token);
+      if(erroAuth||!identidade.user)return res.status(401).json({ok:false,detalhe:'Sessão inválida'});
       const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      if(!await medicoPertenceAContaDoUsuario(pool,medicoId,identidade.user.id))
+        return res.status(403).json({ok:false,detalhe:'Médico não pertence a esta conta'});
       const arquivoBuffer = Buffer.from(arquivoBase64, 'base64');
 
       let documentoTitular: string | undefined;
