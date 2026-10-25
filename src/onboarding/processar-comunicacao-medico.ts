@@ -132,12 +132,16 @@ export async function processarComunicacaoMedico(
         return resposta;
       };
       const narrar=async (resultado:unknown) => chamadas>=orcamento ? [ERRO_CONVERSA] : (await decidir([],resultado)).fala;
-      const permitidas=deps.ferramentas.permitidas(fatos);
+      let permitidas=deps.ferramentas.permitidas(fatos);
       if(deps.interpretadorSemantico&&entrada.respostaMedico) {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
         interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:contexto.plano??null,fatos,agora});
         if(interpretacaoSemantica)interpretacaoSemantica=reconciliarInterpretacaoSemantica(interpretacaoSemantica,fatos);
         if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
+      }
+      if(deps.interpretadorSemantico){
+        const escolhaNecessaria=!!interpretacaoSemantica?.permissaoNecessaria&&interpretacaoSemantica.faltando.includes('permissao');
+        if(!escolhaNecessaria)permitidas=permitidas.filter(a=>a!=='pedir_link_permissoes');
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
       if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
