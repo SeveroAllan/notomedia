@@ -211,6 +211,13 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
 
 export interface EventoAgendaAmplimed { texto: string; cor: string; detalhe?: import('../agenda/amplimed-leitor.js').DetalheAmplimed | null }
 export interface DiaAgendaAmplimed { data: string; eventos: EventoAgendaAmplimed[] }
+export interface EventoFeedAmplimed { titulo: string; inicio: string; fim: string | null; cor: string }
+/** Converte um evento do feed mensal para o mesmo contrato textual da visão Dia; falha fechado se faltar identificação temporal/textual. */
+export function eventoAgendaAmplimedDoFeed(e: EventoFeedAmplimed): EventoAgendaAmplimed | null {
+  const inicio=e.inicio?.trim(), fim=e.fim?.trim(), titulo=e.titulo?.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+  if(!/^\d{2}:\d{2}$/.test(inicio)||!fim||!/^\d{2}:\d{2}$/.test(fim)||!titulo)return null;
+  return {texto:`${inicio} - ${fim}\n${titulo}`,cor:e.cor??''};
+}
 /**
  * Leitura de observação da agenda (somente leitura, nada vira nota). Faz login com a credencial recebida, abre /agenda
  * e lê o dia de hoje e, se pedido, `diasAtras` dias anteriores clicando em "prev" (navegação do calendário).
@@ -247,106 +254,81 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(2500);
     profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
-    // A agenda reabre na última data vista na conta, não necessariamente em "hoje": ancorar no dia pedido
-    // (hoje em America/Sao_Paulo, como todo o resto do sistema) antes de ler, senão a leitura sai do dia errado em silêncio.
+    // A agenda pode ocultar dias na visão Dia (observado: domingo). Cobertura é por DATA, não por cabeçalho visível.
+    // Para cada data do período, tenta a visão diária; se a navegação pular o alvo, confirma o dia pelo feed mensal.
     const hoje = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date());
     let data: string | null = await cabecalho(page);
     if (!data) { console.warn('AMPLIMED_PERIODO cabecalho_ilegivel texto=' + JSON.stringify(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 120)`))); return; }
-    if (data !== hoje) {
-      // O botão "Hoje" não é âncora confiável: na conta real visto pular para data sem relação com hoje
-      // (segue a seleção do mini-calendário). Navega dia a dia até o alvo, conferindo o cabeçalho a cada passo.
-      console.warn('AMPLIMED_PERIODO ancorando esperado=' + hoje + ' cabecalho=' + data);
-      let passos = 0;
-      while (data !== hoje && passos < 62) {
-        const botao = data < hoje ? '.fc-next-button' : '.fc-prev-button';
-        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
-        const anterior: string = data;
-        for (let t = 0; t < 10 && data === anterior; t++) { await page.waitForTimeout(400); data = await cabecalho(page) ?? anterior; }
-        if (data === anterior) { console.warn('AMPLIMED_PERIODO ancora_travou em=' + anterior); break; }
-        passos++;
-      }
-      if (data !== hoje) { console.warn('AMPLIMED_PERIODO ancora_falhou esperado=' + hoje + ' lido=' + data); return; } // não afirma o que não leu
-      await page.waitForTimeout(1200);
-    }
-    dias.push({ data, eventos: await comDetalhes(page, await eventosDaTela(page)) });
-    // A navegação é dia a dia com "prev", mas a conta pode não exibir alguns dias (visto: domingo 18/10/2026
-    // pulado pela agenda: prev de 19 cai em 17). `posicao` é a posição física do calendário; quando prev e next
-    // pulam o mesmo dia dos dois lados, o dia não é exibível — registrado como vazio verificado (sem consultas).
-    let posicao: string = data;
-    let lidos = 0;
-    // Âncora reutilizável: navega dia a dia até `alvo` conferindo o cabeçalho a cada passo.
+
+    // Navega sem oscilar ao redor de hiddenDays: cruzar o alvo prova que a visão diária o pulou.
     const ancorarEm = async (alvo: string): Promise<string | null> => {
       let d = await cabecalho(page);
       let passos = 0;
       while (d && d !== alvo && passos < 62) {
+        const anterior = d;
         const botao = d < alvo ? '.fc-next-button' : '.fc-prev-button';
-        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* a verificação abaixo decide */ }
-        const ant: string = d;
-        for (let t = 0; t < 10 && d === ant; t++) { await page.waitForTimeout(400); d = await cabecalho(page) ?? ant; }
-        if (d === ant) break;
+        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* conferência abaixo decide */ }
+        for (let t = 0; t < 12 && d === anterior; t++) { await page.waitForTimeout(400); d = await cabecalho(page) ?? anterior; }
+        if (d === anterior) break;
+        if ((anterior < alvo && d > alvo) || (anterior > alvo && d < alvo)) {
+          console.warn('AMPLIMED_PERIODO dia_oculto alvo=' + alvo + ' entre=' + anterior + ',' + d);
+          return null;
+        }
         passos++;
       }
       return d === alvo ? d : null;
     };
-    // Um dia que prev e next pulam NÃO está automaticamente vazio: pular só prova que a visão diária não o
-    // exibe (esta conta oculta domingos, hiddenDays=[0]). A evidência aceita é o próprio feed da agenda:
-    // abrir a visão mensal (que baixa o mês inteiro) e consultar os eventos do dia exato via clientEvents.
-    // Verificado contra positivos conhecidos: os eventos dos dias 19/21/22 aparecem na consulta.
-    const verificarDiaSemEventos = async (alvo: string): Promise<boolean | null> => {
+
+    // Pular um dia NÃO significa vazio. A visão mensal baixa os eventos do mês; consultamos o alvo exato.
+    // Se houver eventos, reconstrói o mesmo texto/cor usado pela visão Dia para preservar paciente, valor, telefone e id derivado.
+    const eventosDoFeedMensal = async (alvo: string): Promise<EventoAgendaAmplimed[] | null> => {
       try {
         await page.evaluate('window.scrollTo(0, 0)');
         await page.locator('.fc-month-button').first().click({ timeout: 5000 });
-        await page.waitForTimeout(1500);
-        const total_eventos = await page.evaluate(`(async () => {
+        await page.waitForTimeout(1200);
+        const crus = await page.evaluate(`(async () => {
           const jq = window.jQuery || window.$; const el = document.querySelector('.fc');
           if (!jq || !el) return null;
           jq(el).fullCalendar('gotoDate', '${alvo}');
           await new Promise(r => setTimeout(r, 2500));
           const v = jq(el).fullCalendar('getView');
           if (!v || v.name !== 'month') return null;
-          const evs = jq(el).fullCalendar('clientEvents', e => e.start && e.start.format('YYYY-MM-DD') === '${alvo}');
-          return evs.length;
-        })()`) as number | null;
-        return typeof total_eventos === 'number' ? total_eventos === 0 : null;
+          return jq(el).fullCalendar('clientEvents', e => e.start && e.start.format('YYYY-MM-DD') === '${alvo}').map(e => ({
+            titulo: String(e.title || ''),
+            inicio: e.start ? e.start.format('HH:mm') : '',
+            fim: e.end ? e.end.format('HH:mm') : null,
+            cor: String(e.backgroundColor || e.color || (e.source && (e.source.backgroundColor || e.source.color)) || '')
+          }));
+        })()`) as EventoFeedAmplimed[] | null;
+        if (!Array.isArray(crus)) return null;
+        const eventos = crus.map(eventoAgendaAmplimedDoFeed);
+        if (eventos.some(e => e === null)) {
+          console.warn('AMPLIMED_PERIODO feed_evento_incompleto data=' + alvo + ' total=' + crus.length);
+          return null;
+        }
+        return eventos as EventoAgendaAmplimed[];
       } catch { return null; }
       finally {
-        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* reancora decide */ }
-        await page.waitForTimeout(1200);
+        try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* próxima âncora decide */ }
+        await page.waitForTimeout(1000);
       }
     };
-    while (lidos < total) {
-      const esperado = dataEsperadaAtras(hoje, lidos + 1);
-      await page.evaluate('window.scrollTo(0, 0)');
-      await page.locator('.fc-prev-button').first().click({ timeout: 5000 });
-      let atual: string = posicao;
-      for (let t = 0; t < 12 && atual === posicao; t++) { await page.waitForTimeout(500); atual = await cabecalho(page) ?? posicao; }
-      if (atual !== esperado && atual < esperado) {
-        await page.evaluate('window.scrollTo(0, 0)');
-        await page.locator('.fc-next-button').first().click({ timeout: 5000 });
-        let volta: string = atual;
-        for (let t = 0; t < 12 && volta === atual; t++) { await page.waitForTimeout(500); volta = await cabecalho(page) ?? atual; }
-        if (volta === esperado) { atual = esperado; }
-        else if (volta === posicao) {
-          const semEventos = await verificarDiaSemEventos(esperado);
-          if (semEventos === true) {
-            console.warn('AMPLIMED_PERIODO dia_verificado_vazio data=' + esperado + ' via=feed_mensal');
-            dias.push({ data: esperado, eventos: [] });
-            lidos++;
-            const reancora = await ancorarEm(posicao);
-            if (!reancora) { console.warn('AMPLIMED_PERIODO reancora_falhou alvo=' + posicao); return; } // não afirma o que não leu
-            continue;
-          }
-          // Lacuna real ou verificação indisponível: o dia segue NÃO lido e a leitura incompleta.
-          console.warn('AMPLIMED_PERIODO dia_nao_lido data=' + esperado + ' motivo=' + (semEventos === false ? 'eventos_no_feed' : 'verificacao_falhou'));
-          return;
-        }
-        else { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + lidos + ' esperado=' + esperado + ' lido=' + atual + ' volta=' + volta); return; } // não afirma o que não leu
+
+    for (let deslocamento = 0; deslocamento <= total; deslocamento++) {
+      const esperado = dataEsperadaAtras(hoje, deslocamento);
+      const visivel = await ancorarEm(esperado);
+      if (visivel) {
+        await page.waitForTimeout(1000);
+        dias.push({ data: esperado, eventos: await comDetalhes(page, await eventosDaTela(page)) });
+        continue;
       }
-      if (atual !== esperado) { console.warn('AMPLIMED_PERIODO data_inesperada passo=' + lidos + ' esperado=' + esperado + ' lido=' + atual); return; } // não afirma o que não leu
-      await page.waitForTimeout(1200);
-      posicao = esperado;
-      dias.push({ data: esperado, eventos: await comDetalhes(page, await eventosDaTela(page)) });
-      lidos++;
+      const eventos = await eventosDoFeedMensal(esperado);
+      if (eventos === null) {
+        console.warn('AMPLIMED_PERIODO dia_nao_lido data=' + esperado + ' motivo=verificacao_feed_falhou');
+        return;
+      }
+      console.warn('AMPLIMED_PERIODO dia_oculto_confirmado data=' + esperado + ' eventos=' + eventos.length + ' via=feed_mensal');
+      dias.push({ data: esperado, eventos });
     }
     completo = true;
   } }, signal);
