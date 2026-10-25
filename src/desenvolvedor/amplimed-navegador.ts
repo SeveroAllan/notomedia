@@ -214,14 +214,14 @@ export interface DiaAgendaAmplimed { data: string; eventos: EventoAgendaAmplimed
 export interface EventoFeedAmplimed { titulo: string; inicio: string; fim: string | null; cor: string }
 /** Converte um evento do feed mensal para o mesmo contrato textual da visão Dia; falha fechado se faltar identificação temporal/textual. */
 export function eventoAgendaAmplimedDoFeed(e: EventoFeedAmplimed): EventoAgendaAmplimed | null {
-  const inicio=e.inicio?.trim(), fim=e.fim?.trim(), titulo=e.titulo?.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
-  if(!/^\d{2}:\d{2}$/.test(inicio)||!fim||!/^\d{2}:\d{2}$/.test(fim)||!titulo)return null;
+  const inicio=(e.inicio??'').trim(), fim=(e.fim??'').trim(), titulo=(e.titulo??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
+  if(!inicio||!fim||!/^\d{2}:\d{2}$/.test(inicio)||!/^\d{2}:\d{2}$/.test(fim)||!titulo)return null;
   return {texto:`${inicio} - ${fim}\n${titulo}`,cor:e.cor??''};
 }
 /**
  * Leitura de observação da agenda (somente leitura, nada vira nota). Faz login com a credencial recebida, abre /agenda
- * e lê o dia de hoje e, se pedido, `diasAtras` dias anteriores clicando em "prev" (navegação do calendário).
- * Em cada passo confere a data do cabeçalho; se não bater, para e devolve só o que foi confirmado.
+ * e cobre hoje + `diasAtras` datas anteriores. Usa a visão Dia quando a data é exibível e o feed mensal quando
+ * hiddenDays oculta a data; só devolve completo quando cada data do período foi confirmada.
  */
 export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; diasAtras?: number; detalhes?: boolean }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; dias: DiaAgendaAmplimed[]; profissional: string | null; completo: boolean }> {
   const dias: DiaAgendaAmplimed[] = [];
