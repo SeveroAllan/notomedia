@@ -518,6 +518,49 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=agendaAlvo?await cofres.links?.solicitarLinkCofre(c.medicoId,agendaAlvo,{reenvio:c.fatos.link.enviados>0,fala:decisao.fala,contatoTelefone:c.contatoOperador})??{ok:false,motivo:'AGENDA_INDISPONIVEL'}:{ok:false,motivo:'AGENDA_NAO_INFORMADA'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
+      if(decisao.acao==='pedir_link_certificado') {
+        const solicitados=decisao.parametros?.medicos??[];
+        if(!solicitados.length)return {dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'MEDICO_NAO_IDENTIFICADO'}};
+        const existentes=await listarMedicosDaConta(pool,c.medicoId);
+        const {rows:descobertaRows}=await pool.query(
+          "select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 1",
+          [c.medicoId,c.conversa]
+        );
+        let descobertos:string[]=[];
+        try {
+          const parsed=descobertaRows[0]?.texto?JSON.parse(descobertaRows[0].texto):null;
+          if(Array.isArray(parsed?.profissionais))descobertos=parsed.profissionais.filter((x:unknown):x is string=>typeof x==='string'&&!!x.trim());
+        } catch { descobertos=[]; }
+        const permitidos=[...existentes.map(m=>m.nomeCompleto),...descobertos];
+        const canonicos:string[]=[];
+        for(const informado of solicitados){
+          const chave=normalizarNomeMedico(informado);
+          const candidatos=[...new Map(permitidos.filter(n=>normalizarNomeMedico(n)===chave).map(n=>[normalizarNomeMedico(n),n])).values()];
+          if(candidatos.length!==1)return {falaAssinada:[`Não consegui identificar com segurança o médico "${informado}". Me diga o nome exatamente como apareceu na lista.`],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:candidatos.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO'}};
+          canonicos.push(candidatos[0]!);
+        }
+        const confirmados=await confirmarMedicosDaConta(pool,c.medicoId,canonicos);
+        if(!confirmados.ok)return {falaAssinada:[`Há ambiguidade no médico "${confirmados.nome}". Não criei vínculo nem enviei certificado.`],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:confirmados.motivo}};
+        if(!origemLinksSeguros)return {dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'ORIGEM_INDISPONIVEL'}};
+        let enviados=0;
+        const prontos:string[]=[];
+        for(const medico of confirmados.medicos){
+          if(medico.certificadoValido){prontos.push(medico.nomeCompleto);continue;}
+          const url=linkCertificadoMedico(origemLinksSeguros,medico.id);
+          const envio=await comunicacaoHomologacao.conversa({
+            medicoId:c.medicoId,conversa:c.conversa,chave:`certificado:${medico.id}:${c.chave}`,
+            fala:[`Para ${medico.nomeCompleto}, o certificado A1 ainda está pendente. Use este link do painel:`,url],
+            falaMemoria:[`Para ${medico.nomeCompleto}, o certificado A1 ainda está pendente. Enviei o link do painel.`,'[LINK_SEGURO]'],
+            contatoTelefone:c.contatoOperador
+          });
+          if(envio==='enviado'||envio==='simulado')enviados++;
+        }
+        if(!enviados&&prontos.length){
+          await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`certificado:prontos:${c.chave}`,
+            fala:[`O certificado já está cadastrado para: ${prontos.join(', ')}. Podemos seguir com esses médicos.`],contatoTelefone:c.contatoOperador});
+        }
+        return {jaRespondida:true,dados:{ferramenta:'pedir_link_certificado',ok:true,enviados,prontos}};
+      }
       if(decisao.acao==='pedir_link_permissoes') {
         if(!permissoesNoto) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:'PERMISSOES_INDISPONIVEIS'}};
         const faltantes=await permissoesNoto.faltantes(c.medicoId,['emitir_autonomo']).catch(()=>[] as const);
