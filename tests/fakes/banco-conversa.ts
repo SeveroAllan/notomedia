@@ -25,7 +25,7 @@ export class BancoConversaFalso {
         }
         return { rows: [] };
       }
-      this.mensagens.push({ id: String(this.mensagens.length + 1), medico, conversa, mensagemId: terceiro, texto: quarto, papel });
+      this.mensagens.push({ id: String(this.mensagens.length + 1), medico, conversa, mensagemId: terceiro, texto: quarto, papel: sql.includes("values ($1,$2,$3,$4,'noto')") ? 'noto' : papel });
       return { rows: [{ id: String(this.mensagens.length) }] };
     }
     if (sql.startsWith('select 1 from conversa_mensagens')) return { rows: this.mensagens.filter(m => m.medico === medico && m.mensagemId === terceiro).map(() => ({ existe: 1 })) };
