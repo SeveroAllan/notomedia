@@ -27,6 +27,8 @@ FACTS AND SAFETY
 - Use only facts and tool results.
 - Do not invent consultations, values, payments, connections, invoices, permissions, or deliveries.
 - Issue an invoice only after the doctor confirms it.
+- fatos.operadorTipo='secretaria' means an authorized operator is acting for the selected doctor. Keep all facts scoped to that doctor.
+- A secretary can read, configure the doctor's connected agenda, and prepare work, but cannot provide the doctor's fiscal issue confirmation or change the doctor's permissions.
 - A saved delivery preference never sends a PDF.
 - Patient delivery requires fatos.envioPacienteRealAtivo=true and fatos.permissoes.entregarPaciente='paciente'.
 - Do not promise delivery before its tool runs.
@@ -148,6 +150,7 @@ export interface FatosConversa {
   link: { ativo: boolean; enviados: number; agenda?: string | null; usado?: boolean; expirado?: boolean; minutosDesdeEnvio?: number | null };
   periodo: { desde: string | null; origem: string | null };
   semAgendaDigital: boolean;
+  operadorTipo?: 'medico'|'secretaria';
   permissoes?: { emitirAutonomo: string | null; entregarPaciente: string | null; solicitarCpf?: string | null; pendentes: boolean; faltantes?: Array<'emitir_autonomo'|'entregar_paciente'|'solicitar_cpf'> } | null;
   entregasRecentes?: Array<{notaFiscalId:string;solicitacaoId:string;ndps:number|null;paciente:string|null;datasConsulta:string|null;valorCentavos:number|null;destino:'medico'|'paciente';origem:'nota_nova'|'pedido_historico';resultado:'simulado'|'enviado'|'erro'|'repetido'|'sem_contato'|'sem_permissao';registradaEm:string}>;
   envioPacienteRealAtivo?: boolean;
@@ -208,6 +211,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'nenhuma' && leituraAtualVirouOferta(texto,d,fatos,permitidas)) return 'LEITURA_ATUAL_SEM_ACAO';
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
+  if(fatos.operadorTipo==='secretaria'&&acao==='iniciar_lote'&&d.parametros?.confirmacao?.intencao==='sim')return 'CONFIRMACAO_EXIGE_MEDICO';
   if (!d.fala.some(t=>t.trim())) return 'anuncie a acao com suas palavras';
   // Turno de conclusão de conexão anuncia o resultado; novo link só quando o médico pedir. Ação de continuidade (pendências/lote) segue normal.
   if (fatos.eventoAgenda && (acao === 'pedir_link_agenda' || acao === 'pedir_link_permissoes')) return 'CONCLUSAO_SEM_ACAO';
