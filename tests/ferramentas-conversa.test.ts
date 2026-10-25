@@ -50,3 +50,10 @@ it('reenvio só aparece em homolog com escolha só médico, nunca durante emiss�
  expect(ferramentasLiberadas({...f,ambiente:'producao'},{lote:true})).not.toContain('reenviar_nota_medico');
  expect(ferramentasLiberadas({...f,permissoes:{...f.permissoes,entregarPaciente:'paciente'}},{lote:true})).not.toContain('reenviar_nota_medico');
 });
+
+
+it('com uma agenda conectada ainda libera conexão da outra suportada',()=>{
+ const f={ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false} satisfies FatosConversa;
+ expect(ferramentasLiberadas(f,{lote:true})).toContain('pedir_link_agenda');
+ expect(ferramentasLiberadas({...f,agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:true,conectada:true}}},{lote:true})).not.toContain('pedir_link_agenda');
+});
