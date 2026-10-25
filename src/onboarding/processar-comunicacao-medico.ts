@@ -1,4 +1,4 @@
-import {afirmaFatoDaAgendaSemFerramenta,consultaNaoIdentificada} from './conversador-medico.js';
+import {afirmaFatoDaAgendaSemFerramenta,consultaNaoIdentificada,normalizarBaloesSemPontoEVirgula} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
 import { FALA_CONCLUSAO_AGENDA_CONECTADA, FALA_CONCLUSAO_AGENDA_FALHA_ACESSO, FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL, FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
@@ -60,10 +60,12 @@ export async function processarComunicacaoMedico(
     const memoria=deps.memoriaPersistida;
     const enviar = async (fala:string[], falaMemoria?:string[], sufixo='') => {
       const chaveEnvio=chave+sufixo;
-      if(!fala.length) return;
-      if(falaMemoria) await deps.aoConversar?.(fala,chaveEnvio,falaMemoria);
-      else await deps.aoConversar?.(fala,chaveEnvio);
-      if(conversa && memoria) { try {await memoria.registrarFala(medicoId,conversa,`noto:${chaveEnvio}`,(falaMemoria??fala).join('\n'),'noto');} catch {deps.log('erro','CONVERSA_MEMORIA_FALHOU');} }
+      const falaVisivel=normalizarBaloesSemPontoEVirgula(fala);
+      const falaPersistida=falaMemoria?normalizarBaloesSemPontoEVirgula(falaMemoria):falaVisivel;
+      if(!falaVisivel.length) return;
+      if(falaMemoria) await deps.aoConversar?.(falaVisivel,chaveEnvio,falaPersistida);
+      else await deps.aoConversar?.(falaVisivel,chaveEnvio);
+      if(conversa && memoria) { try {await memoria.registrarFala(medicoId,conversa,`noto:${chaveEnvio}`,falaPersistida.join('\n'),'noto');} catch {deps.log('erro','CONVERSA_MEMORIA_FALHOU');} }
     };
     try {
       if(!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) {
