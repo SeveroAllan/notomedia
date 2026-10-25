@@ -34,7 +34,7 @@ interface Dependencias {
   aoReagir?:(reacao:ReacaoMedico)=>Promise<void>; aoConversar?:(fala:string[],chave:string,falaMemoria?:string[])=>Promise<void>;
   memoriaConversa?:MemoriaConversa; extratorResposta?:ExtratorRespostaMedico; historico:HistoricoComunicacaoRepositorio;
   lerEstado:(medicoId:string,agora:Date)=>Promise<EstadoComunicacaoMedico|null>;
-  tratarCofre?:(medicoId:string,texto:string)=>Promise<boolean>;
+  tratarCofre?:(medicoId:string,texto:string,contatoOperador?:string)=>Promise<boolean>;
   aoDecidir?:(acao:ProximaAcaoNoto,chave:string,contexto?:{nomeMedico?:string})=>Promise<void>;
   log:(nivel:'info'|'erro',mensagem:string)=>void;
 }
@@ -69,7 +69,7 @@ export async function processarComunicacaoMedico(
     };
     try {
       if(!deps.conversaLivreAtiva || !entrada.respostaMedico && !entrada.eventoAgenda) {
-        if(entrada.respostaMedico && await deps.tratarCofre?.(medicoId,entrada.respostaMedico.texto)) return {tipo:'nenhuma'};
+        if(entrada.respostaMedico && await deps.tratarCofre?.(medicoId,entrada.respostaMedico.texto,entrada.contatoOperador)) return {tipo:'nenhuma'};
         if(entrada.respostaMedico && /\b(senha|password|token|secret|segredo|api[_ -]?key)\b/i.test(entrada.respostaMedico.texto)) return {tipo:'nenhuma'};
         const estado=await deps.lerEstado(medicoId,agora);
         if(!estado) return {tipo:'nenhuma'};
