@@ -16,7 +16,7 @@ it('sem vínculo explícito usa o próprio médico como referência',async()=>{
 it('vínculo só grava alvos da mesma conta da conexão-fonte',async()=>{
  const query=vi.fn(async()=>({rows:[{medico_id:'m1'},{medico_id:'m2'}]}));
  expect(await vincularReferenciaAgendaConta({query} as unknown as pg.Pool,['m1','m2'],'tribemd','fonte')).toBe(true);
- const sql=String(query.mock.calls[0]![0]);
+ const sql=String((query.mock.calls as unknown as any[][])[0]![0]);
  expect(sql).toContain('join fonte f on f.conta_id=m.conta_id');
  expect(sql).toContain('on conflict (medico_id,agenda) do update');
 });
