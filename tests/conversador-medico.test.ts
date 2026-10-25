@@ -65,7 +65,7 @@ it('ação inválida, não permitida ou sem agenda/período nunca é assinada',(
  expect(validarAcaoConversa({fala:['Ok'],acao:'listar_pendencias'},{...fatos,agenda:{nome:'tribemd',conectada:true}},['listar_pendencias'],'sim',agora)).toBe('PERIODO_NECESSARIO');
 });
 it.each(['leitura','senha'])('primeiro link sem o fato %s é recusado antes do envio',ausente=>{
- const fala=['O link conecta só a agenda, em leitura das consultas. Login e senha vão só no link seguro; não recebo senha pela conversa. Aqui está o link seguro:'.replace(ausente==='senha'?/senha|login/gi:new RegExp(ausente,'g'),'')];
+ const fala=['O link conecta só a agenda, em leitura das consultas. Login e senha vão só no link seguro. Não recebo senha pela conversa. Aqui está o link seguro:'.replace(ausente==='senha'?/senha|login/gi:new RegExp(ausente,'g'),'')];
  expect(validarAcaoConversa({fala,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}},fatos,['pedir_link_agenda'],'Tribe',agora)).toBe('INTRODUCAO_INCOMPLETA');
 });
 it.each([.5,.89,.9,1])('modo sem agenda exige declaração literal atual e confiança >=.9 (%s)',confianca=>{
@@ -145,13 +145,13 @@ it('prompt inclui aliases de TribeMD e os oito passos de decisão',()=>{
 it('prompt não depende de exemplo Tribe embutido; contrato real continua validando a introdução',()=>{
  expect(PROMPT_CONVERSA).not.toContain('EXAMPLES');
  expect(PROMPT_CONVERSA).not.toMatch(/^- "Tribe" .* -> \{/m);
- const decisao={fala:['TribeMD, certo. Vou enviar o link seguro para conectar a agenda.','Eu só leio as consultas; login e senha ficam no link seguro e nada é enviado a pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'TribeMD',evidencia:'Tribe'}};
+ const decisao={fala:['TribeMD, certo. Vou enviar o link seguro para conectar a agenda.','Eu só leio as consultas. Login e senha ficam no link seguro e nada é enviado a pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'TribeMD',evidencia:'Tribe'}};
  expect(validarAcaoConversa(decisao,fatos,['pedir_link_agenda'],'Tribe',agora)).toBeNull();
 });
 
 it.each([
- ['Perfeito, TribeMD. Vou te mandar um link seguro para voce conectar a agenda.','Eu so leio as consultas para conferir com os comprovantes e emitir; sua senha fica so no link e nada e enviado a pacientes.'],
- ['Apenas vejo sua agenda. Login só no link; não envio nada ao paciente.'],
+ ['Perfeito, TribeMD. Vou te mandar um link seguro para voce conectar a agenda.','Eu so leio as consultas para conferir com os comprovantes e emitir. Sua senha fica so no link e nada e enviado a pacientes.'],
+ ['Apenas vejo sua agenda. Login só no link. Não envio nada ao paciente.'],
  ['Só consulto a agenda, sem alterações. Sua senha vai somente no link, nada vai aos pacientes.']
 ])('introdução natural preserva a essência sem palavras obrigatórias antigas: %j',(...fala)=>{
  expect(validarAcaoConversa({fala,acao:'pedir_link_agenda',parametros:{agenda:'tribemd',evidencia:'tribemd'}},fatos,['pedir_link_agenda'],'Uso o tribemd',agora)).toBeNull();
