@@ -19,11 +19,11 @@ describe('trava de projeto das migrations do PR #10',()=>{
       .toThrow(/SUPABASE_PROJECT_REF_INCORRETO/);
   });
 
-  it('recusa conexão não identificável sem confirmação explícita',()=>{
+  it('recusa conexão não identificável mesmo com ref explícito correto',()=>{
     expect(()=>validarProjetoHomolog('postgresql://usuario:senha@proxy.interno:5432/postgres',undefined))
       .toThrow(/SUPABASE_PROJECT_REF_NAO_CONFIRMADO/);
-    expect(validarProjetoHomolog('postgresql://usuario:senha@proxy.interno:5432/postgres',NOTO_HOMOLOG_PROJECT_REF))
-      .toBe(NOTO_HOMOLOG_PROJECT_REF);
+    expect(()=>validarProjetoHomolog('postgresql://usuario:senha@proxy.interno:5432/postgres',NOTO_HOMOLOG_PROJECT_REF))
+      .toThrow(/SUPABASE_PROJECT_REF_NAO_CONFIRMADO/);
   });
 
   it('recusa divergência entre URL e project ref explícito',()=>{
