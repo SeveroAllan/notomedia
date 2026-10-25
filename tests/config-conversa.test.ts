@@ -8,3 +8,7 @@ it('planner usa modelo forte por padrão e aceita override explícito', () => {
   expect(carregarConfig({}).openaiPlannerModel).toBe('gpt-6.1-sol');
   expect(carregarConfig({ OPENAI_PLANNER_MODEL: 'modelo-planejador' }).openaiPlannerModel).toBe('modelo-planejador');
 });
+
+it.each([undefined,'false','true'])('permissões continuam opt-in e só ligam com true literal: %s',valor=>{
+  expect(carregarConfig({PERMISSOES_ATIVA:valor}).permissoesAtiva).toBe(valor==='true');
+});
