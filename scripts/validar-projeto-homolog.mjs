@@ -13,13 +13,12 @@ export function extrairProjectRefSupabase(databaseUrl) {
 export function validarProjetoHomolog(databaseUrl, projectRefExplicito = process.env.SUPABASE_PROJECT_REF) {
   const inferido = extrairProjectRefSupabase(databaseUrl);
   const explicito = projectRefExplicito?.trim().toLowerCase() || null;
-  if (inferido && explicito && inferido !== explicito) throw new Error('SUPABASE_PROJECT_REF_INCONSISTENTE');
-  const selecionado = inferido ?? explicito;
-  if (!selecionado) {
-    throw new Error('SUPABASE_PROJECT_REF_NAO_CONFIRMADO: defina SUPABASE_PROJECT_REF e confira a conexão antes da migration');
+  if (!inferido) {
+    throw new Error('SUPABASE_PROJECT_REF_NAO_CONFIRMADO: DATABASE_URL precisa identificar o projeto antes da migration');
   }
-  if (selecionado !== NOTO_HOMOLOG_PROJECT_REF) {
-    throw new Error(`SUPABASE_PROJECT_REF_INCORRETO: esperado ${NOTO_HOMOLOG_PROJECT_REF}, recebido ${selecionado}`);
+  if (explicito && inferido !== explicito) throw new Error('SUPABASE_PROJECT_REF_INCONSISTENTE');
+  if (inferido !== NOTO_HOMOLOG_PROJECT_REF) {
+    throw new Error(`SUPABASE_PROJECT_REF_INCORRETO: esperado ${NOTO_HOMOLOG_PROJECT_REF}, recebido ${inferido}`);
   }
-  return selecionado;
+  return inferido;
 }
