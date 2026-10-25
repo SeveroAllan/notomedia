@@ -577,7 +577,8 @@ it('troca de escopo num único turno: recusa à proposta pendente abre o lote do
   expect(abrir).toHaveBeenCalledOnce();expect(abandonar).toHaveBeenCalled();
   expect(contar).toHaveBeenCalledExactlyOnceWith('medico','2026-10-23','2026-10-23T23:59:59.999-03:00',expect.any(Map),'tribemd');
   const falas=enviar.mock.calls.map((call: unknown[])=>(call[0] as {texto:string}).texto);
-  expect(falas.some((t:string)=>t.includes('não vou seguir com esse lote'))).toBe(true);
+  expect(falas.some((t:string)=>t.includes('Essa proposta ficou sem autorização'))).toBe(true);
+  expect(falas.join(' ')).not.toMatch(/não vou seguir|não vou emitir|conciliad/i);
   expect(falas.some((t:string)=>t.includes('Em 23/10/2026 achei 1 consulta com valor, somando R$ 350,00'))).toBe(true);
 });
 
@@ -631,7 +632,7 @@ it.each(['Pode preparar agora o lote, para minha confirmação.', 'prepare', 'ag
  const confirmar=vi.spyOn(PostgresLotesEmissao.prototype,'confirmar').mockResolvedValue(true);
  fronteiras.openai.mockResolvedValue(JSON.stringify({fala:[],acao:null,parametros:{confirmacao:{intencao:'sim',confianca:1}}}));
  enviar.mockResolvedValue({sucesso:true});await receber(criarAppExpress(),'preparar-veto',texto);
- expect(confirmar).not.toHaveBeenCalled();expect(enviar.mock.calls[0][0].texto).toContain('não vou emitir');
+ const textoSaida=String(enviar.mock.calls[0][0].texto);expect(confirmar).not.toHaveBeenCalled();expect(textoSaida).toMatch(/aguardando sua confirmação|sem autorização/);expect(textoSaida).not.toMatch(/não vou emitir|não vou seguir|conciliad/i);
 });
 
 it('timestamp original anterior à proposta não confirma no wiring mesmo processado depois',async()=>{
