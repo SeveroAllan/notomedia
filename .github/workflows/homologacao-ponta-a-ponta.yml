@@ -30,6 +30,9 @@ jobs:
             tests/memoria-conversa-continua.test.ts \
             tests/migracao-operador-seguranca.test.ts \
             tests/migracao-uso-mensal-medico-seguranca.test.ts \
+            tests/migracao-medicos-conta.test.ts \
+            tests/conta-multimedico-modelo.test.ts \
+            tests/profissionais-agenda-multimedico.test.ts \
             tests/projeto-homolog-migrations.test.ts \
             tests/mensagem-falha-emissao.test.ts \
             tests/processar-conversa-medico.test.ts \
