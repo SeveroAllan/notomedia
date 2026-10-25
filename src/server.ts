@@ -85,7 +85,7 @@ import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
 import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico } from './conta/medicos-conta.js';
-import { filtrarConsultasDoProfissional, profissionaisIdentificados } from './agenda/profissionais-agenda.js';
+import { descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
 import { HubDesenvolvedorCpfClient } from './io/hubdodesenvolvedor/hub-desenvolvedor-cpf-client.js';
 import { AdnNfseClient } from './io/fiscal/adn-nfse-client.js';
@@ -479,10 +479,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             const janelaDias=Math.max(1,Math.ceil((Date.parse(hoje)-Date.parse(desde))/86400000));
             const bruto=await cofres.fonteAgenda.consultar({medicoId:c.medicoId,referenciaCofre:c.medicoId,janelaDias,agora:c.agora});
             if(bruto.tipo==='erro')return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:bruto.codigo}};
-            const profissionais=profissionaisIdentificados(bruto.consultas);
-            if(!profissionais.length){
+            const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas,true);
+            if(descoberta.tipo!=='profissionais'){
               return {falaAssinada:['A TribeMD não identificou o profissional de cada consulta nessa leitura. Para não misturar médicos, preciso dessa identificação antes de continuar.'],dados:{ferramenta:'consultar_agenda',ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'}};
             }
+            const profissionais=descoberta.nomes;
             await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais}),'noto');
             const nomes=profissionais.slice(0,12).join(', ');
             const fala=[`Encontrei estes profissionais na TribeMD: ${nomes}. Para quais médicos você quer emitir pelo Noto?`];
