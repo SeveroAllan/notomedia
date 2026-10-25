@@ -13,7 +13,7 @@ const periodoSchema = z.object({
 export const interpretacaoSemanticaSchema = z.object({
   dominio: z.enum(['agenda','fiscal','documento','conexao','permissoes','conversa','outro']),
   objetivo: z.enum(['consultar','preparar','emitir','reenviar','conectar','configurar','responder','conversar','desconhecido']),
-  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','agenda','permissoes','outro']).nullable(),
+  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','entregas','agenda','permissoes','outro']).nullable(),
   granularidade: z.enum(['colecao','item','indefinida']),
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   periodo: periodoSchema,
@@ -35,6 +35,7 @@ Use texto, histórico, resumo, plano anterior, fatos e calendario para resolver 
 "consultas" significa agenda em geral. "pendencias_fiscais" significa consultas sem nota/pendentes para emissão.
 Preserve a medida pedida: lista, quantidade ou valor. Não reduza uma pergunta financeira a listar consultas.
 Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscais são métricas distintas.
+Perguntas sobre PDFs/notas que o Noto acabou de enviar, tentar enviar, reenviar ou entregar devem usar dominio=documento, objetivo=consultar, objeto=entregas quando fatos.entregasRecentes puder responder. Nesse caso não invente necessidade de agenda nem transforme a pergunta em novo reenvio.
 Resolva ambiguidade pelo contexto antes de perguntar. Quando uma pergunta financeira curta é continuação imediata de uma consulta/lista de agenda (por histórico ou plano anterior consultar:consultas) e não há evidência de recebimento/pagamento nem de notas fiscais, a leitura dominante é valor_realizado: o valor registrado nas consultas com status realizada. Isso não prova dinheiro recebido nem nota fiscal emitida.
 Use valor_recebido quando o sentido for dinheiro efetivamente recebido; valor_notas quando o sentido for notas fiscais; valor_agenda quando pedir os valores registrados na agenda independentemente do status.
 Use valor_indefinido somente quando o contexto não tornar uma dessas leituras claramente dominante ou quando duas leituras materiais continuarem igualmente plausíveis. Não peça esclarecimento por ambiguidade apenas teórica.
@@ -47,7 +48,7 @@ SAÍDA JSON estrita:
 {
  "dominio":"agenda|fiscal|documento|conexao|permissoes|conversa|outro",
  "objetivo":"consultar|preparar|emitir|reenviar|conectar|configurar|responder|conversar|desconhecido",
- "objeto":"consultas|pendencias_fiscais|notas|pdf|agenda|permissoes|outro"|null,
+ "objeto":"consultas|pendencias_fiscais|notas|pdf|entregas|agenda|permissoes|outro"|null,
  "granularidade":"colecao|item|indefinida",
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "periodo":{"inicio":"YYYY-MM-DD"|null,"fim":"YYYY-MM-DD"|null,"referencia":"explicito|contextual|nenhum"},
