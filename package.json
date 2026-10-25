@@ -18,7 +18,8 @@
     "migrate:cadastro": "node scripts/migrar-cadastro-certificado.mjs",
     "retry:nota": "node scripts/reprocessar-nota.mjs",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
-    "test:tribemd-browser": "tsc --noEmit -p tsconfig.test.json && TRIBEMD_BROWSER_REQUIRED=1 vitest run tests/tribemd-sync-janela.test.ts"
+    "test:tribemd-browser": "tsc --noEmit -p tsconfig.test.json && TRIBEMD_BROWSER_REQUIRED=1 vitest run tests/tribemd-sync-janela.test.ts",
+    "migrate:operador": "node scripts/migrar-operador-foco.mjs"
   },
   "keywords": [
     "nfse",
