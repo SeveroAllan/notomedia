@@ -5,7 +5,7 @@ begin;
 
 alter table if exists public.conversa_mensagens
   add column if not exists origem_operador text
-  check (origem_operador is null or origem_operador in ('medico','secretaria'));
+  check (origem_operador is null or origem_operador in ('medico','secretaria','conta'));
 
 -- Linhas antigas de entrada vieram do médico direto. Saídas do Noto ficam null.
 update public.conversa_mensagens
