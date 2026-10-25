@@ -25,7 +25,8 @@ import { aposEnfileirarComprovante } from './fluxos/apos-enfileirar-comprovante.
 import { extrairTelefoneJid } from './whatsapp/extrair-telefone-jid.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
-import { Permissoes, ROTULOS } from './permissoes/permissoes.js';
+import { Permissoes } from './permissoes/permissoes.js';
+import { confirmarEscolhaPermissao } from './permissoes/confirmar-escolha.js';
 import { criarRouterPermissoes } from './permissoes/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
 import { CadastroCertificado } from './cadastro/cadastro-certificado.js';
@@ -158,19 +159,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Credenciais do cofre não passam pelo parser geral que conserva rawBody.
   app.use('/api/conta/cofre', cofres.app);
   if (cofres.appLinks) app.use('/c', cofres.appLinks);
-  if (permissoesNoto) app.use('/p', criarRouterPermissoes(permissoesNoto, origemLinksSeguros, async r => {
-    // Escolha gravada: confirma na conversa. Falha aqui não desfaz a gravação (já commitada).
-    const rotulo = ROTULOS[r.permissao as keyof typeof ROTULOS];
-    if (!r.medicoId || !rotulo) return;
-    if (r.permissao === 'solicitar_cpf') await pool.query(
-      `update medicos m set solicitar_cpf_direto_paciente=$2, atualizado_em=now()
-       from noto_whatsapps_medicos wm join noto_whatsapps_conectados c on c.id=wm.whatsapp_conectado_id
-       where wm.medico_id=m.id and c.id=(select wm2.whatsapp_conectado_id from noto_whatsapps_medicos wm2 where wm2.medico_id=$1)`,
-      [r.medicoId, r.valor === 'paciente']).catch(() => {});
-    await comunicacaoHomologacao.conversa({ medicoId: r.medicoId,
-      chave: `permissao_escolhida:${r.linkId}`,
-      fala: [`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${rotulo.botoes[r.valor]}. Isso só define sua preferência; não envia notas antigas. Se quiser mudar depois, é só me pedir.`] });
-  }));
+  if (permissoesNoto) app.use('/p', criarRouterPermissoes(permissoesNoto, origemLinksSeguros, async r =>
+    confirmarEscolhaPermissao(r,{pool,confirmar:entrada=>comunicacaoHomologacao.conversa(entrada)})));
   app.locals.encerrarCofres = cofres.encerrar;
   app.use(
     express.json({
