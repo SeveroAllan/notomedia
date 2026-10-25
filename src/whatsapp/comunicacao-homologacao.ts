@@ -65,7 +65,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
     nota.dataEmissao ? `emissão ${nota.dataEmissao.split('-').reverse().join('/')}` : null,
     nota.nomeTomador ? `tomador ${nota.nomeTomador}` : null
   ].filter(Boolean).join(', ');
-  return `Doutor(a), recebi um PDF de nota fiscal${partes ? ` (${partes})` : ''}. Como está na fase inicial, vou considerar que essa nota já foi emitida fora do Noto e não vou emitir outra para a consulta correspondente. Se não for isso, me avise?`;
+  return `Doutor(a), recebi um PDF de nota fiscal${partes ? ` (${partes})` : ''}. Pelo PDF, essa nota parece já ter sido emitida fora do Noto. Vou considerar essa consulta atendida por essa nota. Se não for isso, me avise que eu reviso.`;
 }
 
 export class ComunicacaoHomologacao {
