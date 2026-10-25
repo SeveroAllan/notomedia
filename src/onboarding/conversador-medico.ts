@@ -210,7 +210,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     const agendaAlvo=normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined);
     if (!agendaSuportada(agendaAlvo)) return 'AGENDA_NAO_SUPORTADA';
     const alvoConectado=agendaAlvo
-      ? fatos.agendas?.[agendaAlvo]?.conectada ?? (normalizarAgenda(fatos.agenda.nome??undefined)===agendaAlvo&&fatos.agenda.conectada)
+      ? (fatos.agendas ? fatos.agendas[agendaAlvo].conectada : fatos.agenda.conectada)
       : false;
     const linkMesmoAlvo=!!fatos.link.ativo&&(!fatos.link.agenda||normalizarAgenda(fatos.link.agenda)===agendaAlvo);
     if (alvoConectado || linkMesmoAlvo || fatos.semAgendaDigital) return 'CONEXAO_NAO_NECESSARIA';
