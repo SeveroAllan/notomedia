@@ -36,7 +36,26 @@ it('entrega plano anterior ao interpretador para resolver referência financeira
   expect(r?.medida).toBe('valor_realizado');
   const payload=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
   expect(payload.plano).toEqual(plano);
-  expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('a leitura dominante é valor_realizado');
+  expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain("Use medida='valor_realizado' when a short financial question");
+});
+
+it('interpretador usa instruções em inglês para entrada pt-BR',()=>{
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('Brazilian Portuguese (pt-BR)');
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('Return only the semantic JSON object.');
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).not.toContain('Interprete a mensagem');
+});
+
+it('pergunta sobre envio recente usa entregas, sem agenda nem reenvio',async()=>{
+ const entrega={notaFiscalId:'nf-1',solicitacaoId:'sol-1',ndps:42,paciente:'Paciente Teste',datasConsulta:'20/10/2026',valorCentavos:25000,destino:'medico' as const,origem:'pedido_historico' as const,resultado:'enviado' as const,registradaEm:'2026-10-25T09:00:00.000Z'};
+ const f:FatosConversa={...fatos,entregasRecentes:[entrega]};
+ const esperado:InterpretacaoSemantica={...frame,dominio:'documento',objetivo:'consultar',objeto:'entregas',granularidade:'colecao',periodo:{inicio:null,fim:null,referencia:'nenhum'}};
+ const completar=vi.fn<typeof completarOpenAi>(async()=>JSON.stringify(esperado));
+ const i=new InterpretadorSemantico('k','gpt-6.1-sol',completar);
+ expect(await i.interpretar({texto:'Que notas são essas?',mensagens:[],resumo:null,fatos:f,agora})).toEqual(esperado);
+ const payload=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
+ expect(payload.fatos.entregasRecentes).toEqual([entrega]);
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain("Use objeto='entregas'");
+ expect(planejarPorSemantica(esperado,f,['nenhuma','consultar_agenda','reenviar_nota_medico'])).toBeNull();
 });
 
 it('planner mapeia significado de agenda para consultar_agenda, não listar_pendencias',()=>{
