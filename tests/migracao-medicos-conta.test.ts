@@ -26,3 +26,18 @@ it('runner usa a trava do projeto homolog antes de abrir conexão',()=>{
   expect(runner.indexOf("validarProjetoHomolog(process.env.DATABASE_URL);")).toBeLessThan(runner.indexOf('new pg.Pool'));
   expect(runner).toContain('20261101-medicos-por-conta.sql');
 });
+
+it('visibilidade RLS de médicos segue a conta, não o papel do usuário',()=>{
+  expect(sql).toMatch(/create\s+or\s+replace\s+function\s+public\.medicos_visiveis_para[\s\S]*join\s+public\.medicos\s+m\s+on\s+m\.conta_id=u\.conta_id/i);
+  expect(sql).toMatch(/revoke\s+execute\s+on\s+function\s+public\.medicos_visiveis_para\(uuid\)\s+from\s+public,\s*anon/i);
+  expect(sql).toMatch(/grant\s+execute[\s\S]*to\s+authenticated,\s*service_role/i);
+});
+
+it('referência de agenda é interna e protegida por RLS e revoke',()=>{
+  expect(sql).toContain('create table if not exists public.noto_medico_agenda_referencias');
+  expect(sql).toContain('alter table public.noto_medico_agenda_referencias enable row level security;');
+  expect(sql).toMatch(/revoke\s+all\s+on\s+table\s+public\.noto_medico_agenda_referencias\s+from\s+anon,\s*authenticated/i);
+  expect(sql).toContain("has_table_privilege('anon','public.noto_medico_agenda_referencias','SELECT')");
+  expect(sql).toContain("has_table_privilege(current_user,'public.noto_medico_agenda_referencias','INSERT')");
+});
+
