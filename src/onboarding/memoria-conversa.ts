@@ -36,10 +36,28 @@ export type EntregaNotaContexto = {
   registradaEm: string;
 };
 
+export type ChunkConversa = {
+  id: string;
+  nivel: number;
+  inicioId: string;
+  fimId: string;
+  resumo: string;
+};
+export type CategoriaMemoriaSemantica = 'preferencia_agenda' | 'preferencia_comunicacao' | 'rotina' | 'decisao' | 'outro';
+export type MemoriaSemantica = {
+  chave: string;
+  categoria: CategoriaMemoriaSemantica;
+  valor: string;
+  origemConversa: string;
+  origemMensagemId: string;
+  confianca: number;
+};
+export type FaseTrabalhoAgente = 'iniciada' | 'concluida' | 'recusada' | 'falhou';
+
 export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   constructor(private readonly pool: pg.Pool) {}
 
-  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa; entregasRecentes: EntregaNotaContexto[] }> {
+  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa; entregasRecentes: EntregaNotaContexto[]; linhaDoTempo?: ChunkConversa[]; memoriasSemanticas?: MemoriaSemantica[] }> {
     const historicoRecente = await this.ler(medicoId, conversa);
     const marcas = {
       semAgendaDigital: await this.semAgendaDigital(medicoId, conversa),
@@ -49,7 +67,14 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     const resumo = await this.lerResumo(medicoId, conversa);
     const plano = await this.lerPlano(medicoId, conversa);
     const entregasRecentes = await this.lerEntregasRecentes(medicoId, conversa);
-    return plano ? { historicoRecente, marcas, resumo, plano, entregasRecentes } : { historicoRecente, marcas, resumo, entregasRecentes };
+    // Memória longa é enriquecimento. Durante rolling deploy, ausência das tabelas novas
+    // não pode derrubar o WhatsApp; o runtime volta ao contrato anterior até a migração.
+    const [linhaDoTempo, memoriasSemanticas] = await Promise.all([
+      this.lerChunksRaiz(medicoId, conversa).catch(() => [] as ChunkConversa[]),
+      this.lerMemoriasSemanticas(medicoId).catch(() => [] as MemoriaSemantica[])
+    ]);
+    const base = plano ? { historicoRecente, marcas, resumo, plano, entregasRecentes } : { historicoRecente, marcas, resumo, entregasRecentes };
+    return { ...base, ...(linhaDoTempo.length ? { linhaDoTempo } : {}), ...(memoriasSemanticas.length ? { memoriasSemanticas } : {}) };
   }
 
   registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
@@ -112,9 +137,76 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     }catch{return [];}});
   }
 
+  async lerChunksRaiz(medicoId:string,conversa:string):Promise<ChunkConversa[]> {
+    const {rows}=await this.pool.query<{id:string;nivel:number;inicio_mensagem_id:string;fim_mensagem_id:string;resumo:string}>(`
+      select id::text,nivel,inicio_mensagem_id::text,fim_mensagem_id::text,resumo from (
+        select id,nivel,inicio_mensagem_id,fim_mensagem_id,resumo
+        from conversa_chunks where medico_id=$1 and conversa=$2 and pai_id is null
+        order by inicio_mensagem_id desc limit 16
+      ) raiz order by inicio_mensagem_id asc`,[medicoId,conversa]);
+    return rows.map(r=>({id:r.id,nivel:Number(r.nivel),inicioId:r.inicio_mensagem_id,fimId:r.fim_mensagem_id,resumo:sanitizarTextoMedico(r.resumo)}));
+  }
+
+  async lerChunksParaConsolidar(medicoId:string,conversa:string,nivel:number,limite=4):Promise<ChunkConversa[]> {
+    const {rows}=await this.pool.query<{id:string;nivel:number;inicio_mensagem_id:string;fim_mensagem_id:string;resumo:string}>(`
+      select id::text,nivel,inicio_mensagem_id::text,fim_mensagem_id::text,resumo
+      from conversa_chunks where medico_id=$1 and conversa=$2 and nivel=$3 and pai_id is null
+      order by inicio_mensagem_id asc limit $4`,[medicoId,conversa,nivel,limite]);
+    return rows.map(r=>({id:r.id,nivel:Number(r.nivel),inicioId:r.inicio_mensagem_id,fimId:r.fim_mensagem_id,resumo:sanitizarTextoMedico(r.resumo)}));
+  }
+
+  async registrarChunk(medicoId:string,conversa:string,nivel:number,inicioId:string,fimId:string,resumo:string,filhos:string[]=[]):Promise<string|null> {
+    const seguro=sanitizarTextoMedico(resumo);
+    const {rows}=await this.pool.query<{id:string}>(`
+      insert into conversa_chunks (medico_id,conversa,nivel,inicio_mensagem_id,fim_mensagem_id,resumo)
+      values ($1,$2,$3,$4::bigint,$5::bigint,$6)
+      on conflict (medico_id,conversa,nivel,inicio_mensagem_id,fim_mensagem_id)
+      do update set resumo=excluded.resumo
+      returning id::text`,[medicoId,conversa,nivel,inicioId,fimId,seguro]);
+    const id=rows[0]?.id??null;
+    if(id&&filhos.length) await this.pool.query(
+      'update conversa_chunks set pai_id=$1::bigint where medico_id=$2 and conversa=$3 and id=any($4::bigint[]) and pai_id is null',
+      [id,medicoId,conversa,filhos]);
+    return id;
+  }
+
+  async lerMemoriasSemanticas(medicoId:string):Promise<MemoriaSemantica[]> {
+    const {rows}=await this.pool.query<{chave:string;categoria:CategoriaMemoriaSemantica;valor:string;origem_conversa:string;origem_mensagem_id:string;confianca:number}>(`
+      select chave,categoria,valor,origem_conversa,origem_mensagem_id::text,confianca
+      from conversa_memorias_semanticas where medico_id=$1 and ativa=true
+      order by atualizado_em desc limit 12`,[medicoId]);
+    return rows.map(r=>({chave:r.chave,categoria:r.categoria,valor:sanitizarTextoMedico(r.valor),origemConversa:r.origem_conversa,origemMensagemId:r.origem_mensagem_id,confianca:Number(r.confianca)}));
+  }
+
+  async registrarMemoriaSemantica(medicoId:string,memoria:MemoriaSemantica):Promise<void> {
+    if(!/^[a-z0-9_:-]{3,80}$/.test(memoria.chave)||memoria.confianca<.9)return;
+    await this.pool.query(`
+      insert into conversa_memorias_semanticas
+        (medico_id,chave,categoria,valor,origem_conversa,origem_mensagem_id,confianca)
+      values ($1,$2,$3,$4,$5,$6::bigint,$7)
+      on conflict (medico_id,chave) do update set
+        categoria=excluded.categoria,valor=excluded.valor,origem_conversa=excluded.origem_conversa,
+        origem_mensagem_id=excluded.origem_mensagem_id,confianca=excluded.confianca,ativa=true,atualizado_em=now()
+      where conversa_memorias_semanticas.origem_mensagem_id <= excluded.origem_mensagem_id`,
+      [medicoId,memoria.chave,memoria.categoria,sanitizarTextoMedico(memoria.valor),memoria.origemConversa,memoria.origemMensagemId,memoria.confianca]);
+  }
+
+  async registrarEventoTrabalho(medicoId:string,conversa:string,chaveProcessamento:string,ferramenta:string,fase:FaseTrabalhoAgente,metadados:Record<string,unknown>={}):Promise<void> {
+    await this.pool.query(`
+      insert into conversa_trabalho_eventos (medico_id,conversa,chave_processamento,ferramenta,fase,metadados)
+      values ($1,$2,$3,$4,$5,$6::jsonb) on conflict do nothing`,
+      [medicoId,conversa,chaveProcessamento,sanitizarTextoMedico(ferramenta),fase,JSON.stringify(metadados)]);
+  }
+
   async limparTudoDoMedico(medicoId: string): Promise<void> {
     await this.pool.query(`with mensagens_removidas as (
       delete from conversa_mensagens where medico_id=$1 returning medico_id
+    ), trabalho_removido as (
+      delete from conversa_trabalho_eventos where medico_id=$1 returning medico_id
+    ), memorias_removidas as (
+      delete from conversa_memorias_semanticas where medico_id=$1 returning medico_id
+    ), chunks_removidos as (
+      delete from conversa_chunks where medico_id=$1 returning medico_id
     ) delete from conversa_resumos where medico_id=$1`, [medicoId]);
   }
 
@@ -187,9 +279,9 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     return rows[0] ? { resumo: sanitizarTextoMedico(rows[0].resumo), ateId: rows[0].ate_id } : null;
   }
 
-  async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string }>> {
-    const { rows } = await this.pool.query<{ id: string; texto: string }>(
-      `select id::text, texto from (select id, texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id not like 'contexto:%'
+  async lerAntigas(medicoId: string, conversa: string, ateId: string): Promise<Array<{ id: string; texto: string; papel?: 'medico'|'noto' }>> {
+    const { rows } = await this.pool.query<{ id: string; texto: string; papel?: 'medico'|'noto' }>(
+      `select id::text, texto, papel from (select id, texto, papel from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id not like 'contexto:%'
         order by id desc offset $4) antigas where id > $3::bigint order by antigas.id asc`,
       [medicoId, conversa, ateId, LIMITE_MENSAGENS_CONTEXTO_MEDICO]);
     return rows.map(mensagem => ({ ...mensagem, texto: sanitizarTextoMedico(mensagem.texto) }));
