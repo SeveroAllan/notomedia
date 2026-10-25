@@ -17,8 +17,10 @@ export const ACOES_CONVERSA = ['pedir_link_agenda', 'consultar_agenda', 'listar_
 export const PROMPT_CONVERSA = `Noto is a fiscal assistant on WhatsApp.
 
 LANGUAGE
-- Write all user-visible text in Brazilian Portuguese (pt-BR).
-- Use first person and at most 3 natural message bubbles.
+- Write user-visible text in natural, professional Brazilian Portuguese (pt-BR).
+- Use first person and at most 3 short message bubbles.
+- Apply ASD-STE100 principles at about 80% rigidity. Keep the conversation human and natural.
+- Never use semicolons in fala. Put the next thought in another bubble.
 - Keep JSON keys, enum values, action names, and tool names unchanged.
 
 FACTS AND SAFETY
@@ -69,8 +71,7 @@ DECISION PROCEDURE
 10. Before an action, state in one sentence who will do what next.
 11. For only "ok" or "beleza" with no new step, use fala=[] plus a reaction, or one short sentence.
 12. If the doctor says "Pode emitir" before the summary, prepare quantity and total for confirmation.
-13. Use a colleague tone.
-   Avoid "Entendi o período:", "como combinamos", "ambiente", "cruzar", and "comprovantes".
+13. Avoid "Entendi o período:", "como combinamos", "ambiente", "cruzar", and "comprovantes".
 14. If fatos.tarefaEmCurso=true, report progress and do not offer the same issue again.
 15. Use fatos.permissoes.faltantes. If interpretacaoSemantica.permissaoNecessaria is missing, use pedir_link_permissoes.
    Ask only for that choice. Do not ask again unless the doctor asks to change it.
@@ -128,6 +129,12 @@ export function confirmacaoDaDecisao(d:DecisaoConversa) {
   // qualquer outra ação não carrega interpretação utilizável.
   return !d.acao || d.acao==='nenhuma' || d.acao==='iniciar_lote' ? d.parametros?.confirmacao??{intencao:'duvida' as const,confianca:0} : {intencao:'duvida' as const,confianca:0};
 }
+export function normalizarBaloesSemPontoEVirgula(falas:readonly string[]):string[] {
+  const partes=falas.flatMap(f=>f.split(';').map(x=>x.trim()).filter(Boolean));
+  if(partes.length<=3)return partes;
+  return falas.map(f=>f.replace(/\s*;\s*/g,'. ').replace(/\.\s*\./g,'. ').trim()).filter(Boolean).slice(0,3);
+}
+
 export interface FatosConversa {
   ambiente: string | null;
   agenda: { nome: string | null; conectada: boolean };
@@ -268,6 +275,7 @@ export class ConversadorMedico {
       // O link é gerado e anexado pelo sistema: a fala nunca carrega URL (o histórico sanitizado pode induzir eco do placeholder).
       if ((resposta.acao ?? null) === 'pedir_link_agenda')
         resposta.fala = resposta.fala.map(t => t.replace(/https?:\/\/\S+/gi, '').replace(/\s{2,}/g, ' ').trim()).filter(Boolean);
+      resposta.fala=normalizarBaloesSemPontoEVirgula(resposta.fala);
       // Rascunho de ação sem anúncio volta ao decisor uma vez antes de qualquer efeito.
       const confirmacaoPendente=entrada.fatos.lote?.estado==='aguardando_confirmacao_lote' && resposta.parametros?.confirmacao && (!resposta.acao || resposta.acao==='nenhuma') && entrada.resultadoFerramenta===undefined;
       if (!resposta.fala.length && !resposta.reacao && !confirmacaoPendente && (!resposta.acao || resposta.acao==='nenhuma' || entrada.resultadoFerramenta!==undefined)) throw Error('FALA_AUSENTE');
