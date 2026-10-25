@@ -133,15 +133,16 @@ export function reconciliarInterpretacaoSemantica(i:InterpretacaoSemantica,fatos
 /** Mapeia significado estruturado para capacidade; não interpreta linguagem. */
 export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConversa,permitidas:readonly string[]):DecisaoConversa|null{
   if(i.confianca<.8)return null;
-  const faltaPermissao=i.permissaoNecessaria&&i.faltando.includes('permissao');
-  if(faltaPermissao&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
-    return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
+  const permissaoNecessaria=i.permissaoNecessaria??null;
+  const faltaPermissao=permissaoNecessaria!==null&&i.faltando.includes('permissao');
+  if(faltaPermissao&&permissaoNecessaria&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
+    return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
   if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&fatos.agenda.nome&&permitidas.includes('pedir_link_agenda')){
     return {fala:['Para continuar, preciso conectar sua agenda só para leitura.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:fatos.agenda.nome}};
   }
-  if(faltaPermissao&&permitidas.includes('pedir_link_permissoes')){
-    return {fala:['Para registrar essa escolha, vou te mandar o link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:i.permissaoNecessaria}};
+  if(faltaPermissao&&permissaoNecessaria&&permitidas.includes('pedir_link_permissoes')){
+    return {fala:['Para registrar essa escolha, vou te mandar o link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
   if((i.dominio==='agenda'||i.dominio==='fiscal')&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
