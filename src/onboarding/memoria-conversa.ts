@@ -23,11 +23,23 @@ export type PlanoConversa = {
   proximosPassos: string[];
   aguardando: string | null;
 };
+export type EntregaNotaContexto = {
+  notaFiscalId: string;
+  solicitacaoId: string;
+  ndps: number | null;
+  paciente: string | null;
+  datasConsulta: string | null;
+  valorCentavos: number | null;
+  destino: 'medico' | 'paciente';
+  origem: 'nota_nova' | 'pedido_historico';
+  resultado: 'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao';
+  registradaEm: string;
+};
 
 export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   constructor(private readonly pool: pg.Pool) {}
 
-  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa }> {
+  async lerContextoParaModelo(medicoId: string, conversa: string): Promise<{ historicoRecente: string[]; marcas: { semAgendaDigital: boolean; linkAgendaSolicitado: boolean; boasVindasComunicadas: boolean }; resumo: ResumoConversa | null; plano?: PlanoConversa; entregasRecentes: EntregaNotaContexto[] }> {
     const historicoRecente = await this.ler(medicoId, conversa);
     const marcas = {
       semAgendaDigital: await this.semAgendaDigital(medicoId, conversa),
@@ -36,7 +48,8 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
     };
     const resumo = await this.lerResumo(medicoId, conversa);
     const plano = await this.lerPlano(medicoId, conversa);
-    return plano ? { historicoRecente, marcas, resumo, plano } : { historicoRecente, marcas, resumo };
+    const entregasRecentes = await this.lerEntregasRecentes(medicoId, conversa);
+    return plano ? { historicoRecente, marcas, resumo, plano, entregasRecentes } : { historicoRecente, marcas, resumo, entregasRecentes };
   }
 
   registrarFala(medicoId: string, conversa: string, id: string, texto: string, papel: 'medico' | 'noto' = 'medico'): Promise<boolean> {
@@ -76,6 +89,27 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
       if (!plano?.objetivo || !plano?.etapa || !Array.isArray(plano.faltando) || !Array.isArray(plano.proximosPassos)) return null;
       return plano;
     } catch { return null; }
+  }
+
+  async registrarEntregaNota(medicoId:string,conversa:string,chave:string,entrega:EntregaNotaContexto):Promise<void> {
+    const seguro:EntregaNotaContexto={
+      ...entrega,
+      paciente:entrega.paciente?sanitizarTextoMedico(entrega.paciente):null,
+      datasConsulta:entrega.datasConsulta?sanitizarTextoMedico(entrega.datasConsulta):null
+    };
+    await this.pool.query(`insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,'noto')
+      on conflict (medico_id, mensagem_id) do update set conversa=excluded.conversa,texto=excluded.texto,papel='noto',criada_em=now()`,
+      [medicoId,conversa,`contexto:entrega_nota:${chave}`,JSON.stringify(seguro)]);
+  }
+
+  async lerEntregasRecentes(medicoId:string,conversa:string):Promise<EntregaNotaContexto[]> {
+    const {rows}=await this.pool.query<{texto:string}>(`select texto from conversa_mensagens
+      where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:entrega_nota:%'
+      order by id desc limit 8`,[medicoId,conversa]);
+    return rows.flatMap(r=>{try{
+      const e=JSON.parse(r.texto) as EntregaNotaContexto;
+      return e?.notaFiscalId&&e?.solicitacaoId&&e?.destino&&e?.resultado?[e]:[];
+    }catch{return [];}});
   }
 
   async limparTudoDoMedico(medicoId: string): Promise<void> {
