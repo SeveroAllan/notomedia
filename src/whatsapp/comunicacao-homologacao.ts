@@ -311,7 +311,7 @@ export class ComunicacaoHomologacao {
         const resultado=this.simular('nota_paciente');await registrarEntrega('paciente',resultado);return resultado;
       }
       const propria = nota.nome_instancia && nota.instancia_status === 'conectado' &&
-        (nota.instancia_conta_id === nota.medico_conta_id || nota.instancia_medico_id === medicoId) &&
+        ((nota.instancia_conta_id && nota.medico_conta_id && nota.instancia_conta_id === nota.medico_conta_id) || nota.instancia_medico_id === medicoId) &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {
         if (nota.origem !== 'lote') await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
