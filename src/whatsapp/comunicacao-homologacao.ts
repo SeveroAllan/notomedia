@@ -232,20 +232,11 @@ export class ComunicacaoHomologacao {
     return this.paciente({ medicoId, solicitacaoId: rows[0].solicitacao_id, chaveReenvio:chavePedido }, transporte);
   }
 
-  async retomarEntregaMedico(medicoId: string, transporte: EnviarPdfDanfse): Promise<void> {
-    if ((await this.permissoes?.ler(medicoId, 'entregar_paciente'))?.valor !== 'so_medico') return;
-    const { rows } = await this.pool.query(`select sn.id as solicitacao_id from solicitacoes_nota sn
-      join notas_fiscais nf on nf.solicitacao_id=sn.id and nf.medico_id=sn.medico_id
-      join public.noto_emissoes_comprovantes ec on ec.nota_fiscal_id=nf.id and ec.medico_id=sn.medico_id
-      where sn.medico_id=$1 and nf.status='autorizada' and ec.estado='nota_gerada'
-      order by nf.criado_em`, [medicoId]);
-    for (const r of rows) await this.paciente({ medicoId, solicitacaoId: r.solicitacao_id }, transporte);
-  }
 
   async paciente(entrada: { medicoId: string; solicitacaoId: string; chaveReenvio?:string }, transporte: EnviarPdfDanfse): Promise<'simulado' | 'enviado' | 'erro' | 'repetido' | 'sem_contato' | 'sem_permissao'> {
     const { medicoId, solicitacaoId } = entrada;
     try {
-      const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, sn.origem,
+      const { rows } = await this.pool.query(`select nf.id as nota_fiscal_id, nf.pdf_storage_path, nf.ndps, nf.valor_servicos_centavos, sn.origem, sn.datas_consulta_texto, p.nome as paciente_nome,
         u.telefone as telefone_medico, case when sn.contato_paciente_encriptado is not null then pgp_sym_decrypt(sn.contato_paciente_encriptado, $5)
           when sn.origem='lote' then null else p.telefone end as contato_telefone, pf.ambiente, wi.nome_instancia,
         wi.medico_id as instancia_medico_id, wi.status as instancia_status
@@ -260,18 +251,32 @@ export class ComunicacaoHomologacao {
         where sn.id = $1 and sn.medico_id = $2 and nf.medico_id = $2 and nf.status = 'autorizada'`,
         [solicitacaoId, medicoId, this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName, this.config.encryptionKey]);
       const nota = rows[0];
+      const origemEntrega=entrada.chaveReenvio?'pedido_historico' as const:'nota_nova' as const;
+      const registrarEntrega=async(destino:'medico'|'paciente',resultado:'simulado'|'enviado'|'erro'|'repetido'|'sem_contato'|'sem_permissao')=>{
+        if(!nota?.nota_fiscal_id||!nota?.telefone_medico)return;
+        const conversa=createHash('sha256').update(JSON.stringify([this.config.evolutionAssistantInstanceName,String(nota.telefone_medico).replace(/\D/g,'')])).digest('hex');
+        const chave=createHmac('sha256',this.config.appPepper).update(JSON.stringify([nota.nota_fiscal_id,destino,origemEntrega,entrada.chaveReenvio??'nova'])).digest('hex');
+        await new PostgresMemoriaConversaMedico(this.pool).registrarEntregaNota(medicoId,conversa,chave,{
+          notaFiscalId:nota.nota_fiscal_id,solicitacaoId,paciente:nota.paciente_nome??null,datasConsulta:nota.datas_consulta_texto??null,
+          ndps:Number.isInteger(nota.ndps)?Number(nota.ndps):null,valorCentavos:Number.isInteger(nota.valor_servicos_centavos)?Number(nota.valor_servicos_centavos):null,
+          destino,origem:origemEntrega,resultado,registradaEm:new Date().toISOString()
+        }).catch(()=>{});
+      };
       if (nota && (await this.permissoes?.ler?.(medicoId, 'entregar_paciente'))?.valor === 'so_medico') {
-        if (!this.permitido(this.config.envioMedicoRealAtivo, nota.ambiente, nota.telefone_medico)) return this.simular('nota_medico');
-        if (!nota.pdf_storage_path || !this.transporte.enviarPdf) return 'erro';
-        return await this.enviarUnico(medicoId, 'nota_medico', entrada.chaveReenvio?JSON.stringify([nota.nota_fiscal_id,'reenvio',entrada.chaveReenvio]):nota.nota_fiscal_id, async () => (await this.transporte.enviarPdf!({
+        if (!this.permitido(this.config.envioMedicoRealAtivo, nota.ambiente, nota.telefone_medico)) {
+          const resultado=this.simular('nota_medico');await registrarEntrega('medico',resultado);return resultado;
+        }
+        if (!nota.pdf_storage_path || !this.transporte.enviarPdf) {await registrarEntrega('medico','erro');return 'erro';}
+        const resultado=await this.enviarUnico(medicoId, 'nota_medico', entrada.chaveReenvio?JSON.stringify([nota.nota_fiscal_id,'reenvio',entrada.chaveReenvio]):nota.nota_fiscal_id, async () => (await this.transporte.enviarPdf!({
           instanciaNome: this.config.evolutionAssistantInstanceName, contatoTelefone: nota.telefone_medico,
           pdfPathOuUrl: nota.pdf_storage_path, nomeArquivo: 'DANFSe.pdf',
           legenda: 'Segue sua nota de homologação para você repassar. Documento sem valor fiscal.'
         })).sucesso);
+        await registrarEntrega('medico',resultado);return resultado;
       }
       if (nota?.origem === 'lote') {
         const telefone = typeof nota.contato_telefone === 'string' ? nota.contato_telefone.replace(/\D/g, '') : '';
-        if (!/^\d{10,13}$/.test(telefone)) return 'sem_contato';
+        if (!/^\d{10,13}$/.test(telefone)) {await registrarEntrega('paciente','sem_contato');return 'sem_contato';}
         nota.contato_telefone = telefone;
       }
       // Permissão entregar_paciente: só a escolha gravada 'paciente' libera o envio. Ausente ou 'so_medico' bloqueia.
@@ -284,22 +289,25 @@ export class ComunicacaoHomologacao {
           const link = await this.permissoes.criarLink(medicoId, 'entregar_paciente').catch(() => null);
           if (link && 'url' in link) await this.medico({ medicoId, acao: 'entrega_sem_permissao_link', chave: nota.nota_fiscal_id, texto: link.url }).catch(() => 'erro');
         }
+        await registrarEntrega('paciente','sem_permissao');
         return 'sem_permissao';
       }
-      if (!nota || !this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone)) return this.simular('nota_paciente');
-      if (!this.config.envioPacienteRealAtivo) return this.simular('nota_paciente');
+      if (!nota) return this.simular('nota_paciente');
+      if (!this.permitido(this.config.envioPacienteRealAtivo, nota.ambiente, nota.contato_telefone) || !this.config.envioPacienteRealAtivo) {
+        const resultado=this.simular('nota_paciente');await registrarEntrega('paciente',resultado);return resultado;
+      }
       const propria = nota.nome_instancia && nota.instancia_medico_id === medicoId && nota.instancia_status === 'conectado' &&
         ![this.config.evolutionOfficialInstanceName, this.config.evolutionAssistantInstanceName].includes(nota.nome_instancia);
       if (!propria || !nota.pdf_storage_path) {
         if (nota.origem !== 'lote') await this.medico({ medicoId, acao: propria ? 'falha_entrega' : 'instancia_indisponivel', chave: nota.nota_fiscal_id });
-        return 'erro';
+        await registrarEntrega('paciente','erro');return 'erro';
       }
       const resultado = await this.enviarUnico(medicoId, 'nota_paciente', nota.nota_fiscal_id, async () => (await transporte.enviarPdf({
         instanciaNome: nota.nome_instancia, contatoTelefone: nota.contato_telefone, pdfPathOuUrl: nota.pdf_storage_path,
         nomeArquivo: 'DANFSe.pdf', legenda: 'Segue sua nota enviada pelo consultório. Documento de homologação, sem valor fiscal.'
       })).sucesso);
       if (resultado === 'erro' && nota.origem !== 'lote') await this.medico({ medicoId, acao: 'falha_entrega', chave: nota.nota_fiscal_id });
-      return resultado;
+      await registrarEntrega('paciente',resultado);return resultado;
     } catch { this.log('ENTREGA_COMPROVANTE_FALHOU'); return 'erro'; }
   }
 
