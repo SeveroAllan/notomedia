@@ -42,6 +42,13 @@ export interface MedicoDadosRegistro {
   telefone?: string;
 }
 
+export interface OperadorMedicoRegistro {
+  usuarioId: string;
+  tipo: 'medico' | 'secretaria';
+  telefone: string;
+  medicos: Array<{ id: string; nomeCompleto: string; crm: string | null }>;
+}
+
 export interface ConsultaEmAbertoRegistro {
   id: string;
   dataHora: Date;
@@ -84,6 +91,9 @@ export interface AtendimentoRepositorio {
 
   vincularPacienteConversa(conversaId: string, pacienteId: string): Promise<void>;
   buscarMedicoPorTelefone(telefone: string): Promise<MedicoDadosRegistro | null>;
+  buscarOperadorPorTelefone?(telefone: string): Promise<OperadorMedicoRegistro | null>;
+  lerFocoOperador?(usuarioId: string): Promise<string | null>;
+  salvarFocoOperador?(usuarioId: string, medicoId: string): Promise<boolean>;
   salvarMensagem?(params: {
     conversaId: string;
     direcao: 'recebida' | 'enviada';
