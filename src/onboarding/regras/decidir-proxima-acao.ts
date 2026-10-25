@@ -105,12 +105,12 @@ export function montarBoasVindas(
   const nomeSaudacao = primeiroNome.charAt(0).toLocaleUpperCase('pt-BR') + primeiroNome.slice(1);
   const entrega = !capacidade.envioPacienteRealAtivo
     ? capacidade.entregarPaciente==='paciente'
-      ? 'Sua escolha de entrega ao paciente está salva, mas esse envio está desligado neste ambiente; por enquanto não envio notas ao paciente.'
-      : 'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.'
+      ? 'Sua escolha de entrega ao paciente está salva, mas esse envio está desligado neste ambiente. Por enquanto não envio notas ao paciente.'
+      : 'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.'
     : !capacidade.permissoesAtivas || !capacidade.entregarPaciente
-      ? 'Antes de qualquer entrega ao paciente, preciso da sua escolha; sem ela, não envio.'
+      ? 'Antes de qualquer entrega ao paciente, preciso da sua escolha. Sem ela, não envio.'
       : capacidade.entregarPaciente==='so_medico'
-        ? 'Sua escolha atual é receber as notas só por aqui; não envio ao paciente.'
+        ? 'Sua escolha atual é receber as notas só por aqui. Não envio ao paciente.'
         : 'Sua escolha atual permite entrega ao paciente, mas cada envio ainda depende das travas e do destino permitido.';
   const baloes: [string, string, string] = [
     `Olá, Dr(a). ${nomeSaudacao}! Sou o Noto, seu assistente de notas fiscais.`,
