@@ -194,7 +194,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'nenhuma') return null;
   if (fatos.ambiente !== 'homologacao' || !permitidas.includes(acao)) return 'ACAO_NAO_PERMITIDA';
   if(fatos.operadorTipo==='secretaria'&&acao==='iniciar_lote'&&d.parametros?.confirmacao?.intencao==='sim')return 'CONFIRMACAO_EXIGE_MEDICO';
-  const agendaDaAcao=normalizarAgenda(d.parametros?.agenda??fatos.agenda.nome??undefined);
+  const agendaDaAcao=agendaSuportada(normalizarAgenda(d.parametros?.agenda??fatos.agenda.nome??undefined));
   const agendaDaAcaoConectada=agendaDaAcao
     ? fatos.agendas?.[agendaDaAcao]?.conectada ?? (fatos.agenda.conectada&&normalizarAgenda(fatos.agenda.nome??undefined)===agendaDaAcao)
     : false;
@@ -207,8 +207,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'pedir_link_permissoes' && emVerificacao && !/permiss|autonom|entreg|sozinho/i.test(texto)) return 'CONEXAO_EM_VERIFICACAO';
   if (acao === 'pedir_link_agenda') {
     if(!opcoes?.introducaoVerificada && d.fala.length>2) return 'BALOES_LINK_EXCEDIDOS';
-    const agendaAlvo=normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined);
-    if (!agendaSuportada(agendaAlvo)) return 'AGENDA_NAO_SUPORTADA';
+    const agendaAlvo=agendaSuportada(normalizarAgenda(d.parametros?.agenda ?? fatos.agenda.nome ?? fatos.link.agenda ?? undefined));
+    if (!agendaAlvo) return 'AGENDA_NAO_SUPORTADA';
     const alvoConectado=agendaAlvo
       ? (fatos.agendas ? fatos.agendas[agendaAlvo].conectada : fatos.agenda.conectada)
       : false;
