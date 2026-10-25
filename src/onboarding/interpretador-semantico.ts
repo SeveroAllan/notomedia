@@ -24,7 +24,7 @@ export const interpretacaoSemanticaSchema = z.object({
     naoEmitir: z.boolean(),
     somenteLeitura: z.boolean()
   }).strict(),
-  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','confirmacao','permissao','dados_consulta'])).max(7),
+  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','agenda_foco','confirmacao','permissao','dados_consulta'])).max(8),
   confianca: z.number().min(0).max(1)
 }).strict();
 
@@ -72,8 +72,11 @@ AGENDA CONFIGURATION
 - Treat questions about adding, connecting, changing, or configuring an agenda as configuration requests. They are not claims about consultations.
 - Use objetivo='configurar' or objetivo='conectar' with objeto='agenda' for these requests.
 - Set agendaAlvo='tribemd' or 'amplimed' only when the doctor explicitly identifies that supported agenda.
-- "outra agenda" without a supported agenda name means agendaAlvo=null. Do not guess the other agenda from history alone.
+- "outra agenda" without a supported agenda name means agendaAlvo=null. Do not guess the other agenda for a configuration request.
 - A connected agenda does not prevent the doctor from connecting the other supported agenda.
+- For consultation, pending, preparation, or issue requests, use agendaAlvo when the doctor names TribeMD or Amplimed.
+- When both agendas are connected, agendaAlvo may be contextual only when the recent conversation clearly established one agenda as the current source.
+- When both agendas are connected and no source is clear, add agenda_foco to faltando. Never choose one silently.
 
 PERMISSIONS
 - Set permissaoNecessaria only when the goal depends on a configurable choice.
@@ -167,12 +170,20 @@ export function reconciliarInterpretacaoSemantica(i:InterpretacaoSemantica,fatos
   const faltando=new Set(i.faltando);
   const dependeDeConsulta=['consultar','preparar','emitir'].includes(i.objetivo)&&
     ['consultas','pendencias_fiscais','notas'].includes(i.objeto??'');
-  if(dependeDeConsulta&&!fatos.agenda.conectada){
+  const agendaAlvo=i.agendaAlvo??null;
+  const conectadas=fatos.agendas ? (['tribemd','amplimed'] as const).filter(a=>fatos.agendas?.[a].conectada) : [];
+  const alvoConectado=agendaAlvo
+    ? (fatos.agendas?.[agendaAlvo]?.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agendaAlvo))
+    : fatos.agenda.conectada;
+  if(dependeDeConsulta&&!alvoConectado){
     if(fatos.semAgendaDigital){
       faltando.delete('agenda');
+      faltando.delete('agenda_foco');
       faltando.add('dados_consulta');
     }else faltando.add('agenda');
-  }else if(fatos.agenda.conectada)faltando.delete('agenda');
+  }else if(alvoConectado)faltando.delete('agenda');
+  if(dependeDeConsulta&&conectadas.length>1&&!agendaAlvo)faltando.add('agenda_foco');
+  else faltando.delete('agenda_foco');
 
   if(i.permissaoNecessaria){
     if(permissaoEscolhida(fatos,i.permissaoNecessaria))faltando.delete('permissao');
@@ -199,19 +210,27 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
   if(faltaPermissao&&permissaoNecessaria&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
     return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
-  if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&fatos.agenda.nome&&permitidas.includes('pedir_link_agenda')){
-    return {fala:['Para continuar, preciso conectar sua agenda só para leitura.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:fatos.agenda.nome}};
+  if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&permitidas.includes('pedir_link_agenda')){
+    const alvo=i.agendaAlvo??(fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':fatos.agenda.nome?.toLowerCase()==='tribemd'?'tribemd':null);
+    if(alvo)return {fala:['Para continuar, preciso conectar essa agenda só para leitura.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:alvo}};
+  }
+  if(i.faltando.includes('agenda_foco')){
+    return {fala:['Você tem TribeMD e Amplimed conectadas. Qual delas quer usar neste pedido?'],acao:null};
   }
   if(faltaPermissao&&permissaoNecessaria&&permitidas.includes('pedir_link_permissoes')){
     return {fala:['Para registrar essa escolha, vou te mandar o link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
   if((i.dominio==='agenda'||i.dominio==='fiscal')&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
-    if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
-    return {fala:[i.medida?.startsWith('valor_')?'Vou conferir os valores disponíveis na agenda nesse período.':'Vou conferir sua agenda nesse período.'],acao:'consultar_agenda',parametros:{medida:i.medida??'lista',desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
+    if(!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
+    const alvo=i.agendaAlvo??(fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':fatos.agenda.nome?.toLowerCase()==='tribemd'?'tribemd':null);
+    if(!alvo)return null;
+    return {fala:[i.medida?.startsWith('valor_')?'Vou conferir os valores disponíveis nessa agenda nesse período.':'Vou conferir essa agenda nesse período.'],acao:'consultar_agenda',parametros:{agenda:alvo,medida:i.medida??'lista',desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
   }
   if(i.dominio==='fiscal'&&i.objeto==='pendencias_fiscais'&&i.objetivo==='consultar'){
-    if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('listar_pendencias'))return null;
-    return {fala:['Vou conferir as pendências desse período.'],acao:'listar_pendencias',parametros:{desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
+    if(!i.periodo.inicio||i.faltando.length||!permitidas.includes('listar_pendencias'))return null;
+    const alvo=i.agendaAlvo??(fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':fatos.agenda.nome?.toLowerCase()==='tribemd'?'tribemd':null);
+    if(!alvo)return null;
+    return {fala:['Vou conferir as pendências desse período nessa agenda.'],acao:'listar_pendencias',parametros:{agenda:alvo,desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
   }
   return null;
 }
