@@ -6,6 +6,13 @@ begin;
 alter table public.medicos
   alter column usuario_id drop not null;
 
+alter table public.medicos
+  drop constraint if exists medicos_usuario_id_fkey;
+
+alter table public.medicos
+  add constraint medicos_usuario_id_fkey
+  foreign key (usuario_id) references public.usuarios(id) on delete set null;
+
 do $medicos_conta$
 begin
   if exists (
@@ -28,6 +35,18 @@ begin
       and a.attname='conta_id' and not a.attisdropped and a.attnotnull
   ) then
     raise exception 'public.medicos.conta_id precisa continuar obrigatório';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint con
+    join pg_class c on c.oid=con.conrelid
+    join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname='public' and c.relname='medicos'
+      and con.conname='medicos_usuario_id_fkey'
+      and con.contype='f' and con.confdeltype='n'
+  ) then
+    raise exception 'FK medicos.usuario_id precisa usar ON DELETE SET NULL';
   end if;
 
   if not (
