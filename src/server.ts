@@ -359,7 +359,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const ferramentasConversa: FerramentasConversa = {
     lerFatos: async (medicoId,agora) => {
       const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
-      const [agendaAtiva,agendas] = await Promise.all([cofres.statusAgenda(medicoId),cofres.statusAgendas(medicoId)]);
+      const agendaAtiva=await cofres.statusAgenda(medicoId);
+      const agendas=typeof (cofres as {statusAgendas?:unknown}).statusAgendas==='function'
+        ? await cofres.statusAgendas(medicoId)
+        : {
+            tribemd:{salvo:agendaAtiva.nome?.toLowerCase()==='tribemd',conectada:agendaAtiva.nome?.toLowerCase()==='tribemd'&&agendaAtiva.conectada,consentimentoEm:null},
+            amplimed:{salvo:agendaAtiva.nome?.toLowerCase()==='amplimed',conectada:agendaAtiva.nome?.toLowerCase()==='amplimed'&&agendaAtiva.conectada,consentimentoEm:null}
+          };
       const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const conexao = await cofres.links?.lerContextoConexao(medicoId,agora);
       const periodo = await contextoPendencias.ler(medicoId);
