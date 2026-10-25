@@ -547,6 +547,14 @@ it('Amplimed conectado: se o decisor insiste em afirmar sem consultar, nada é a
  expect(c.executar).not.toHaveBeenCalled();
  const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');expect(falas).not.toMatch(/nenhuma consulta/);expect(falas).toMatch(/consultar a agenda/);
 });
+it('saída visível aplica estilo sem ponto e vírgula só depois da decisão',async()=>{
+ const c=cenario();
+ c.completar.mockResolvedValue(JSON.stringify({fala:['Vou conferir agora; depois te explico.'],acao:null}));
+ await c.turno('estilo','Pode me explicar?');
+ expect(c.completar).toHaveBeenCalledOnce();
+ expect(c.enviar).toHaveBeenCalledExactlyOnceWith(['Vou conferir agora','depois te explico.'],'estilo');
+});
+
 it('conversa comum sobre agenda sem afirmar fato não é barrada',async()=>{
  const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};
  c.completar.mockResolvedValue(JSON.stringify({fala:['Quer que eu confira a agenda de hoje?'],acao:null}));
