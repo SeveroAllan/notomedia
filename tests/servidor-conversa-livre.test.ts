@@ -651,7 +651,7 @@ it('listar Amplimed desde data não oferece notas já autorizadas ou tentativas 
  vi.spyOn(PostgresLotesEmissao.prototype,'situacaoConsulta').mockImplementation(async(_m,_f,id)=>id==='emitida'?'ja_faturada':id==='travada'?'bloqueada':'pendente');
  fronteiras.openai.mockImplementation(async(_k,_m,msgs)=>JSON.stringify(JSON.parse(String(msgs[1]!.content)).resultadoFerramenta?{fala:['Conferi.'],acao:null}:{fala:['Vou consultar.'],acao:'listar_pendencias',parametros:{desde:'2026-10-15'}}));
  await receber(criarAppExpress(),'lista-fiscal','O que ficou sem nota desde15outubro? Sem emitir.');
- const fala=enviar.mock.calls.map((call: unknown[])=>(call[0] as {texto:string}).texto).join(' ');expect(fala).toContain('1 atendimento');expect(fala).toContain('Nova');expect(fala).not.toContain('Ja Emitida');expect(fala).not.toContain('Travada');expect(fala).toContain('1 já tem nota');expect(fala).toContain('1 tem tentativa anterior');
+ const fala=enviar.mock.calls.map((call: unknown[])=>(call[0] as {texto:string}).texto).join(' ');expect(fala).toContain('1 atendimento');expect(fala).toContain('Nova');expect(fala).not.toContain('Ja Emitida');expect(fala).not.toContain('Travada');expect(fala).toContain('1 já tem nota');expect(fala).toContain('1 atendimento já tem uma tentativa de emissão registrada');expect(fala).toContain('continua preservada');expect(fala).not.toMatch(/conciliad|não vou emitir de novo/i);
 });
 it('semana passada não inclui hoje nem herda paciente antigo',async()=>{
  fronteiras.agenda={nome:'amplimed',conectada:true};config.envioRealAllowlist=['+5551993527271'];enviosEsperados=2;
