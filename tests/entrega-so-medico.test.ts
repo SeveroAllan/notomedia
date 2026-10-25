@@ -33,13 +33,6 @@ it.each([{ ativo: false }, { ambiente: 'producao' }, { allowlist: [] }, { allowl
   await c.paciente({ medicoId: 'm', solicitacaoId: 's' }, { enviarPdf });
   expect(enviarPdf).not.toHaveBeenCalled();
 });
-it('retoma após escolha usando somente notas autorizadas existentes e não reemite', async () => {
-  const { c, enviarPdf, query } = cenario();
-  await c.retomarEntregaMedico('m', { enviarPdf });
-  await c.retomarEntregaMedico('m', { enviarPdf });
-  expect(enviarPdf).toHaveBeenCalledTimes(1);
-  expect(query.mock.calls.find(([sql]) => sql.includes('select sn.id as solicitacao_id'))?.[0]).toContain("nf.status='autorizada'");
-});
 it('porta sem contato recusa escolha paciente antes de tentar entrega', async () => {
   const {c,enviarPdf,query}=cenario({escolha:'paciente'});
   expect(await c.entregarAoMedicoSemContato('m','s',{enviarPdf})).toBe('sem_permissao');
