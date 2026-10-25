@@ -34,7 +34,7 @@ export interface ProcessarWebhookDeps {
   instanciaAssistenteNome?: string;
   comunicacaoMedicoAtiva?: boolean;
   reservarMensagemMedico?: (medicoId: string, instancia: string, mensagemId: string) => Promise<boolean>;
-  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null; enviadaEm?: string | null; contatoOperador?: string; operadorTipo?: 'medico'|'secretaria' }) => Promise<unknown>;
+  aoReceberMensagemMedico?: (contexto: { medicoId: string; texto: string; chaveMensagem: string; chaveWhatsApp: import('../whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura; chavePergunta?: string; chaveConversa: string; dataMensagem: string | null; enviadaEm?: string | null; contatoOperador?: string; origemOperador?: 'conta'|'medico'|'secretaria' }) => Promise<unknown>;
   aoSolicitarMedicoOperador?: (contexto:{usuarioId:string;telefone:string;medicos:readonly MedicoOperavel[]})=>Promise<void>;
   aoAtualizarConexao?: (evento: { instancia: string; state: 'open' | 'close' | 'connecting' }) => Promise<void>;
   aoReceberComprovante?: (contexto: { medicoId: string; pacienteId: string; mensagem: DadosMensagemEvolution }) => Promise<unknown>;
@@ -98,32 +98,33 @@ export async function processarMensagemWebhook(
   if (payload.instance === deps.instanciaAssistenteNome) {
     if (deps.comunicacaoMedicoAtiva && !payload.data.key.fromMe && tipo === 'texto' && deps.aoReceberMensagemMedico) {
       try {
-        const medico = await deps.repositorio.buscarMedicoPorTelefone(telefone);
-        let medicoId=medico?.id??null;
-        let operadorTipo:'medico'|'secretaria'|undefined;
+        let medicoId:string|null=null;
+        let origemOperador:'conta'|'medico'|'secretaria'|undefined;
         let contatoOperador:string|undefined;
-        if(!medicoId&&deps.repositorio.buscarOperadorPorTelefone){
-          const operador=await deps.repositorio.buscarOperadorPorTelefone(telefone);
-          if(operador){
-            if(operador.tipo==='medico'&&operador.medicos.length===1) medicoId=operador.medicos[0]!.id;
-            if(operador.tipo==='secretaria'){
-              operadorTipo='secretaria';
-              let alvo=resolverMedicoMencionado(texto,operador.medicos);
-              const mencaoInconclusiva=!alvo&&mensagemPedeTrocaDeMedico(texto);
-              if(!alvo&&!mencaoInconclusiva&&deps.repositorio.lerFocoOperador){
-                const foco=await deps.repositorio.lerFocoOperador(operador.usuarioId).catch(()=>null);
-                alvo=operador.medicos.find(m=>m.id===foco)??null;
-              }
-              if(!alvo&&operador.medicos.length===1)alvo=operador.medicos[0]!;
-              if(!alvo){
-                await deps.aoSolicitarMedicoOperador?.({usuarioId:operador.usuarioId,telefone,medicos:operador.medicos});
-                return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
-              }
-              if(deps.repositorio.salvarFocoOperador&&!await deps.repositorio.salvarFocoOperador(operador.usuarioId,alvo.id))
-                return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
-              medicoId=alvo.id;contatoOperador=telefone;
-            }
+        const operador=deps.repositorio.buscarOperadorPorTelefone
+          ? await deps.repositorio.buscarOperadorPorTelefone(telefone)
+          : null;
+        if(operador){
+          origemOperador='conta';
+          contatoOperador=telefone;
+          let alvo=resolverMedicoMencionado(texto,operador.medicos);
+          const mencaoInconclusiva=!alvo&&mensagemPedeTrocaDeMedico(texto);
+          if(!alvo&&!mencaoInconclusiva&&deps.repositorio.lerFocoOperador){
+            const foco=await deps.repositorio.lerFocoOperador(operador.usuarioId).catch(()=>null);
+            alvo=operador.medicos.find(m=>m.id===foco)??null;
           }
+          if(!alvo&&operador.medicos.length===1)alvo=operador.medicos[0]!;
+          if(!alvo){
+            await deps.aoSolicitarMedicoOperador?.({usuarioId:operador.usuarioId,telefone,medicos:operador.medicos});
+            return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
+          }
+          if(deps.repositorio.salvarFocoOperador&&!await deps.repositorio.salvarFocoOperador(operador.usuarioId,alvo.id))
+            return {ok:true,acao:'descartada',motivoDescarte:'medico_nao_identificado'};
+          medicoId=alvo.id;
+        } else {
+          const medico=await deps.repositorio.buscarMedicoPorTelefone(telefone);
+          medicoId=medico?.id??null;
+          if(medicoId)origemOperador='medico';
         }
         if (medicoId) {
           if (deps.reservarMensagemMedico && !await deps.reservarMensagemMedico(medicoId, payload.instance, payload.data.key.id)) return { ok: true, acao: 'descartada', motivoDescarte: 'mensagem_duplicada' };
@@ -134,7 +135,7 @@ export async function processarMensagemWebhook(
           const chaveConversa = createHash('sha256').update(JSON.stringify([payload.instance, telefone])).digest('hex');
           const referencia = payload.data.message?.extendedTextMessage?.contextInfo;
           const chavePergunta = referencia && typeof referencia === 'object' && 'stanzaId' in referencia && typeof referencia.stanzaId === 'string' ? referencia.stanzaId : undefined;
-          await deps.aoReceberMensagemMedico({ medicoId, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, enviadaEm: Number.isFinite(data.getTime()) ? data.toISOString() : null, ...(chavePergunta ? { chavePergunta } : {}), ...(contatoOperador?{contatoOperador}:{}), ...(operadorTipo?{operadorTipo}:{}) });
+          await deps.aoReceberMensagemMedico({ medicoId, texto, chaveMensagem: payload.data.key.id, chaveWhatsApp: payload.data.key, chaveConversa, dataMensagem, enviadaEm: Number.isFinite(data.getTime()) ? data.toISOString() : null, ...(chavePergunta ? { chavePergunta } : {}), ...(contatoOperador?{contatoOperador}:{}), ...(origemOperador?{origemOperador}:{}) });
         }
       } catch { console.error('COMUNICACAO_MEDICO_CICLO_FALHOU'); }
     }
