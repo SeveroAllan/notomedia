@@ -20,7 +20,7 @@ it('work log guarda apenas metadados fornecidos e não entra na conversa',async(
  const memoria=new PostgresMemoriaConversaMedico({query} as unknown as pg.Pool);
  await memoria.registrarEventoTrabalho('m','c','chave','consultar_agenda','concluida',{agenda:'tribemd',desde:'2026-10-20',ok:true});
  expect(query).toHaveBeenCalledOnce();
- const parametros=query.mock.calls[0]![1] as unknown[];
+ const parametros=(query.mock.calls as unknown as unknown[][])[0]![1] as unknown[];
  expect(parametros.slice(0,5)).toEqual(['m','c','chave','consultar_agenda','concluida']);
  expect(JSON.parse(String(parametros[5]))).toEqual({agenda:'tribemd',desde:'2026-10-20',ok:true});
 });
@@ -52,7 +52,7 @@ it('compactação extrai memória somente com origem explícita e sanitiza antes
   chunk:'Preferência pela Amplimed. CPF [OCULTO]',
   memorias:[{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Prefere Amplimed. CPF [OCULTO]',origemId:'12',confianca:.98}]
  });
- expect(String(completar.mock.calls[0]![2][0]!.content)).toContain('origemId');
+ expect(String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content)).toContain('origemId');
 });
 
 it('timeline e memória entram no decisor, mas o prompt declara fatos como autoridade atual',async()=>{
@@ -65,10 +65,10 @@ it('timeline e memória entram no decisor, mas o prompt declara fatos como autor
   fatos:{ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:true,conectada:true}},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false},
   agora:new Date('2026-10-25T15:00:00-03:00'),acoesPermitidas:['nenhuma']
  });
- const entrada=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
+ const entrada=JSON.parse(String((completar.mock.calls as unknown as any[][])[0]![2][1]!.content));
  expect(entrada.linhaDoTempo).toEqual(['[01/10] Médico passou a preferir Amplimed.']);
  expect(entrada.memoriasSemanticas).toEqual([{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Prefere Amplimed'}]);
- expect(String(completar.mock.calls[0]![2][0]!.content)).toContain('fatos and tool results win');
+ expect(String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content)).toContain('fatos and tool results win');
 });
 
 it('interpretador recebe a mesma timeline sem transformar memória em estado operacional',async()=>{
@@ -84,8 +84,8 @@ it('interpretador recebe a mesma timeline sem transformar memória em estado ope
   fatos:{ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:true,conectada:true}},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false},
   agora:new Date('2026-10-25T15:00:00-03:00')
  });
- const entrada=JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
+ const entrada=JSON.parse(String((completar.mock.calls as unknown as any[][])[0]![2][1]!.content));
  expect(entrada.linhaDoTempo).toEqual(['Histórico antigo']);
  expect(entrada.memoriasSemanticas[0].valor).toBe('Prefere Amplimed');
- expect(String(completar.mock.calls[0]![2][0]!.content)).toContain('fatos is the current operational authority');
+ expect(String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content)).toContain('fatos is the current operational authority');
 });
