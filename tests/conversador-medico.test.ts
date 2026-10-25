@@ -281,6 +281,14 @@ it('reenvio exige pedido literal, escolha só médico e dia válido de consulta'
  expect(validarAcaoConversa(d,f,['reenviar_nota_medico'],'Pode emitir?',agora)).toBe('PEDIDO_REENVIO_AUSENTE');
  expect(validarAcaoConversa(d,{...f,permissoes:{...f.permissoes,entregarPaciente:'paciente'}},['reenviar_nota_medico'],'me envia o PDF',agora)).toBe('ENTREGA_NAO_ESCOLHIDA');
 });
+it('pedido histórico explícito sem data não envia coleção inteira',()=>{
+ const f={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}};
+ const d={fala:['Vou buscar a nota pedida.'],acao:'reenviar_nota_medico',parametros:{evidencia:'Me manda minhas notas'}};
+ expect(validarAcaoConversa(d,f,['reenviar_nota_medico'],'Me manda minhas notas',agora)).toBe('PERIODO_NECESSARIO');
+ const comDia={...d,parametros:{...d.parametros,dia:'2026-10-20'}};
+ expect(validarAcaoConversa(comDia,f,['reenviar_nota_medico'],'Me manda minhas notas',agora)).toBeNull();
+});
+
 it('evidência literal de emissão não autoriza entrega da nota existente',()=>{
  const f={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'so_medico',pendentes:false}};
  expect(validarAcaoConversa({fala:['Vou buscar.'],acao:'reenviar_nota_medico',parametros:{evidencia:'Pode emitir?'}},f,['reenviar_nota_medico'],'Pode emitir?',agora)).toBe('PEDIDO_REENVIO_AUSENTE');
