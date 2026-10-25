@@ -71,6 +71,6 @@ it('certificados são independentes por médico da mesma conta',async()=>{
     {id:'m1',nomeCompleto:'Ana Lima',crm:null,certificadoValido:true},
     {id:'m2',nomeCompleto:'Bruno Souza',crm:null,certificadoValido:false}
   ]);
-  expect(String(query.mock.calls[0]![0])).toContain('c.medico_id=m.id');
+  expect(String((query.mock.calls as unknown as any[][])[0]![0])).toContain('c.medico_id=m.id');
 });
 
