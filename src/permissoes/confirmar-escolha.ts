@@ -19,6 +19,6 @@ export async function confirmarEscolhaPermissao(
   await deps.confirmar({
     medicoId:r.medicoId,
     chave:`permissao_escolhida:${r.linkId}`,
-    fala:[`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${textoBotao}. Isso só define sua preferência; não envia notas antigas. Se quiser mudar depois, é só me pedir.`]
+    fala:[`Escolha salva: ${rotulo.titulo.toLowerCase()} - ${textoBotao}. Isso só define sua preferência. Não envia notas antigas. Se quiser mudar depois, é só me pedir.`]
   });
 }
