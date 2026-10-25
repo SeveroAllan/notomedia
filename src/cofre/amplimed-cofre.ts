@@ -1,6 +1,6 @@
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { ErroCofre } from './tribemd-cofre.js';
-import { diasAtrasAmplimed, montarLeituraAmplimed, type DetalheAmplimed } from '../agenda/amplimed-leitor.js';
+import { dataEsperadaAtras, diasAtrasAmplimed, montarLeituraAmplimed, type DetalheAmplimed } from '../agenda/amplimed-leitor.js';
 import { separarElegiveis } from '../agenda/leitura-adaptativa.js';
 import type { CodigoLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 import type { EstadoNavegador } from '../desenvolvedor/tribemd-perfil.js';
@@ -87,10 +87,18 @@ export class CofreAmplimed {
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
-        // Defesa em profundidade: o primeiro dia lido tem que ser o "hoje" pedido (a agenda pode reabrir em outra data).
-        if (r.dias[0]?.data !== hoje) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
-        const dias: { data: string; consultas: { paciente: string; dataHora: string; status: 'realizada'|'cancelada'|'faltou'|'agendada'; valorCentavos: number | null }[]; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
+        // Defesa em profundidade por cobertura, não por posição visual: cada data de hoje até "desde" deve existir exatamente uma vez.
+        // Isso aceita hiddenDays confirmados pelo feed mensal, mas continua recusando lacuna, duplicata ou data fora do período.
+        const esperadas = Array.from({length:diasAtras+1},(_,i)=>dataEsperadaAtras(hoje,i));
+        const porData = new Map<string,(typeof r.dias)[number]>();
         for (const d of r.dias) {
+            if (porData.has(d.data) || !esperadas.includes(d.data)) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
+            porData.set(d.data,d);
+        }
+        if (esperadas.some(data=>!porData.has(data))) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
+        const dias: { data: string; consultas: { paciente: string; dataHora: string; status: 'realizada'|'cancelada'|'faltou'|'agendada'; valorCentavos: number | null }[]; elegiveis: { paciente: string; dataHora: string; idExterno: string; valorCentavos: number; detalhe: DetalheAmplimed | null }[]; lidos: number }[] = [];
+        for (const data of esperadas) {
+            const d=porData.get(data)!;
             const leitura = montarLeituraAmplimed(d.eventos, { data: d.data, profissional: r.profissional });
             if (!leitura.confiavel) return { ok: false as const, motivo: 'LEITURA_NAO_CONFIAVEL', problemas: leitura.problemas.map(x => x.codigo), data: d.data };
             dias.push({ data: d.data, lidos: leitura.lidos, consultas: leitura.consultas.map(c => ({ paciente:c.pacienteNome,dataHora:c.dataHora,status:c.status,valorCentavos:c.valorCentavos })), elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora, idExterno: c.idExterno, valorCentavos: c.valorCentavos ?? 0, detalhe: leitura.detalhes.get(c.idExterno) ?? null })) });
