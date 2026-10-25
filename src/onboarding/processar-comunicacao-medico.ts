@@ -19,7 +19,7 @@ export interface ResultadoAcaoConversa {
   dados?: unknown; jaRespondida?: boolean; falaAssinada?: string[]; falaMemoria?: string[];
 }
 export interface ContextoAcaoConversa {
-  medicoId: string; conversa: string; chave: string; texto: string; agora: Date; chavePergunta?: string; mensagemEm?: Date;
+  medicoId: string; conversa: string; chave: string; texto: string; agora: Date; chavePergunta?: string; mensagemEm?: Date; contatoOperador?: string;
   fatos: FatosConversa; narrar: (dados: unknown) => Promise<string[]>;
 }
 export interface FerramentasConversa {
@@ -52,7 +52,7 @@ export function dadoCadastralIsolado(texto:string):boolean {
 const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
-  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
+  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;contatoOperador?:string;eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
 ):Promise<ProximaAcaoNoto> {
   if(!deps.ativo) return {tipo:'nenhuma'};
   const executar = async ():Promise<ProximaAcaoNoto> => {
@@ -260,7 +260,7 @@ export async function processarComunicacaoMedico(
             atual={...atual,fala:normalizarBaloesSemPontoEVirgula(atual.fala,limiteBaloes)};
             if(['consultar_agenda','listar_pendencias','iniciar_lote'].includes(atual.acao??'')) await enviar(atual.fala.slice(0,1),undefined,sufixo);
             ferramentasExecutadas++;
-            return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});
+            return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),contatoOperador:entrada.contatoOperador,fatos,narrar});
           };
           const decisaoExecutada=decisao;
           const r=await executarFerramenta(decisaoExecutada,':anuncio');
