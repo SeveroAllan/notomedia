@@ -91,16 +91,31 @@ function decidirRepergunta(
   return { tipo: 'nenhuma' };
 }
 
+export interface CapacidadeEntregaBoasVindas {
+  permissoesAtivas: boolean;
+  entregarPaciente: string | null;
+  envioPacienteRealAtivo: boolean;
+}
 export function montarBoasVindas(
   nomeMedico: string,
-  ultimaNota: UltimaNotaConhecida | null
+  ultimaNota: UltimaNotaConhecida | null,
+  capacidade: CapacidadeEntregaBoasVindas = {permissoesAtivas:false,entregarPaciente:null,envioPacienteRealAtivo:false}
 ): [string, string, string, string] | [string, string, string, string, string] {
   const primeiroNome = nomeMedico.trim().split(/\s+/)[0].toLocaleLowerCase('pt-BR').slice(0, 400);
   const nomeSaudacao = primeiroNome.charAt(0).toLocaleUpperCase('pt-BR') + primeiroNome.slice(1);
+  const entrega = !capacidade.envioPacienteRealAtivo
+    ? capacidade.entregarPaciente==='paciente'
+      ? 'Sua escolha de entrega ao paciente está salva, mas esse envio está desligado neste ambiente; por enquanto não envio notas ao paciente.'
+      : 'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.'
+    : !capacidade.permissoesAtivas || !capacidade.entregarPaciente
+      ? 'Antes de qualquer entrega ao paciente, preciso da sua escolha; sem ela, não envio.'
+      : capacidade.entregarPaciente==='so_medico'
+        ? 'Sua escolha atual é receber as notas só por aqui; não envio ao paciente.'
+        : 'Sua escolha atual permite entrega ao paciente, mas cada envio ainda depende das travas e do destino permitido.';
   const baloes: [string, string, string] = [
     `Olá, Dr(a). ${nomeSaudacao}! Sou o Noto, seu assistente de notas fiscais.`,
-    'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
-    'Se você pedir, também entrego uma nota nova ou antiga por aqui.'
+    'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
+    entrega
   ];
   if (!ultimaNota?.paciente) return [...baloes, PERGUNTA_INICIO_NOTAS];
   const dias = ultimaNota.diasDesdeEmissao;
