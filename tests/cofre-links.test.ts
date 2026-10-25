@@ -337,6 +337,11 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 }]);
     expect(completar).toHaveBeenCalledTimes(5);
     expect(deps.log).not.toHaveBeenCalledWith('info',expect.stringContaining('CONVERSA_INTRODUCAO_CORRIGIR BALOES_LINK_EXCEDIDOS'));
+    const payloads=completar.mock.calls.map(chamada=>JSON.parse(String(chamada[2][1].content)));
+    expect(payloads.filter(p=>p.correcao!==undefined)).toHaveLength(0);
+    expect(payloads.filter(p=>p.resultadoFerramenta===undefined)).toHaveLength(4);
+    expect(payloads.filter(p=>p.resultadoFerramenta!==undefined)).toHaveLength(1);
+    expect(textos.every(t=>!t.includes(';'))).toBe(true);
     expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['Você pode pedir outro link em uma hora.'], 'link-3');
     const chamada = completar.mock.calls.at(-1)!; expect(JSON.parse(String(chamada[2][1].content)).resultadoFerramenta.aguardarMinutos).toBe(60);
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
