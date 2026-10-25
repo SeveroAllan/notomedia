@@ -633,9 +633,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   };
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null, contatoOperador?:string, operadorTipo?:'medico'|'secretaria') => {
+  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null, contatoOperador?:string, origemOperador?:'conta'|'medico'|'secretaria') => {
     const agora = new Date();
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, operadorTipo,
+    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, origemOperador,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
     }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, interpretadorSemantico, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao, contatoOperador); } : undefined,
@@ -1200,7 +1200,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           await evolutionAssistantClient.enviarTexto({instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:perguntaSelecaoMedico(medicos)});
         },
         aoReceberMensagemMedico: async contexto => {
-          if (contexto.operadorTipo!=='secretaria' && emissaoComprovante && config.envioMedicoRealAtivo && permissoesNoto && await permissoesCpfAtivaP) {
+          if (emissaoComprovante && config.envioMedicoRealAtivo && permissoesNoto && await permissoesCpfAtivaP) {
             // Conferência de CPF antes de qualquer interpretação de confirmação de emissão: só resposta vinculada à pergunta conta.
             const retomadaDeps: RetomadaDeps = {
               pool, encryptionKey: config.encryptionKey, pepper: config.appPepper, comunicacao: comunicacaoHomologacao,
@@ -1219,9 +1219,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               { medicoId: contexto.medicoId, texto: contexto.texto, chavePergunta: contexto.chavePergunta }) === 'consumida') return;
           }
           if (config.conversaLivreAtiva) await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp, contexto.contatoOperador);
-          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.operadorTipo);
-          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.operadorTipo);
-          if (contexto.operadorTipo!=='secretaria' && emissaoComprovante && config.envioMedicoRealAtivo) {
+          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+          if (emissaoComprovante && config.envioMedicoRealAtivo) {
             const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
             if (pendentes.length) {
               const unica = pendentes.length === 1 ? pendentes[0] : null;
@@ -1253,7 +1253,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               return;
             }
           }
-          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.operadorTipo);
+          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
         },
         aoReceberRespostaCpf: async contexto => {
           if (!await permissoesCpfAtivaP) return;
