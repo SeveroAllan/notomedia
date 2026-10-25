@@ -159,7 +159,12 @@ export class ComunicacaoHomologacao {
         join usuarios u on u.id = m.usuario_id left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = rows[0];
       if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
-      const baloes = montarBoasVindas(nomeMedico, ultimaNota);
+      const escolhaEntrega=this.permissoes?await this.permissoes.ler(medicoId,'entregar_paciente').catch(()=>null):null;
+      const baloes = montarBoasVindas(nomeMedico, ultimaNota, {
+        permissoesAtivas:!!this.permissoes,
+        entregarPaciente:escolhaEntrega?.valor??null,
+        envioPacienteRealAtivo:this.config.envioPacienteRealAtivo===true
+      });
       if (!await this.reservarMensagem(medicoId, destino.telefone, 'boas_vindas:unica', baloes)) return 'repetido';
       const resultado = await this.enviarUnico(medicoId, 'boas_vindas', 'unica', async () => {
         for (const texto of baloes) {
