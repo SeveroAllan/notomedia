@@ -27,9 +27,18 @@ export async function consultarStatusInstanciaWhatsapp(
 ): Promise<ResultadoStatusWhatsapp> {
   const { medicoId, evolutionUrl, evolutionApiKey } = input;
   const baseUrl = evolutionUrl.replace(/\/+$/, '');
-  const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+  let nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
 
   try {
+    const existente=await pool.query(`
+      select w.nome_instancia
+      from medicos m
+      join whatsapp_instancias w on w.conta_id=m.conta_id and w.oficial=false
+      where m.id=$1
+      order by w.conectado_em desc nulls last,w.id
+      limit 1
+    `,[medicoId]);
+    if(existente.rows[0]?.nome_instancia)nomeInstancia=existente.rows[0].nome_instancia;
     const res = await fetch(`${baseUrl}/instance/connectionState/${nomeInstancia}`, {
       method: 'GET',
       signal: AbortSignal.timeout(5_000),
