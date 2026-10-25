@@ -14,6 +14,10 @@ import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
 import { planejarPorSemantica, reconciliarInterpretacaoSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
+export function origemPodeVirarMemoriaMedico(m:{papel?:'medico'|'noto';origemOperador?:'medico'|'secretaria'|'conta'|null}):boolean {
+  return (m.papel==='medico'||m.papel===undefined)&&(m.origemOperador===undefined||m.origemOperador==='medico');
+}
+
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
 export interface ResultadoAcaoConversa {
   dados?: unknown; jaRespondida?: boolean; falaAssinada?: string[]; falaMemoria?: string[];
@@ -348,7 +352,7 @@ export async function processarComunicacaoMedico(
             try {
               await memoria.registrarChunk(medicoId,conversa,0,inicioId,fimId,compactacao?.chunk??resumo);
               if(compactacao) {
-                const fontesMedico=new Set(antigas.filter(m=>(m.papel==='medico'||m.papel===undefined)&&(m.origemOperador===undefined||m.origemOperador==='medico')).map(m=>m.id));
+                const fontesMedico=new Set(antigas.filter(origemPodeVirarMemoriaMedico).map(m=>m.id));
                 for(const m of compactacao.memorias) if(fontesMedico.has(m.origemId))
                   await memoria.registrarMemoriaSemantica(medicoId,{chave:m.chave,categoria:m.categoria,valor:m.valor,origemConversa:conversa,origemMensagemId:m.origemId,confianca:m.confianca});
               }
