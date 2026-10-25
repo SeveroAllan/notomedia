@@ -301,8 +301,9 @@ it('novo pedido abandona propostas pendentes de outra chave antes de abrir', asy
 it('consulta bloqueada por tentativa não concluída é avisada, sem parecer período errado', async () => {
   const c = cenario(); c.deps.contar.mockResolvedValue({ consultas: [], totalConsultas: 0, totalCentavos: 0, semValor: 0, bloqueadas: 2 });
   await c.conversa.iniciar('m', 'c', 'pedido', agora, '2026-10-16');
-  expect(c.falas[0]).toContain('2 consultas do período já tiveram uma tentativa de emissão que não concluiu');
-  expect(c.falas.some(f => /conciliar essa tentativa/.test(f))).toBe(true);
+  expect(c.falas[0]).toContain('2 consultas do período já têm tentativas de emissão registradas');
+  expect(c.falas.some(f => /Posso conferir agora/.test(f))).toBe(true);
+  expect(c.falas.join(' ')).not.toMatch(/conciliar|bloquead|não vou emitir|não vou seguir/i);
   expect(c.falas.some(f => /Não encontrei consultas com valor/.test(f))).toBe(true);
 });
 
