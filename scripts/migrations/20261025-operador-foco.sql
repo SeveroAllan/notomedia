@@ -1,5 +1,8 @@
 begin;
 
+alter table if exists public.cofre_links
+  add column if not exists destino_telefone text;
+
 create table if not exists public.noto_operador_foco (
   usuario_id uuid primary key references public.usuarios(id) on delete cascade,
   medico_id uuid not null references public.medicos(id) on delete cascade,
