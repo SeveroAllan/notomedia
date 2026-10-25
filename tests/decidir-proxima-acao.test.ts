@@ -219,8 +219,8 @@ describe('boas-vindas com última nota em cinco balões', () => {
       const antes = structuredClone(nota);
       expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
         'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
-        'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
-        'Se você pedir, também entrego uma nota nova ou antiga por aqui.',
+        'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
+        'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.',
         `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}.`,
         'Desde quando você não emite notas?'
       ]);
@@ -242,11 +242,22 @@ describe('boas-vindas sem última nota com paciente conhecido', () => {
   ])('termina com pergunta sobre notas quando a nota é %j', nota => {
     expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
       'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
-      'Toda vez que um paciente seu mandar um comprovante, eu confiro a consulta na sua agenda e emito a nota. A nota vai direto para a conversa do paciente, pelo seu próprio WhatsApp.',
-      'Se você pedir, também entrego uma nota nova ou antiga por aqui.',
+      'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
+      'Neste momento, o envio direto de notas ao paciente está desligado; não vou prometer essa entrega.',
       'Desde quando você não emite notas?'
     ]);
   });
+});
+
+it('boas-vindas respeitam escolha salva e capacidade real de envio ao paciente',()=>{
+ const base=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'paciente',envioPacienteRealAtivo:false});
+ expect(base[2]).toContain('está salva');expect(base[2]).toContain('desligado');expect(base[2]).toContain('não envio');
+ const soMedico=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'so_medico',envioPacienteRealAtivo:true});
+ expect(soMedico[2]).toContain('só por aqui');expect(soMedico[2]).toContain('não envio ao paciente');
+ const pendente=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:null,envioPacienteRealAtivo:true});
+ expect(pendente[2]).toContain('preciso da sua escolha');expect(pendente[2]).toContain('sem ela, não envio');
+ const liberado=montarBoasVindas('Ana',null,{permissoesAtivas:true,entregarPaciente:'paciente',envioPacienteRealAtivo:true});
+ expect(liberado[2]).toContain('permite entrega ao paciente');expect(liberado[2]).toContain('depende das travas');
 });
 
 it.each(['ALICE CASTRO MENEZES XAVIER', '  alice Castro  ', 'Alice'])('saúda somente o primeiro nome natural de %s', nome => {
