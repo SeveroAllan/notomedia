@@ -295,7 +295,7 @@ it.each([true, false])('cofre atual notifica conclusão real, conectado=%s, sem 
 });
 
 const introducaoLinkV2 = ['Para conseguir emitir suas notas, o link conecta só a agenda TribeMD, em modo de leitura para cruzar consultas e comprovantes.',
-    'Por segurança, login e senha vão só no link seguro; não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'];
+    'Por segurança, login e senha vão só no link seguro. Não recebo senha pela conversa. Nada é enviado a pacientes. Aqui está o link seguro:'];
 function ferramentasLinkV2(enviar: (id:string,opcoes?:{reenvio?:boolean;fala?:readonly string[]})=>Promise<{ok:boolean;motivo:string}>, snapshotDesatualizado=false) {
     return {
         lerFatos: async () => {
@@ -335,7 +335,9 @@ it('ferramenta do conversador reutiliza limite real de 3/h do cofre e deduplica 
     for (let i = 1; i <= 3; i++) await processarComunicacaoMedico({ ...evento, chaveProcessamento: `link-${i}` }, deps);
     expect(textos).toHaveLength(9); expect(await salvos()).toHaveLength(3);
     expect(resultados).toEqual([{ ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: true, motivo: 'enviado' }, { ok: false, motivo: 'LIMITE_PEDIDOS', aguardarMinutos: 60 }]);
-    expect(completar).toHaveBeenCalledTimes(5); expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['Você pode pedir outro link em uma hora.'], 'link-3');
+    expect(completar).toHaveBeenCalledTimes(5);
+    expect(deps.log).not.toHaveBeenCalledWith('info',expect.stringContaining('CONVERSA_INTRODUCAO_CORRIGIR BALOES_LINK_EXCEDIDOS'));
+    expect(deps.aoConversar).toHaveBeenCalledExactlyOnceWith(['Você pode pedir outro link em uma hora.'], 'link-3');
     const chamada = completar.mock.calls.at(-1)!; expect(JSON.parse(String(chamada[2][1].content)).resultadoFerramenta.aguardarMinutos).toBe(60);
     expect(deps.listarConsultasSemNota).not.toHaveBeenCalled();
 });
@@ -541,15 +543,15 @@ it('pedido de novo com link ativo informa validade, conserva a mesma URL e uma �
     const c = await conversaComLinkRealFalso();
     await c.turno('inicial', 'Uso TribeMD e preciso emitir uma nota.');
     const url = textos[2];
-    c.completar.mockResolvedValue('{"fala":["O link anterior continua válido; pode usar o mesmo."],"acao":null}');
+    c.completar.mockResolvedValue('{"fala":["O link anterior continua válido.","Pode usar o mesmo."],"acao":null}');
     await c.turno('de-novo', 'me manda o link de novo');
     expect(await salvos()).toHaveLength(1); expect(c.enviarLink).toHaveBeenCalledOnce();
     expect(textos).toHaveLength(3); expect(textos.at(-1)).toBe(url);
-    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua válido; pode usar o mesmo.'], 'de-novo');
+    expect(c.aoConversar).toHaveBeenCalledExactlyOnceWith(['O link anterior continua válido.','Pode usar o mesmo.'], 'de-novo');
 });
 
 it('texto/resultado apenas: usa fala contextual do chamador antes da URL, sem alterar uso único ou dedup de conclusão', async () => {
-    const fala = ['O link conecta só a agenda, em leitura. Login e senha ficam no link seguro; nada é enviado a pacientes.'];
+    const fala = ['O link conecta só a agenda, em leitura. Login e senha ficam no link seguro. Nada é enviado a pacientes.'];
     expect(await links.solicitarLinkCofre(medicoId, 'tribemd', { fala })).toEqual({ ok: true, motivo: 'enviado' });
     expect(textos).toHaveLength(2); expect(textos[0]).toBe(fala[0]);
     const token = new URL(textos[1]).pathname.split('/').at(-1)!;
