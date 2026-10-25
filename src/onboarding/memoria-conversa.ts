@@ -59,7 +59,7 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   async registrarMarca(medicoId: string, conversa: string, marca: 'sem_agenda_digital' | 'link_agenda_solicitado'): Promise<void> {
     if (marca === 'sem_agenda_digital') return this.registrarSemAgendaDigital(medicoId, conversa);
     await this.registrar(medicoId, conversa, 'noto:cofre_agenda:solicitado',
-      'O link seguro já foi solicitado nesta conversa; aguardo a conexão. Isso não confirma envio.', 'noto');
+      'O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.', 'noto');
   }
 
   registrarResumo(medicoId: string, conversa: string, resumo: string, ateId: string): Promise<void> {
