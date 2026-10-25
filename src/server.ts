@@ -360,13 +360,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     lerFatos: async (medicoId,agora) => {
       const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
       const agendaAtiva=(await cofres.statusAgenda(medicoId))??{nome:null,conectada:false};
+      const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
+      const agendaEfetiva=estado?.estado.agenda??agendaAtiva;
       const agendas=typeof (cofres as {statusAgendas?:unknown}).statusAgendas==='function'
         ? await cofres.statusAgendas(medicoId)
         : {
-            tribemd:{salvo:agendaAtiva.nome?.toLowerCase()==='tribemd',conectada:agendaAtiva.nome?.toLowerCase()==='tribemd'&&agendaAtiva.conectada,consentimentoEm:null},
-            amplimed:{salvo:agendaAtiva.nome?.toLowerCase()==='amplimed',conectada:agendaAtiva.nome?.toLowerCase()==='amplimed'&&agendaAtiva.conectada,consentimentoEm:null}
+            tribemd:{salvo:agendaEfetiva.nome?.toLowerCase()==='tribemd',conectada:agendaEfetiva.nome?.toLowerCase()==='tribemd'&&agendaEfetiva.conectada,consentimentoEm:null},
+            amplimed:{salvo:agendaEfetiva.nome?.toLowerCase()==='amplimed',conectada:agendaEfetiva.nome?.toLowerCase()==='amplimed'&&agendaEfetiva.conectada,consentimentoEm:null}
           };
-      const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const conexao = await cofres.links?.lerContextoConexao(medicoId,agora);
       const periodo = await contextoPendencias.ler(medicoId);
       const lote = retroativo ? await lotes.ativo(medicoId) : null;
