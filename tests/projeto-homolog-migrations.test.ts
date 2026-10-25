@@ -1,4 +1,5 @@
 import {describe,expect,it} from 'vitest';
+// @ts-ignore -- o runner de migration é JavaScript ESM executado diretamente pelo Node.
 import {NOTO_HOMOLOG_PROJECT_REF,extrairProjectRefSupabase,validarProjetoHomolog} from '../scripts/validar-projeto-homolog.mjs';
 
 describe('trava de projeto das migrations do PR #10',()=>{
