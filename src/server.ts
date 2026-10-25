@@ -85,6 +85,7 @@ import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
 import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico } from './conta/medicos-conta.js';
+import { vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
 import { descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
 import { HubDesenvolvedorCpfClient } from './io/hubdodesenvolvedor/hub-desenvolvedor-cpf-client.js';
@@ -484,7 +485,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             const profissionais=descoberta.nomes;
             const temNovo=profissionais.some(nome=>!conhecidos.has(normalizarNomeMedico(nome)));
             if(profissionais.length>1||contaMulti||temNovo){
-              await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais}),'noto');
+              await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais,referenciaMedicoId:c.medicoId}),'noto');
               const nomes=profissionais.slice(0,12).join(', ');
               const fala=[`Encontrei estes profissionais na TribeMD: ${nomes}. Para quais médicos você quer emitir pelo Noto?`];
               return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'consultar_agenda',ok:true,modo:'descoberta_medicos',profissionais}};
@@ -531,9 +532,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           [c.medicoId,c.conversa]
         );
         let descobertos:string[]=[];
+        let descobertaFonte:'tribemd'|'amplimed'|null=null;
+        let referenciaMedicoId:string|null=null;
         try {
           const parsed=descobertaRows[0]?.texto?JSON.parse(descobertaRows[0].texto):null;
           if(Array.isArray(parsed?.profissionais))descobertos=parsed.profissionais.filter((x:unknown):x is string=>typeof x==='string'&&!!x.trim());
+          if(parsed?.fonte==='tribemd'||parsed?.fonte==='amplimed')descobertaFonte=parsed.fonte;
+          if(typeof parsed?.referenciaMedicoId==='string')referenciaMedicoId=parsed.referenciaMedicoId;
         } catch { descobertos=[]; }
         const permitidos=[...existentes.map(m=>m.nomeCompleto),...descobertos];
         const canonicos:string[]=[];
@@ -545,6 +550,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         }
         const confirmados=await confirmarMedicosDaConta(pool,c.medicoId,canonicos);
         if(!confirmados.ok)return {falaAssinada:[`Há ambiguidade no médico "${confirmados.nome}". Não criei vínculo nem enviei certificado.`],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:confirmados.motivo}};
+        if(descobertaFonte&&referenciaMedicoId){
+          const vinculou=await vincularReferenciaAgendaConta(pool,confirmados.medicos.map(m=>m.id),descobertaFonte,referenciaMedicoId);
+          if(!vinculou)return {falaAssinada:['Não consegui associar todos os médicos à agenda com segurança. Não vou atribuir consultas até confirmar esse vínculo.'],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'MEDICO_AMBIGUO'}};
+        }
         if(!origemLinksSeguros)return {dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'ORIGEM_INDISPONIVEL'}};
         let enviados=0;
         const prontos:string[]=[];
