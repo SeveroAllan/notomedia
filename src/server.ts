@@ -358,7 +358,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const ferramentasConversa: FerramentasConversa = {
     lerFatos: async (medicoId,agora) => {
       const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
-      const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,await cofres.statusAgenda(medicoId),config.preparacaoFiscalAtiva===true);
+      const [agendaAtiva,agendas] = await Promise.all([cofres.statusAgenda(medicoId),cofres.statusAgendas(medicoId)]);
+      const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const conexao = await cofres.links?.lerContextoConexao(medicoId,agora);
       const periodo = await contextoPendencias.ler(medicoId);
       const lote = retroativo ? await lotes.ativo(medicoId) : null;
@@ -381,6 +382,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         faltantes=await permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[]);
       }
       return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
+        agendas:{tribemd:{salva:agendas.tribemd.salvo,conectada:agendas.tribemd.conectada},amplimed:{salva:agendas.amplimed.salvo,conectada:agendas.amplimed.conectada}},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           agenda:conexao?.link?.agenda??null,
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
