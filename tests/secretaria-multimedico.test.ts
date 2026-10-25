@@ -70,4 +70,3 @@ it('seleção plural com um médico ainda não cadastrado preserva o foco para v
  expect(d.aoReceberMensagemMedico).toHaveBeenLastCalledWith(expect.objectContaining({medicoId:'m1',origemOperador:'conta'}));
  expect(d.salvarFocoOperador).toHaveBeenLastCalledWith('u-operador','m1');
 });
-
