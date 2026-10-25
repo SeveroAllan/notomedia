@@ -59,8 +59,8 @@ it('com uma agenda conectada ainda libera conexão da outra suportada',()=>{
 });
 
 
-it('secretária não recebe ferramenta para alterar permissões do médico',()=>{
- const f={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,operadorTipo:'secretaria' as const,
+it('operador do WhatsApp da conta pode configurar permissões sem redução por papel',()=>{
+ const f={ambiente:'homologacao',agenda:{nome:'Amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
   permissoes:{emitirAutonomo:null,entregarPaciente:null,pendentes:true,faltantes:['emitir_autonomo','entregar_paciente'] as const}} satisfies FatosConversa;
- expect(ferramentasLiberadas(f,{lote:true})).not.toContain('pedir_link_permissoes');
+ expect(ferramentasLiberadas(f,{lote:true})).toContain('pedir_link_permissoes');
 });
