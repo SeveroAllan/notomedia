@@ -212,6 +212,9 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
 export interface EventoAgendaAmplimed { texto: string; cor: string; detalhe?: import('../agenda/amplimed-leitor.js').DetalheAmplimed | null }
 export interface DiaAgendaAmplimed { data: string; eventos: EventoAgendaAmplimed[] }
 export interface EventoFeedAmplimed { titulo: string; inicio: string; fim: string | null; cor: string }
+export function navegacaoPulouDataAmplimed(anterior:string,atual:string,alvo:string):boolean {
+  return (anterior<alvo&&atual>alvo)||(anterior>alvo&&atual<alvo);
+}
 /** Converte um evento do feed mensal para o mesmo contrato textual da visão Dia; falha fechado se faltar identificação temporal/textual. */
 export function eventoAgendaAmplimedDoFeed(e: EventoFeedAmplimed): EventoAgendaAmplimed | null {
   const inicio=(e.inicio??'').trim(), fim=(e.fim??'').trim(), titulo=(e.titulo??'').replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim();
@@ -270,7 +273,7 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
         try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator(botao).first().click({ timeout: 5000 }); } catch { /* conferência abaixo decide */ }
         for (let t = 0; t < 12 && d === anterior; t++) { await page.waitForTimeout(400); d = await cabecalho(page) ?? anterior; }
         if (d === anterior) break;
-        if ((anterior < alvo && d > alvo) || (anterior > alvo && d < alvo)) {
+        if (navegacaoPulouDataAmplimed(anterior,d,alvo)) {
           console.warn('AMPLIMED_PERIODO dia_oculto alvo=' + alvo + ' entre=' + anterior + ',' + d);
           return null;
         }
