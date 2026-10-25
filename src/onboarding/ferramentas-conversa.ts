@@ -1,7 +1,7 @@
 import type {FatosConversa} from './conversador-medico.js';
 // Catálogo único das ferramentas que o decisor da conversa pode pedir.
 // O modelo escolhe; esta camada diz o que está liberado agora e o que exige confirmação do médico.
-export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'consultar_agenda'|'listar_pendencias'|'iniciar_lote'|'pedir_link_permissoes'|'reenviar_nota_medico';
+export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'pedir_link_certificado'|'consultar_agenda'|'listar_pendencias'|'iniciar_lote'|'pedir_link_permissoes'|'reenviar_nota_medico';
 export interface DescricaoFerramenta {
   nome:NomeFerramenta;
   tipo:'sem_efeito'|'leitura'|'escrita';
@@ -22,12 +22,14 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
     liberada:f=>!f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar uma agenda suportada que ainda não esteja conectada; nunca recebe senha pelo chat.',
     liberada:podeConectarOutraAgenda},
+  {nome:'pedir_link_certificado',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar um link do painel existente para cadastrar o A1 de cada médico explicitamente escolhido e ainda sem certificado.',
+    liberada:f=>(f.medicosConta??[]).some(m=>m.certificado==='pendente')},
   {nome:'consultar_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Consultar as consultas da agenda no período, independentemente de situação fiscal.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'pedir_link_permissoes',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para o médico escolher permissões com botões (emissão autônoma; entrega ao paciente; a quem pedir CPF ausente).',
-    liberada:f=>f.operadorTipo!=='secretaria'&&!!f.permissoes&&((f.permissoes.faltantes?.length??0)>0||f.permissoes.pendentes===true)},
+    liberada:f=>!!f.permissoes&&((f.permissoes.faltantes?.length??0)>0||f.permissoes.pendentes===true)},
   {nome:'reenviar_nota_medico',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Entregar ao médico uma única nota já autorizada pedida explicitamente. Nunca emite outra nota.',
     liberada:f=>f.permissoes?.entregarPaciente==='so_medico'},
   {nome:'iniciar_lote',tipo:'escrita',exigeConfirmacaoDoMedico:true,descricao:'Preparar o lote de notas; só emite depois do "pode" sobre a proposta.',
