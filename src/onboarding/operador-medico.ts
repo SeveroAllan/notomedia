@@ -23,7 +23,8 @@ export function resolverMedicoMencionado(texto:string,medicos:readonly MedicoOpe
 }
 
 export function mensagemPedeTrocaDeMedico(texto:string):boolean {
-  return /\b(?:dr|dra|doutor|doutora|m[eé]dico|m[eé]dica|trocar|mudar|outro|outra)\b/i.test(texto);
+  return /\b(?:dr|dra|doutor|doutora|m[eé]dico|m[eé]dica)\b/i.test(texto) ||
+    /\b(?:trocar|mudar)\b.*\b(?:m[eé]dico|m[eé]dica)\b/i.test(texto);
 }
 
 export function perguntaSelecaoMedico(medicos:readonly MedicoOperavel[]):string {
