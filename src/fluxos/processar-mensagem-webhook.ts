@@ -22,7 +22,7 @@ import {
   ehEventoSincronizacaoAuxiliar
 } from '../whatsapp/payload-historico-webhook-schema.js';
 import { processarHistoricoWebhook } from './processar-historico-webhook.js';
-import { mensagemPedeTrocaDeMedico, resolverMedicoMencionado, type MedicoOperavel } from '../onboarding/operador-medico.js';
+import { mensagemPedeTrocaDeMedico, resolverMedicoMencionado, resolverMedicosMencionados, type MedicoOperavel } from '../onboarding/operador-medico.js';
 
 
 export interface ProcessarWebhookDeps {
@@ -107,8 +107,9 @@ export async function processarMensagemWebhook(
         if(operador){
           origemOperador='conta';
           contatoOperador=telefone;
+          const multiplos=resolverMedicosMencionados(texto,operador.medicos);
           let alvo=resolverMedicoMencionado(texto,operador.medicos);
-          const mencaoInconclusiva=!alvo&&mensagemPedeTrocaDeMedico(texto);
+          const mencaoInconclusiva=multiplos.length<2&&!alvo&&mensagemPedeTrocaDeMedico(texto);
           if(!alvo&&!mencaoInconclusiva&&deps.repositorio.lerFocoOperador){
             const foco=await deps.repositorio.lerFocoOperador(operador.usuarioId).catch(()=>null);
             alvo=operador.medicos.find(m=>m.id===foco)??null;
