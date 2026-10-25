@@ -1,3 +1,4 @@
+import { resultadoConsultaAgenda } from './onboarding/resumo-valores-agenda.js';
 import {selecionarDias,horarioConsulta,selecaoConsultas,pacienteLiteralDaConsulta, confirmaSelecaoAnterior,type SelecaoConsultas} from './agenda/selecao-consultas.js';
 import { origemWebhookConfigurada } from './onboarding/io/origem-webhook.js';
 import {ferramentasLiberadas} from './onboarding/ferramentas-conversa.js';
@@ -441,16 +442,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           if(!a.ok)return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
           const consultas=a.dias.flatMap(d=>d.consultas).filter(x=>{const dia=x.dataHora.slice(0,10);return dia>=desde&&dia<=ate;});
           const fala=montar(consultas);
-          return {dados:{ferramenta:'consultar_agenda',ok:true,total:consultas.length,desde,ate},falaAssinada:fala,falaMemoria:fala};
+          return resultadoConsultaAgenda({consultas,desde,ate,medida:decisao.parametros?.medida,fala});
         }
         const janelaDias=Math.max(1,Math.ceil((Date.parse(hoje)-Date.parse(desde))/86400000));
         const a=await sincronizarAgendaHomologacao(c.medicoId,c.agora,janelaDias);
         console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'consultar_agenda',agenda:'tribemd',ok:a.tipo==='consultas',motivo:a.tipo==='erro'?a.codigo:undefined}));
         if(a.tipo==='erro')return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.codigo}};
         const consultas=a.consultas.filter(x=>{const dia=x.dataHora.slice(0,10);return dia>=desde&&dia<=ate;})
-          .map(x=>({paciente:x.nomeAoVivo?.trim()||'Paciente',dataHora:x.dataHora,status:x.status}));
+          .map(x=>({paciente:x.nomeAoVivo?.trim()||'Paciente',dataHora:x.dataHora,status:x.status,valorCentavos:x.valorCobradoAoVivoCentavos??null}));
         const fala=montar(consultas);
-        return {dados:{ferramenta:'consultar_agenda',ok:true,total:consultas.length,desde,ate},falaAssinada:fala,falaMemoria:fala};
+        return resultadoConsultaAgenda({consultas,desde,ate,medida:decisao.parametros?.medida,fala});
       }
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);

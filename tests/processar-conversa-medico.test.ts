@@ -1,3 +1,4 @@
+import {resultadoConsultaAgenda} from '../src/onboarding/resumo-valores-agenda.js';
 import {MemoriaConversaMedico} from '../src/onboarding/contexto-conversa-medico.js';
 import type pg from 'pg';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
@@ -682,4 +683,67 @@ it('conversa contínua alterna explicação, leitura concreta e escolha sem herd
  c.completar.mockResolvedValueOnce(responder('Posso buscar a mais recente.')).mockResolvedValueOnce(responder('Qual o nome e a data ou horário da consulta?'));
  await c.turno('escolher','Tenho um paciente com duas consultas, mas quero a nota só de uma. Como faço para escolher sem emitir a errada?');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.enviar.mock.calls.at(-1)?.[0].join(' ')).toMatch(/nome e a data/);
+});
+
+it('pergunta financeira curta após lista usa contexto como valor realizado, sem repetir lista ou preparar',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
+ await c.memoria.registrarFala('m','c','noto:lista-anterior','Encontrei 11 consultas nesta semana.','noto');
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({
+   dominio:'fiscal',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'valor_realizado',
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'},paciente:null,
+   restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.98
+ }))}});
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'cancelada',valorCentavos:10000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Encontrei 2 consultas.','Paciente Teste Cinco (realizada)']}));
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{
+   const d=JSON.parse(String(msgs[1]!.content));expect(d.acoesPermitidas).toEqual(['nenhuma']);
+   expect(d.interpretacaoSemantica.medida).toBe('valor_realizado');
+   expect(d.resultadoFerramenta.valoresAgenda.realizadas.totalCentavos).toBe(25000);
+   return JSON.stringify({fala:['Pelos valores registrados na agenda, as consultas realizadas somam R$ 250,00. Isso não confirma dinheiro recebido nem total de notas fiscais.'],acao:null});
+ });
+ await c.turno('quanto-faturado','Quanto foi faturado?');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'valor_realizado'}});
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');
+ expect(falas).toContain('R$ 250,00');
+ expect(falas).toContain('não confirma dinheiro recebido');
+ expect(falas).not.toContain('Encontrei 11 consultas');
+ expect(falas).not.toContain('Paciente Teste Cinco');
+ expect(c.executar.mock.calls[0]![0].acao).not.toBe('iniciar_lote');
+});
+
+it('quantidade responde a contagem sem expor a lista de pacientes',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({
+   dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'quantidade',
+   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
+   restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.99
+ }))}});
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'cancelada',valorCentavos:10000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Paciente Um (realizada)','Paciente Dois (cancelada)']}));
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.resultadoFerramenta.total).toBe(2);return JSON.stringify({fala:['Foram 2 consultas nesse período.'],acao:null});});
+ await c.turno('quantidade','Quantas consultas tive nesse período?');
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'quantidade'}});
+ const falas=c.enviar.mock.calls.flatMap(([f])=>f).join(' ');
+ expect(falas).toContain('Foram 2 consultas');
+ expect(falas).not.toContain('Paciente Um');
+ expect(falas).not.toContain('Paciente Dois');
+});
+
+it.each(['valor_realizado','valor_recebido','valor_notas'] as const)('frame→handler→resposta preserva %s sem efeito fiscal',async medida=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({dominio:'fiscal',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida,periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'},paciente:null,restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:1}))}});
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000},{status:'realizada',valorCentavos:null},{status:'cancelada',valorCentavos:90000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Lista não pedida']}));
+ const resposta=medida==='valor_realizado'?'Há R$ 250,00 conhecidos em consultas realizadas, mas falta um valor; não tenho o total completo.':'A agenda não comprova esse valor; não tenho dados de recebimento ou de notas fiscais nesta leitura.';
+ c.completar.mockImplementation(async(_k,_m,msgs)=>{const d=JSON.parse(String(msgs[1]!.content));expect(d.resultadoFerramenta.medida).toBe(medida);expect(d.resultadoFerramenta.valoresAgenda.realizadas).toMatchObject({subtotalCentavos:25000,totalCentavos:null,semValor:1});expect(d.acoesPermitidas).toEqual(['nenhuma']);return JSON.stringify({fala:[resposta],acao:null});});
+ await c.turno('financeiro-'+medida,'Confira esse valor, sem preparar nem emitir.');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0].acao).toBe('consultar_agenda');
+ expect(c.enviar.mock.calls.at(-1)![0]).toEqual([resposta]);expect(c.enviar.mock.calls.flatMap(([f])=>f)).not.toContain('Lista não pedida');
+});
+
+it('fallback do planejador preserva a medida semântica ao chamar a agenda',async()=>{
+ const c=cenario();c.fatos.agenda={nome:'amplimed',conectada:true};c.deps.orcamentoChamadas=6;
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar:vi.fn(async()=>({dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'item',medida:'valor_agenda',periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'contextual'},paciente:null,restricoes:{naoEmitir:true,somenteLeitura:true},faltando:[],confianca:.98}))}});
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou conferir.'],acao:'consultar_agenda',parametros:{desde:'2026-10-19',ate:'2026-10-21'}})).mockResolvedValueOnce(JSON.stringify({fala:['O valor registrado na agenda é R$ 250,00.'],acao:null}));
+ c.executar.mockImplementation(async d=>resultadoConsultaAgenda({consultas:[{status:'realizada',valorCentavos:25000}],desde:d.parametros!.desde!,ate:d.parametros!.ate!,medida:d.parametros!.medida,fala:['Lista não pedida']}));
+ await c.turno('financeiro-fallback','Confira o valor registrado na agenda desse período.');
+ expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'valor_agenda'}});
+ expect(c.enviar.mock.calls.at(-1)![0]).toEqual(['O valor registrado na agenda é R$ 250,00.']);
 });

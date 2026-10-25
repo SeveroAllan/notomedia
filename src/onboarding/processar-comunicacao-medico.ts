@@ -135,7 +135,7 @@ export async function processarComunicacaoMedico(
       const permitidas=deps.ferramentas.permitidas(fatos);
       if(deps.interpretadorSemantico&&entrada.respostaMedico) {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
-        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,fatos,agora});
+        interpretacaoSemantica=await deps.interpretadorSemantico.interpretar({texto,mensagens,resumo:contexto.resumo?.resumo??null,plano:contexto.plano??null,fatos,agora});
         if(interpretacaoSemantica&&interpretacaoSemantica.confianca<.8)interpretacaoSemantica=null;
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
@@ -247,6 +247,7 @@ export async function processarComunicacaoMedico(
           await memoria.registrarMarca(medicoId,conversa,'sem_agenda_digital');
         } else if(decisao.acao && decisao.acao!=='nenhuma' || fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
           const executarFerramenta=async (atual:DecisaoConversa,sufixo:string) => {
+            if(atual.acao==='consultar_agenda'&&interpretacaoSemantica?.medida) atual={...atual,parametros:{...atual.parametros,medida:interpretacaoSemantica.medida}};
             if(['consultar_agenda','listar_pendencias','iniciar_lote'].includes(atual.acao??'')) await enviar(atual.fala.slice(0,1),undefined,sufixo);
             ferramentasExecutadas++;
             return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});
