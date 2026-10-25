@@ -62,10 +62,10 @@ it('reconcilia pré-requisitos reais: agenda ausente vira pendência e modo manu
 
 it('planner oferece a escolha específica somente quando a permissão necessária está pendente',()=>{
  const i:InterpretacaoSemantica={...frame,dominio:'permissoes',objetivo:'configurar',objeto:'permissoes',permissaoNecessaria:'entregar_paciente',faltando:['permissao']};
- const pendente={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente'] as const}};
+ const pendente:FatosConversa={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente']}};
  const d=planejarPorSemantica(i,pendente,['nenhuma','pedir_link_permissoes']);
  expect(d).toMatchObject({acao:'pedir_link_permissoes',parametros:{permissao:'entregar_paciente'}});
- const escolhido={...pendente,permissoes:{...pendente.permissoes,entregarPaciente:'paciente',pendentes:false,faltantes:[]}};
+ const escolhido:FatosConversa={...pendente,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:'paciente',pendentes:false,faltantes:[]}};
  const reconciliado=reconciliarInterpretacaoSemantica(i,escolhido);
  expect(reconciliado.faltando).not.toContain('permissao');
  expect(planejarPorSemantica(reconciliado,escolhido,['nenhuma'])).toBeNull();
