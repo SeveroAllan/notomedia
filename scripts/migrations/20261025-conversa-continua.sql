@@ -3,6 +3,15 @@ begin;
 -- O transcript original continua em conversa_mensagens. Estas tabelas adicionam
 -- memória derivada e trabalho do agente sem transformar resumos em fonte de verdade.
 
+alter table if exists public.conversa_mensagens
+  add column if not exists origem_operador text
+  check (origem_operador is null or origem_operador in ('medico','secretaria'));
+
+-- Linhas antigas de entrada vieram do médico direto. Saídas do Noto ficam null.
+update public.conversa_mensagens
+set origem_operador='medico'
+where papel='medico' and origem_operador is null;
+
 create table if not exists public.conversa_chunks (
   id bigserial primary key,
   medico_id uuid not null references public.medicos(id) on delete cascade,
