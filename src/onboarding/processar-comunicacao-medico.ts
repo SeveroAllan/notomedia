@@ -52,7 +52,7 @@ export function dadoCadastralIsolado(texto:string):boolean {
 const falaSemMarcaLegada=(t:string)=>t!=='O link seguro já foi solicitado nesta conversa. Aguardo a conexão. Isso não confirma envio.';
 const processamentos = new Map<string,Promise<ProximaAcaoNoto>>();
 export async function processarComunicacaoMedico(
-  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;contatoOperador?:string;operadorTipo?:'medico'|'secretaria';eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
+  entrada:Pick<EntradaLegada,'medicoId'|'chaveProcessamento'|'respostaMedico'> & {agora:Date;chaveConversa?:string;chavePergunta?:string;contatoOperador?:string;origemOperador?:'conta'|'medico'|'secretaria';eventoAgenda?:{agenda:'tribemd'|'amplimed';conectado:boolean;falhaAcesso?:boolean}}, deps:Dependencias
 ):Promise<ProximaAcaoNoto> {
   if(!deps.ativo) return {tipo:'nenhuma'};
   const executar = async ():Promise<ProximaAcaoNoto> => {
@@ -102,13 +102,12 @@ export async function processarComunicacaoMedico(
         if(!historico.boasVindasComunicadas) {
           const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
           await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
-          if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');
+          if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico');
           if(acao.tipo==='boas_vindas') return acao;
         }
       }
       const contexto=await memoria.lerContextoParaModelo(medicoId,conversa);
       const fatos=await deps.ferramentas.lerFatos(medicoId,agora);
-      if(entrada.operadorTipo)fatos.operadorTipo=entrada.operadorTipo;
       if(fatos.ambiente!=='homologacao') return {tipo:'nenhuma'};
       fatos.semAgendaDigital=contexto.marcas.semAgendaDigital && !fatos.agenda.conectada;
       fatos.entregasRecentes=contexto.entregasRecentes;
@@ -161,7 +160,7 @@ export async function processarComunicacaoMedico(
         await memoria.registrarPlano(medicoId,conversa,planoAtual);
       }
       if(!decisao) decisao=await decidir(permitidas);
-      if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');
+      if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico');
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
       // não é resposta à pergunta, então não força parametros.confirmacao.
       const trocaEscopo=decisao.acao==='iniciar_lote'&&permitidas.includes('iniciar_lote')
@@ -380,7 +379,7 @@ export async function processarComunicacaoMedico(
       const mensagem=sanitizarErroFiscal(erro instanceof Error?erro.message:erro,identificadores).replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi,'[OCULTO]');
       deps.log('erro','CONVERSA_FALHA_TECNICA '+JSON.stringify({nome,mensagem}));
       if(entrada.respostaMedico && conversa && memoria) {
-        try {await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto),'medico',entrada.operadorTipo==='secretaria'?'secretaria':'medico');} catch { /* Best effort. */ }
+        try {await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto),'medico',entrada.origemOperador??'medico');} catch { /* Best effort. */ }
       }
       try {await enviar([ERRO_CONVERSA]);} catch {deps.log('erro','CONVERSA_FALLBACK_FALHOU');}
       return {tipo:'nenhuma'};
