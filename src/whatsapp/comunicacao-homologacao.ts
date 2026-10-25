@@ -255,11 +255,12 @@ export class ComunicacaoHomologacao {
       const registrarEntrega=async(destino:'medico'|'paciente',resultado:'simulado'|'enviado'|'erro'|'repetido'|'sem_contato'|'sem_permissao')=>{
         if(!nota?.nota_fiscal_id||!nota?.telefone_medico)return;
         const conversa=createHash('sha256').update(JSON.stringify([this.config.evolutionAssistantInstanceName,String(nota.telefone_medico).replace(/\D/g,'')])).digest('hex');
-        const chave=createHmac('sha256',this.config.appPepper).update(JSON.stringify([nota.nota_fiscal_id,destino,origemEntrega,entrada.chaveReenvio??'nova'])).digest('hex');
+        const registradaEm=new Date().toISOString();
+        const chave=createHmac('sha256',this.config.appPepper).update(JSON.stringify([nota.nota_fiscal_id,destino,origemEntrega,entrada.chaveReenvio??'nova',resultado,registradaEm])).digest('hex');
         await new PostgresMemoriaConversaMedico(this.pool).registrarEntregaNota(medicoId,conversa,chave,{
           notaFiscalId:nota.nota_fiscal_id,solicitacaoId,paciente:nota.paciente_nome??null,datasConsulta:nota.datas_consulta_texto??null,
           ndps:Number.isInteger(nota.ndps)?Number(nota.ndps):null,valorCentavos:Number.isInteger(nota.valor_servicos_centavos)?Number(nota.valor_servicos_centavos):null,
-          destino,origem:origemEntrega,resultado,registradaEm:new Date().toISOString()
+          destino,origem:origemEntrega,resultado,registradaEm
         }).catch(()=>{});
       };
       if (nota && (await this.permissoes?.ler?.(medicoId, 'entregar_paciente'))?.valor === 'so_medico') {
