@@ -27,7 +27,7 @@ export const interpretacaoSemanticaSchema = z.object({
   confianca: z.number().min(0).max(1)
 }).strict();
 
-export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida']};
+export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria']};
 
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interprete a mensagem do médico pelo significado, não por palavras-chave.
 Você NÃO executa ações, NÃO responde ao médico e NÃO decide política de segurança. Produza apenas a representação semântica JSON.
