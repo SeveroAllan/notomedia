@@ -11,12 +11,17 @@ export interface DescricaoFerramenta {
   liberada:(fatos:FatosConversa,disponibilidade:{lote:boolean})=>boolean;
 }
 const tarefaOcupada=(f:FatosConversa)=>['aguardando_confirmacao_lote','confirmado','processando'].includes(f.lote?.estado??'');
+const podeConectarOutraAgenda=(f:FatosConversa)=>{
+  if(f.semAgendaDigital)return false;
+  if(!f.agendas)return !f.agenda.conectada&&!f.link.ativo;
+  return !f.agendas.tribemd.conectada||!f.agendas.amplimed.conectada;
+};
 export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
   {nome:'nenhuma',tipo:'sem_efeito',exigeConfirmacaoDoMedico:false,descricao:'Só conversar, explicar ou responder à confirmação pendente.',liberada:()=>true},
   {nome:'registrar_modo_sem_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Registrar que o médico declarou não usar agenda digital.',
     liberada:f=>!f.agenda.conectada&&!f.semAgendaDigital},
-  {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar a agenda; nunca recebe senha pelo chat.',
-    liberada:f=>!f.agenda.conectada&&!f.link.ativo&&!f.semAgendaDigital},
+  {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar uma agenda suportada que ainda não esteja conectada; nunca recebe senha pelo chat.',
+    liberada:podeConectarOutraAgenda},
   {nome:'consultar_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Consultar as consultas da agenda no período, independentemente de situação fiscal.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',
