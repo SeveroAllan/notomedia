@@ -14,6 +14,7 @@ export const interpretacaoSemanticaSchema = z.object({
   objetivo: z.enum(['consultar','preparar','emitir','reenviar','conectar','configurar','responder','conversar','desconhecido']),
   objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','agenda','permissoes','outro']).nullable(),
   granularidade: z.enum(['colecao','item','indefinida']),
+  medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   periodo: periodoSchema,
   paciente: z.string().trim().min(1).max(150).nullable(),
   restricoes: z.object({
@@ -24,13 +25,15 @@ export const interpretacaoSemanticaSchema = z.object({
   confianca: z.number().min(0).max(1)
 }).strict();
 
-export type InterpretacaoSemantica = z.infer<typeof interpretacaoSemanticaSchema>;
+export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida']};
 
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interprete a mensagem do médico pelo significado, não por palavras-chave.
 Você NÃO executa ações, NÃO responde ao médico e NÃO decide política de segurança. Produza apenas a representação semântica JSON.
 
 Use texto, histórico, resumo, fatos e calendario para resolver referências temporais, anafóricas e contextuais naturais.
 "consultas" significa agenda em geral. "pendencias_fiscais" significa consultas sem nota/pendentes para emissão.
+Preserve a medida pedida: lista, quantidade ou valor. Não reduza uma pergunta financeira a listar consultas.
+Valor na agenda, valor de consultas realizadas, dinheiro recebido e notas fiscais são métricas distintas. Se o sentido financeiro não estiver definido pelo turno ou contexto, use valor_indefinido; não escolha uma métrica por conta própria.
 Não transforme uma coleção em item: se o médico pede consultas de um período, granularidade=colecao e não invente paciente/data/hora ausentes.
 Só marque faltando quando o objetivo realmente não puder ser executado com os dados já presentes.
 Restrições como "sem emitir", "só conferir", "não prepare" devem ser preservadas.
@@ -42,6 +45,7 @@ SAÍDA JSON estrita:
  "objetivo":"consultar|preparar|emitir|reenviar|conectar|configurar|responder|conversar|desconhecido",
  "objeto":"consultas|pendencias_fiscais|notas|pdf|agenda|permissoes|outro"|null,
  "granularidade":"colecao|item|indefinida",
+ "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "periodo":{"inicio":"YYYY-MM-DD"|null,"fim":"YYYY-MM-DD"|null,"referencia":"explicito|contextual|nenhum"},
  "paciente":string|null,
  "restricoes":{"naoEmitir":boolean,"somenteLeitura":boolean},
@@ -94,9 +98,9 @@ export class InterpretadorSemantico {
 /** Mapeia significado estruturado para capacidade; não interpreta linguagem. */
 export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConversa,permitidas:readonly string[]):DecisaoConversa|null{
   if(i.confianca<.8)return null;
-  if(i.dominio==='agenda'&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
+  if((i.dominio==='agenda'||i.dominio==='fiscal')&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;
-    return {fala:['Vou conferir sua agenda nesse período.'],acao:'consultar_agenda',parametros:{desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
+    return {fala:[i.medida?.startsWith('valor_')?'Vou conferir os valores disponíveis na agenda nesse período.':'Vou conferir sua agenda nesse período.'],acao:'consultar_agenda',parametros:{medida:i.medida??'lista',desde:i.periodo.inicio,...(i.periodo.fim?{ate:i.periodo.fim}:{})}};
   }
   if(i.dominio==='fiscal'&&i.objeto==='pendencias_fiscais'&&i.objetivo==='consultar'){
     if(!fatos.agenda.conectada||!i.periodo.inicio||i.faltando.length||!permitidas.includes('listar_pendencias'))return null;

@@ -6,7 +6,7 @@ import type { FatosConversa } from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:'amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const frame:InterpretacaoSemantica={
-  dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',
+  dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'lista',
   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
   restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[],confianca:.98
 };
@@ -42,4 +42,10 @@ it('planner distingue pendência fiscal de consulta geral pelo objeto semântico
 it('planner não força ação quando a semântica está incompleta ou pouco confiável',()=>{
   expect(planejarPorSemantica({...frame,confianca:.4},fatos,['consultar_agenda'])).toBeNull();
   expect(planejarPorSemantica({...frame,faltando:['periodo'],periodo:{inicio:null,fim:null,referencia:'nenhum'}},fatos,['consultar_agenda'])).toBeNull();
+});
+
+it.each(['valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido'] as const)('preserva medida financeira %s sem converter consulta em lote',medida=>{
+ const d=planejarPorSemantica({...frame,dominio:'fiscal',medida},fatos,['nenhuma','consultar_agenda','iniciar_lote']);
+ expect(d).toMatchObject({acao:'consultar_agenda',parametros:{medida,desde:'2026-10-19'}});
+ expect(d?.acao).not.toBe('iniciar_lote');
 });

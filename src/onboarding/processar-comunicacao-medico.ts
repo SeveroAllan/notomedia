@@ -247,6 +247,7 @@ export async function processarComunicacaoMedico(
           await memoria.registrarMarca(medicoId,conversa,'sem_agenda_digital');
         } else if(decisao.acao && decisao.acao!=='nenhuma' || fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
           const executarFerramenta=async (atual:DecisaoConversa,sufixo:string) => {
+            if(atual.acao==='consultar_agenda'&&interpretacaoSemantica?.medida) atual={...atual,parametros:{...atual.parametros,medida:interpretacaoSemantica.medida}};
             if(['consultar_agenda','listar_pendencias','iniciar_lote'].includes(atual.acao??'')) await enviar(atual.fala.slice(0,1),undefined,sufixo);
             ferramentasExecutadas++;
             return deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),fatos,narrar});

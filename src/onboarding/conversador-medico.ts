@@ -46,9 +46,10 @@ COMO DECIDIR (siga na ordem)
 
 
 Se interpretacaoSemantica existir, ela é o significado normalizado do turno: não invente campos ausentes nem reinterprete a linguagem para criar novas faltas. Pergunte somente o que estiver em interpretacaoSemantica.faltando. Se faltando=[], avance usando uma capacidade permitida ou responda ao resultado.
+ValoresAgenda são centavos, não recebido/NF. Total nulo é incompleto. Responda à medida; valor_indefinido exige esclarecer a métrica, nunca preparar lote.
 Corrija sem narrar validações.
 SAÍDA JSON {"fala":[...],"acao":null|nome,"parametros":{},"reacao"?:emoji,"plano":{objetivo,etapa,faltando,proximosPassos,aguardando}}. plano sem autoridade. Máx 3x500 chars. Ações só de acoesPermitidas. Após ferramenta, acao só se podeAgirAposFerramenta=true; senão null. Só fatos reais; zero pendências só se total=0; falha técnica sem prometer retorno.`;
-const parametrosSchema = z.object({ paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
+const parametrosSchema = z.object({ medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).optional(), paciente: z.object({nome:z.string().trim().min(1).max(150),evidencia:z.string().trim().min(1).max(300)}).strict().optional(), agenda: z.string().trim().max(80).optional(), desde: z.string().optional(), ate: z.string().optional(), dia: z.string().optional(),
   permissao: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).optional().catch(undefined),
   periodo: z.enum(['semana_passada','semana_retrasada','mes_passado','mes_retrasado']).optional().catch(undefined),
   evidencia: z.string().trim().min(1).max(300).optional(), confianca: z.number().min(0).max(1).optional(),
