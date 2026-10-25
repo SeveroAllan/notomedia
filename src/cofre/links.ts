@@ -174,10 +174,11 @@ export class LinksCofre {
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>, contatoTelefone?:string) {
         const credencial = contemCredencialAgenda(texto);
         // Enquanto há link pendente, nem uma senha sem rótulo segue para memória ou IA.
-        const pendente = (await this.deps.pool.query(`select id from cofre_links where medico_id=$1
-            and usado_em is null and expira_em>now() limit 1`, [medicoId])).rows[0];
+        const pendente = (await this.deps.pool.query(`select id, agenda from cofre_links where medico_id=$1
+            and usado_em is null and expira_em>now() order by criado_em desc limit 1`, [medicoId])).rows[0];
         if (credencial || pendente) {
-            await this.solicitarLinkCofre(medicoId, 'tribemd',{contatoTelefone});
+            const agendaPendente=agendaSuportada(pendente?.agenda);
+            if(agendaPendente)await this.solicitarLinkCofre(medicoId, agendaPendente,{contatoTelefone});
             return true;
         }
         const agenda = await classificar(texto);
