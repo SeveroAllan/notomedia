@@ -248,12 +248,8 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   if (acao === 'pedir_link_certificado') {
     const nomes=d.parametros?.medicos??[];
     if(!nomes.length)return 'MEDICO_NECESSARIO';
-    const disponiveis=fatos.medicosConta??[];
-    for(const nome of nomes){
-      const n=nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().trim();
-      const correspondentes=disponiveis.filter(m=>m.nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().trim()===n);
-      if(correspondentes.length!==1)return correspondentes.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO';
-    }
+    const normalizados=nomes.map(nome=>nome.normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').toLowerCase().trim()).filter(Boolean);
+    if(normalizados.length!==nomes.length||new Set(normalizados).size!==normalizados.length)return 'MEDICO_AMBIGUO';
     return null;
   }
   if (acao === 'reenviar_nota_medico') {
