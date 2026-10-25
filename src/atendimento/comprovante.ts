@@ -46,7 +46,7 @@ export type DecisaoPedidoComprovante =
   | { tipo: 'nenhuma'; motivo: 'COMPROVANTE_JA_PROCESSADO' | 'AUDITORIA_FALHOU' }
   | { tipo: 'perguntar_medico'; motivo: 'VINCULO_TELEFONE_INDEFINIDO' | 'CONSULTA_AMBIGUA_OU_AUSENTE' | 'LEITURA_INDISPONIVEL' | 'COMPROVANTE_ILEGIVEL' | 'NAO_COMPROVANTE'
       | 'CAMPO_OBRIGATORIO_AUSENTE' | 'CONFIANCA_INSUFICIENTE' | 'CADASTRO_INCOMPLETO' | 'VALOR_DIVERGENTE' | 'PDF_NAO_SUPORTADO' | 'FONTE_INDISPONIVEL' | 'ACESSO_EXPIRADO'
-      | 'CONSULTA_APOS_PAGAMENTO' | 'MULTIPLAS_CONSULTAS_SEM_NOTA' | 'NOTA_FASE_INICIAL' | 'NAO_COMPROVANTE'; detalhe?: {
+      | 'CONSULTA_APOS_PAGAMENTO' | 'MULTIPLAS_CONSULTAS_SEM_NOTA' | 'NOTA_FASE_INICIAL' | 'NAO_COMPROVANTE' | 'PROFISSIONAL_NAO_IDENTIFICADO' | 'PROFISSIONAL_AMBIGUO'; detalhe?: {
       pacienteNome: string | null; valorCentavos: number | null; consultas: { dataHora: string }[] };
       detalheNota?: { numeroNota: string | null; dataEmissao: string | null; valorCentavos: number | null; nomeTomador: string | null } }
   | { tipo: 'perguntar_pacote'; motivo: 'VALOR_MULTIPLO_CONSULTA' }
