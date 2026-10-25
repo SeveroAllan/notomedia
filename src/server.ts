@@ -295,7 +295,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const r=await emissaoLote.reenviarSemContato(medicoId,chave,candidatos,(id,consulta)=>detalheLote(id,consulta),
         (id,solicitacaoId)=>comunicacaoHomologacao.paciente({medicoId:id,solicitacaoId},evolutionClient));
       await comunicacaoHomologacao.conversa({medicoId,conversa,chave:`lote:reenvio:${chave}`,
-        fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido; confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas; vou verificar o que impediu a entrega.' : ''}`]});
+        fala:[`${r.entregues} notas entregues.${r.semContato ? ` ${r.semContato} continuam sem contato válido. Confira o contato na agenda.` : ''}${r.total-r.entregues-r.semContato>0 ? ' As demais não foram reenviadas. Vou verificar o que impediu a entrega.' : ''}`]});
       console.info(JSON.stringify({evento:'LOTE_REENVIO',medicoId,...r}));return true;
     },
     listarPeriodo: async (id, conversa, chave, inicio, agora, aoConcluir, somenteContagem = false) => {
@@ -306,7 +306,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
         if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo, limiteLeitura:{desde:calendarioConversa(agora).amplimedDesde,ate:hoje} }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
         let diasSelecionados:typeof a.dias;try{diasSelecionados=selecionarDias(a.dias,selecao??{});}catch{await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:selecao:${chave}`,fala:['Não consegui identificar um único atendimento nessa seleção. Não preparei nenhuma nota. Qual é a data e o horário?']});return;}
-        if(selecao?.paciente&&new Set(selecionarDias(a.dias,{...selecao,ordem:undefined}).flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota; preciso identificar qual paciente você quer.']});return;}
+        if(selecao?.paciente&&new Set(selecionarDias(a.dias,{...selecao,ordem:undefined}).flatMap(d=>d.elegiveis).map(e=>e.detalhe?.cpf).filter(Boolean)).size>1){await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:ambiguo:${chave}`,fala:['Encontrei cadastros diferentes com esse nome. Não preparei nenhuma nota. Preciso identificar qual paciente você quer.']});return;}
         const p = prepararLoteAmplimed(diasSelecionados);
         // paciente_id é FK de pacientes: vincula/cria o cadastro mínimo pelo celular do cadastro Amplimed (mesmo caminho do TribeMD).
         const repoConsultas = new PostgresConsultasSincronizadas(pool); const prontas: typeof p.consultas = [];
@@ -456,7 +456,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='reenviar_nota_medico') {
         const r=await comunicacaoHomologacao.reenviarNotaMedico(c.medicoId,evolutionClient,diaDecisao(decisao,c.agora)??undefined,c.chave);
-        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Já existe uma tentativa de envio deste PDF. Vou preservar a nota sem repetir o envio; o recebimento ainda precisa ser conferido.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
+        const fala=r==='enviado'?'O envio do PDF da nota já emitida foi aceito. Confira se o documento apareceu por aqui.':r==='repetido'?'Já existe uma tentativa de envio deste PDF. Vou preservar a nota sem repetir o envio. O recebimento ainda precisa ser conferido.':r==='ambiguo'?'Há mais de uma nota emitida. De qual data de consulta você quer o PDF?':r==='ausente'?'Não encontrei uma única nota autorizada para esse pedido. Qual é a data da consulta?':'Não consegui entregar o PDF agora. A nota está preservada, sem nova emissão.';
         await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`nota:reenvio:${c.chave}`,fala:[fala]});
         return {jaRespondida:true};
       }
@@ -523,7 +523,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ? [`${escopo} vi ${total} atendimento${total>1?'s':''} finalizado${total>1?'s':''} com cobrança particular. ${porDia.join('. ')}. Se quiser, preparo a emissão dessas notas e você confirma antes.`]
           : [`${escopo} não encontrei atendimento finalizado com cobrança particular${alvo} sem nota e livre para preparar na sua agenda Amplimed. Não preparei notas de outras pessoas.`];
         if(jaFaturadas)fala.push(jaFaturadas===1?'1 já tem nota autorizada e ficou fora da lista.':`${jaFaturadas} já têm nota autorizada e ficaram fora da lista.`);
-        if(bloqueadas)fala.push(bloqueadas===1?'1 tem tentativa anterior que precisa ser conciliada; não vou emitir de novo.':`${bloqueadas} têm tentativas anteriores que precisam ser conciliadas; não vou emitir de novo.`);
+        if(bloqueadas)fala.push(bloqueadas===1?'1 tem tentativa anterior que precisa ser conciliada. Não vou emitir de novo.':`${bloqueadas} têm tentativas anteriores que precisam ser conciliadas. Não vou emitir de novo.`);
         return {dados:{ferramenta:'listar_pendencias',ok:true,total,desde,jaFaturadas,bloqueadas},falaAssinada:fala,falaMemoria:fala};
       }
       if(decisao.acao==='iniciar_lote') {
@@ -896,7 +896,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (req.body?.usarReferencia === true) {
         console.warn('[Fiscal] Adoção da referência pendente:', { codigo: err?.codigo || 'CONFIRMACAO_FALHOU', diagnostico: err?.diagnostico, mensagem: err?.message });
         if (err instanceof ErroAdocaoReferencia) return res.status(400).json({ ok: false, codigo: err.codigo, detalhe: err.message });
-        return res.status(400).json({ ok: false, detalhe: 'Ainda não conseguimos adotar a configuração completa dessa nota. Busque a referência novamente; se persistir, a equipe precisa analisar o caso antes de liberar a emissão.' });
+        return res.status(400).json({ ok: false, detalhe: 'Ainda não conseguimos adotar a configuração completa dessa nota. Busque a referência novamente. Se persistir, a equipe precisa analisar o caso antes de liberar a emissão.' });
       }
       return res.status(400).json({
         ok: false, detalhe: Array.isArray(err?.issues)
