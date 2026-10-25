@@ -13,7 +13,7 @@ import { LIMITE_MENSAGENS_CONTEXTO_MEDICO } from './regras/decidir-proxima-acao.
  */
 export interface MemoriaConversa {
   ler(medicoId: string, conversa: string): string[] | Promise<string[]>;
-  registrar(medicoId: string, conversa: string, id: string, texto: string, papel?: 'medico' | 'noto', origemOperador?: 'medico'|'secretaria'): void | boolean | Promise<void | boolean>;
+  registrar(medicoId: string, conversa: string, id: string, texto: string, papel?: 'medico' | 'noto', origemOperador?: 'medico'|'secretaria'|'conta'): void | boolean | Promise<void | boolean>;
 }
 export type ResumoConversa = { resumo: string; ateId: string };
 export type PlanoConversa = {
