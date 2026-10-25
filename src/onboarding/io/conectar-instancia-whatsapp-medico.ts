@@ -47,7 +47,20 @@ export async function conectarInstanciaWhatsappMedico(
 ): Promise<ResultadoConexaoWhatsapp> {
   const { medicoId, evolutionUrl, evolutionApiKey, appWebhookUrl, webhookSecret } = input;
   const baseUrl = evolutionUrl.replace(/\/+$/, '');
-  const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+  const contextoConta=(await pool.query(`
+    select m.conta_id,
+      (select w.nome_instancia from whatsapp_instancias w
+       where w.conta_id=m.conta_id and w.oficial=false
+       order by w.conectado_em desc nulls last, w.id
+       limit 1) as nome_instancia,
+      (select u.telefone from usuarios u
+       where u.conta_id=m.conta_id and u.ativo=true and nullif(regexp_replace(coalesce(u.telefone,''),'\\D','','g'),'') is not null
+       order by case when u.id=m.usuario_id then 0 else 1 end, u.id
+       limit 1) as telefone_conta
+    from medicos m where m.id=$1
+  `,[medicoId])).rows[0];
+  if(!contextoConta)throw new Error('MEDICO_NAO_ENCONTRADO');
+  const nomeInstancia = contextoConta.nome_instancia ?? `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
   const porQrCode = input.modoConexao === 'qrcode';
   const falhar = (diagnostico: NonNullable<ResultadoConexaoWhatsapp['diagnostico']>): ResultadoConexaoWhatsapp => ({
     ok: false, nomeInstancia, status: 'erro', diagnostico,
@@ -58,17 +71,8 @@ export async function conectarInstanciaWhatsappMedico(
   let diagnostico: ResultadoConexaoWhatsapp['diagnostico'];
   let telefonePareamento = porQrCode ? undefined : formatarTelefonePareamento(input.telefoneConsultorio);
 
-  if (!porQrCode && !telefonePareamento) {
-    const telefoneSalvo = await pool.query(
-      `select u.telefone
-       from medicos m
-       join usuarios u on u.id = m.usuario_id
-       where m.id = $1
-       limit 1`,
-      [medicoId]
-    );
-    telefonePareamento = formatarTelefonePareamento(telefoneSalvo.rows[0]?.telefone);
-  }
+  if (!porQrCode && !telefonePareamento)
+    telefonePareamento = formatarTelefonePareamento(contextoConta.telefone_conta);
 
   let qrcodeBase64: string | null = null;
   let pairingCode: string | null = null;
@@ -221,7 +225,7 @@ export async function conectarInstanciaWhatsappMedico(
     )
     on conflict (nome_instancia) do update set
       status = excluded.status,
-      medico_id = excluded.medico_id,
+      medico_id = coalesce(whatsapp_instancias.medico_id, excluded.medico_id),
       conta_id = coalesce(excluded.conta_id, whatsapp_instancias.conta_id),
       conectado_em = coalesce(excluded.conectado_em, whatsapp_instancias.conectado_em),
       webhook_configurado = excluded.webhook_configurado
