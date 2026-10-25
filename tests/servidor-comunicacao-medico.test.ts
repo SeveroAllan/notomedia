@@ -28,6 +28,11 @@ beforeEach(() => {
       cert_ativos: '1', whats_conectados: '1', whatsapp_vinculado: true,
       revisao_profissional: { estado: 'concluido', dados: { aprovacaoPainel: { confirmadoEm: '2026-10-17T15:00:00Z', nome: 'Medica Ficticia', crm: '12345/SC', rqe: null } } } }] };
     if (sql.includes('from notas_fiscais')) return { rows: [] };
+    if (sql.includes('select id, conta_id, telefone from usuarios') && sql.includes('regexp_replace(telefone')) return { rows: [{ id:'usuario', conta_id:'conta', telefone:'5511999990000' }] };
+    if (sql.includes('from medicos') && sql.includes('where conta_id=$1') && sql.includes('order by nome_completo')) return { rows: [{ id:medico, nome_completo:'Medica Ficticia', crm:'12345/SC' }] };
+    if (sql.includes('from public.noto_operador_foco f') && sql.includes('join usuarios u')) return { rows: [] };
+    if (sql.includes('insert into public.noto_operador_foco')) return { rows: [{ medico_id:medico }] };
+    if (sql.includes('from medicos m') && sql.includes('where m.conta_id=(select conta_id from medicos where id=$1)')) return { rows: [{ id:medico, nome_completo:'Medica Ficticia', crm:'12345/SC', certificado_valido:true }] };
     if (sql.includes('regexp_replace(u.telefone')) return { rows: [{ id: medico, nome_completo: 'Medica Ficticia', crm: '12345/SC', telefone: '5511999990000' }] };
     if (sql.includes('update whatsapp_instancias')) return { rows: [{ medico_id: medico }] };
     throw Error('SQL_FORA_DO_TESTE');
