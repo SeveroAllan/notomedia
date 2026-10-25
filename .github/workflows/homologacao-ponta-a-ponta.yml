@@ -21,9 +21,21 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: TypeScript de producao
+        run: npm run typecheck
       - name: Bateria curta
         run: |
-          npx vitest run             tests/lote-retroativo.test.ts             tests/processar-conversa-medico.test.ts             tests/servidor-conversa-livre.test.ts             tests/cofre-links.test.ts             tests/conversador-medico.test.ts             tests/interpretador-semantico.test.ts             tests/ferramentas-conversa.test.ts
+          npx vitest run \
+            tests/lote-retroativo.test.ts \
+            tests/processar-conversa-medico.test.ts \
+            tests/servidor-conversa-livre.test.ts \
+            tests/gatilhos-comunicacao.test.ts \
+            tests/cofre-links.test.ts \
+            tests/conversador-medico.test.ts \
+            tests/interpretador-semantico.test.ts \
+            tests/ferramentas-conversa.test.ts \
+            tests/operador-medico.test.ts \
+            tests/secretaria-multimedico.test.ts
       - name: Suite completa
         run: npm test
       - name: Diff check
