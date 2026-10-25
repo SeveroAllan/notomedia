@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { completarOpenAi } from '../src/io/nvidia/chat-client.js';
-import { InterpretadorSemantico, PROMPT_INTERPRETACAO_SEMANTICA, planejarPorSemantica, type InterpretacaoSemantica } from '../src/onboarding/interpretador-semantico.js';
+import { InterpretadorSemantico, PROMPT_INTERPRETACAO_SEMANTICA, planejarPorSemantica, reconciliarInterpretacaoSemantica, type InterpretacaoSemantica } from '../src/onboarding/interpretador-semantico.js';
 import type { FatosConversa } from '../src/onboarding/conversador-medico.js';
 
 const agora=new Date('2026-10-21T15:00:00Z');
@@ -48,6 +48,33 @@ it('planner distingue pendência fiscal de consulta geral pelo objeto semântico
  const fiscal:InterpretacaoSemantica={...frame,dominio:'fiscal',objetivo:'consultar',objeto:'pendencias_fiscais'};
  const d=planejarPorSemantica(fiscal,fatos,['nenhuma','consultar_agenda','listar_pendencias']);
  expect(d).toMatchObject({acao:'listar_pendencias',parametros:{desde:'2026-10-19',ate:'2026-10-21'}});
+});
+
+it('reconcilia pré-requisitos reais: agenda ausente vira pendência e modo manual não empurra conexão',()=>{
+ const emitir:InterpretacaoSemantica={...frame,dominio:'fiscal',objetivo:'emitir',objeto:'notas',periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},faltando:[]};
+ const semConexao={...fatos,agenda:{nome:'tribemd',conectada:false},semAgendaDigital:false};
+ expect(reconciliarInterpretacaoSemantica(emitir,semConexao).faltando).toContain('agenda');
+ const manual={...semConexao,semAgendaDigital:true};
+ const r=reconciliarInterpretacaoSemantica(emitir,manual);
+ expect(r.faltando).not.toContain('agenda');expect(r.faltando).toContain('dados_consulta');
+ expect(planejarPorSemantica(r,manual,['nenhuma','pedir_link_agenda','registrar_modo_sem_agenda'])).toBeNull();
+});
+
+it('planner oferece a escolha específica somente quando a permissão necessária está pendente',()=>{
+ const i:InterpretacaoSemantica={...frame,dominio:'permissoes',objetivo:'configurar',objeto:'permissoes',permissaoNecessaria:'entregar_paciente',faltando:['permissao']};
+ const pendente={...fatos,permissoes:{emitirAutonomo:'sempre_perguntar',entregarPaciente:null,pendentes:true,faltantes:['entregar_paciente'] as const}};
+ const d=planejarPorSemantica(i,pendente,['nenhuma','pedir_link_permissoes']);
+ expect(d).toMatchObject({acao:'pedir_link_permissoes',parametros:{permissao:'entregar_paciente'}});
+ const escolhido={...pendente,permissoes:{...pendente.permissoes,entregarPaciente:'paciente',pendentes:false,faltantes:[]}};
+ const reconciliado=reconciliarInterpretacaoSemantica(i,escolhido);
+ expect(reconciliado.faltando).not.toContain('permissao');
+ expect(planejarPorSemantica(reconciliado,escolhido,['nenhuma'])).toBeNull();
+});
+
+it('agenda conhecida e desconectada vira próximo passo proativo sem depender da frase original',()=>{
+ const i:InterpretacaoSemantica={...frame,dominio:'fiscal',objetivo:'emitir',objeto:'notas',faltando:['agenda']};
+ const f={...fatos,agenda:{nome:'tribemd',conectada:false},semAgendaDigital:false};
+ expect(planejarPorSemantica(i,f,['nenhuma','pedir_link_agenda'])).toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'tribemd'}});
 });
 
 it('planner não força ação quando a semântica está incompleta ou pouco confiável',()=>{
