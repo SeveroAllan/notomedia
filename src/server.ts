@@ -376,6 +376,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const agendaAtiva=(await cofres.statusAgenda(medicoId))??{nome:null,conectada:false};
       const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const agendaEfetiva=estado?.estado.agenda??agendaAtiva;
+      let medicosConta:Awaited<ReturnType<typeof listarMedicosDaConta>>=[];
+      try { medicosConta=await listarMedicosDaConta(pool,medicoId); } catch { medicosConta=[]; }
+      const medicoFoco=medicosConta.find(m=>m.id===medicoId)?.nomeCompleto??estado?.nomeMedico??null;
       const agendas=typeof (cofres as {statusAgendas?:unknown}).statusAgendas==='function'
         ? await cofres.statusAgendas(medicoId)
         : {
@@ -409,6 +412,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           agenda:conexao?.link?.agenda??null,
           usado:conexao?.link?.usado,expirado:conexao?.link?.expirado,minutosDesdeEnvio:conexao?.link?.minutosDesdeEnvio},
         periodo:{desde:periodo.dataInicio,origem:periodo.dataInicio?'contexto_salvo':null},semAgendaDigital:false,
+        medicoFoco,
+        medicosConta:medicosConta.map(m=>({nome:m.nomeCompleto,certificado:m.certificadoValido?'ok' as const:'pendente' as const})),
         permissoes:permissoesNoto?{emitirAutonomo:emitirAutonomoValor,entregarPaciente:entregarPacienteValor,
           solicitarCpf:solicitarCpfValor,pendentes:faltantes.length>0,faltantes}:null,
         envioPacienteRealAtivo:config.envioPacienteRealAtivo===true,
