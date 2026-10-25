@@ -46,6 +46,11 @@ beforeEach(() => {
     if(sql.startsWith('select count(*)::int as total from cofre_links')) return {rows:[{total:0}]};
     if (sql.startsWith('select data_inicio::text')) return { rows: [{ data_inicio: '2026-09-03', aguardando_data: false, ultimo_aviso: null }] };
     if (sql.startsWith('insert into public.noto_contexto_pendencias') || sql.startsWith('update public.noto_contexto_pendencias')) return { rows: [{ medico_id: 'medico' }] };
+    if (sql.includes('select id, conta_id, telefone from usuarios')) return { rows: [{ id:'usuario', conta_id:'conta', telefone }] };
+    if (sql.includes('from medicos') && sql.includes('where conta_id=$1') && sql.includes('order by nome_completo')) return { rows: [{ id:'medico', nome_completo:'Medica Ficticia', crm:'CRM 1' }] };
+    if (sql.includes('from public.noto_operador_foco f') && sql.includes('join usuarios u')) return { rows: [] };
+    if (sql.includes('insert into public.noto_operador_foco')) return { rows: [{ medico_id:'medico' }] };
+    if (sql.includes('from medicos m') && sql.includes('where m.conta_id=(select conta_id from medicos where id=$1)')) return { rows: [{ id:'medico', nome_completo:'Medica Ficticia', crm:'CRM 1', certificado_valido:true }] };
     if (sql.startsWith('select u.telefone from medicos m')) return { rows: [{ telefone }] };
     if (sql.startsWith('select ambiente from medico_perfil_fiscal')) return { rows: [{ ambiente }] };
     if (sql.startsWith('select id from pacientes')) return { rows: [{ id: '00000000-0000-4000-8000-000000000002' }] };
