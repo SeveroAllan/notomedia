@@ -63,3 +63,11 @@ it('menção explícita a vários médicos preserva o foco em vez de escolher um
  expect(d.aoReceberMensagemMedico).toHaveBeenLastCalledWith(expect.objectContaining({medicoId:'m1',origemOperador:'conta'}));
  expect(d.salvarFocoOperador).toHaveBeenLastCalledWith('u-operador','m1');
 });
+
+it('seleção plural com um médico ainda não cadastrado preserva o foco para validar o conjunto',async()=>{
+ const d=deps('m1');
+ await processarMensagemWebhook(evento('Quero emitir para João da Silva e Dra. Ana Lima','6'),'segredo',d.entrada);
+ expect(d.aoReceberMensagemMedico).toHaveBeenLastCalledWith(expect.objectContaining({medicoId:'m1',origemOperador:'conta'}));
+ expect(d.salvarFocoOperador).toHaveBeenLastCalledWith('u-operador','m1');
+});
+
