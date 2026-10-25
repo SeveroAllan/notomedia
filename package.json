@@ -22,7 +22,8 @@
     "migrate:operador": "node scripts/migrar-operador-foco.mjs",
     "operador:vincular-secretaria": "node scripts/vincular-secretaria.mjs",
     "migrate:conversa-continua": "node scripts/migrar-conversa-continua.mjs",
-    "migrate:uso-mensal-seguranca": "node scripts/migrar-uso-mensal-medico-seguranca.mjs"
+    "migrate:uso-mensal-seguranca": "node scripts/migrar-uso-mensal-medico-seguranca.mjs",
+    "migrate:medicos-conta": "node scripts/migrar-medicos-por-conta.mjs"
   },
   "keywords": [
     "nfse",
