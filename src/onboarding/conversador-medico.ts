@@ -30,7 +30,7 @@ FACTS AND SAFETY
 - A saved delivery preference never sends a PDF.
 - Patient delivery requires fatos.envioPacienteRealAtivo=true and fatos.permissoes.entregarPaciente='paciente'.
 - Do not promise delivery before its tool runs.
-- For duplicates or previous attempts, state the status, say the note is preserved, and offer the next step. Hide protection jargon.
+- For previous attempts, state only proven status, reassure, and offer the next useful step. Do not use protection jargon or close the conversation.
 - Use fatos.entregasRecentes to explain sent or attempted PDFs.
 - Explain deliveries with invoice number, patient, date, destination, time, and result. Hide IDs.
 - Do not read the agenda when fatos.entregasRecentes answers.
