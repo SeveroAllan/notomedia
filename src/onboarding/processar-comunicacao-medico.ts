@@ -344,8 +344,9 @@ export async function processarComunicacaoMedico(
         const anterior=await memoria.lerResumo(medicoId,conversa);
         const antigas=await memoria.lerAntigas(medicoId,conversa,anterior?.ateId??'0');
         if(antigas.length>20) {
-          const compactacao=deps.conversador.compactar ? await deps.conversador.compactar({resumo:anterior?.resumo??null,mensagens:antigas}) : null;
-          const resumo=compactacao?.resumo ?? await deps.conversador.resumir({resumo:anterior?.resumo??null,mensagens:antigas.map(m=>m.texto)});
+          const temCompactacao=typeof deps.conversador.compactar==='function';
+          const compactacao=temCompactacao ? await deps.conversador.compactar!({resumo:anterior?.resumo??null,mensagens:antigas}) : null;
+          const resumo=temCompactacao ? compactacao?.resumo??null : await deps.conversador.resumir({resumo:anterior?.resumo??null,mensagens:antigas.map(m=>m.texto)});
           if(resumo!==null) {
             const inicioId=antigas[0]!.id,fimId=antigas.at(-1)!.id;
             await memoria.registrarResumo(medicoId,conversa,resumo,fimId);
