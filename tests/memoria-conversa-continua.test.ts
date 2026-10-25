@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import {expect,it,vi} from 'vitest';
 import {ConversadorMedico} from '../src/onboarding/conversador-medico.js';
+import {origemPodeVirarMemoriaMedico} from '../src/onboarding/processar-comunicacao-medico.js';
 import {InterpretadorSemantico} from '../src/onboarding/interpretador-semantico.js';
 import {PostgresMemoriaConversaMedico} from '../src/onboarding/memoria-conversa.js';
 
@@ -53,6 +54,22 @@ it('compactação extrai memória somente com origem explícita e sanitiza antes
   memorias:[{chave:'agenda_preferida',categoria:'preferencia_agenda',valor:'Prefere Amplimed. CPF [OCULTO]',origemId:'12',confianca:.98}]
  });
  expect(String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content)).toContain('origemId');
+});
+
+
+it('preferência da conta não vira memória específica do médico',async()=>{
+ expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'medico'})).toBe(true);
+ expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'conta'})).toBe(false);
+ expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'secretaria'})).toBe(false);
+ const completar=vi.fn(async()=>JSON.stringify({resumo:'A conta usa Amplimed.',chunk:'A conta usa Amplimed.',memorias:[]}));
+ await new ConversadorMedico('k','m',completar as any).compactar({resumo:null,mensagens:[
+   {id:'20',papel:'medico',origemOperador:'conta',texto:'Para a clínica, prefiro Amplimed'}
+ ]});
+ const sistema=String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content);
+ const entrada=JSON.parse(String((completar.mock.calls as unknown as any[][])[0]![2][1]!.content));
+ expect(sistema).toContain('origemOperador=conta');
+ expect(sistema).toContain('must never become physician-specific semantic memory');
+ expect(entrada.fontes).toEqual([{id:'20',papel:'medico',origemOperador:'conta'}]);
 });
 
 it('timeline e memória entram no decisor, mas o prompt declara fatos como autoridade atual',async()=>{
