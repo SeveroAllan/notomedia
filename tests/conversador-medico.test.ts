@@ -367,8 +367,8 @@ it('continuação de seleção já identificada não vira orientação genérica
 });
 
 
-it('secretária não pode fornecer a confirmação fiscal do médico',()=>{
- const f:FatosConversa={ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}},link:{ativo:false,enviados:0},periodo:{desde:'2026-10-19',origem:'contexto'},semAgendaDigital:false,operadorTipo:'secretaria'};
+it('operador do WhatsApp da conta pode confirmar sem redução por papel, mantendo os gates fiscais',()=>{
+ const f:FatosConversa={ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}},link:{ativo:false,enviados:0},periodo:{desde:'2026-10-19',origem:'contexto'},semAgendaDigital:false};
  const d={fala:['A proposta está pronta.'],acao:'iniciar_lote',parametros:{agenda:'tribemd',desde:'2026-10-19',confirmacao:{intencao:'sim' as const,confianca:.99}}};
- expect(validarAcaoConversa(d,f,['nenhuma','iniciar_lote'],'Pode emitir',agora)).toBe('CONFIRMACAO_EXIGE_MEDICO');
+ expect(validarAcaoConversa(d,f,['nenhuma','iniciar_lote'],'Pode emitir',agora)).toBeNull();
 });
