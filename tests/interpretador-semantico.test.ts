@@ -6,7 +6,7 @@ import type { FatosConversa } from '../src/onboarding/conversador-medico.js';
 const agora=new Date('2026-10-21T15:00:00Z');
 const fatos:FatosConversa={ambiente:'homologacao',agenda:{nome:'amplimed',conectada:true},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false};
 const frame:InterpretacaoSemantica={
-  dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'lista',
+  dominio:'agenda',objetivo:'consultar',objeto:'consultas',granularidade:'colecao',medida:'lista',permissaoNecessaria:null,
   periodo:{inicio:'2026-10-19',fim:'2026-10-21',referencia:'explicito'},paciente:null,
   restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[],confianca:.98
 };
