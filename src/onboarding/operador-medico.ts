@@ -45,4 +45,3 @@ export function mensagemSelecionaVariosMedicos(texto:string):boolean {
   return /\b(?:emitir|emissao|nota|notas)\s+(?:para|pros?|pelos?)\b/.test(t) && /\s+e\s+/.test(t)
     || /\b(?:medicos|medicas|profissionais)\b/.test(t);
 }
-
