@@ -9,6 +9,8 @@ it('migration permite médico da conta sem usuário sem remover a conta obrigat�
   expect(sql).toContain("a.attname='usuario_id'");
   expect(sql).toContain("a.attname='conta_id'");
   expect(sql).toContain('a.attnotnull');
+  expect(sql).toMatch(/foreign key \(usuario_id\) references public\.usuarios\(id\) on delete set null/i);
+  expect(sql).toContain("con.confdeltype='n'");
 });
 
 it('migration verifica acesso necessário do backend antes do commit',()=>{
