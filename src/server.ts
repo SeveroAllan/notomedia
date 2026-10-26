@@ -806,7 +806,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     if(texto && chaveConversa && origemOperador==='conta'){
       medicoId=await origemConfiguracaoAgendaNaConversa(pool,medicoId,chaveConversa,texto);
     }
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, origemOperador,
+    // "digitando..." enquanto prepara a resposta: renovação curta e encerramento explícito com 'paused'
+    // no finally (sucesso, erro ou cancelamento). Chamadas fire-and-forget: nunca bloqueiam a resposta.
+    let presencaTimer: ReturnType<typeof setInterval> | undefined;
+    if (texto && config.conversaLivreAtiva === true) {
+      const ping = () => { void comunicacaoHomologacao.presencaDigitando(medicoId, contatoOperador, 'composing', 30_000).catch(() => {}); };
+      ping();
+      presencaTimer = setInterval(ping, 15_000);
+      presencaTimer.unref?.();
+    }
+    try {
+      return await processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, origemOperador,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
     }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, interpretadorSemantico, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,
       aoReagir: chaveWhatsApp ? async reacao => { await comunicacaoHomologacao.reagir(medicoId, chaveWhatsApp, reacao, contatoOperador); } : undefined,
@@ -826,6 +836,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),
       log: (nivel, mensagem) => nivel === 'info' ? console.info(mensagem) : registrarLinhaSincrona(mensagem)
     });
+    } finally {
+      if (presencaTimer) clearInterval(presencaTimer);
+      if (texto && config.conversaLivreAtiva === true) void comunicacaoHomologacao.presencaDigitando(medicoId, contatoOperador, 'paused', 0).catch(() => {});
+    }
   };
   const retomarConfiguracaoMedicoValidado = async (alvoMedicoId:string) => {
     if(!memoriaPersistida)return;

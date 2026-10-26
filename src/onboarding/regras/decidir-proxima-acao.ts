@@ -1,4 +1,4 @@
-import { PERGUNTA_INICIO_NOTAS } from '../falas.js';
+import { FALA_PEDIDO_CONEXAO_AGENDA, PERGUNTA_INICIO_NOTAS } from '../falas.js';
 import { z } from 'zod';
 import { CONFIANCA_MINIMA_COMPROVANTE } from '../../atendimento/comprovante.js';
 
@@ -117,14 +117,14 @@ export function montarBoasVindas(
     'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
     entrega
   ];
-  if (!ultimaNota?.paciente) return [...baloes, PERGUNTA_INICIO_NOTAS];
+  if (!ultimaNota?.paciente) return [...baloes, FALA_PEDIDO_CONEXAO_AGENDA];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
   const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
-  const pergunta = PERGUNTA_INICIO_NOTAS;
+  const pergunta = FALA_PEDIDO_CONEXAO_AGENDA;
   return [...baloes, resumo.slice(0, 500), pergunta];
 }
 

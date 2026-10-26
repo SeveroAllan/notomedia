@@ -49,6 +49,22 @@ export class EvolutionApiClient
     } catch { return { sucesso: false, erro: 'EVOLUTION_LEITURA_INDISPONIVEL' }; }
   }
 
+  /** Presença "digitando..."/pausa na conversa do médico com o assistente (Evolution v2 sendPresence). */
+  async enviarPresenca(params: { instanciaNome: string; contatoTelefone: string; presence: 'composing' | 'paused'; delayMs: number }): Promise<{ sucesso: boolean; erro?: string }> {
+    const tel = (params.contatoTelefone ?? '').replace(/\D/g, '');
+    if (!params.instanciaNome || params.instanciaNome === (this.instanciaSomenteOtp || this.instanciaOficialNome) || !/^\d{10,15}$/.test(tel))
+      return { sucesso: false, erro: 'PRESENCA_NAO_PERMITIDA' };
+    try {
+      const resp = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/sendPresence/${encodeURIComponent(params.instanciaNome)}`, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify({ number: tel, options: { delay: params.delayMs, presence: params.presence, number: tel } })
+      });
+      await resp.body?.cancel().catch(() => {});
+      return resp.ok ? { sucesso: true } : { sucesso: false, erro: `EVOLUTION_HTTP_${resp.status}` };
+    } catch { return { sucesso: false, erro: 'EVOLUTION_PRESENCA_INDISPONIVEL' }; }
+  }
+
   async enviarReacao(params: Parameters<TransporteReacao['enviarReacao']>[0]): Promise<{ sucesso: boolean }> {
     const { chave, instanciaNome, reacao } = params;
     if (instanciaNome === (this.instanciaSomenteOtp || this.instanciaOficialNome) || !instanciaNome || !chave.id || chave.fromMe || !/^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) return { sucesso: false };

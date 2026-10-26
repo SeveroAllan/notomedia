@@ -1,5 +1,6 @@
 import { PostgresMemoriaConversaMedico } from '../onboarding/memoria-conversa.js';
 import { REACOES_PERMITIDAS, type ReacaoMedico, type TransporteReacao } from './reagir-mensagem.js';
+import type { TipoPresencaMedico, TransportePresenca } from './presenca-digitando.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
 import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
 import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
@@ -70,7 +71,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & EnviarPdfDanfse>, private readonly log: (texto: string) => void = console.info,
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & TransportePresenca & EnviarPdfDanfse>, private readonly log: (texto: string) => void = console.info,
     private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string; contatoTelefone?: string;
@@ -112,6 +113,20 @@ export class ComunicacaoHomologacao {
       if (resultado === 'erro') this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' }));
       return resultado;
     } catch { this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' })); return 'erro'; }
+  }
+
+  /** "digitando..." transitório enquanto a resposta é preparada; 'paused' encerra explicitamente. Não grava dedupe. */
+  async presencaDigitando(medicoId: string, contatoTelefone?: string, presence: TipoPresencaMedico = 'composing', delayMs = 30_000): Promise<'simulado' | 'enviado' | 'erro'> {
+    if (!this.config.conversaLivreAtiva || !this.config.envioMedicoRealAtivo) return this.simular('presenca_digitando');
+    try {
+      const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
+        left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
+      const tel = (contatoTelefone ?? rows[0]?.telefone ?? '').replace(/\D/g, '');
+      if (!/^\d{10,15}$/.test(tel) || !this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, tel)) return this.simular('presenca_digitando');
+      const ok = (await this.transporte.enviarPresenca?.({ instanciaNome: this.config.evolutionAssistantInstanceName,
+        contatoTelefone: tel, presence, delayMs }))?.sucesso === true;
+      return ok ? 'enviado' : 'erro';
+    } catch { return 'erro'; }
   }
 
   async reagir(medicoId: string, chave: ChaveMensagemLeitura, reacao: unknown, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {

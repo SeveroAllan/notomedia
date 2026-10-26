@@ -81,7 +81,9 @@ beforeEach(() => {
   logs = vi.spyOn(console, 'info').mockImplementation(() => {}); erros = vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 afterEach(() => {
-  expect(enviar).toHaveBeenCalledTimes(enviosEsperados); expect(pdf).not.toHaveBeenCalled(); expect(rede).not.toHaveBeenCalled();
+  expect(enviar).toHaveBeenCalledTimes(enviosEsperados); expect(pdf).not.toHaveBeenCalled();
+  // Presença "digitando..." é rede deliberada do fluxo assistente; qualquer outra URL segue proibida.
+  expect(rede.mock.calls.filter(([url]: unknown[]) => !String(url).includes('/chat/sendPresence'))).toEqual([]);
   expect(fronteiras.emitir).not.toHaveBeenCalled(); expect(erros.mock.calls).toEqual([...Array.from({ length: errosEsperados }, () => ['COMUNICACAO_SEM_FALA']),...errosExtras.map(e=>[e])]);
   Object.assign(config, anterior); vi.restoreAllMocks();
 });
@@ -181,7 +183,7 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
   const registro = banco.mensagens.find(m => m.mensagemId === 'noto:boas_vindas:unica');
   expect(await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', chave)).toContain(baloes.join('\n'));
   expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
-  expect(baloes[3]).toBe('Desde quando você não emite notas?');
+  expect(baloes[3]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.');
   await receber(criarAppExpress(), 'resposta', 'quero');
   expect(fronteiras.openai).toHaveBeenCalledTimes(1);
   const dados = JSON.parse(String(fronteiras.openai.mock.calls[0]![2][1]!.content));
