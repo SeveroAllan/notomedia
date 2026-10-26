@@ -9,9 +9,14 @@ validarProjetoHomolog(process.env.DATABASE_URL);
 
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000 });
 try {
-  const sql = await readFile(new URL('./migrations/20261101-medicos-por-conta.sql', import.meta.url), 'utf8');
-  await pool.query(sql);
-  console.log('Migração de médicos por conta aplicada. Nenhuma mensagem foi enviada.');
+  for (const arquivo of [
+    './migrations/20261031-contadores-delegacoes.sql',
+    './migrations/20261101-medicos-por-conta.sql'
+  ]) {
+    const sql = await readFile(new URL(arquivo, import.meta.url), 'utf8');
+    await pool.query(sql);
+  }
+  console.log('Migrações de delegações e médicos por conta aplicadas. Nenhuma mensagem foi enviada.');
 } finally {
   await pool.end();
 }
