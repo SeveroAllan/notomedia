@@ -3,6 +3,7 @@ import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { criarAppExpress } from '../src/server.js';
 import { config } from '../src/config.js';
 import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js';
+import { ComunicacaoHomologacao } from '../src/whatsapp/comunicacao-homologacao.js';
 const fronteiras = vi.hoisted(() => ({ query: vi.fn(), connect: vi.fn(), agenda: vi.fn(), completar: vi.fn(), sincronizar: vi.fn(), emitir: vi.fn() }));
 vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.completar }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
@@ -61,6 +62,17 @@ it('flag desligada no app preserva descarte e não toca banco/cofre/histórico',
   config.comunicacaoMedicoAtiva = false;
   expect((await receber(mensagem('m1'))).corpo).toEqual({ ok: true, acao: 'descartada', motivoDescarte: 'gatilho_nao_reconhecido' });
   expect(fronteiras.completar).not.toHaveBeenCalled(); expect(fronteiras.query).not.toHaveBeenCalled(); expect(fronteiras.connect).not.toHaveBeenCalled(); expect(fronteiras.agenda).not.toHaveBeenCalled(); expect(intencoes()).toEqual([]);
+});
+it('mensagem do assistente envolve o processamento na sessão de digitando', async () => {
+  const eventos: string[] = [];
+  vi.spyOn(ComunicacaoHomologacao.prototype, 'duranteDigitacao').mockImplementation(async (_medicoId, _chave, _contato, executar) => {
+    eventos.push('inicio');
+    const resultado = await executar();
+    eventos.push('fim');
+    return resultado;
+  });
+  await receber(mensagem('digitando-1'));
+  expect(eventos).toEqual(['inicio', 'fim']);
 });
 it('assistente liga banco real do estado e histórico Postgres em ciclo seco com resposta registrada', async () => {
   const { app } = await receber(mensagem('m1'));
