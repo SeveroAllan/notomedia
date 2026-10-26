@@ -44,7 +44,9 @@ export type ChunkConversa = {
   resumo: string;
 };
 export type CategoriaMemoriaSemantica = 'preferencia_agenda' | 'preferencia_comunicacao' | 'rotina' | 'decisao' | 'outro';
+export type EscopoMemoriaSemantica = 'medico' | 'conta';
 export type MemoriaSemantica = {
+  escopo: EscopoMemoriaSemantica;
   chave: string;
   categoria: CategoriaMemoriaSemantica;
   valor: string;
@@ -171,26 +173,50 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
   }
 
   async lerMemoriasSemanticas(medicoId:string):Promise<MemoriaSemantica[]> {
-    const {rows}=await this.pool.query<{chave:string;categoria:CategoriaMemoriaSemantica;valor:string;origem_conversa:string;origem_mensagem_id:string;confianca:number}>(`
-      select chave,categoria,valor,origem_conversa,origem_mensagem_id::text,confianca
-      from conversa_memorias_semanticas where medico_id=$1 and ativa=true
-      order by atualizado_em desc limit 12`,[medicoId]);
-    return rows.map(r=>({chave:r.chave,categoria:r.categoria,valor:sanitizarTextoMedico(r.valor),origemConversa:r.origem_conversa,origemMensagemId:r.origem_mensagem_id,confianca:Number(r.confianca)}));
+    const {rows}=await this.pool.query<{escopo:EscopoMemoriaSemantica;chave:string;categoria:CategoriaMemoriaSemantica;valor:string;origem_conversa:string;origem_mensagem_id:string;confianca:number}>(`
+      with alvo as (select conta_id from medicos where id=$1)
+      select memoria.escopo,memoria.chave,memoria.categoria,memoria.valor,memoria.origem_conversa,
+        memoria.origem_mensagem_id::text,memoria.confianca
+      from conversa_memorias_semanticas memoria cross join alvo
+      where memoria.ativa=true and (
+        (memoria.escopo='medico' and memoria.medico_id=$1)
+        or (memoria.escopo='conta' and memoria.conta_id=alvo.conta_id)
+      )
+      order by memoria.atualizado_em desc limit 16`,[medicoId]);
+    return rows.map(r=>({escopo:r.escopo,chave:r.chave,categoria:r.categoria,valor:sanitizarTextoMedico(r.valor),origemConversa:r.origem_conversa,origemMensagemId:r.origem_mensagem_id,confianca:Number(r.confianca)}));
   }
 
-  async registrarMemoriaSemantica(medicoId:string,memoria:MemoriaSemantica):Promise<void> {
+  async registrarMemoriaSemantica(
+    medicoId:string,
+    memoria:Omit<MemoriaSemantica,'escopo'> & {escopo?:EscopoMemoriaSemantica}
+  ):Promise<void> {
     const categoriasAutomaticas:readonly CategoriaMemoriaSemantica[]=['preferencia_agenda','preferencia_comunicacao','rotina'];
     if(!/^[a-z0-9_:-]{3,80}$/.test(memoria.chave)||memoria.confianca<.9||!categoriasAutomaticas.includes(memoria.categoria))return;
     if(/\b(?:paciente|cpf|cnpj|telefone|e-?mail|nota\s+(?:do|da)|consulta\s+(?:do|da))\b|@/i.test(memoria.valor))return;
+    const escopo=memoria.escopo??'medico';
+    const seguro=sanitizarTextoMedico(memoria.valor);
+    const base=[medicoId,memoria.chave,memoria.categoria,seguro,memoria.origemConversa,memoria.origemMensagemId,memoria.confianca];
+    if(escopo==='conta') {
+      await this.pool.query(`
+        insert into conversa_memorias_semanticas
+          (medico_id,conta_id,escopo,chave,categoria,valor,origem_conversa,origem_mensagem_id,confianca)
+        select $1,m.conta_id,'conta',$2,$3,$4,$5,$6::bigint,$7 from medicos m where m.id=$1
+        on conflict (conta_id,chave) where escopo='conta' do update set
+          medico_id=excluded.medico_id,categoria=excluded.categoria,valor=excluded.valor,
+          origem_conversa=excluded.origem_conversa,origem_mensagem_id=excluded.origem_mensagem_id,
+          confianca=excluded.confianca,ativa=true,atualizado_em=now()
+        where conversa_memorias_semanticas.origem_mensagem_id <= excluded.origem_mensagem_id`,base);
+      return;
+    }
     await this.pool.query(`
       insert into conversa_memorias_semanticas
-        (medico_id,chave,categoria,valor,origem_conversa,origem_mensagem_id,confianca)
-      values ($1,$2,$3,$4,$5,$6::bigint,$7)
-      on conflict (medico_id,chave) do update set
-        categoria=excluded.categoria,valor=excluded.valor,origem_conversa=excluded.origem_conversa,
-        origem_mensagem_id=excluded.origem_mensagem_id,confianca=excluded.confianca,ativa=true,atualizado_em=now()
-      where conversa_memorias_semanticas.origem_mensagem_id <= excluded.origem_mensagem_id`,
-      [medicoId,memoria.chave,memoria.categoria,sanitizarTextoMedico(memoria.valor),memoria.origemConversa,memoria.origemMensagemId,memoria.confianca]);
+        (medico_id,conta_id,escopo,chave,categoria,valor,origem_conversa,origem_mensagem_id,confianca)
+      select $1,m.conta_id,'medico',$2,$3,$4,$5,$6::bigint,$7 from medicos m where m.id=$1
+      on conflict (medico_id,chave) where escopo='medico' do update set
+        conta_id=excluded.conta_id,categoria=excluded.categoria,valor=excluded.valor,
+        origem_conversa=excluded.origem_conversa,origem_mensagem_id=excluded.origem_mensagem_id,
+        confianca=excluded.confianca,ativa=true,atualizado_em=now()
+      where conversa_memorias_semanticas.origem_mensagem_id <= excluded.origem_mensagem_id`,base);
   }
 
   async registrarEventoTrabalho(medicoId:string,conversa:string,chaveProcessamento:string,ferramenta:string,fase:FaseTrabalhoAgente,metadados:Record<string,unknown>={}):Promise<void> {
