@@ -116,9 +116,9 @@ export async function processarComunicacaoMedico(
           const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
           await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
           if(entrada.respostaMedico) {
-        try { await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico'); }
-        catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
-      }
+            try { await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico'); }
+            catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
+          }
           if(acao.tipo==='boas_vindas') return acao;
         }
       }
@@ -176,7 +176,10 @@ export async function processarComunicacaoMedico(
         await memoria.registrarPlano(medicoId,conversa,planoAtual);
       }
       if(!decisao) decisao=await decidir(permitidas);
-      if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico');
+      if(entrada.respostaMedico) {
+        try { await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico'); }
+        catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
+      }
       // Pedido explícito de novo dia/período substitui a proposta pendente (o iniciar a abandona):
       // não é resposta à pergunta, então não força parametros.confirmacao.
       const trocaEscopo=decisao.acao==='iniciar_lote'&&permitidas.includes('iniciar_lote')
