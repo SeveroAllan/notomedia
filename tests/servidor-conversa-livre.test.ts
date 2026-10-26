@@ -75,6 +75,7 @@ beforeEach(() => {
   fronteiras.openai.mockImplementation(completar);
   reagir = vi.spyOn(EvolutionApiClient.prototype, 'enviarReacao').mockResolvedValue({ sucesso: true });
   ler = vi.spyOn(EvolutionApiClient.prototype, 'marcarLida').mockResolvedValue({ sucesso: true });
+  vi.spyOn(EvolutionApiClient.prototype, 'iniciarDigitacao').mockResolvedValue({ parar: async () => {} });
   enviar = vi.spyOn(EvolutionApiClient.prototype, 'enviarTexto').mockRejectedValue(Error('ENVIO_PROIBIDO'));
   pdf = vi.spyOn(EvolutionApiClient.prototype, 'enviarPdf').mockRejectedValue(Error('PDF_PROIBIDO'));
   rede = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('REDE_PROIBIDA'));
