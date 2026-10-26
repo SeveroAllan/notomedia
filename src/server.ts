@@ -1440,42 +1440,44 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               { medicoId: contexto.medicoId, texto: contexto.texto, chavePergunta: contexto.chavePergunta }) === 'consumida') return;
           }
           if (config.conversaLivreAtiva) await comunicacaoHomologacao.marcarLida(contexto.medicoId, contexto.chaveWhatsApp, contexto.contatoOperador);
-          if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
-          if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
-          if (emissaoComprovante && config.envioMedicoRealAtivo) {
-            const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
-            if (pendentes.length) {
-              const unica = pendentes.length === 1 ? pendentes[0] : null;
-              const c = unica?.confirmacao;
-              const pergunta = c?.paciente && c?.dataEnvioPagamento && c?.dataConsulta
-                ? `Autoriza emitir a nota de ${c.paciente}, pagamento enviado em ${c.dataEnvioPagamento}, consulta de ${c.dataConsulta}?` : 'Não há uma oportunidade única vinculada a uma pergunta de emissão.';
-              const usarDecisor = config.conversaLivreAtiva && conversador && await comunicacaoHomologacao.medicoPermitido(contexto.medicoId, contexto.contatoOperador);
-              const memoriaConfirmacao = usarDecisor ? await memoriaPersistida!.lerContextoParaModelo(contexto.medicoId,contexto.chaveConversa) : null;
-              const interpretacao = usarDecisor ? confirmacaoDaDecisao(await conversador.responder({texto:contexto.texto,mensagens:memoriaConfirmacao!.historicoRecente,
-                resumo:memoriaConfirmacao!.resumo?.resumo??null,agora:new Date(),acoesPermitidas:['nenhuma'],
-                fatos:{ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
-                  lote:{estado:'aguardando_confirmacao_individual',pergunta,perguntaId:c?.perguntaChave},pendentes:pendentes.length}
-              }))
-                : await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
-              const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, limitarConfirmacaoEmissao(contexto.texto, interpretacao), new Date(),
-                await comunicacaoHomologacao.medicoPermitido(contexto.medicoId, contexto.contatoOperador), c?.perguntaChave ?? '', contexto.chavePergunta);
-              if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
-                const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: unica.id,
-                  chaveDisparo: `${unica.id}:${contexto.chaveMensagem}`, paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta,
-                  contatoTelefone: contexto.contatoOperador });
-                await emissaoComprovante.registrarPergunta(contexto.medicoId, unica.id, envio.resultado, envio.chaveMensagem, new Date());
+          return comunicacaoHomologacao.duranteDigitacao(contexto.medicoId, contexto.chaveWhatsApp, contexto.contatoOperador, async () => {
+            if (config.conversaLivreAtiva && contemCredencialAgenda(contexto.texto)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+            if (retroativo && await lotePermitido(contexto.medicoId) && await lotes.ativo(contexto.medicoId)) return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+            if (emissaoComprovante && config.envioMedicoRealAtivo) {
+              const pendentes = await emissaoComprovante.buscarConfirmacoes(contexto.medicoId);
+              if (pendentes.length) {
+                const unica = pendentes.length === 1 ? pendentes[0] : null;
+                const c = unica?.confirmacao;
+                const pergunta = c?.paciente && c?.dataEnvioPagamento && c?.dataConsulta
+                  ? `Autoriza emitir a nota de ${c.paciente}, pagamento enviado em ${c.dataEnvioPagamento}, consulta de ${c.dataConsulta}?` : 'Não há uma oportunidade única vinculada a uma pergunta de emissão.';
+                const usarDecisor = config.conversaLivreAtiva && conversador && await comunicacaoHomologacao.medicoPermitido(contexto.medicoId, contexto.contatoOperador);
+                const memoriaConfirmacao = usarDecisor ? await memoriaPersistida!.lerContextoParaModelo(contexto.medicoId,contexto.chaveConversa) : null;
+                const interpretacao = usarDecisor ? confirmacaoDaDecisao(await conversador.responder({texto:contexto.texto,mensagens:memoriaConfirmacao!.historicoRecente,
+                  resumo:memoriaConfirmacao!.resumo?.resumo??null,agora:new Date(),acoesPermitidas:['nenhuma'],
+                  fatos:{ambiente:'homologacao',agenda:{nome:null,conectada:false},link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+                    lote:{estado:'aguardando_confirmacao_individual',pergunta,perguntaId:c?.perguntaChave},pendentes:pendentes.length}
+                }))
+                  : await interpretarConfirmacaoEmissao(iaApiKey, iaModeloTexto, completarIa, { texto: contexto.texto, pergunta });
+                const resultado = await emissaoComprovante.confirmar(contexto.medicoId, contexto.chaveMensagem, limitarConfirmacaoEmissao(contexto.texto, interpretacao), new Date(),
+                  await comunicacaoHomologacao.medicoPermitido(contexto.medicoId, contexto.contatoOperador), c?.perguntaChave ?? '', contexto.chavePergunta);
+                if (resultado.motivo === 'CONFIRMACAO_INSUFICIENTE' && unica && c?.envio === 'enviado' && c?.dataEnvioPagamento && c?.dataConsulta && c?.paciente) {
+                  const envio = await comunicacaoHomologacao.confirmarEmissao({ medicoId: contexto.medicoId, solicitacaoId: unica.id,
+                    chaveDisparo: `${unica.id}:${contexto.chaveMensagem}`, paciente: c.paciente, dataEnvioPagamento: c.dataEnvioPagamento, dataConsulta: c.dataConsulta,
+                    contatoTelefone: contexto.contatoOperador });
+                  await emissaoComprovante.registrarPergunta(contexto.medicoId, unica.id, envio.resultado, envio.chaveMensagem, new Date());
+                  return;
+                }
+                const fala = resultado.liberada ? 'Confirmação registrada. A emissão está liberada para processamento.'
+                  : resultado.motivo === 'RECUSADA' ? 'Certo. Essa nota ficou sem autorização para emissão. Se quiser, posso revisar os dados com você antes de uma nova decisão.'
+                  : resultado.motivo === 'EXPIRADA' ? 'A confirmação dessa oportunidade venceu após 48 horas. Não liberei a emissão.'
+                  : resultado.motivo === 'MULTIPLAS_PENDENTES' ? 'Há mais de uma nota aguardando confirmação. Preciso que elas sejam conferidas antes de liberar uma emissão.'
+                  : 'Não consegui confirmar sua autorização com segurança. Você autoriza a emissão da nota dessa oportunidade?';
+                await comunicacaoHomologacao.conversa({ medicoId: contexto.medicoId, chave: `confirmacao:${contexto.chaveMensagem}`, fala: [fala], contatoTelefone:contexto.contatoOperador });
                 return;
               }
-              const fala = resultado.liberada ? 'Confirmação registrada. A emissão está liberada para processamento.'
-                : resultado.motivo === 'RECUSADA' ? 'Certo. Essa nota ficou sem autorização para emissão. Se quiser, posso revisar os dados com você antes de uma nova decisão.'
-                : resultado.motivo === 'EXPIRADA' ? 'A confirmação dessa oportunidade venceu após 48 horas. Não liberei a emissão.'
-                : resultado.motivo === 'MULTIPLAS_PENDENTES' ? 'Há mais de uma nota aguardando confirmação. Preciso que elas sejam conferidas antes de liberar uma emissão.'
-                : 'Não consegui confirmar sua autorização com segurança. Você autoriza a emissão da nota dessa oportunidade?';
-              await comunicacaoHomologacao.conversa({ medicoId: contexto.medicoId, chave: `confirmacao:${contexto.chaveMensagem}`, fala: [fala], contatoTelefone:contexto.contatoOperador });
-              return;
             }
-          }
-          return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+            return comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa, contexto.chaveWhatsApp, undefined, contexto.chavePergunta, contexto.enviadaEm, contexto.contatoOperador, contexto.origemOperador);
+          });
         },
         aoReceberRespostaCpf: async contexto => {
           if (!await permissoesCpfAtivaP) return;
