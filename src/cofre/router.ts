@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { dataDoIdAmplimed, tomadorAmplimedAoVivo } from '../agenda/amplimed-lote.js';
-import { lerEventosAgendaAmplimed, verificarLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
+import { lerEventosAgendaAmplimed, listarProfissionaisAgendaAmplimed, verificarLoginAmplimed } from '../desenvolvedor/amplimed-navegador.js';
 import { CofreAmplimed } from './amplimed-cofre.js';
 import { pedirCodigo2faPorArquivo } from './codigo-2fa-arquivo.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
@@ -59,7 +59,7 @@ export function criarCofreContas(deps: {
         // O diretório é local ao container (some a cada deploy): recria a cada boot, restrito ao serviço.
         if (dir2fa) mkdirSync(dir2fa, { recursive: true, mode: 0o700 });
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
-            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
+            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
             pedirCodigo2fa: dir2fa ? id => pedirCodigo2faPorArquivo(dir2fa, id) : undefined });
         if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
@@ -182,9 +182,13 @@ export function criarCofreContas(deps: {
             }
             return mapearStatusAgenda(status);
         },
-        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false) => {
+        lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false, codigoProfissional?: string) => {
             const ref=await referencia(medicoId,'amplimed');
-            return cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(ref, desde, hoje, comDetalhes) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+            return cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(ref, desde, hoje, comDetalhes, codigoProfissional) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+        },
+        listarProfissionaisAmplimed: async (medicoId: string) => {
+            const ref=await referencia(medicoId,'amplimed');
+            return cofreAmplimed ? cofreAmplimed.listarProfissionais(ref) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' as const };
         },
         detalheAmplimedAoVivo: async (medicoId: string, idExterno: string) => {
             const data = dataDoIdAmplimed(idExterno);

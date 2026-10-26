@@ -24,7 +24,8 @@
     "migrate:conversa-continua": "node scripts/migrar-conversa-continua.mjs",
     "migrate:uso-mensal-seguranca": "node scripts/migrar-uso-mensal-medico-seguranca.mjs",
     "migrate:medicos-conta": "node scripts/migrar-medicos-por-conta.mjs",
-    "migrate:compat-conta": "node scripts/migrar-compatibilidade-conta.mjs"
+    "migrate:compat-conta": "node scripts/migrar-compatibilidade-conta.mjs",
+    "migrate:profissional-externo": "node scripts/migrar-profissional-externo-id.mjs"
   },
   "keywords": [
     "nfse",

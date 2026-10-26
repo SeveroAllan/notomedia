@@ -209,9 +209,10 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }
 }
 
-export interface EventoAgendaAmplimed { texto: string; cor: string; detalhe?: import('../agenda/amplimed-leitor.js').DetalheAmplimed | null }
+export interface EventoAgendaAmplimed { texto: string; cor: string; codigoProfissional?: string | null; detalhe?: import('../agenda/amplimed-leitor.js').DetalheAmplimed | null }
 export interface DiaAgendaAmplimed { data: string; eventos: EventoAgendaAmplimed[] }
-export interface EventoFeedAmplimed { titulo: string; inicio: string; fim: string | null; cor: string }
+export interface EventoFeedAmplimed { titulo: string; inicio: string; fim: string | null; cor: string; recurso?: string | null }
+export interface ProfissionalFiltroAmplimed { codigo: string; nome: string }
 export function navegacaoPulouDataAmplimed(anterior:string,atual:string,alvo:string):boolean {
   return (anterior<alvo&&atual>alvo)||(anterior>alvo&&atual<alvo);
 }
@@ -222,14 +223,39 @@ export function eventoAgendaAmplimedDoFeed(e: EventoFeedAmplimed): EventoAgendaA
   return {texto:`${inicio} - ${fim}\n${titulo}`,cor:e.cor??''};
 }
 /**
+ * Filtra eventos pelo código do profissional vinculado. Fail-closed: evento sem código de
+ * profissional atribuído pela própria página (resourceId do FullCalendar) torna a leitura
+ * incompleta em vez de ser atribuído por suposição.
+ */
+export function filtrarEventosPorCodigoProfissional<T extends { codigoProfissional?: string | null }>(
+  eventos: readonly T[], codigo: string
+): { ok: true; eventos: T[] } | { ok: false; motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' } {
+  if (!codigo.trim()) return { ok: true, eventos: [...eventos] };
+  if (eventos.some(e => !e.codigoProfissional?.trim())) return { ok: false, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
+  return { ok: true, eventos: eventos.filter(e => e.codigoProfissional === codigo) };
+}
+
+/** Lista os profissionais do filtro da agenda (checkboxes .select_profs): código do filtro + nome exibido. */
+export async function listarProfissionaisAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; profissionais: ProfissionalFiltroAmplimed[] }> {
+  let profissionais: ProfissionalFiltroAmplimed[] = [];
+  const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
+    if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForSelector('#seletor_profissional', { timeout: 15000 }).catch(() => {});
+    profissionais = await page.evaluate(`[...document.querySelectorAll('.select_profs')].map(c => ({ codigo: String(c.getAttribute('valor') || ''), nome: String(c.getAttribute('prof') || (c.closest('label')?.textContent || '')).trim() })).filter(p => p.codigo && p.nome)`) as ProfissionalFiltroAmplimed[];
+  } }, signal);
+  return { codigo, profissionais };
+}
+
+/**
  * Leitura de observação da agenda (somente leitura, nada vira nota). Faz login com a credencial recebida, abre /agenda
  * e cobre hoje + `diasAtras` datas anteriores. Usa a visão Dia quando a data é exibível e o feed mensal quando
  * hiddenDays oculta a data; só devolve completo quando cada data do período foi confirmada.
  */
-export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; diasAtras?: number; detalhes?: boolean }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; dias: DiaAgendaAmplimed[]; profissional: string | null; completo: boolean }> {
+export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; diasAtras?: number; detalhes?: boolean; codigoProfissional?: string }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; dias: DiaAgendaAmplimed[]; profissional: string | null; completo: boolean; motivo?: string }> {
   const dias: DiaAgendaAmplimed[] = [];
   let profissional: string | null = null;
   let completo = false;
+  let motivo: string | undefined;
   const cabecalho = async (page: Page) => dataDoCabecalhoAmplimed(await page.evaluate(`(document.querySelector('.fc-toolbar')?.innerText || '').slice(0, 300)`) as string);
   const eventosDaTela = async (page: Page) => await page.evaluate(`[...document.querySelectorAll('.fc-time-grid-event')].map(e => ({ texto: (e.innerText || '').trim().slice(0, 400), cor: e.style.backgroundColor || '' }))`) as EventoAgendaAmplimed[];
   // Painel "Visualizar Agendamento": só leitura (clica no compromisso, lê o texto, fecha). Só para compromissos finalizados (verde).
@@ -256,6 +282,27 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForSelector('.fc-event, .fc-time-grid', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(2500);
+    const codigoProfissional = opcoes.codigoProfissional?.trim();
+    if (codigoProfissional) {
+      // Fixa a seleção do profissional no filtro da própria página (checkbox .select_profs + selectedprofs)
+      // e só prossegue quando a página confirma a seleção. Sem confirmação: leitura fail-closed.
+      const fixacao = await page.evaluate(`(() => {
+        const alvo = ${JSON.stringify('__CODIGO__')};
+        const sel = document.querySelector('#seletor_profissional');
+        if (!sel) return 'seletor_ausente';
+        if (String(sel.getAttribute('selectedprofs') || '0') === alvo) return 'ok';
+        const chk = document.querySelector('.select_profs[valor="' + alvo + '"]');
+        if (!chk) return 'profissional_ausente_no_filtro';
+        if (!chk.checked) chk.click();
+        try { if (typeof window.updateAgendaByProfissional === 'function') window.updateAgendaByProfissional(); } catch { /* verificação abaixo decide */ }
+        return 'pendente';
+      })()`.replace('__CODIGO__', codigoProfissional.replace(/["\\]/g, ''))) as string;
+      if (fixacao !== 'ok') {
+        if (fixacao === 'pendente') await page.waitForTimeout(3000);
+        const atual = await page.evaluate(`String(document.querySelector('#seletor_profissional')?.getAttribute('selectedprofs') || '0')`) as string;
+        if (atual !== codigoProfissional) { motivo = 'SELECAO_PROFISSIONAL_FALHOU'; console.warn('AMPLIMED_PROFISSIONAL fixacao_falhou motivo=' + fixacao); return; }
+      }
+    }
     profissional = await page.evaluate(`(() => { const t = (document.querySelector('.fc-head')?.innerText || '').split('\\n').map(x => x.trim()).filter(x => x && !/\\d{4}/.test(x)); return t[0] ? t[0].slice(0, 120) : null; })()`) as string | null;
     // A agenda pode ocultar dias na visão Dia (observado: domingo). Cobertura é por DATA, não por cabeçalho visível.
     // Para cada data do período, tenta a visão diária; se a navegação pular o alvo, confirma o dia pelo feed mensal.
@@ -300,7 +347,8 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
             titulo: String(e.title || ''),
             inicio: e.start ? e.start.format('HH:mm') : '',
             fim: e.end ? e.end.format('HH:mm') : null,
-            cor: String(e.backgroundColor || e.color || (e.source && (e.source.backgroundColor || e.source.color)) || '')
+            cor: String(e.backgroundColor || e.color || (e.source && (e.source.backgroundColor || e.source.color)) || ''),
+            recurso: e.resourceId ? String(e.resourceId) : null
           }));
         })()`) as EventoFeedAmplimed[] | null;
         if (!Array.isArray(crus)) return null;
@@ -309,7 +357,14 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
           console.warn('AMPLIMED_PERIODO feed_evento_incompleto data=' + alvo + ' total=' + crus.length);
           return null;
         }
-        return eventos as EventoAgendaAmplimed[];
+        const conv = eventos as EventoAgendaAmplimed[];
+        crus.forEach((c, i) => { conv[i]!.codigoProfissional = c.recurso ?? null; });
+        if (codigoProfissional) {
+          const filtro = filtrarEventosPorCodigoProfissional(conv, codigoProfissional);
+          if (!filtro.ok) { console.warn('AMPLIMED_PROFISSIONAL feed_sem_resource_id data=' + alvo); return null; }
+          return filtro.eventos;
+        }
+        return conv;
       } catch { return null; }
       finally {
         try { await page.evaluate('window.scrollTo(0, 0)'); await page.locator('.fc-agendaDay-button').first().click({ timeout: 5000 }); } catch { /* próxima âncora decide */ }
@@ -322,6 +377,15 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
       const visivel = await ancorarEm(esperado);
       if (visivel) {
         await page.waitForTimeout(1000);
+        if (codigoProfissional) {
+          const confere = await page.evaluate(`(() => {
+            const jq = window.jQuery || window.$; const el = document.querySelector('.fc');
+            if (!jq || !el) return null;
+            const evs = jq(el).fullCalendar('clientEvents', e => e.start && e.start.format('YYYY-MM-DD') === ${JSON.stringify('__DIA__')});
+            return Array.isArray(evs) && evs.every(e => String(e.resourceId || '') === ${JSON.stringify('__COD__')});
+          })()`.replace('__DIA__', esperado).replace('__COD__', codigoProfissional)) as boolean | null;
+          if (confere !== true) { motivo = 'PROFISSIONAL_NAO_IDENTIFICADO'; console.warn('AMPLIMED_PROFISSIONAL resource_id_inconsistente data=' + esperado); return; }
+        }
         dias.push({ data: esperado, eventos: await comDetalhes(page, await eventosDaTela(page)) });
         continue;
       }
@@ -335,5 +399,5 @@ export async function lerEventosAgendaAmplimed(opcoes: { executavel: string; ema
     }
     completo = true;
   } }, signal);
-  return { codigo, dias, profissional, completo: completo || total === 0 && dias.length === 1 };
+  return { codigo, dias, profissional, completo: completo || total === 0 && dias.length === 1, motivo };
 }

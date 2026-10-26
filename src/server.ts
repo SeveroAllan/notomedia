@@ -85,8 +85,8 @@ import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
 import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
-import { vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
-import { descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
+import { resolverVinculoAgendaConta, vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
+import { descobrirProfissionaisDoFiltroAmplimed, descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
 import { HubDesenvolvedorCpfClient } from './io/hubdodesenvolvedor/hub-desenvolvedor-cpf-client.js';
 import { AdnNfseClient } from './io/fiscal/adn-nfse-client.js';
@@ -318,7 +318,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (fonteAgenda === 'amplimed') {
         // Amplimed: lê finalizados particulares com o tomador, grava como consultas sincronizadas (fonte amplimed) e entrega os valores ao vivo.
         const hoje = agora.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
-        const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true);
+        const vinculo = await resolverVinculoAgendaConta(pool, id, 'amplimed').catch(() => null);
+        const a = await cofres.lerAgendaAmplimed(id, inicio, hoje, true, vinculo?.profissionalExternoId ?? undefined);
         console.info('FERRAMENTA_AGENDA_RESULTADO ' + JSON.stringify({ medicoId: id, ferramenta: 'iniciar_lote', agenda: 'amplimed', ok: a.ok, motivo: a.ok ? undefined : a.motivo }));
         if (!a.ok) { await comunicacaoHomologacao.conversa({ medicoId: id, conversa, chave: `lote:resultado:${chave}`, fala: narrar ? await narrar({ ferramenta: 'iniciar_lote', ok: false, motivo: a.motivo, limiteLeitura:{desde:calendarioConversa(agora).amplimedDesde,ate:hoje} }) : ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'] }); return; }
         let diasSelecionados:typeof a.dias;try{diasSelecionados=selecionarDias(a.dias,selecao??{});}catch{await comunicacaoHomologacao.conversa({medicoId:id,conversa,chave:`lote:selecao:${chave}`,fala:['Não consegui identificar um único atendimento nessa seleção. Não preparei nenhuma nota. Qual é a data e o horário?']});return;}
@@ -374,9 +375,26 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const associarMedicoAgendaSeguro = async (baseMedicoId:string,alvoMedicoId:string,nomeMedico:string,agenda:'tribemd'|'amplimed',agora=new Date()) => {
     const agendas=await cofres.statusAgendas(baseMedicoId).catch(()=>null);
     if(!agendas?.[agenda]?.conectada)return {ok:false as const,motivo:'AGENDA_NAO_CONECTADA' as const};
-    const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId);
+    let codigoProfissional:string|null=null;
+    let motivoAmplimed:'PROFISSIONAL_NAO_IDENTIFICADO'|'PROFISSIONAL_AMBIGUO'|'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA'|null=null;
+    if(agenda==='amplimed'){
+      // Vínculo por nome + código do filtro da própria agenda. Zero ou vários nomes iguais: fail-closed.
+      const lista=await cofres.listarProfissionaisAmplimed(baseMedicoId);
+      if(!lista.ok)motivoAmplimed='PROFISSIONAL_NAO_IDENTIFICADO';
+      else{
+        const alvo=normalizarNomeMedico(nomeMedico);
+        const iguais=lista.profissionais.filter(p=>normalizarNomeMedico(p.nome)===alvo);
+        if(iguais.length===1)codigoProfissional=iguais[0]!.codigo;
+        else motivoAmplimed=iguais.length>1?'PROFISSIONAL_AMBIGUO':'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA';
+      }
+    }
+    const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId,codigoProfissional);
     if(!vinculou)return {ok:false as const,motivo:'MEDICO_AMBIGUO' as const};
-    if(agenda==='amplimed')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:'PROFISSIONAL_NAO_IDENTIFICADO' as const};
+    if(agenda==='amplimed'){
+      return codigoProfissional
+        ? {ok:true as const,agenda,identificacao:'observada' as const}
+        : {ok:true as const,agenda,identificacao:'pendente' as const,motivo:motivoAmplimed??'PROFISSIONAL_NAO_IDENTIFICADO' as const};
+    }
     const bruto=await cofres.fonteAgenda.consultar({medicoId:baseMedicoId,referenciaCofre:baseMedicoId,janelaDias:90,agora});
     if(bruto.tipo==='erro')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:bruto.codigo};
     const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
@@ -443,7 +461,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if(!await comunicacaoHomologacao.medicoPermitido(c.medicoId,c.contatoOperador)) return {dados:{ok:false,motivo:'ENVIO_BLOQUEADO'}};
       const agendaAcao=normalizarAgenda(decisao.parametros?.agenda??c.fatos.agenda.nome??undefined);
       const contaMulti=(c.fatos.medicosConta?.length??0)>1;
-      if(contaMulti&&agendaAcao==='amplimed'&&(decisao.acao==='listar_pendencias'||decisao.acao==='iniciar_lote')){
+      const codigoVinculo=agendaAcao==='amplimed'
+        ? (await resolverVinculoAgendaConta(pool,c.medicoId,'amplimed').catch(()=>null))?.profissionalExternoId??null
+        : null;
+      if(contaMulti&&agendaAcao==='amplimed'&&!codigoVinculo&&(decisao.acao==='listar_pendencias'||decisao.acao==='iniciar_lote')){
         return {falaAssinada:['Nesta integração da Amplimed eu ainda não consigo provar qual profissional atende cada consulta. Para não misturar médicos, não vou preparar nem emitir por essa agenda em conta multi-médico.'],dados:{ferramenta:decisao.acao,ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'}};
       }
       if(c.fatos.lote?.estado==='aguardando_confirmacao_lote' && decisao.parametros?.confirmacao) {
@@ -469,6 +490,29 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return {jaRespondida:true};
       }
       if(decisao.acao==='descobrir_medicos_agenda') {
+        if(agendaAcao==='amplimed'){
+          const lista=await cofres.listarProfissionaisAmplimed(c.medicoId);
+          if(!lista.ok){
+            const fala=['Não consegui ler a lista de profissionais da agenda agora. Isso não prova que outro médico não exista. Se você já souber o nome completo, me diga e eu continuo pela validação do certificado.'];
+            return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:lista.motivo}};
+          }
+          const descobertaAmplimed=descobrirProfissionaisDoFiltroAmplimed(lista.profissionais);
+          if(descobertaAmplimed.tipo==='bloqueada'){
+            const fala=['Nessa leitura a agenda não mostrou a lista de profissionais. Não vou atribuir médicos por suposição. Se você souber o nome completo do médico que quer adicionar, posso continuar pela validação do certificado.'];
+            return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:descobertaAmplimed.motivo}};
+          }
+          const profissionais=descobertaAmplimed.nomes.slice(0,12);
+          await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'amplimed',profissionais:lista.profissionais,referenciaMedicoId:c.medicoId,cobertura:{tipo:'filtro_profissionais_agenda',catalogoCompleto:false}}),'noto');
+          const conhecidos=new Set((c.fatos.medicosConta??[]).map(m=>normalizarNomeMedico(m.nome)));
+          const novos=profissionais.filter(nome=>!conhecidos.has(normalizarNomeMedico(nome)));
+          if(!novos.length){
+            const fala=[`Nessa leitura observei apenas profissionais que já estão vinculados ao Noto: ${profissionais.join(', ')}. Essa lista vem do filtro de profissionais da agenda.`,
+              'Se você quer adicionar outro médico, me diga o nome completo e eu continuo pela validação do certificado.'];
+            return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_somente_conhecidos',profissionais}};
+          }
+          const fala=[`Além dos médicos já vinculados, observei na agenda: ${novos.join(', ')}. Quais desses você quer configurar no Noto?`];
+          return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_medicos',profissionais:novos}};
+        }
         const bruto=await cofres.fonteAgenda.consultar({medicoId:c.medicoId,referenciaCofre:c.medicoId,janelaDias:90,agora:c.agora});
         if(bruto.tipo==='erro'){
           const fala=bruto.codigo==='SINCRONIZACAO_INCOMPLETA'
@@ -516,7 +560,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           if(ordenadas.length>itens.length){const aviso=`Mostrei as primeiras ${itens.length}; há mais ${ordenadas.length-itens.length} nesse período.`;if(baloes.length<3)baloes.push(aviso);}
           return baloes.slice(0,3);
         };
-        if(agendaAcao==='amplimed'&&contaMulti){
+        if(agendaAcao==='amplimed'&&contaMulti&&!codigoVinculo){
           return {falaAssinada:['Nesta integração da Amplimed eu ainda não consigo identificar com segurança o profissional de cada consulta. Posso continuar com outro fluxo, mas não vou mostrar pacientes nem atribuir consultas a médicos até essa identificação existir.'],dados:{ferramenta:'consultar_agenda',ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'}};
         }
         if(agendaAcao==='tribemd'){
@@ -539,7 +583,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           }
         }
         if(agendaAcao==='amplimed') {
-          const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,false);
+          const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,false,codigoVinculo??undefined);
           console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'consultar_agenda',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo}));
           if(!a.ok)return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
           const consultas=a.dias.flatMap(d=>d.consultas).filter(x=>{const dia=x.dataHora.slice(0,10);return dia>=desde&&dia<=ate;});
@@ -673,7 +717,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if(decisao.acao==='listar_pendencias' && agendaAcao==='amplimed') {
         // Amplimed v1: modo observação, dia a dia até 31 dias; nada vira nota.
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
-        const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,!!selecao.paciente);
+        const a=await cofres.lerAgendaAmplimed(c.medicoId,desde,hoje,!!selecao.paciente,codigoVinculo??undefined);
         console.info('FERRAMENTA_AGENDA_RESULTADO '+JSON.stringify({medicoId:c.medicoId,ferramenta:'listar_pendencias',agenda:'amplimed',ok:a.ok,motivo:a.ok?undefined:a.motivo,dias:a.ok?a.dias.length:undefined,total:a.ok?a.dias.reduce((n,d)=>n+d.elegiveis.length,0):undefined}));
         if(!a.ok) return {dados:{ferramenta:'listar_pendencias',ok:false,motivo:a.motivo,limiteLeitura:{desde:calendarioConversa(c.agora).amplimedDesde,ate:hoje}}};
         const br=(d:string)=>d.split('-').reverse().join('/');

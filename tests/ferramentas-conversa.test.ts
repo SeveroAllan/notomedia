@@ -66,12 +66,33 @@ it('operador do WhatsApp da conta pode configurar permissões sem redução por 
 });
 
 
-it('associação de médico só aparece para médico com certificado e agenda conectada',()=>{
+it('associação de médico aparece com médico na conta e agenda conectada, sem exigir certificado',()=>{
  const base={ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}},
   link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
   medicosConta:[{nome:'Ana Lima',certificado:'ok' as const},{nome:'Bruno Souza',certificado:'pendente' as const}]} satisfies FatosConversa;
  expect(ferramentasLiberadas(base,{lote:true})).toContain('associar_medico_agenda');
- expect(ferramentasLiberadas({...base,medicosConta:[{nome:'Bruno Souza',certificado:'pendente'}]},{lote:true})).not.toContain('associar_medico_agenda');
+ // Agenda antes do certificado: médico pendente já pode ser associado (fluxo aprovado 26/10).
+ expect(ferramentasLiberadas({...base,medicosConta:[{nome:'Bruno Souza',certificado:'pendente'}]},{lote:true})).toContain('associar_medico_agenda');
+ expect(ferramentasLiberadas({...base,medicosConta:[]},{lote:true})).not.toContain('associar_medico_agenda');
  expect(ferramentasLiberadas({...base,agenda:{nome:'tribemd',conectada:false},agendas:{tribemd:{salva:true,conectada:false},amplimed:{salva:false,conectada:false}}},{lote:true})).not.toContain('associar_medico_agenda');
  expect(CATALOGO_FERRAMENTAS.find(t=>t.nome==='descobrir_medicos_agenda')?.descricao).toMatch(/Atalho opcional/);
+});
+
+it('descoberta de profissionais liberada para agenda Amplimed conectada',()=>{
+ const base={ambiente:'homologacao',agenda:{nome:'amplimed',conectada:true},agendas:{tribemd:{salva:false,conectada:false},amplimed:{salva:true,conectada:true}},
+  link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+  conta:{maxMedicos:5,usoCadastro:null}} satisfies FatosConversa;
+ expect(ferramentasLiberadas(base,{lote:true})).toContain('descobrir_medicos_agenda');
+ expect(ferramentasLiberadas({...base,agenda:{nome:'amplimed',conectada:false},agendas:{tribemd:{salva:false,conectada:false},amplimed:{salva:true,conectada:false}}},{lote:true})).not.toContain('descobrir_medicos_agenda');
+});
+
+it('associação Amplimed por código: vínculo persiste o código estável do profissional',()=>{
+ // Contrato novo (26/10): conta multi-médico Amplimed só libera leitura/lote
+ // quando existe vínculo com profissional_externo_id; a gate é aplicada no server
+ // (resolverVinculoAgendaConta) — aqui cobrimos que a ferramenta de associação
+ // continua disponível sem certificado para permitir criar esse vínculo.
+ const base={ambiente:'homologacao',agenda:{nome:'amplimed',conectada:true},agendas:{tribemd:{salva:false,conectada:false},amplimed:{salva:true,conectada:true}},
+  link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+  medicosConta:[{nome:'Ana Lima',certificado:'pendente' as const}]} satisfies FatosConversa;
+ expect(ferramentasLiberadas(base,{lote:true})).toContain('associar_medico_agenda');
 });

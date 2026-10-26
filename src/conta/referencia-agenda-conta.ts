@@ -1,27 +1,36 @@
 import type pg from 'pg';
 import type {AgendaSuportada} from '../agenda/agendas-suportadas.js';
 
-export async function resolverReferenciaAgendaConta(
+export async function resolverVinculoAgendaConta(
   pool:pg.Pool,
   medicoId:string,
   agenda:AgendaSuportada
-):Promise<string>{
+):Promise<{referenciaMedicoId:string;profissionalExternoId:string|null}>{
   const {rows}=await pool.query(`
-    select r.referencia_medico_id
+    select r.referencia_medico_id, r.profissional_externo_id
     from public.noto_medico_agenda_referencias r
     join medicos alvo on alvo.id=r.medico_id
     join medicos fonte on fonte.id=r.referencia_medico_id and fonte.conta_id=alvo.conta_id
     where r.medico_id=$1 and r.agenda=$2
     limit 1
   `,[medicoId,agenda]);
-  return rows[0]?.referencia_medico_id??medicoId;
+  return {referenciaMedicoId:rows[0]?.referencia_medico_id??medicoId,profissionalExternoId:rows[0]?.profissional_externo_id??null};
+}
+
+export async function resolverReferenciaAgendaConta(
+  pool:pg.Pool,
+  medicoId:string,
+  agenda:AgendaSuportada
+):Promise<string>{
+  return (await resolverVinculoAgendaConta(pool,medicoId,agenda)).referenciaMedicoId;
 }
 
 export async function vincularReferenciaAgendaConta(
   pool:pg.Pool,
   medicoIds:readonly string[],
   agenda:AgendaSuportada,
-  referenciaMedicoId:string
+  referenciaMedicoId:string,
+  profissionalExternoId?:string|null
 ):Promise<boolean>{
   if(!medicoIds.length)return true;
   const {rows}=await pool.query(`
@@ -33,13 +42,15 @@ export async function vincularReferenciaAgendaConta(
       where m.id=any($1::uuid[])
     ), gravados as (
       insert into public.noto_medico_agenda_referencias
-        (medico_id,agenda,referencia_medico_id,atualizado_em)
-      select id,$2,(select id from fonte),now() from alvos
+        (medico_id,agenda,referencia_medico_id,profissional_externo_id,atualizado_em)
+      select id,$2,(select id from fonte),$4,now() from alvos
       on conflict (medico_id,agenda) do update
-        set referencia_medico_id=excluded.referencia_medico_id,atualizado_em=excluded.atualizado_em
+        set referencia_medico_id=excluded.referencia_medico_id,
+            profissional_externo_id=coalesce(excluded.profissional_externo_id,noto_medico_agenda_referencias.profissional_externo_id),
+            atualizado_em=excluded.atualizado_em
       returning medico_id
     )
     select medico_id from gravados
-  `,[medicoIds,agenda,referenciaMedicoId]);
+  `,[medicoIds,agenda,referenciaMedicoId,profissionalExternoId??null]);
   return rows.length===new Set(medicoIds).size;
 }

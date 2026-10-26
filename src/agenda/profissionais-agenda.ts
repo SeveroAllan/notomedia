@@ -47,3 +47,18 @@ export function descobrirProfissionaisParaConta(
   const nomes=profissionaisIdentificados(consultas);
   return nomes.length?{tipo:'profissionais',nomes}:{tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};
 }
+
+/**
+ * Descoberta de profissionais para a Amplimed: vem do filtro de profissionais da própria
+ * agenda (código estável do filtro + nome exibido), não de textos de consulta. Dedup por código.
+ * Sem lista legível, a descoberta é bloqueada (fail-closed) em vez de cair em suposição por texto.
+ */
+export function descobrirProfissionaisDoFiltroAmplimed(profissionais: readonly { codigo: string; nome: string }[]): {tipo:'profissionais';nomes:string[]}|{tipo:'bloqueada';motivo:'PROFISSIONAL_NAO_IDENTIFICADO'} {
+  const porCodigo = new Map<string, string>();
+  for (const p of profissionais) {
+    const codigo = p.codigo.trim(), nome = p.nome.trim();
+    if (codigo && nome) porCodigo.set(codigo, nome);
+  }
+  const nomes = [...porCodigo.values()];
+  return nomes.length ? { tipo: 'profissionais', nomes } : { tipo: 'bloqueada', motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
+}

@@ -18,7 +18,8 @@ export class CofreAmplimed {
         pedirCodigo2fa?: (medicoId: string) => Promise<string | null>;
         aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
         /** Leitura de observação da agenda do dia; sem ele a leitura fica indisponível. */
-        lerEventos?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }, diasAtras: number, detalhes?: boolean) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean }> }) {
+        lerEventos?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }, diasAtras: number, detalhes?: boolean, codigoProfissional?: string) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean; motivo?: string }>;
+        listarProfissionais?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }) => Promise<{ codigo: CodigoLoginAmplimed; profissionais: { codigo: string; nome: string }[] }> }) {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
@@ -72,7 +73,7 @@ export class CofreAmplimed {
         return this.status(id);
     }
     /** Lê a agenda de `desde` até hoje (teto 31 dias) em modo observação. Devolve só consultas já checadas; nunca a credencial. */
-    async lerAgendaPeriodo(id: string, desde: string, hoje: string, comDetalhes = false) {
+    async lerAgendaPeriodo(id: string, desde: string, hoje: string, comDetalhes = false, codigoProfissional?: string) {
         if (!this.opcoes.lerEventos) return { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
         const diasAtras = diasAtrasAmplimed(hoje, desde);
         if (diasAtras === null) return { ok: false as const, motivo: 'PERIODO_FORA_DO_LIMITE' };
@@ -82,8 +83,9 @@ export class CofreAmplimed {
         p.email = ''; p.senha = '';
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.lerEventos>>>;
         const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
-        try { r = await this.tranca(id, () => this.opcoes.lerEventos!({ ...credencial, ...ganchos }, diasAtras, comDetalhes)); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        try { r = await this.tranca(id, () => this.opcoes.lerEventos!({ ...credencial, ...ganchos }, diasAtras, comDetalhes, codigoProfissional)); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
+        if (r.motivo) return { ok: false as const, motivo: r.motivo };
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
@@ -104,6 +106,20 @@ export class CofreAmplimed {
             dias.push({ data: d.data, lidos: leitura.lidos, consultas: leitura.consultas.map(c => ({ paciente:c.pacienteNome,dataHora:c.dataHora,status:c.status,valorCentavos:c.valorCentavos })), elegiveis: separarElegiveis(leitura.consultas).elegiveis.map(c => ({ paciente: c.pacienteNome, dataHora: c.dataHora, idExterno: c.idExterno, valorCentavos: c.valorCentavos ?? 0, detalhe: leitura.detalhes.get(c.idExterno) ?? null })) });
         }
         return { ok: true as const, dias };
+    }
+    /** Lista os profissionais do filtro da agenda (código estável + nome exibido), sem ler consultas. */
+    async listarProfissionais(id: string) {
+        if (!this.opcoes.listarProfissionais) return { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+        const p = await this.perfis.ler(this.chave(id));
+        if (!p.senha || !p.email) return { ok: false as const, motivo: 'CREDENCIAL_AUSENTE' };
+        const credencial = { email: p.email, senha: p.senha };
+        p.email = ''; p.senha = '';
+        const ganchos = await this.ganchosSessao(id).catch(() => ({ estado: undefined, aoSalvarEstado: undefined, aoPedirCodigo2fa: undefined }));
+        let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.listarProfissionais>>>;
+        try { r = await this.tranca(id, () => this.opcoes.listarProfissionais!({ ...credencial, ...ganchos })); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
+        finally { credencial.email = ''; credencial.senha = ''; }
+        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
+        return { ok: true as const, profissionais: r.profissionais };
     }
     /** Apaga a credencial e o estado do Amplimed deste médico. */
     async excluir(id: string) { this.opcoes.aoAlterarAcesso?.(id); await this.perfis.esquecer(this.chave(id)); return this.status(id); }
