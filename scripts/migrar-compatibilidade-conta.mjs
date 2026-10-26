@@ -10,6 +10,7 @@ validarProjetoHomolog(process.env.DATABASE_URL);
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 5000 });
 try {
   for (const arquivo of [
+    './migrations/20261031-contadores-delegacoes.sql',
     './migrations/20261102-origem-operador-conta.sql',
     './migrations/20261103-memoria-conta-e-visibilidade.sql'
   ]) {
