@@ -640,7 +640,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               const parsed=JSON.parse(row.texto);
               if(parsed?.fonte==='amplimed'&&parsed?.referenciaMedicoId===c.medicoId&&Array.isArray(parsed?.codigos)){
                 const hit=parsed.codigos.find((x:{codigo?:unknown;nome?:unknown})=>normalizarNomeMedico(String(x?.nome??''))===alvoNorm);
-                if(typeof hit?.codigo==='string'&&hit.codigo){codigoConfirmado=hit.codigo;break;}
+                if(typeof hit?.codigo==='string'&&hit.codigo&&!hit.codigo.includes('[OCULTO]')){codigoConfirmado=hit.codigo;break;}
               }
             }catch{/* proposta abaixo decide */}
           }
