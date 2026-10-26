@@ -1,7 +1,7 @@
 import type pg from 'pg';
 import {expect,it,vi} from 'vitest';
 import {ConversadorMedico} from '../src/onboarding/conversador-medico.js';
-import {origemPodeVirarMemoriaMedico} from '../src/onboarding/processar-comunicacao-medico.js';
+import {escopoMemoriaPorOrigem,origemPodeVirarMemoriaMedico} from '../src/onboarding/processar-comunicacao-medico.js';
 import {InterpretadorSemantico} from '../src/onboarding/interpretador-semantico.js';
 import {PostgresMemoriaConversaMedico} from '../src/onboarding/memoria-conversa.js';
 
@@ -57,19 +57,24 @@ it('compactação extrai memória somente com origem explícita e sanitiza antes
 });
 
 
-it('preferência da conta não vira memória específica do médico',async()=>{
+it('mensagem da conta aprende em escopo da conta sem virar preferência pessoal do médico',async()=>{
  expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'medico'})).toBe(true);
  expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'conta'})).toBe(false);
- expect(origemPodeVirarMemoriaMedico({papel:'medico',origemOperador:'secretaria'})).toBe(false);
- const completar=vi.fn(async()=>JSON.stringify({resumo:'A conta usa Amplimed.',chunk:'A conta usa Amplimed.',memorias:[]}));
- await new ConversadorMedico('k','m',completar as any).compactar({resumo:null,mensagens:[
+ expect(escopoMemoriaPorOrigem({papel:'medico',origemOperador:'medico'})).toBe('medico');
+ expect(escopoMemoriaPorOrigem({papel:'medico',origemOperador:'conta'})).toBe('conta');
+ expect(escopoMemoriaPorOrigem({papel:'medico',origemOperador:'secretaria'})).toBe('conta');
+ const completar=vi.fn(async()=>JSON.stringify({
+   resumo:'A conta usa Amplimed.',chunk:'A conta usa Amplimed.',
+   memorias:[{chave:'agenda_conta',categoria:'preferencia_agenda',valor:'A conta prefere Amplimed',origemId:'20',confianca:.98}]
+ }));
+ const compactada=await new ConversadorMedico('k','m',completar as any).compactar({resumo:null,mensagens:[
    {id:'20',papel:'medico',origemOperador:'conta',texto:'Para a clínica, prefiro Amplimed'}
  ]});
+ expect(compactada?.memorias).toHaveLength(1);
  const sistema=String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content);
- const entrada=JSON.parse(String((completar.mock.calls as unknown as any[][])[0]![2][1]!.content));
  expect(sistema).toContain('origemOperador=conta');
- expect(sistema).toContain('must never become physician-specific semantic memory');
- expect(entrada.fontes).toEqual([{id:'20',papel:'medico',origemOperador:'conta'}]);
+ expect(sistema).toContain('account');
+ expect(escopoMemoriaPorOrigem({papel:'medico',origemOperador:'conta'})).toBe('conta');
 });
 
 it('timeline e memória entram no decisor, mas o prompt declara fatos como autoridade atual',async()=>{
@@ -106,3 +111,22 @@ it('interpretador recebe a mesma timeline sem transformar memória em estado ope
  expect(entrada.memoriasSemanticas[0].valor).toBe('Prefere Amplimed');
  expect(String((completar.mock.calls as unknown as any[][])[0]![2][0]!.content)).toContain('fatos is the current operational authority');
 });
+
+it('memória de conta usa chave da conta e leitura devolve o escopo',async()=>{
+ const query=vi.fn(async(sql:string)=>{
+   if(sql.includes("on conflict (conta_id,chave) where escopo='conta'"))return {rows:[]};
+   if(sql.includes('with alvo as'))return {rows:[{
+     escopo:'conta',chave:'agenda_conta',categoria:'preferencia_agenda',valor:'A conta prefere Amplimed',
+     origem_conversa:'c',origem_mensagem_id:'20',confianca:.98
+   }]};
+   return {rows:[]};
+ });
+ const memoria=new PostgresMemoriaConversaMedico({query} as unknown as pg.Pool);
+ await memoria.registrarMemoriaSemantica('m',{escopo:'conta',chave:'agenda_conta',categoria:'preferencia_agenda',valor:'A conta prefere Amplimed',origemConversa:'c',origemMensagemId:'20',confianca:.98});
+ expect(String((query.mock.calls as unknown as any[][])[0]![0])).toContain("on conflict (conta_id,chave) where escopo='conta'");
+ expect(await memoria.lerMemoriasSemanticas('m')).toEqual([{
+   escopo:'conta',chave:'agenda_conta',categoria:'preferencia_agenda',valor:'A conta prefere Amplimed',
+   origemConversa:'c',origemMensagemId:'20',confianca:.98
+ }]);
+});
+
