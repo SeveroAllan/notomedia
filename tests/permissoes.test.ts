@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type pg from 'pg';
-import { Permissoes, ROTULOS } from '../src/permissoes/permissoes.js';
+import { Permissoes, ROTULOS, explicacaoEscolhaPermissao } from '../src/permissoes/permissoes.js';
 import { criarRouterPermissoes } from '../src/permissoes/router.js';
 import { ComunicacaoHomologacao } from '../src/whatsapp/comunicacao-homologacao.js';
 import { carregarConfig } from '../src/config.js';
@@ -226,11 +226,30 @@ describe('router /p: página de escolha com botões', () => {
         const html = await get.text();
         expect(html).toContain(ROTULOS.entregar_paciente.botoes.paciente);
         expect(html).toContain(ROTULOS.entregar_paciente.botoes.so_medico);
+        expect(html).toContain('type="submit"');
+        expect(html).toContain('não emite nem envia notas antigas');
         const post = await fetch(url + '/escolher', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base }, body: 'valor=paciente' });
         expect(post.status).toBe(202);
         expect(await post.text()).toContain('Escolha salva');
         expect(escolhido).toEqual([{ permissao: 'entregar_paciente', valor: 'paciente', medicoId, linkId: links[0].id }]);
         expect(await (await fetch(url, { headers: { host: new URL(base).host } })).status).toBe(410);
+        await fechar();
+    });
+    it.each([
+        ['autonomo', ROTULOS.emitir_autonomo.botoes.autonomo],
+        ['sempre_perguntar', ROTULOS.emitir_autonomo.botoes.sempre_perguntar]
+    ] as const)('POST de emissão salva e confirma exatamente o botão %s, sem escolha implícita', async (valor,label) => {
+        const p = (globalThis as any).__permissoesTeste as Permissoes;
+        const a = await p.criarLink(medicoId, 'emitir_autonomo');
+        const url = 'url' in a! ? a.url : '';
+        const post = await fetch(url + '/escolher', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', origin: base }, body: 'valor='+valor });
+        expect(post.status).toBe(202);
+        const resposta=await post.text();
+        expect(escolhas.at(-1)?.valor).toBe(valor);
+        expect(escolhido.at(-1)).toMatchObject({permissao:'emitir_autonomo',valor});
+        expect(resposta).toContain(label);
+        expect(resposta).toContain('Essa foi exatamente a opção salva');
+        expect(resposta).toContain('não emite nem envia notas antigas');
         await fechar();
     });
     it('GET de token desconhecido devolve 410; POST com origem estranha é recusado', async () => {
@@ -284,4 +303,12 @@ describe('portão de entrega ao paciente', () => {
         expect(r).toBe('enviado');
         expect(envios).toEqual(['pdf']);
     });
+});
+
+
+it('explicação de emissão é neutra: mostra as duas opções e diz que sim no chat não escolhe nenhuma',()=>{
+ const fala=explicacaoEscolhaPermissao('emitir_autonomo').join(' ');
+ expect(fala).toContain(ROTULOS.emitir_autonomo.botoes.autonomo);
+ expect(fala).toContain(ROTULOS.emitir_autonomo.botoes.sempre_perguntar);
+ expect(fala).toContain('Responder “sim” aqui no WhatsApp não escolhe nenhuma opção');
 });

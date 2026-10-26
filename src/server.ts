@@ -25,7 +25,7 @@ import { aposEnfileirarComprovante } from './fluxos/apos-enfileirar-comprovante.
 import { extrairTelefoneJid } from './whatsapp/extrair-telefone-jid.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
-import { Permissoes, type Permissao } from './permissoes/permissoes.js';
+import { Permissoes, explicacaoEscolhaPermissao, type Permissao } from './permissoes/permissoes.js';
 import { confirmarEscolhaPermissao } from './permissoes/confirmar-escolha.js';
 import { criarRouterPermissoes } from './permissoes/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
@@ -230,14 +230,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const medicosConta=await listarMedicosDaConta(pool,medicoId);
         const medicoAtual=medicosConta.find(m=>m.id===medicoId);
         if(!medicoAtual)return {tipo:'erro' as const,codigo:'PROFISSIONAL_AMBIGUO' as const};
-        const exigirProfissional=medicosConta.length>1;
         const resultado = await cacheAgenda.consultar(medicoId, janelaDias, () => sincronizarAgenda(
           { medicoId, referenciaCofre: medicoId, janelaDias, agora },
           cofres.fonteAgenda,
           repo,
           (id, consulta) => repo.resolverPaciente(id, consulta),
           consultas => {
-            const filtradas=filtrarConsultasDoProfissional(consultas,medicoAtual.nomeCompleto,exigirProfissional);
+            const filtradas=filtrarConsultasDoProfissional(consultas,medicoAtual.nomeCompleto);
             return filtradas.ok ? {ok:true,consultas:filtradas.consultas} : {ok:false,codigo:filtradas.motivo};
           }
         ));
@@ -453,6 +452,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           ?.iniciar(c.medicoId,c.conversa,c.chave,c.agora,desdeTroca,diaTroca?`${diaTroca}T23:59:59.999-03:00`:undefined);
         return {jaRespondida:true};
       }
+      if(decisao.acao==='descobrir_medicos_agenda') {
+        const bruto=await cofres.fonteAgenda.consultar({medicoId:c.medicoId,referenciaCofre:c.medicoId,janelaDias:90,agora:c.agora});
+        if(bruto.tipo==='erro')return {dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:bruto.codigo}};
+        const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
+        if(descoberta.tipo==='bloqueada'){
+          return {falaAssinada:['A TribeMD não identificou o profissional de cada consulta nessa leitura. Para não misturar médicos, preciso dessa identificação antes de continuar.'],dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:descoberta.motivo}};
+        }
+        const profissionais=descoberta.nomes.slice(0,12);
+        await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais,referenciaMedicoId:c.medicoId}),'noto');
+        const fala=[`Encontrei estes profissionais na TribeMD: ${profissionais.join(', ')}. Para quais médicos você quer emitir pelo Noto?`];
+        return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_medicos',profissionais}};
+      }
       if(decisao.acao==='consultar_agenda') {
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
         const desde=decisao.parametros?.desde??'', ate=decisao.parametros?.ate??hoje;
@@ -479,7 +490,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           const janelaDescoberta=Math.max(1,Math.ceil((Date.parse(hoje)-Date.parse(desde))/86400000));
           const bruto=await cofres.fonteAgenda.consultar({medicoId:c.medicoId,referenciaCofre:c.medicoId,janelaDias:janelaDescoberta,agora:c.agora});
           if(bruto.tipo==='erro')return {dados:{ferramenta:'consultar_agenda',ok:false,motivo:bruto.codigo}};
-          const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas,true);
+          const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
           if(descoberta.tipo==='profissionais'){
             const conhecidos=new Set((c.fatos.medicosConta??[]).map(m=>normalizarNomeMedico(m.nome)));
             const profissionais=descoberta.nomes;
@@ -490,7 +501,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               const fala=[`Encontrei estes profissionais na TribeMD: ${nomes}. Para quais médicos você quer emitir pelo Noto?`];
               return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'consultar_agenda',ok:true,modo:'descoberta_medicos',profissionais}};
             }
-          } else if(contaMulti) {
+          } else {
             return {falaAssinada:['A TribeMD não identificou o profissional de cada consulta nessa leitura. Para não misturar médicos, preciso dessa identificação antes de continuar.'],dados:{ferramenta:'consultar_agenda',ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'}};
           }
         }
@@ -582,7 +593,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(!alvo) return {dados:{ferramenta:'pedir_link_permissoes',ok:true,motivo:'TODAS_ESCOLHIDAS'}};
         const r=await permissoesNoto.criarLink(c.medicoId,alvo).catch(()=>null);
         if(!r||'erro' in r) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:r&&'erro' in r?r.erro:'FALHA'}};
-        const fala=[...decisao.fala.filter(t=>t.trim()).slice(0,2), r.url];
+        const fala=[...explicacaoEscolhaPermissao(alvo), r.url];
         const envio=await comunicacaoHomologacao.conversa({medicoId:c.medicoId,chave:`link_permissoes:${alvo}:${r.url.slice(-12)}`,fala,conversa:c.conversa,falaMemoria:fala.map((t,i)=>i===fala.length-1?'[LINK_SEGURO]':t),contatoTelefone:c.contatoOperador});
         for(const [indice,texto] of fala.entries()) await memoriaPersistida?.registrarFala(c.medicoId,c.conversa,`noto:permissoes:link:${alvo}:${r.url.slice(-12)}:${indice}`,indice===fala.length-1?`${origemLinksSeguros}/p/[LINK_SEGURO]`:texto,'noto').catch(()=>{});
         return {jaRespondida:envio==='enviado'||envio==='simulado',dados:{ferramenta:'pedir_link_permissoes',ok:envio!=='erro',motivo:envio}};

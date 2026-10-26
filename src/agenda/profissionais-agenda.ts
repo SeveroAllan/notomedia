@@ -25,12 +25,14 @@ export function consultaPertenceAoProfissional(consulta: ConsultaComProfissional
   return !!profissional && normalizar(profissional) === normalizar(nomeMedico);
 }
 
+/**
+ * Persistência fiscal sempre exige identidade profissional por consulta.
+ * A quantidade de médicos já cadastrados nunca é evidência de autoria.
+ */
 export function filtrarConsultasDoProfissional<T extends ConsultaComProfissional>(
   consultas: readonly T[],
-  nomeMedico: string,
-  exigirIdentificacao: boolean
+  nomeMedico: string
 ): { ok: true; consultas: T[] } | { ok: false; motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' | 'PROFISSIONAL_AMBIGUO' } {
-  if (!exigirIdentificacao) return { ok: true, consultas: [...consultas] };
   if (consultas.some(c => !c.profissional?.trim())) return { ok: false, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
   const filtradas = consultas.filter(c => consultaPertenceAoProfissional(c,nomeMedico));
   if (!filtradas.length && consultas.length) return { ok: false, motivo: 'PROFISSIONAL_AMBIGUO' };
@@ -39,10 +41,8 @@ export function filtrarConsultasDoProfissional<T extends ConsultaComProfissional
 
 export function descobrirProfissionaisParaConta(
   fonte:'tribemd'|'amplimed',
-  consultas:readonly ConsultaComProfissional[],
-  contaMultiMedico:boolean
-): {tipo:'nao_necessaria'}|{tipo:'profissionais';nomes:string[]}|{tipo:'bloqueada';motivo:'PROFISSIONAL_NAO_IDENTIFICADO'} {
-  if(!contaMultiMedico)return {tipo:'nao_necessaria'};
+  consultas:readonly ConsultaComProfissional[]
+): {tipo:'profissionais';nomes:string[]}|{tipo:'bloqueada';motivo:'PROFISSIONAL_NAO_IDENTIFICADO'} {
   if(fonte==='amplimed')return {tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};
   const nomes=profissionaisIdentificados(consultas);
   return nomes.length?{tipo:'profissionais',nomes}:{tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'};

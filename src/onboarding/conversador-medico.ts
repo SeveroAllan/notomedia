@@ -13,7 +13,7 @@ import { PROMPT_STANDARD } from './prompt-standard.js';
 
 export { ERRO_CONVERSA } from './falas.js';
 export { PROMPT_STANDARD };
-export const ACOES_CONVERSA = ['pedir_link_agenda', 'pedir_link_certificado', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
+export const ACOES_CONVERSA = ['pedir_link_agenda', 'pedir_link_certificado', 'descobrir_medicos_agenda', 'consultar_agenda', 'listar_pendencias', 'iniciar_lote', 'registrar_modo_sem_agenda', 'pedir_link_permissoes', 'reenviar_nota_medico', 'nenhuma'] as const;
 export const PROMPT_CONVERSA = `Noto is a fiscal assistant on WhatsApp.
 
 LANGUAGE
@@ -36,7 +36,9 @@ FACTS AND SAFETY
 - One WhatsApp operates one account. fatos.medicosConta lists its doctors and certificate state.
 - modo='descoberta_medicos': show only professional names, ask which to use, never patient data.
 - Explicit doctor choice: use parametros.medicos and pedir_link_certificado for pending certificates. One pending certificate blocks only that doctor.
+- Adding doctors through TribeMD is a continuing goal: connect TribeMD if needed, then discover professionals, ask which doctors to use, then offer one certificate link for each chosen doctor that needs A1.
 - Never guess ambiguous doctors. Scope consultations, certificates and invoices to the selected doctor.
+- Permission values are chosen only by the exact button selected on the secure page. A chat reply such as "sim" never selects autonomous issue, delivery, or CPF behavior. Explain the available options neutrally and do not claim a choice was saved before the page confirms it.
 
 DECISION PROCEDURE
 0. Use interpretacaoSemantica when it exists. Ask only for fields in faltando.
@@ -66,7 +68,8 @@ DECISION PROCEDURE
 14. If fatos.tarefaEmCurso=true, report progress and do not offer the same issue again.
 15. Use fatos.permissoes.faltantes. If interpretacaoSemantica.permissaoNecessaria is missing, use pedir_link_permissoes.
    Ask only for that choice. Do not ask again unless the doctor asks to change it.
-16. If fatos.eventoAgenda.conectado=true, report it and propose the next step.
+16. If fatos.eventoAgenda.conectado=true, report it and continue the unfinished goal from plano instead of switching topics.
+   If plano.objetivo='configurar:medicos' and TribeMD just connected, use descobrir_medicos_agenda next. Do not divert to permissions.
    If conectado=false, use acao=null and explain the real blocker.
    If falhaAcesso=true, say that secure verification is needed without blaming the password.
 17. Old invoice: reenviar_nota_medico only after explicit request with clear day, literal evidence and parametros.dia. Past-delivery questions use entregasRecentes with acao=null; do not resend/read agenda.
@@ -233,6 +236,11 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
     }
     if (!opcoes?.introducaoVerificada && !fatos.link.enviados && faltasIntroducaoLink(d.fala).length) return 'INTRODUCAO_INCOMPLETA';
   }
+  if (acao === 'descobrir_medicos_agenda') {
+    const ag=agendaDaAcao;
+    if(ag!=='tribemd'||!agendaDaAcaoConectada||fatos.semAgendaDigital)return 'AGENDA_NAO_CONECTADA';
+    return null;
+  }
   if (acao === 'pedir_link_certificado') {
     const nomes=d.parametros?.medicos??[];
     if(!nomes.length)return 'MEDICO_NECESSARIO';
@@ -283,7 +291,7 @@ export class ConversadorMedico {
       const br=(d:string)=>d.split('-').reverse().join('/');
       return {fala:[`Minha leitura da Amplimed alcança de ${br(resultado.limiteLeitura.desde)} a ${br(resultado.limiteLeitura.ate)}. O período pedido começa antes disso. Quer conferir a parte dentro dessa janela?`],acao:null};
     }
-    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias', 'consultar_agenda'].includes(resultado.ferramenta ?? '') &&
+    if (resultado?.ok === false && ['iniciar_lote', 'listar_pendencias', 'consultar_agenda', 'descobrir_medicos_agenda'].includes(resultado.ferramenta ?? '') &&
         ['LEITURA_INCOMPLETA', 'FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO'].includes(resultado.motivo ?? ''))
       return { fala: ['Não consegui ler sua agenda agora. Tento de novo quando você pedir.'], acao: null };
     try {

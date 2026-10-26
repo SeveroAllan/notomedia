@@ -13,7 +13,7 @@ const periodoSchema = z.object({
 export const interpretacaoSemanticaSchema = z.object({
   dominio: z.enum(['agenda','fiscal','documento','conexao','permissoes','conversa','outro']),
   objetivo: z.enum(['consultar','preparar','emitir','reenviar','conectar','configurar','responder','conversar','desconhecido']),
-  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','entregas','agenda','permissoes','outro']).nullable(),
+  objeto: z.enum(['consultas','pendencias_fiscais','notas','pdf','entregas','agenda','medicos','permissoes','outro']).nullable(),
   granularidade: z.enum(['colecao','item','indefinida']),
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   permissaoNecessaria: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).nullable().default(null),
@@ -76,6 +76,8 @@ AGENDA CONFIGURATION
 - Set agendaAlvo='tribemd' or 'amplimed' only when the doctor explicitly identifies that supported agenda.
 - "outra agenda" without a supported agenda name means agendaAlvo=null. Do not guess the other agenda for a configuration request.
 - A connected agenda does not prevent the doctor from connecting the other supported agenda.
+- If the user wants to add, discover, choose, or configure another physician through TribeMD, keep objetivo='configurar', objeto='medicos', agendaAlvo='tribemd'. Connecting the agenda is only a prerequisite and must not replace that physician-management goal.
+- If an unfinished plano has objetivo='configurar:medicos', a brief interruption does not cancel it. When the user asks to continue, resume the next safe step from that plan.
 - For consultation, pending, preparation, or issue requests, use agendaAlvo when the doctor names TribeMD or Amplimed.
 - When both agendas are connected, agendaAlvo may be contextual only when the recent conversation clearly established one agenda as the current source.
 - When both agendas are connected and no source is clear, add agenda_foco to faltando. Never choose one silently.
@@ -86,6 +88,7 @@ PERMISSIONS
 - Use entregar_paciente for invoice delivery destination.
 - Use solicitar_cpf for the source of a missing CPF.
 - Do not invent a permission requirement for a read-only agenda request.
+- A chat answer such as "sim" is not a permission value. Only the exact button selected on the secure permission page establishes emitir_autonomo, entregar_paciente, or solicitar_cpf.
 
 SCOPE
 - Do not change a collection request into an item request.
@@ -104,7 +107,7 @@ Return strict JSON:
 {
  "dominio":"agenda|fiscal|documento|conexao|permissoes|conversa|outro",
  "objetivo":"consultar|preparar|emitir|reenviar|conectar|configurar|responder|conversar|desconhecido",
- "objeto":"consultas|pendencias_fiscais|notas|pdf|entregas|agenda|permissoes|outro"|null,
+ "objeto":"consultas|pendencias_fiscais|notas|pdf|entregas|agenda|medicos|permissoes|outro"|null,
  "granularidade":"colecao|item|indefinida",
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "permissaoNecessaria":"emitir_autonomo|entregar_paciente|solicitar_cpf"|null,
@@ -189,6 +192,18 @@ export function reconciliarInterpretacaoSemantica(i:InterpretacaoSemantica,fatos
   if(dependeDeConsulta&&conectadas.length>1&&!agendaAlvo)faltando.add('agenda_foco');
   else faltando.delete('agenda_foco');
 
+  const configuraMedicos=i.objetivo==='configurar'&&i.objeto==='medicos';
+  if(configuraMedicos){
+    if(!agendaAlvo)faltando.add('agenda_foco');
+    else if(agendaAlvo==='tribemd'){
+      faltando.delete('agenda_foco');
+      if(alvoConectado)faltando.delete('agenda');else faltando.add('agenda');
+    }else{
+      faltando.delete('agenda');
+      faltando.delete('agenda_foco');
+    }
+  }
+
   if(i.permissaoNecessaria){
     if(permissaoEscolhida(fatos,i.permissaoNecessaria))faltando.delete('permissao');
     else faltando.add('permissao');
@@ -203,6 +218,14 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
   const permissaoNecessaria=i.permissaoNecessaria??null;
   const faltaPermissao=permissaoNecessaria!==null&&i.faltando.includes('permissao');
   const agendaAlvo=i.agendaAlvo??null;
+  if(i.objetivo==='configurar'&&i.objeto==='medicos'){
+    if(!agendaAlvo)return {fala:['Qual agenda você quer usar para descobrir os médicos: TribeMD ou Amplimed?'],acao:null};
+    if(agendaAlvo==='amplimed')return {fala:['Na Amplimed eu ainda não consigo comprovar o profissional de cada consulta. Para adicionar médicos pela agenda com isolamento seguro, use a TribeMD.'],acao:null};
+    const conectada=fatos.agendas?.tribemd.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()==='tribemd');
+    if(!conectada&&permitidas.includes('pedir_link_agenda'))return {fala:['Vou conectar a TribeMD só para leitura e, quando concluir, continuo automaticamente descobrindo os profissionais.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd'}};
+    if(conectada&&permitidas.includes('descobrir_medicos_agenda'))return {fala:['Vou descobrir os profissionais identificados na TribeMD para você escolher quais quer usar.'],acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}};
+    return null;
+  }
   if((i.dominio==='agenda'||i.dominio==='conexao')&&i.objeto==='agenda'&&(i.objetivo==='configurar'||i.objetivo==='conectar')){
     if(!agendaAlvo)return null;
     const conectada=fatos.agendas?.[agendaAlvo]?.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agendaAlvo);
@@ -212,7 +235,7 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
     return null;
   }
   if(faltaPermissao&&permissaoNecessaria&&i.dominio==='permissoes'&&permitidas.includes('pedir_link_permissoes')){
-    return {fala:['Para seguir com essa escolha, vou te mandar o link seguro de configuração.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
+    return {fala:['Vou abrir a página segura com as opções para você escolher. Nenhuma opção é escolhida pelo chat.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
   if(i.faltando.includes('agenda')&&!fatos.semAgendaDigital&&permitidas.includes('pedir_link_agenda')){
     const alvo=i.agendaAlvo??(fatos.agenda.nome?.toLowerCase()==='amplimed'?'amplimed':fatos.agenda.nome?.toLowerCase()==='tribemd'?'tribemd':null);
@@ -222,7 +245,7 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
     return {fala:['Você tem TribeMD e Amplimed conectadas. Qual delas quer usar neste pedido?'],acao:null};
   }
   if(faltaPermissao&&permissaoNecessaria&&permitidas.includes('pedir_link_permissoes')){
-    return {fala:['Para registrar essa escolha, vou te mandar o link seguro.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
+    return {fala:['Vou abrir a página segura com as opções para você escolher. Responder aqui no WhatsApp não salva nenhuma delas.'],acao:'pedir_link_permissoes',parametros:{permissao:permissaoNecessaria}};
   }
   if((i.dominio==='agenda'||i.dominio==='fiscal')&&i.objetivo==='consultar'&&i.objeto==='consultas'&&i.granularidade==='colecao'){
     if(!i.periodo.inicio||i.faltando.length||!permitidas.includes('consultar_agenda'))return null;

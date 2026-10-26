@@ -12,7 +12,7 @@ it('salvar ou trocar destino só confirma preferência e não possui caminho de 
   expect(query).not.toHaveBeenCalled();
   expect(confirmar).toHaveBeenCalledExactlyOnceWith({
     medicoId:'m',chave:'permissao_escolhida:l1',
-    fala:[expect.stringContaining('só define sua preferência. Não envia notas antigas')]
+    fala:[expect.stringMatching(/exatamente a opção escolhida.*Não emite nem envia notas antigas/)]
   });
   expect(enviarPdf).not.toHaveBeenCalled();
 });

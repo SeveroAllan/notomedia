@@ -142,6 +142,7 @@ export async function processarComunicacaoMedico(
       const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
       let planoAtual=contexto.plano??null;
+      const planoMedicosEmCurso=()=>planoAtual?.objetivo==='configurar:medicos'&&planoAtual.etapa!=='concluido';
       let interpretacaoSemantica:InterpretacaoSemantica|null=null;
       const decidir = async (acoesPermitidas:readonly string[], resultadoFerramenta?:unknown,correcao?:{motivo:string;faltou:string[]},podeAgirAposFerramenta=false) => {
         if(++chamadas>orcamento) throw Error('ORCAMENTO_CONVERSA_EXCEDIDO');
@@ -166,14 +167,30 @@ export async function processarComunicacaoMedico(
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
       if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
-        planoAtual={
-          objetivo:[interpretacaoSemantica.objetivo,interpretacaoSemantica.objeto].filter(Boolean).join(':'),
-          etapa:decisao?.acao?'executar_capacidade':'resolver_faltantes',
-          faltando:[...interpretacaoSemantica.faltando],
-          proximosPassos:decisao?.acao?[decisao.acao]:[],
-          aguardando:interpretacaoSemantica.faltando[0]??null
-        };
-        await memoria.registrarPlano(medicoId,conversa,planoAtual);
+        const interrupcaoConversacional=planoMedicosEmCurso() &&
+          !(interpretacaoSemantica.objetivo==='configurar'&&interpretacaoSemantica.objeto==='medicos') &&
+          (interpretacaoSemantica.dominio==='conversa'||interpretacaoSemantica.dominio==='outro'||
+           ['responder','conversar','desconhecido'].includes(interpretacaoSemantica.objetivo));
+        if(!interrupcaoConversacional){
+          const configuraMedicos=interpretacaoSemantica.objetivo==='configurar'&&interpretacaoSemantica.objeto==='medicos';
+          planoAtual=configuraMedicos ? {
+            objetivo:'configurar:medicos',
+            etapa:decisao?.acao==='pedir_link_agenda'?'conectar_agenda':decisao?.acao==='descobrir_medicos_agenda'?'descobrir_medicos':interpretacaoSemantica.faltando.length?'resolver_faltantes':'continuar',
+            faltando:[...interpretacaoSemantica.faltando],
+            proximosPassos:decisao?.acao==='pedir_link_agenda'?['pedir_link_agenda','descobrir_medicos_agenda']:decisao?.acao?[decisao.acao]:[],
+            aguardando:interpretacaoSemantica.faltando[0]??null
+          } : {
+            objetivo:[interpretacaoSemantica.objetivo,interpretacaoSemantica.objeto].filter(Boolean).join(':'),
+            etapa:decisao?.acao?'executar_capacidade':'resolver_faltantes',
+            faltando:[...interpretacaoSemantica.faltando],
+            proximosPassos:decisao?.acao?[decisao.acao]:[],
+            aguardando:interpretacaoSemantica.faltando[0]??null
+          };
+          await memoria.registrarPlano(medicoId,conversa,planoAtual);
+        }
+      }
+      if(!decisao&&entrada.eventoAgenda?.conectado&&entrada.eventoAgenda.agenda==='tribemd'&&planoMedicosEmCurso()&&permitidas.includes('descobrir_medicos_agenda')){
+        decisao={fala:['A TribeMD conectou. Vou continuar de onde paramos e descobrir os profissionais disponíveis.'],acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}};
       }
       if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) {
@@ -292,7 +309,14 @@ export async function processarComunicacaoMedico(
             try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'iniciada',metaEntrada); } catch { /* Enriquecimento opcional. */ }
             try {
               const resultado=await deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),contatoOperador:entrada.contatoOperador,fatos,narrar});
-              const dados=resultado.dados as {ok?:boolean;motivo?:string}|undefined;
+              const dados=resultado.dados as {ok?:boolean;motivo?:string;modo?:string;profissionais?:unknown[]}|undefined;
+              if(ferramenta==='descobrir_medicos_agenda'&&dados?.ok===true&&dados.modo==='descoberta_medicos'&&Array.isArray(dados.profissionais)){
+                planoAtual={objetivo:'configurar:medicos',etapa:'selecionar_medicos',faltando:['medicos'],proximosPassos:['pedir_link_certificado'],aguardando:'medicos'};
+                await memoria.registrarPlano(medicoId,conversa,planoAtual);
+              }else if(ferramenta==='pedir_link_certificado'&&dados?.ok===true){
+                planoAtual={objetivo:'configurar:medicos',etapa:'concluido',faltando:[],proximosPassos:[],aguardando:null};
+                await memoria.registrarPlano(medicoId,conversa,planoAtual);
+              }
               try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'concluida',{...metaEntrada,...(typeof dados?.ok==='boolean'?{ok:dados.ok}:{}),...(dados?.motivo?{motivo:sanitizarTextoMedico(dados.motivo)}:{})}); } catch { /* Enriquecimento opcional. */ }
               return resultado;
             } catch(erro) {
@@ -305,7 +329,7 @@ export async function processarComunicacaoMedico(
           if(r.jaRespondida) fala=[];
           else {
             const tipo=CATALOGO_FERRAMENTAS.find(f=>f.nome===decisaoExecutada.acao)?.tipo;
-            const podeReplanejar=orcamento>2 && tipo==='leitura' && r.dados!==undefined && chamadas<orcamento && ferramentasExecutadas<2;
+            const podeReplanejar=orcamento>2 && tipo==='leitura' && decisaoExecutada.acao!=='descobrir_medicos_agenda' && r.dados!==undefined && chamadas<orcamento && ferramentasExecutadas<2;
             if(podeReplanejar) {
               if(r.falaAssinada) {
                 await enviar([...r.falaAssinada],[...(r.falaMemoria??r.falaAssinada)],':observacao:1');
@@ -340,6 +364,8 @@ export async function processarComunicacaoMedico(
               } else {
                 fala=r.falaAssinada?[]:proxima.fala;
               }
+            } else if(decisaoExecutada.acao==='descobrir_medicos_agenda'&&r.falaAssinada) {
+              fala=[...r.falaAssinada]; falaMemoria=[...(r.falaMemoria??r.falaAssinada)];
             } else {
               fala=await narrar(r.dados??{ok:true});
               if(r.falaAssinada) {

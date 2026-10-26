@@ -73,3 +73,12 @@ it('certificados são independentes por médico da mesma conta',async()=>{
   ]);
   expect(String((query.mock.calls as unknown as any[][])[0]![0])).toContain('c.medico_id=m.id');
 });
+
+
+it('cada médico escolhido recebe alvo independente no link de certificado',()=>{
+ const origem='https://noto.exemplo.com';
+ const ids=['00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002'];
+ const urls=ids.map(id=>new URL(linkCertificadoMedico(origem,id)));
+ expect(urls.map(u=>u.searchParams.get('medicoId'))).toEqual(ids);
+ expect(urls[0].toString()).not.toBe(urls[1].toString());
+});

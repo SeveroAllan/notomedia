@@ -16,28 +16,30 @@ it('TribeMD preserva profissional por consulta e descoberta retorna somente nome
   const nomes=profissionaisIdentificados(normalizado.consultas);
   expect(nomes).toEqual(['Dra. Ana Lima','Dr Bruno Souza']);
   expect(JSON.stringify(nomes)).not.toMatch(/Paciente Sigiloso|Outro Paciente/);
-  expect(descobrirProfissionaisParaConta('tribemd',normalizado.consultas,true)).toEqual({tipo:'profissionais',nomes});
+  expect(descobrirProfissionaisParaConta('tribemd',normalizado.consultas)).toEqual({tipo:'profissionais',nomes});
 });
 
-it('Amplimed multi-médico falha fechado porque o leitor atual não identifica profissional por consulta',()=>{
-  expect(descobrirProfissionaisParaConta('amplimed',consultas,true))
+it('Amplimed continua falhando fechado porque o leitor atual não identifica profissional por consulta',()=>{
+  expect(descobrirProfissionaisParaConta('amplimed',consultas))
     .toEqual({tipo:'bloqueada',motivo:'PROFISSIONAL_NAO_IDENTIFICADO'});
 });
 
-it('conta de um médico preserva o comportamento anterior sem exigir campo profissional',()=>{
-  expect(descobrirProfissionaisParaConta('amplimed',[],false)).toEqual({tipo:'nao_necessaria'});
-  expect(filtrarConsultasDoProfissional([{...consultas[0],profissional:undefined}],'Ana Lima',false))
-    .toMatchObject({ok:true,consultas:[expect.objectContaining({idExterno:'1'})]});
-});
-
-it('multi-médico filtra somente consultas do foco e recusa consulta sem profissional',()=>{
-  expect(filtrarConsultasDoProfissional(consultas,'Ana Lima',true))
-    .toMatchObject({ok:true,consultas:[expect.objectContaining({idExterno:'1'})]});
-  expect(filtrarConsultasDoProfissional([{...consultas[0],profissional:undefined}],'Ana Lima',true))
+it('mesmo com um único médico cadastrado, consulta sem profissional não é atribuída por suposição',()=>{
+  expect(filtrarConsultasDoProfissional([{...consultas[0],profissional:undefined}],'Ana Lima'))
     .toEqual({ok:false,motivo:'PROFISSIONAL_NAO_IDENTIFICADO'});
 });
 
-it('sincronização bloqueada por profissional não grava consulta em médico errado',async()=>{
+it('mesmo com um único médico cadastrado, consulta de outro profissional não é persistida nele',()=>{
+  expect(filtrarConsultasDoProfissional([{...consultas[1]}],'Ana Lima'))
+    .toEqual({ok:false,motivo:'PROFISSIONAL_AMBIGUO'});
+});
+
+it('filtro aceita somente consultas identificadas do médico em foco e não mistura outro profissional',()=>{
+  expect(filtrarConsultasDoProfissional(consultas,'Ana Lima'))
+    .toMatchObject({ok:true,consultas:[expect.objectContaining({idExterno:'1'})]});
+});
+
+it('sincronização bloqueada por profissional não resolve paciente nem grava consulta em médico errado',async()=>{
   const fonte:FonteAgenda={consultar:vi.fn(async()=>({tipo:'consultas' as const,fonte:'tribemd',consultas}))};
   const salvar=vi.fn(async()=>{});
   const resolverPaciente=vi.fn(async()=>{throw new Error('NAO_DEVERIA_RESOLVER');});
@@ -46,7 +48,7 @@ it('sincronização bloqueada por profissional não grava consulta em médico er
     fonte,
     {salvar},
     resolverPaciente,
-    cs=>({ok:false as const,codigo:'PROFISSIONAL_AMBIGUO' as const})
+    cs=>filtrarConsultasDoProfissional(cs,'Médico que não aparece')
   );
   expect(resultado).toEqual({tipo:'erro',codigo:'PROFISSIONAL_AMBIGUO'});
   expect(salvar).not.toHaveBeenCalled();

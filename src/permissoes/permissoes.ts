@@ -32,6 +32,15 @@ export const ROTULOS: Record<Permissao, { titulo: string; descricao: string; bot
 };
 const TOKEN_FORMATO = /^[A-Za-z0-9_-]{43}$/;
 
+export function explicacaoEscolhaPermissao(permissao: Permissao): string[] {
+    const rotulo=ROTULOS[permissao];
+    const opcoes=VALORES[permissao].map(valor=>rotulo.botoes[valor]);
+    return [
+        `${rotulo.titulo}: no link você escolhe entre “${opcoes[0]}” e “${opcoes[1]}”.`,
+        'Responder “sim” aqui no WhatsApp não escolhe nenhuma opção. Só o botão selecionado na página salva a preferência.'
+    ];
+}
+
 export interface Escolha { valor: string; escolhido_por: string | null; atualizado_em: string }
 
 export class Permissoes {

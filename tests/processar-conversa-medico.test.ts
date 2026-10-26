@@ -20,7 +20,7 @@ function cenario() {
  const completar=vi.fn<typeof completarOpenAi>(async()=>'{"fala":["Oi! O que você precisa?"],"acao":null}');
  const enviar=vi.fn(async(_fala:string[],_chave:string,_memoria?:string[])=>{}),executar=vi.fn<FerramentasConversa['executar']>(async()=>({dados:{ok:true}}));
  const guardarPeriodo=vi.fn(async(_id:string,desde:string)=>{fatos.periodo={desde,origem:'contexto_salvo'};});
- const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda','consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda',...(f.permissoes?.pendentes?['pedir_link_permissoes' as const]:[])]:[],guardarPeriodo,executar};
+ const ferramentas:FerramentasConversa={lerFatos:async()=>structuredClone(fatos),permitidas:f=>f.ambiente==='homologacao'?['nenhuma','pedir_link_agenda',...((f.agendas?.tribemd.conectada??(f.agenda.conectada&&f.agenda.nome?.toLowerCase()==='tribemd'))?['descobrir_medicos_agenda' as const]:[]),...((f.medicosConta?.length??0)>0?['pedir_link_certificado' as const]:[]),'consultar_agenda','listar_pendencias','iniciar_lote','registrar_modo_sem_agenda',...(f.permissoes?.pendentes?['pedir_link_permissoes' as const]:[])]:[],guardarPeriodo,executar};
  const deps={ativo:true,conversaLivreAtiva:true,orcamentoChamadas:undefined as number|undefined,memoriaPersistida:memoria,conversador:new ConversadorMedico('k','m',completar),ferramentas,
    historico:new HistoricoComunicacaoEmMemoria(),lerEstado:async()=>({estado:{agora,fiscal:{certificado:'ok' as const,dadosFiscais:'ok' as const},agenda:fatos.agenda,ultimaNota:null}}),aoConversar:enviar,log:vi.fn(),aoReagir:vi.fn()};
  const turno=(chave:string,texto:string)=>processarComunicacaoMedico({medicoId:'m',chaveProcessamento:chave,chaveConversa:'c',agora,respostaMedico:{texto,dataMensagem:'2026-10-21'}},deps);
@@ -841,4 +841,50 @@ it('fallback do planejador preserva a medida semântica ao chamar a agenda',asyn
  await c.turno('financeiro-fallback','Confira o valor registrado na agenda desse período.');
  expect(c.executar).toHaveBeenCalledOnce();expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'consultar_agenda',parametros:{medida:'valor_agenda'}});
  expect(c.enviar.mock.calls.at(-1)![0]).toEqual(['O valor registrado na agenda é R$ 250,00.']);
+});
+
+
+it('jornada adicionar médico preserva objetivo, tolera interrupção e retoma descoberta após conectar até certificados',async()=>{
+ const c=cenario();c.deps.orcamentoChamadas=6;
+ c.fatos.agenda={nome:'tribemd',conectada:false};
+ c.fatos.agendas={tribemd:{salva:false,conectada:false},amplimed:{salva:false,conectada:false}};
+ c.fatos.medicosConta=[{nome:'Ana Lima',certificado:'ok'}];
+ c.fatos.permissoes={emitirAutonomo:null,entregarPaciente:null,pendentes:true,faltantes:['emitir_autonomo']};
+ const interpretar=vi.fn(async({texto}:{texto:string})=>{
+   if(texto.includes('adicionar'))return {dominio:'conexao' as const,objetivo:'configurar' as const,objeto:'medicos' as const,granularidade:'colecao' as const,medida:'lista' as const,permissaoNecessaria:null,agendaAlvo:'tribemd' as const,periodo:{inicio:null,fim:null,referencia:'nenhum' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99};
+   if(texto.includes('clima'))return {dominio:'conversa' as const,objetivo:'conversar' as const,objeto:'outro' as const,granularidade:'indefinida' as const,medida:'lista' as const,permissaoNecessaria:null,agendaAlvo:null,periodo:{inicio:null,fim:null,referencia:'nenhum' as const},paciente:null,restricoes:{naoEmitir:false,somenteLeitura:false},faltando:[] as const,confianca:.99};
+   return null;
+ });
+ Object.assign(c.deps,{interpretadorSemantico:{interpretar}});
+ c.executar.mockImplementation(async d=>{
+   if(d.acao==='pedir_link_agenda')return {jaRespondida:true,dados:{ferramenta:'pedir_link_agenda',ok:true}};
+   if(d.acao==='descobrir_medicos_agenda')return {falaAssinada:['Encontrei estes profissionais na TribeMD: Ana Lima, Bruno Souza. Para quais médicos você quer emitir pelo Noto?'],dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_medicos',profissionais:['Ana Lima','Bruno Souza']}};
+   if(d.acao==='pedir_link_certificado')return {jaRespondida:true,dados:{ferramenta:'pedir_link_certificado',ok:true,enviados:1,prontos:['Ana Lima']}};
+   return {dados:{ok:true}};
+ });
+ await c.turno('medicos-inicio','Quero adicionar outro médico pela TribeMD.');
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'tribemd'}});
+ let plano=(await c.memoria.lerContextoParaModelo('m','c')).plano;
+ expect(plano?.objetivo).toBe('configurar:medicos');
+ expect(plano?.proximosPassos).toContain('descobrir_medicos_agenda');
+
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Posso responder isso e depois seguimos de onde paramos.'],acao:null}));
+ await c.turno('interrupcao','Antes disso, como está o clima?');
+ plano=(await c.memoria.lerContextoParaModelo('m','c')).plano;
+ expect(plano?.objetivo).toBe('configurar:medicos');
+ expect(c.executar.mock.calls.map(([d])=>d.acao)).not.toContain('pedir_link_permissoes');
+
+ c.fatos.agenda={nome:'tribemd',conectada:true};
+ c.fatos.agendas.tribemd={salva:true,conectada:true};
+ await processarComunicacaoMedico({medicoId:'m',chaveProcessamento:'tribe-conectada',chaveConversa:'c',agora,eventoAgenda:{agenda:'tribemd',conectado:true}},c.deps);
+ expect(c.executar.mock.calls.at(-1)?.[0]).toMatchObject({acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}});
+ expect(c.enviar.mock.calls.flatMap(([fala])=>fala).join(' ')).toContain('Ana Lima, Bruno Souza');
+ plano=(await c.memoria.lerContextoParaModelo('m','c')).plano;
+ expect(plano).toMatchObject({objetivo:'configurar:medicos',etapa:'selecionar_medicos',aguardando:'medicos'});
+
+ c.completar.mockResolvedValueOnce(JSON.stringify({fala:['Vou abrir o certificado de cada médico escolhido que ainda precisa do A1.'],acao:'pedir_link_certificado',parametros:{medicos:['Ana Lima','Bruno Souza']}}));
+ await c.turno('medicos-escolha','Quero Ana Lima e Bruno Souza.');
+ expect(c.executar.mock.calls.at(-1)?.[0]).toMatchObject({acao:'pedir_link_certificado',parametros:{medicos:['Ana Lima','Bruno Souza']}});
+ plano=(await c.memoria.lerContextoParaModelo('m','c')).plano;
+ expect(plano).toMatchObject({objetivo:'configurar:medicos',etapa:'concluido',faltando:[]});
 });

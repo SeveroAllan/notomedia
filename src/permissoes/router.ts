@@ -21,10 +21,10 @@ export function criarRouterPermissoes(permissoes: Permissoes | undefined, origem
             if (!link) { res.status(410).type('html').send(expirado); return; }
             const r = ROTULOS[link.permissao];
             const botoes = VALORES[link.permissao].map(v =>
-                `<button class="btn-action" name="valor" value="${v}" style="margin-bottom:12px">${r.botoes[v]}</button>`).join('');
+                `<button type="submit" class="btn-action" name="valor" value="${v}" style="margin-bottom:12px">${r.botoes[v]}</button>`).join('');
             res.type('html').send(pagina(r.titulo, `<h1>${r.titulo}</h1><p>${r.descricao}</p>
 <form method="post" onsubmit="this.action=location.pathname+'/escolher'">${botoes}</form>
-<p class="nota">A escolha fica salva e você pode mudar depois pela conversa.</p>`));
+<p class="nota">Só o botão que você selecionar será salvo. Salvar a preferência não emite nem envia notas antigas. Você pode mudar depois pela conversa.</p>`));
         } catch { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); }
     });
     app.use(express.urlencoded({ limit: '1kb', extended: false }));
@@ -36,7 +36,7 @@ export function criarRouterPermissoes(permissoes: Permissoes | undefined, origem
             if (!r.ok) { res.status(r.motivo === 'INVALIDO' ? 410 : 400).type('html').send(expirado); return; }
             const rotulo = ROTULOS[r.permissao];
             try { await aoEscolher?.({ permissao: r.permissao, valor: r.valor, medicoId: r.medicoId, linkId: r.linkId }); } catch { /* a gravação já aconteceu; o aviso é cortesia */ }
-            res.status(202).type('html').send(pagina('Escolha salva', `<h1>Escolha salva</h1><p>${rotulo.titulo}: ${rotulo.botoes[r.valor]}.<br>Eu continuo com você pelo WhatsApp.</p><a class="btn-action" href="whatsapp://">Voltar para o WhatsApp</a><p class="nota">Você pode fechar esta página.</p>`));
+            res.status(202).type('html').send(pagina('Escolha salva', `<h1>Escolha salva</h1><p>${rotulo.titulo}: ${rotulo.botoes[r.valor]}.<br>Essa foi exatamente a opção salva.</p><a class="btn-action" href="whatsapp://">Voltar para o WhatsApp</a><p class="nota">Salvar a preferência não emite nem envia notas antigas. Você pode fechar esta página.</p>`));
         } catch { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); }
     });
     app.use((_req, res) => res.status(404).send('Página indisponível.'));
