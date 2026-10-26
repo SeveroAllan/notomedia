@@ -251,14 +251,14 @@ it('presença digitando envia composing com delay e paused com delay zero, sanit
   expect(await c.presencaDigitando('m', '+5551993527271', 'paused', 0)).toBe('enviado');
   expect(enviarPresenca).toHaveBeenLastCalledWith({ instanciaNome: carregarConfig({}).evolutionAssistantInstanceName, contatoTelefone: '5551993527271', presence: 'paused', delayMs: 0 });
 });
-it('Evolution envia sendPresence com body v2 (number + options) e nunca na instância oficial', async () => {
+it('Evolution envia sendPresence com body plano (number + presence + delay na raiz) e nunca na instância oficial', async () => {
   const { EvolutionApiClient } = await import('../src/io/evolution/evolution-api-client.js');
   const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ ok: true }));
   try {
     const cliente = new EvolutionApiClient('https://evolution.invalid', 'ficticia', 'assistente', 'oficial');
     expect((await cliente.enviarPresenca({ instanciaNome: 'notomed_assistente', contatoTelefone: '5551993527271', presence: 'composing', delayMs: 30000 })).sucesso).toBe(true);
     expect(fetcher).toHaveBeenCalledWith('https://evolution.invalid/chat/sendPresence/notomed_assistente', expect.objectContaining({ method: 'POST',
-      body: JSON.stringify({ number: '5551993527271', options: { delay: 30000, presence: 'composing', number: '5551993527271' } }) }));
+      body: JSON.stringify({ number: '5551993527271', presence: 'composing', delay: 30000 }) }));
     expect((await cliente.enviarPresenca({ instanciaNome: 'oficial', contatoTelefone: '5551993527271', presence: 'composing', delayMs: 1 })).sucesso).toBe(false);
     expect((await cliente.enviarPresenca({ instanciaNome: 'notomed_assistente', contatoTelefone: 'abc', presence: 'composing', delayMs: 1 })).sucesso).toBe(false);
   } finally { fetcher.mockRestore(); }

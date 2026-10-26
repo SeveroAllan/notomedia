@@ -58,7 +58,7 @@ export class EvolutionApiClient
       const resp = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/sendPresence/${encodeURIComponent(params.instanciaNome)}`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
         headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
-        body: JSON.stringify({ number: tel, options: { delay: params.delayMs, presence: params.presence, number: tel } })
+        body: JSON.stringify({ number: tel, presence: params.presence, delay: params.delayMs })
       });
       await resp.body?.cancel().catch(() => {});
       return resp.ok ? { sucesso: true } : { sucesso: false, erro: `EVOLUTION_HTTP_${resp.status}` };
