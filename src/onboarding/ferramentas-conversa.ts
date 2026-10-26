@@ -1,7 +1,7 @@
 import type {FatosConversa} from './conversador-medico.js';
 // Catálogo único das ferramentas que o decisor da conversa pode pedir.
 // O modelo escolhe; esta camada diz o que está liberado agora e o que exige confirmação do médico.
-export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'pedir_link_certificado'|'descobrir_medicos_agenda'|'consultar_agenda'|'listar_pendencias'|'iniciar_lote'|'pedir_link_permissoes'|'reenviar_nota_medico';
+export type NomeFerramenta='nenhuma'|'registrar_modo_sem_agenda'|'pedir_link_agenda'|'pedir_link_certificado'|'descobrir_medicos_agenda'|'associar_medico_agenda'|'consultar_agenda'|'listar_pendencias'|'iniciar_lote'|'pedir_link_permissoes'|'reenviar_nota_medico';
 export interface DescricaoFerramenta {
   nome:NomeFerramenta;
   tipo:'sem_efeito'|'leitura'|'escrita';
@@ -22,10 +22,12 @@ export const CATALOGO_FERRAMENTAS:readonly DescricaoFerramenta[]=[
     liberada:f=>!f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'pedir_link_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar o link seguro para conectar uma agenda suportada que ainda não esteja conectada; nunca recebe senha pelo chat.',
     liberada:podeConectarOutraAgenda},
-  {nome:'pedir_link_certificado',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Enviar um link do painel existente para cadastrar o A1 de cada médico explicitamente escolhido e ainda sem certificado.',
+  {nome:'pedir_link_certificado',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Iniciar ou retomar a configuração de médico explicitamente nomeado, criando no máximo um registro pendente e enviando o link autenticado do A1 somente quando necessário.',
     liberada:f=>(f.medicosConta??[]).length>0},
-  {nome:'descobrir_medicos_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Descobrir somente os nomes dos profissionais identificados por consulta na TribeMD, sem expor pacientes.',
+  {nome:'descobrir_medicos_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Atalho opcional: descobrir somente nomes de profissionais observados por consulta na TribeMD, sem expor pacientes e sem afirmar catálogo completo.',
     liberada:f=>(f.agendas?.tribemd.conectada??(f.agenda.conectada&&f.agenda.nome?.toLowerCase()==='tribemd'))&&!f.semAgendaDigital},
+  {nome:'associar_medico_agenda',tipo:'escrita',exigeConfirmacaoDoMedico:false,descricao:'Associar um médico já criado/validado a uma agenda da mesma conta explicitamente informada e verificar se a leitura identifica esse profissional; nunca atribui consultas sem identificação compatível.',
+    liberada:f=>(f.medicosConta??[]).some(m=>m.certificado==='ok')&&!!(f.agendas?.tribemd.conectada||f.agendas?.amplimed.conectada||f.agenda.conectada)&&!f.semAgendaDigital},
   {nome:'consultar_agenda',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Consultar as consultas da agenda no período, independentemente de situação fiscal.',
     liberada:f=>f.agenda.conectada&&!f.semAgendaDigital},
   {nome:'listar_pendencias',tipo:'leitura',exigeConfirmacaoDoMedico:false,descricao:'Ler da agenda as consultas sem nota no período.',

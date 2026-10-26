@@ -22,6 +22,10 @@ export type PlanoConversa = {
   faltando: string[];
   proximosPassos: string[];
   aguardando: string | null;
+  /** Médicos cujo onboarding está em curso. Nome informado é intenção de configuração, não identidade validada. */
+  medicos?: string[];
+  /** Agenda já informada/observada para retomar sem perguntar novamente. */
+  agenda?: 'tribemd' | 'amplimed' | null;
 };
 export type EntregaNotaContexto = {
   notaFiscalId: string;
@@ -100,6 +104,8 @@ export class PostgresMemoriaConversaMedico implements MemoriaConversa {
       faltando: plano.faltando.map(sanitizarTextoMedico),
       proximosPassos: plano.proximosPassos.map(sanitizarTextoMedico),
       aguardando: plano.aguardando ? sanitizarTextoMedico(plano.aguardando) : null,
+      ...(plano.medicos?.length ? { medicos: plano.medicos.map(sanitizarTextoMedico).filter(Boolean).slice(0, 12) } : {}),
+      ...(plano.agenda === 'tribemd' || plano.agenda === 'amplimed' ? { agenda: plano.agenda } : {}),
     };
     await this.pool.query(`insert into conversa_mensagens (medico_id, conversa, mensagem_id, texto, papel) values ($1,$2,$3,$4,$5)
       on conflict (medico_id, mensagem_id) do update set texto=excluded.texto, papel=excluded.papel`,

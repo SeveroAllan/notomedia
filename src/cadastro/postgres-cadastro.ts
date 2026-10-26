@@ -29,7 +29,7 @@ export class PostgresCadastro {
  async revisaoPainel(medicoId:string){
   const r=(await this.pool.query(`select m.nome_completo as nome,m.crm,m.rqe,to_jsonb(t) as trabalho,${versaoRevisaoSql} as versao
    ,exists(select 1 from whatsapp_instancias w where w.medico_id=m.id and w.oficial=false and w.status='conectado') as whatsapp_conectado
-   from medicos m join usuarios u on u.id=m.usuario_id and u.ativo=true
+   from medicos m
    left join lateral(select id from medico_certificados where medico_id=m.id and status='ativo' order by criado_em desc,id desc limit 1) cert on true
    left join cadastro_certificado_trabalhos t on t.certificado_id=cert.id and t.medico_id=m.id where m.id=$1`,[medicoId])).rows[0];
   if(!r)throw new ErroRevisaoCadastro(404,'Cadastro não encontrado.');
@@ -41,7 +41,7 @@ export class PostgresCadastro {
    const t=(await c.query('select * from cadastro_certificado_trabalhos where id=$1 and medico_id=$2 for update',[e.trabalhoId,medicoId])).rows[0] as TrabalhoCadastro|undefined;
    if(!t||!['aguardando_confirmacao','concluido'].includes(t.estado))throw new ErroRevisaoCadastro(409,'O cadastro mudou. Atualize os dados antes de pesquisar.');
    const cert=(await c.query("select id from medico_certificados where medico_id=$1 and status='ativo' order by criado_em desc,id desc limit 1 for update",[medicoId])).rows[0];
-   const ativo=(await c.query('select u.ativo from usuarios u join medicos m on m.usuario_id=u.id where m.id=$1',[medicoId])).rows[0]?.ativo;
+   const ativo=(await c.query('select exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true) as ativo from medicos m where m.id=$1',[medicoId])).rows[0]?.ativo;
    if(!ativo||cert?.id!==t.certificado_id)throw new ErroRevisaoCadastro(409,'A consulta ou o certificado mudou. Atualize os dados antes de pesquisar.');
    const versao=(await c.query(`select ${versaoRevisaoSql} as versao from cadastro_certificado_trabalhos t join medicos m on m.id=t.medico_id where t.id=$1`,[t.id])).rows[0]?.versao;
    if(versao!==e.versao)throw new ErroRevisaoCadastro(409,'Os dados foram atualizados. Revise novamente antes de pesquisar.');
@@ -60,7 +60,7 @@ export class PostgresCadastro {
    if(!t)throw new ErroRevisaoCadastro(409,'O cadastro mudou. Atualize os dados antes de confirmar.');
    const m=(await c.query('select nome_completo,crm,rqe from medicos where id=$1 for update',[medicoId])).rows[0];
    const cert=(await c.query("select id from medico_certificados where medico_id=$1 and status='ativo' order by criado_em desc,id desc limit 1 for update",[medicoId])).rows[0];
-   const ativo=(await c.query('select u.ativo from usuarios u join medicos m on m.usuario_id=u.id where m.id=$1',[medicoId])).rows[0]?.ativo;
+   const ativo=(await c.query('select exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true) as ativo from medicos m where m.id=$1',[medicoId])).rows[0]?.ativo;
    if(!ativo||cert?.id!==t.certificado_id||!['pendente','consultando','aguardando_confirmacao','concluido'].includes(t.estado))throw new ErroRevisaoCadastro(409,'A consulta ou o certificado mudou. Atualize os dados antes de confirmar.');
    const anterior=t.dados.aprovacaoPainel;
    if(t.estado==='concluido'&&anterior?.confirmadoEm&&anterior.nome===e.nome&&anterior.crm===e.crm&&anterior.rqe===e.rqe&&m.nome_completo===e.nome&&m.crm===e.crm&&m.rqe===e.rqe)return;
@@ -95,9 +95,10 @@ export class PostgresCadastro {
  }
  async agendarAtivos():Promise<void>{
   await this.pool.query(`insert into cadastro_certificado_trabalhos(medico_id,certificado_id,snapshot)
-   select m.id,c.id,jsonb_build_object('nome',m.nome_completo,'crm',m.crm) from medicos m join usuarios u on u.id=m.usuario_id and u.ativo=true
+   select m.id,c.id,jsonb_build_object('nome',m.nome_completo,'crm',m.crm) from medicos m
    join medico_certificados c on c.medico_id=m.id and c.status='ativo'
-   where not exists(select 1 from medico_certificados n where n.medico_id=m.id and n.status='ativo' and (n.criado_em,n.id)>(c.criado_em,c.id))
+   where exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true)
+   and not exists(select 1 from medico_certificados n where n.medico_id=m.id and n.status='ativo' and (n.criado_em,n.id)>(c.criado_em,c.id))
    on conflict(certificado_id) do nothing`);
  }
  async invalidarObsoletos():Promise<void>{
@@ -106,8 +107,9 @@ export class PostgresCadastro {
    snapshot=jsonb_build_object('nome',m.nome_completo,'crm',m.crm) from medicos m
    where m.id=t.medico_id and t.estado='aguardando_confirmacao' and (m.nome_completo is distinct from t.snapshot->>'nome' or m.crm is distinct from t.snapshot->>'crm')`);
   await this.pool.query(`update cadastro_certificado_trabalhos t set estado='obsoleto',reserva=null,atualizado_em=now()
-  where t.estado not in ('obsoleto','concluido') and not exists(select 1 from medico_certificados c join medicos m on m.id=c.medico_id join usuarios u on u.id=m.usuario_id
-   where c.id=t.certificado_id and c.medico_id=t.medico_id and c.status='ativo' and u.ativo=true
+  where t.estado not in ('obsoleto','concluido') and not exists(select 1 from medico_certificados c join medicos m on m.id=c.medico_id
+   where c.id=t.certificado_id and c.medico_id=t.medico_id and c.status='ativo'
+   and exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true)
    and not exists(select 1 from medico_certificados n where n.medico_id=m.id and n.status='ativo' and (n.criado_em,n.id)>(c.criado_em,c.id)))`);}
  async reservar():Promise<ReservaCadastro|null>{
   await this.invalidarObsoletos();return this.transacao(async c=>{
@@ -150,7 +152,8 @@ export class PostgresCadastro {
   });
  }
  async pendencia(medicoId:string):Promise<TrabalhoCadastro|null>{const r=await this.pool.query(`select t.* from cadastro_certificado_trabalhos t join medico_certificados c on c.id=t.certificado_id
-  join medicos m on m.id=t.medico_id join usuarios u on u.id=m.usuario_id and u.ativo=true where t.medico_id=$1 and t.estado='aguardando_confirmacao' and c.status='ativo'
+  join medicos m on m.id=t.medico_id where t.medico_id=$1 and t.estado='aguardando_confirmacao' and c.status='ativo'
+  and exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true)
   and not exists(select 1 from medico_certificados n where n.medico_id=m.id and n.status='ativo' and (n.criado_em,n.id)>(c.criado_em,c.id)) order by t.criado_em desc limit 1`,[medicoId]);return r.rows[0]??null;}
  private async agendarAviso(c:pg.PoolClient,trabalhoId:string,chave:string,tipo:AvisoCadastro['tipo'],pendenciaId:string|null,texto?:string):Promise<void>{
   await c.query('insert into cadastro_certificado_avisos(trabalho_id,chave,tipo,pendencia_id,mensagem_recebida) values($1,$2,$3,$4,$5) on conflict do nothing',[trabalhoId,chave,tipo,pendenciaId,texto??null]);
@@ -159,8 +162,11 @@ export class PostgresCadastro {
   await this.invalidarObsoletos();
   await this.pool.query("update cadastro_certificado_avisos set estado='incerto',diagnostico='ENVIO_SEM_CONFIRMACAO' where estado='enviando' and reservado_em<now()-interval '3 minutes'");
   return this.transacao(async c=>{
-   const r=(await c.query(`select a.*,to_jsonb(t) trabalho,u.telefone from cadastro_certificado_avisos a join cadastro_certificado_trabalhos t on t.id=a.trabalho_id
-    join medicos m on m.id=t.medico_id join usuarios u on u.id=m.usuario_id and u.ativo=true
+   const r=(await c.query(`select a.*,to_jsonb(t) trabalho,
+      (select u.telefone from usuarios u where u.conta_id=m.conta_id and u.ativo=true and u.telefone is not null
+       order by (u.id=m.usuario_id) desc,u.criado_em,u.id limit 1) as telefone
+    from cadastro_certificado_avisos a join cadastro_certificado_trabalhos t on t.id=a.trabalho_id
+    join medicos m on m.id=t.medico_id
     where a.estado in ('pendente','preparado') and a.proxima_tentativa_em<=now() and (a.reserva is null or a.reservado_em<now()-interval '3 minutes')
     and exists(select 1 from whatsapp_instancias w where w.medico_id=t.medico_id and w.oficial=false and w.status='conectado')
     and t.estado in ('aguardando_confirmacao','concluido') and m.nome_completo is not distinct from t.snapshot->>'nome' and m.crm is not distinct from t.snapshot->>'crm'
@@ -173,8 +179,9 @@ export class PostgresCadastro {
  }
  async prepararAviso(a:AvisoCadastro,texto:string):Promise<void>{await this.pool.query("update cadastro_certificado_avisos set texto=$3,estado='preparado' where id=$1 and reserva=$2 and estado='pendente'",[a.id,a.reserva,texto]);a.texto=texto;}
  async iniciarAviso(a:AvisoCadastro):Promise<boolean>{const r=await this.pool.query(`update cadastro_certificado_avisos a set estado='enviando' where a.id=$1 and a.reserva=$2 and a.estado='preparado'
-  and exists(select 1 from cadastro_certificado_trabalhos t join medico_certificados cert on cert.id=t.certificado_id join medicos m on m.id=t.medico_id join usuarios u on u.id=m.usuario_id
-   where t.id=a.trabalho_id and cert.status='ativo' and u.ativo=true and t.estado in ('aguardando_confirmacao','concluido')
+  and exists(select 1 from cadastro_certificado_trabalhos t join medico_certificados cert on cert.id=t.certificado_id join medicos m on m.id=t.medico_id
+   where t.id=a.trabalho_id and cert.status='ativo' and exists(select 1 from usuarios u where u.conta_id=m.conta_id and u.ativo=true)
+   and t.estado in ('aguardando_confirmacao','concluido')
    and exists(select 1 from whatsapp_instancias w where w.medico_id=t.medico_id and w.oficial=false and w.status='conectado')
    and m.nome_completo is not distinct from t.snapshot->>'nome' and m.crm is not distinct from t.snapshot->>'crm'
    and (a.tipo='concluido' and t.estado='concluido' or a.pendencia_id::text=t.dados->'pendencia'->>'id')) returning a.id`,[a.id,a.reserva]);return r.rows.length===1;}

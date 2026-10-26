@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type pg from 'pg';
-import { ZodError } from 'zod';
+import { ZodError, z } from 'zod';
 import type { PostgresCadastro } from './postgres-cadastro.js';
 import { aprovacaoPainelSchema, pesquisaPainelSchema, ErroRevisaoCadastro } from './revisao-painel.js';
 
@@ -12,8 +12,12 @@ export function criarRouterCadastroPainel(deps:{pool:pg.Pool;repo:PostgresCadast
    const header=req.header('Authorization')||'';
    const authId=header.startsWith('Bearer ')?await deps.autenticar(header.slice(7)):null;
    if(!authId){res.status(401).json({ok:false,detalhe:'Entre novamente para revisar o cadastro.'});return;}
-   const medico=(await deps.pool.query('select m.id from medicos m join usuarios u on u.id=m.usuario_id where u.auth_user_id=$1 and u.ativo=true limit 1',[authId])).rows[0];
-   if(!medico){res.status(403).json({ok:false,detalhe:'Conta médica não encontrada.'});return;}
+   const alvo=typeof req.query['medicoId']==='string'&&req.query['medicoId']?req.query['medicoId']:null;
+   if(alvo&&!z.string().uuid().safeParse(alvo).success){res.status(400).json({ok:false,detalhe:'Médico inválido.'});return;}
+   const medico=(await deps.pool.query(`select m.id from usuarios u join medicos m on m.conta_id=u.conta_id
+     where u.auth_user_id=$1 and u.ativo=true and ($2::uuid is null or m.id=$2::uuid)
+     order by (m.usuario_id=u.id) desc,m.criado_em,m.id limit 1`,[authId,alvo])).rows[0];
+   if(!medico){res.status(403).json({ok:false,detalhe:'Médico não pertence a esta conta.'});return;}
    res.locals.medicoId=medico.id;next();
   }catch{res.status(503).json({ok:false,detalhe:'Não foi possível verificar a sessão.'});}
  });

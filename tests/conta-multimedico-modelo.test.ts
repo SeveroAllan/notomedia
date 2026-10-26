@@ -1,7 +1,7 @@
 import {expect,it,vi} from 'vitest';
 import type pg from 'pg';
 import {PostgresAtendimentoRepositorio} from '../src/io/postgres/postgres-atendimento-repositorio.js';
-import {linkCertificadoMedico,resolverMedicosPorNomes} from '../src/conta/medicos-conta.js';
+import {confirmarMedicosDaConta,linkCertificadoMedico,resolverMedicosPorNomes,resolverNomesParaConfiguracao} from '../src/conta/medicos-conta.js';
 import {perguntaSelecaoMedico} from '../src/onboarding/operador-medico.js';
 
 it('operador do WhatsApp recebe todos os médicos da conta, mesmo quando possui médico próprio',async()=>{
@@ -81,4 +81,38 @@ it('cada médico escolhido recebe alvo independente no link de certificado',()=>
  const urls=ids.map(id=>new URL(linkCertificadoMedico(origem,id)));
  expect(urls.map(u=>u.searchParams.get('medicoId'))).toEqual(ids);
  expect(urls[0].toString()).not.toBe(urls[1].toString());
+});
+
+
+it('descoberta é atalho: nome observado é reaproveitado e nome não observado pode iniciar configuração quando está explícito',()=>{
+ expect(resolverNomesParaConfiguracao(['Bruno Souza'],['Ana Lima'],['Bruno Souza'],'Quero adicionar o Bruno'))
+   .toEqual({ok:true,nomes:['Bruno Souza']});
+ expect(resolverNomesParaConfiguracao(['Carla Mendes'],['Ana Lima'],[],'Quero adicionar Carla Mendes'))
+   .toEqual({ok:true,nomes:['Carla Mendes']});
+ expect(resolverNomesParaConfiguracao(['Carla Mendes'],['Ana Lima'],[],'Quero adicionar outro médico'))
+   .toEqual({ok:false,motivo:'MEDICO_NAO_IDENTIFICADO',nome:'Carla Mendes'});
+});
+
+it('repetir configuração do mesmo nome normalizado reutiliza médico e não duplica cadastro',async()=>{
+ const medicos=[{id:'base',nome_completo:'Ana Lima',crm:'1/RS',certificado_valido:true}];
+ let inserts=0;
+ const query=vi.fn(async(sql:string,p:unknown[]=[])=>{
+   const q=sql.replace(/\s+/g,' ').trim().toLowerCase();
+   if(['begin','commit','rollback'].includes(q)||q.includes('pg_advisory_xact_lock'))return {rows:[]};
+   if(q.startsWith('select conta_id from medicos'))return {rows:[{conta_id:'conta'}]};
+   if(q.includes('from medicos m where m.conta_id=$1 order by'))return {rows:structuredClone(medicos)};
+   if(q.includes('insert into medicos (usuario_id,conta_id,nome_completo)')){
+     inserts++;
+     const linha={id:'bruno-id',nome_completo:String(p[1]),crm:null,certificado_valido:false};
+     medicos.push(linha);return {rows:[linha]};
+   }
+   throw Error('SQL não esperado: '+sql);
+ });
+ const pool={connect:async()=>({query,release(){}})} as unknown as pg.Pool;
+ const a=await confirmarMedicosDaConta(pool,'base',['Bruno Souza']);
+ const b=await confirmarMedicosDaConta(pool,'base',['Dr. Bruno Souza']);
+ expect(a).toMatchObject({ok:true,medicos:[{id:'bruno-id'}]});
+ expect(b).toMatchObject({ok:true,medicos:[{id:'bruno-id'}]});
+ expect(inserts).toBe(1);
+ expect(medicos.filter(m=>m.id==='bruno-id')).toHaveLength(1);
 });

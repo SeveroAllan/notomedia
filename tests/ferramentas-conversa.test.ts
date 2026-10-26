@@ -64,3 +64,14 @@ it('operador do WhatsApp da conta pode configurar permissões sem redução por 
   permissoes:{emitirAutonomo:null,entregarPaciente:null,pendentes:true,faltantes:['emitir_autonomo','entregar_paciente'] as const}} satisfies FatosConversa;
  expect(ferramentasLiberadas(f,{lote:true})).toContain('pedir_link_permissoes');
 });
+
+
+it('associação de médico só aparece para médico com certificado e agenda conectada',()=>{
+ const base={ambiente:'homologacao',agenda:{nome:'tribemd',conectada:true},agendas:{tribemd:{salva:true,conectada:true},amplimed:{salva:false,conectada:false}},
+  link:{ativo:false,enviados:0},periodo:{desde:null,origem:null},semAgendaDigital:false,
+  medicosConta:[{nome:'Ana Lima',certificado:'ok' as const},{nome:'Bruno Souza',certificado:'pendente' as const}]} satisfies FatosConversa;
+ expect(ferramentasLiberadas(base,{lote:true})).toContain('associar_medico_agenda');
+ expect(ferramentasLiberadas({...base,medicosConta:[{nome:'Bruno Souza',certificado:'pendente'}]},{lote:true})).not.toContain('associar_medico_agenda');
+ expect(ferramentasLiberadas({...base,agenda:{nome:'tribemd',conectada:false},agendas:{tribemd:{salva:true,conectada:false},amplimed:{salva:false,conectada:false}}},{lote:true})).not.toContain('associar_medico_agenda');
+ expect(CATALOGO_FERRAMENTAS.find(t=>t.nome==='descobrir_medicos_agenda')?.descricao).toMatch(/Atalho opcional/);
+});

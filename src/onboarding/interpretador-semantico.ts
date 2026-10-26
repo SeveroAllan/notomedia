@@ -18,17 +18,18 @@ export const interpretacaoSemanticaSchema = z.object({
   medida: z.enum(['lista','quantidade','valor_agenda','valor_realizado','valor_recebido','valor_notas','valor_indefinido']).default('lista'),
   permissaoNecessaria: z.enum(['emitir_autonomo','entregar_paciente','solicitar_cpf']).nullable().default(null),
   agendaAlvo: z.enum(['tribemd','amplimed']).nullable().optional(),
+  medico: z.string().trim().min(2).max(150).nullable().optional(),
   periodo: periodoSchema,
   paciente: z.string().trim().min(1).max(150).nullable(),
   restricoes: z.object({
     naoEmitir: z.boolean(),
     somenteLeitura: z.boolean()
   }).strict(),
-  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','agenda_foco','confirmacao','permissao','dados_consulta'])).max(8),
+  faltando: z.array(z.enum(['periodo','paciente','consulta','agenda','agenda_foco','confirmacao','permissao','dados_consulta','medico'])).max(8),
   confianca: z.number().min(0).max(1)
 }).strict();
 
-export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'|'agendaAlvo'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria'];agendaAlvo?:'tribemd'|'amplimed'|null};
+export type InterpretacaoSemantica = Omit<z.infer<typeof interpretacaoSemanticaSchema>, 'medida'|'permissaoNecessaria'|'agendaAlvo'|'medico'> & {medida?:z.infer<typeof interpretacaoSemanticaSchema>['medida'];permissaoNecessaria?:z.infer<typeof interpretacaoSemanticaSchema>['permissaoNecessaria'];agendaAlvo?:'tribemd'|'amplimed'|null;medico?:string|null};
 
 export const PROMPT_INTERPRETACAO_SEMANTICA = `Interpret the doctor's message by meaning. Do not use keyword matching as the primary method.
 
@@ -76,8 +77,9 @@ AGENDA CONFIGURATION
 - Set agendaAlvo='tribemd' or 'amplimed' only when the doctor explicitly identifies that supported agenda.
 - "outra agenda" without a supported agenda name means agendaAlvo=null. Do not guess the other agenda for a configuration request.
 - A connected agenda does not prevent the doctor from connecting the other supported agenda.
-- If the user wants to add, discover, choose, or configure another physician through TribeMD, keep objetivo='configurar', objeto='medicos', agendaAlvo='tribemd'. Connecting the agenda is only a prerequisite and must not replace that physician-management goal.
-- If an unfinished plano has objetivo='configurar:medicos', a brief interruption does not cancel it. When the user asks to continue, resume the next safe step from that plan.
+- If the user wants to add/configure another physician, keep objetivo='configurar', objeto='medicos'. Set medico to the physician name only when the message or unfinished plan identifies it. Do not require an agenda before starting physician configuration.
+- Agenda discovery is optional context, not proof that a physician exists or does not exist. If a named physician was not observed in the agenda, keep the name and continue certificate configuration instead of restarting discovery.
+- If an unfinished plano has objetivo='configurar:medicos', a brief interruption does not cancel it. When the user answers the pending agenda question, inherit plano.medicos and continue that doctor without asking the name again.
 - For consultation, pending, preparation, or issue requests, use agendaAlvo when the doctor names TribeMD or Amplimed.
 - When both agendas are connected, agendaAlvo may be contextual only when the recent conversation clearly established one agenda as the current source.
 - When both agendas are connected and no source is clear, add agenda_foco to faltando. Never choose one silently.
@@ -112,6 +114,7 @@ Return strict JSON:
  "medida":"lista|quantidade|valor_agenda|valor_realizado|valor_recebido|valor_notas|valor_indefinido",
  "permissaoNecessaria":"emitir_autonomo|entregar_paciente|solicitar_cpf"|null,
  "agendaAlvo":"tribemd|amplimed"|null,
+ "medico":string|null,
  "periodo":{"inicio":"YYYY-MM-DD"|null,"fim":"YYYY-MM-DD"|null,"referencia":"explicito|contextual|nenhum"},
  "paciente":string|null,
  "restricoes":{"naoEmitir":boolean,"somenteLeitura":boolean},
@@ -194,14 +197,9 @@ export function reconciliarInterpretacaoSemantica(i:InterpretacaoSemantica,fatos
 
   const configuraMedicos=i.objetivo==='configurar'&&i.objeto==='medicos';
   if(configuraMedicos){
-    if(!agendaAlvo)faltando.add('agenda_foco');
-    else if(agendaAlvo==='tribemd'){
-      faltando.delete('agenda_foco');
-      if(alvoConectado)faltando.delete('agenda');else faltando.add('agenda');
-    }else{
-      faltando.delete('agenda');
-      faltando.delete('agenda_foco');
-    }
+    faltando.delete('agenda');
+    faltando.delete('agenda_foco');
+    if(!i.medico?.trim())faltando.add('medico');else faltando.delete('medico');
   }
 
   if(i.permissaoNecessaria){
@@ -219,11 +217,9 @@ export function planejarPorSemantica(i:InterpretacaoSemantica,fatos:FatosConvers
   const faltaPermissao=permissaoNecessaria!==null&&i.faltando.includes('permissao');
   const agendaAlvo=i.agendaAlvo??null;
   if(i.objetivo==='configurar'&&i.objeto==='medicos'){
-    if(!agendaAlvo)return {fala:['Qual agenda você quer usar para descobrir os médicos: TribeMD ou Amplimed?'],acao:null};
-    if(agendaAlvo==='amplimed')return {fala:['Na Amplimed eu ainda não consigo comprovar o profissional de cada consulta. Para adicionar médicos pela agenda com isolamento seguro, use a TribeMD.'],acao:null};
-    const conectada=fatos.agendas?.tribemd.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()==='tribemd');
-    if(!conectada&&permitidas.includes('pedir_link_agenda'))return {fala:['Vou conectar a TribeMD só para leitura e, quando concluir, continuo automaticamente descobrindo os profissionais.','Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'tribemd'}};
-    if(conectada&&permitidas.includes('descobrir_medicos_agenda'))return {fala:['Vou descobrir os profissionais identificados na TribeMD para você escolher quais quer usar.'],acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}};
+    const medico=i.medico?.trim();
+    if(!medico)return {fala:['Qual é o nome completo do médico que você quer adicionar?'],acao:null};
+    if(permitidas.includes('pedir_link_certificado'))return {fala:[`Vou iniciar a configuração de ${medico}. O nome ainda não libera emissão: primeiro vamos validar o certificado e os dados profissionais.`],acao:'pedir_link_certificado',parametros:{medicos:[medico],...(agendaAlvo?{agenda:agendaAlvo}:{})}};
     return null;
   }
   if((i.dominio==='agenda'||i.dominio==='conexao')&&i.objeto==='agenda'&&(i.objetivo==='configurar'||i.objetivo==='conectar')){

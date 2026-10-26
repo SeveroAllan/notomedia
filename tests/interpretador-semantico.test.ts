@@ -142,18 +142,20 @@ it('agenda alvo desconectada pede conexão mesmo quando a outra está ativa',()=
 });
 
 
-it('objetivo de adicionar médicos pela TribeMD atravessa conexão e vira descoberta, não permissões',()=>{
- const baseMedicos:InterpretacaoSemantica={...frame,dominio:'conexao',objetivo:'configurar',objeto:'medicos',agendaAlvo:'tribemd',periodo:{inicio:null,fim:null,referencia:'nenhum'},faltando:[]};
+it('onboarding de médico começa pelo nome e descoberta de agenda é só atalho',()=>{
+ const semNome:InterpretacaoSemantica={...frame,dominio:'conexao',objetivo:'configurar',objeto:'medicos',agendaAlvo:'tribemd',medico:null,periodo:{inicio:null,fim:null,referencia:'nenhum'},faltando:[]};
  const desconectado:FatosConversa={...fatos,agenda:{nome:'tribemd',conectada:false},agendas:{tribemd:{salva:false,conectada:false},amplimed:{salva:false,conectada:false}},medicosConta:[{nome:'Ana Lima',certificado:'ok'}]};
- const r1=reconciliarInterpretacaoSemantica(baseMedicos,desconectado);
- expect(r1.faltando).toContain('agenda');
- expect(planejarPorSemantica(r1,desconectado,['nenhuma','pedir_link_agenda','pedir_link_permissoes']))
-   .toMatchObject({acao:'pedir_link_agenda',parametros:{agenda:'tribemd'}});
- const conectado:FatosConversa={...desconectado,agenda:{nome:'tribemd',conectada:true},agendas:{...desconectado.agendas!,tribemd:{salva:true,conectada:true}}};
- const r2=reconciliarInterpretacaoSemantica(baseMedicos,conectado);
- expect(r2.faltando).not.toContain('agenda');
- expect(planejarPorSemantica(r2,conectado,['nenhuma','descobrir_medicos_agenda','pedir_link_permissoes']))
-   .toMatchObject({acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}});
- expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain("objeto='medicos'");
+ const r1=reconciliarInterpretacaoSemantica(semNome,desconectado);
+ expect(r1.faltando).toContain('medico');
+ expect(r1.faltando).not.toContain('agenda');
+ expect(planejarPorSemantica(r1,desconectado,['nenhuma','pedir_link_agenda','descobrir_medicos_agenda','pedir_link_permissoes']))
+   .toMatchObject({acao:null,fala:[expect.stringMatching(/nome completo/i)]});
+
+ const comNome=reconciliarInterpretacaoSemantica({...semNome,medico:'Bruno Souza'},desconectado);
+ expect(comNome.faltando).not.toContain('medico');
+ expect(comNome.faltando).not.toContain('agenda');
+ expect(planejarPorSemantica(comNome,desconectado,['nenhuma','pedir_link_certificado','pedir_link_agenda','descobrir_medicos_agenda','pedir_link_permissoes']))
+   .toMatchObject({acao:'pedir_link_certificado',parametros:{medicos:['Bruno Souza'],agenda:'tribemd'}});
+ expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('Agenda discovery is optional context');
  expect(PROMPT_INTERPRETACAO_SEMANTICA).toContain('Only the exact button selected on the secure permission page');
 });

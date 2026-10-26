@@ -166,6 +166,16 @@ export async function processarComunicacaoMedico(
         if(!escolhaNecessaria)permitidas=permitidas.filter(a=>a!=='pedir_link_permissoes');
       }
       let decisao=interpretacaoSemantica?planejarPorSemantica(interpretacaoSemantica,fatos,permitidas):null;
+      // Resposta à pergunta de agenda retoma o médico já guardado no plano; não volta ao certificado nem pede o nome de novo.
+      if(planoMedicosEmCurso()&&planoAtual?.etapa==='escolher_agenda'&&interpretacaoSemantica?.agendaAlvo&&planoAtual.medicos?.length===1){
+        const agenda=interpretacaoSemantica.agendaAlvo;
+        const conectada=fatos.agendas?.[agenda]?.conectada ?? (fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agenda);
+        if(conectada&&permitidas.includes('associar_medico_agenda')){
+          decisao={fala:[`Vou associar ${planoAtual.medicos[0]} à ${agenda==='tribemd'?'TribeMD':'Amplimed'} e conferir se as consultas identificam esse profissional.`],acao:'associar_medico_agenda',parametros:{agenda,medicos:[planoAtual.medicos[0]]}};
+        }else if(!conectada&&permitidas.includes('pedir_link_agenda')){
+          decisao={fala:[`Vou te mandar o link seguro para conectar a ${agenda==='tribemd'?'TribeMD':'Amplimed'} e depois retomo a associação de ${planoAtual.medicos[0]}.`,'Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda}};
+        }
+      }
       if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {
         const interrupcaoConversacional=planoMedicosEmCurso() &&
           !(interpretacaoSemantica.objetivo==='configurar'&&interpretacaoSemantica.objeto==='medicos') &&
@@ -173,12 +183,18 @@ export async function processarComunicacaoMedico(
            ['responder','conversar','desconhecido'].includes(interpretacaoSemantica.objetivo));
         if(!interrupcaoConversacional){
           const configuraMedicos=interpretacaoSemantica.objetivo==='configurar'&&interpretacaoSemantica.objeto==='medicos';
+          const medicosPlano=configuraMedicos
+            ? [...new Set([...(interpretacaoSemantica.medico?.trim()?[interpretacaoSemantica.medico.trim()]:[]),...(planoAtual?.medicos??[])])].slice(0,12)
+            : [];
+          const agendaPlano=configuraMedicos ? (interpretacaoSemantica.agendaAlvo??planoAtual?.agenda??null) : null;
           planoAtual=configuraMedicos ? {
             objetivo:'configurar:medicos',
-            etapa:decisao?.acao==='pedir_link_agenda'?'conectar_agenda':decisao?.acao==='descobrir_medicos_agenda'?'descobrir_medicos':interpretacaoSemantica.faltando.length?'resolver_faltantes':'continuar',
-            faltando:[...interpretacaoSemantica.faltando],
-            proximosPassos:decisao?.acao==='pedir_link_agenda'?['pedir_link_agenda','descobrir_medicos_agenda']:decisao?.acao?[decisao.acao]:[],
-            aguardando:interpretacaoSemantica.faltando[0]??null
+            etapa:decisao?.acao==='pedir_link_certificado'?'aguardando_certificado':decisao?.acao==='pedir_link_agenda'?'conectar_agenda':decisao?.acao==='associar_medico_agenda'?'associar_agenda':interpretacaoSemantica.faltando.length?'resolver_faltantes':'continuar',
+            faltando:decisao?.acao==='pedir_link_certificado'?['certificado']:[...interpretacaoSemantica.faltando],
+            proximosPassos:decisao?.acao==='pedir_link_certificado'?['validar_certificado','definir_agenda','associar_medico_agenda']:decisao?.acao?[decisao.acao]:[],
+            aguardando:decisao?.acao==='pedir_link_certificado'?'validacao do certificado':interpretacaoSemantica.faltando[0]??null,
+            ...(medicosPlano.length?{medicos:medicosPlano}:{}),
+            ...(agendaPlano?{agenda:agendaPlano}: {})
           } : {
             objetivo:[interpretacaoSemantica.objetivo,interpretacaoSemantica.objeto].filter(Boolean).join(':'),
             etapa:decisao?.acao?'executar_capacidade':'resolver_faltantes',
@@ -189,8 +205,9 @@ export async function processarComunicacaoMedico(
           await memoria.registrarPlano(medicoId,conversa,planoAtual);
         }
       }
-      if(!decisao&&entrada.eventoAgenda?.conectado&&entrada.eventoAgenda.agenda==='tribemd'&&planoMedicosEmCurso()&&permitidas.includes('descobrir_medicos_agenda')){
-        decisao={fala:['A TribeMD conectou. Vou continuar de onde paramos e descobrir os profissionais disponíveis.'],acao:'descobrir_medicos_agenda',parametros:{agenda:'tribemd'}};
+      if(!decisao&&entrada.eventoAgenda?.conectado&&planoMedicosEmCurso()&&planoAtual?.medicos?.length===1&&permitidas.includes('associar_medico_agenda')){
+        const agenda=entrada.eventoAgenda.agenda==='amplimed'?'amplimed':'tribemd';
+        decisao={fala:[`A ${agenda==='tribemd'?'TribeMD':'Amplimed'} conectou. Vou retomar a configuração de ${planoAtual.medicos[0]} e verificar a associação.`],acao:'associar_medico_agenda',parametros:{agenda,medicos:[planoAtual.medicos[0]]}};
       }
       if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) {
@@ -309,12 +326,23 @@ export async function processarComunicacaoMedico(
             try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'iniciada',metaEntrada); } catch { /* Enriquecimento opcional. */ }
             try {
               const resultado=await deps.ferramentas!.executar(atual,{medicoId,conversa,chave,texto,agora,chavePergunta:entrada.chavePergunta,mensagemEm:entrada.respostaMedico?.enviadaEm ? new Date(entrada.respostaMedico.enviadaEm) : new Date(NaN),contatoOperador:entrada.contatoOperador,fatos,narrar});
-              const dados=resultado.dados as {ok?:boolean;motivo?:string;modo?:string;profissionais?:unknown[]}|undefined;
+              const dados=resultado.dados as {ok?:boolean;motivo?:string;modo?:string;profissionais?:unknown[];aguardandoCertificado?:boolean;linksAtivos?:unknown[];prontos?:unknown[];identificacao?:string;agenda?:string}|undefined;
               if(ferramenta==='descobrir_medicos_agenda'&&dados?.ok===true&&dados.modo==='descoberta_medicos'&&Array.isArray(dados.profissionais)){
-                planoAtual={objetivo:'configurar:medicos',etapa:'selecionar_medicos',faltando:['medicos'],proximosPassos:['pedir_link_certificado'],aguardando:'medicos'};
+                planoAtual={objetivo:'configurar:medicos',etapa:'selecionar_medicos',faltando:['medicos'],proximosPassos:['pedir_link_certificado'],aguardando:'medicos',...(planoAtual?.agenda?{agenda:planoAtual.agenda}:{})};
                 await memoria.registrarPlano(medicoId,conversa,planoAtual);
               }else if(ferramenta==='pedir_link_certificado'&&dados?.ok===true){
-                planoAtual={objetivo:'configurar:medicos',etapa:'concluido',faltando:[],proximosPassos:[],aguardando:null};
+                const medicos=atual.parametros?.medicos??planoAtual?.medicos??[];
+                const aguardando=dados.aguardandoCertificado===true;
+                planoAtual={objetivo:'configurar:medicos',etapa:aguardando?'aguardando_certificado':'escolher_agenda',
+                  faltando:[aguardando?'certificado':'agenda'],proximosPassos:aguardando?['validar_certificado','definir_agenda','associar_medico_agenda']:['definir_agenda','associar_medico_agenda'],
+                  aguardando:aguardando?'validacao do certificado':'agenda',...(medicos.length?{medicos:[...medicos]}:{}),...(atual.parametros?.agenda?{agenda:atual.parametros.agenda as 'tribemd'|'amplimed'}:planoAtual?.agenda?{agenda:planoAtual.agenda}:{})};
+                await memoria.registrarPlano(medicoId,conversa,planoAtual);
+              }else if(ferramenta==='associar_medico_agenda'&&dados?.ok===true){
+                const observado=dados.identificacao==='observada';
+                planoAtual={objetivo:'configurar:medicos',etapa:observado?'concluido':'aguardando_identificacao_consultas',
+                  faltando:observado?[]:['identificacao_consultas'],proximosPassos:observado?[]:['verificar_identificacao_consultas'],
+                  aguardando:observado?null:'identificacao segura das consultas',...(planoAtual?.medicos?.length?{medicos:planoAtual.medicos}:{}),
+                  ...((dados.agenda==='tribemd'||dados.agenda==='amplimed')?{agenda:dados.agenda}:planoAtual?.agenda?{agenda:planoAtual.agenda}:{})};
                 await memoria.registrarPlano(medicoId,conversa,planoAtual);
               }
               try { await memoria.registrarEventoTrabalho(medicoId,conversa,chave,ferramenta,'concluida',{...metaEntrada,...(typeof dados?.ok==='boolean'?{ok:dados.ok}:{}),...(dados?.motivo?{motivo:sanitizarTextoMedico(dados.motivo)}:{})}); } catch { /* Enriquecimento opcional. */ }

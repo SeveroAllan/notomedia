@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { nomeProfissionalValido } from './validar-dados-emissao.js';
 
 export interface MedicoConta {
   id: string;
@@ -33,6 +34,26 @@ export async function listarMedicosDaConta(pool: pg.Pool, medicoId: string): Pro
     crm:r.crm??null,
     certificadoValido:Boolean(r.certificado_valido)
   })).filter(m=>m.nomeCompleto);
+}
+
+export function resolverNomesParaConfiguracao(
+  informados:readonly string[],
+  existentes:readonly string[],
+  descobertos:readonly string[],
+  textoAtual:string
+):{ok:true;nomes:string[]}|{ok:false;motivo:'MEDICO_NAO_IDENTIFICADO'|'MEDICO_AMBIGUO';nome:string}{
+  const permitidos=[...existentes,...descobertos];
+  const texto=normalizarNomeMedico(textoAtual);
+  const nomes:string[]=[];
+  for(const informado of informados){
+    const chave=normalizarNomeMedico(informado);
+    const candidatos=[...new Map(permitidos.filter(n=>normalizarNomeMedico(n)===chave).map(n=>[normalizarNomeMedico(n),n])).values()];
+    if(candidatos.length>1)return {ok:false,motivo:'MEDICO_AMBIGUO',nome:informado};
+    const canonico=candidatos[0]??(nomeProfissionalValido(informado)&&!!chave&&texto.includes(chave)?informado.trim():null);
+    if(!canonico)return {ok:false,motivo:'MEDICO_NAO_IDENTIFICADO',nome:informado};
+    if(!nomes.some(n=>normalizarNomeMedico(n)===normalizarNomeMedico(canonico)))nomes.push(canonico);
+  }
+  return {ok:true,nomes};
 }
 
 export async function medicoPertenceAContaDoUsuario(pool: pg.Pool, medicoId: string, authUserId: string): Promise<boolean> {

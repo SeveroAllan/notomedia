@@ -84,7 +84,7 @@ import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onbo
 import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
-import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico } from './conta/medicos-conta.js';
+import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
 import { vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
 import { descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
@@ -198,7 +198,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const cert = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
       if (!cert || cert.id !== certificadoId) return undefined;
       return extrairChavesCertificado(cert.pfxBuffer, cert.senhaCertificado).documentoTitular;
-    }, hubCpfClient ? cpf => hubCpfClient.consultar(cpf) : undefined, pesquisaCrmConfigurada, 'openserp');
+    }, hubCpfClient ? cpf => hubCpfClient.consultar(cpf) : undefined, pesquisaCrmConfigurada, 'openserp',
+    medicoId => retomarConfiguracaoMedicoValidado(medicoId));
   if (process.env.NODE_ENV !== 'test') {
     const timer = setInterval(() => {
       // Enriquecimento automático via OpenSerp sem envio de perguntas no WhatsApp.
@@ -370,6 +371,21 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }) : false;
   }
 
+  const associarMedicoAgendaSeguro = async (baseMedicoId:string,alvoMedicoId:string,nomeMedico:string,agenda:'tribemd'|'amplimed',agora=new Date()) => {
+    const agendas=await cofres.statusAgendas(baseMedicoId).catch(()=>null);
+    if(!agendas?.[agenda]?.conectada)return {ok:false as const,motivo:'AGENDA_NAO_CONECTADA' as const};
+    const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId);
+    if(!vinculou)return {ok:false as const,motivo:'MEDICO_AMBIGUO' as const};
+    if(agenda==='amplimed')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:'PROFISSIONAL_NAO_IDENTIFICADO' as const};
+    const bruto=await cofres.fonteAgenda.consultar({medicoId:baseMedicoId,referenciaCofre:baseMedicoId,janelaDias:90,agora});
+    if(bruto.tipo==='erro')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:bruto.codigo};
+    const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
+    if(descoberta.tipo==='bloqueada')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:descoberta.motivo};
+    const observado=descoberta.nomes.some(nome=>normalizarNomeMedico(nome)===normalizarNomeMedico(nomeMedico));
+    return {ok:true as const,agenda,identificacao:observado?'observada' as const:'pendente' as const,
+      ...(observado?{}:{motivo:'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA' as const})};
+  };
+
   const ferramentasConversa: FerramentasConversa = {
     lerFatos: async (medicoId,agora) => {
       const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
@@ -454,15 +470,32 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       if(decisao.acao==='descobrir_medicos_agenda') {
         const bruto=await cofres.fonteAgenda.consultar({medicoId:c.medicoId,referenciaCofre:c.medicoId,janelaDias:90,agora:c.agora});
-        if(bruto.tipo==='erro')return {dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:bruto.codigo}};
+        if(bruto.tipo==='erro'){
+          const fala=bruto.codigo==='SINCRONIZACAO_INCOMPLETA'
+            ? ['Não consegui completar toda a leitura da agenda. Isso não prova que outro médico não exista. Se você já souber o nome completo, me diga e eu continuo pela validação do certificado.']
+            : undefined;
+          return {dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:bruto.codigo},...(fala?{falaAssinada:fala,falaMemoria:fala}:{})};
+        }
+        if(!bruto.consultas.length){
+          const fala=['Não observei profissionais nos atendimentos dessa janela. Isso não é um catálogo da clínica e não prova que outro médico não exista. Se você souber o nome completo, me diga e eu continuo pela validação do certificado.'];
+          return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_vazia',profissionais:[]}};
+        }
         const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
         if(descoberta.tipo==='bloqueada'){
-          return {falaAssinada:['A TribeMD não identificou o profissional de cada consulta nessa leitura. Para não misturar médicos, preciso dessa identificação antes de continuar.'],dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:descoberta.motivo}};
+          const fala=['Nessa leitura a TribeMD não identificou o profissional das consultas. Não vou atribuir médicos por suposição. Se você souber o nome completo do médico que quer adicionar, posso continuar pela validação do certificado.'];
+          return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:descoberta.motivo}};
         }
         const profissionais=descoberta.nomes.slice(0,12);
-        await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais,referenciaMedicoId:c.medicoId}),'noto');
-        const fala=[`Encontrei estes profissionais na TribeMD: ${profissionais.join(', ')}. Para quais médicos você quer emitir pelo Noto?`];
-        return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_medicos',profissionais}};
+        await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'tribemd',profissionais,referenciaMedicoId:c.medicoId,cobertura:{tipo:'atendimentos_observados',janelaDias:90,catalogoCompleto:false}}),'noto');
+        const conhecidos=new Set((c.fatos.medicosConta??[]).map(m=>normalizarNomeMedico(m.nome)));
+        const novos=profissionais.filter(nome=>!conhecidos.has(normalizarNomeMedico(nome)));
+        if(!novos.length){
+          const fala=[`Nessa leitura observei apenas profissionais que já estão vinculados ao Noto: ${profissionais.join(', ')}. Essa leitura vem de atendimentos observados e não comprova o catálogo completo da clínica.`,
+            'Se você quer adicionar outro médico, me diga o nome completo e eu continuo pela validação do certificado.'];
+          return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_somente_conhecidos',profissionais}};
+        }
+        const fala=[`Além dos médicos já vinculados, observei na TribeMD: ${novos.join(', ')}. Quais desses você quer configurar no Noto?`];
+        return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:true,modo:'descoberta_medicos',profissionais:novos}};
       }
       if(decisao.acao==='consultar_agenda') {
         const hoje=c.agora.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
@@ -534,6 +567,25 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=agendaAlvo?await cofres.links?.solicitarLinkCofre(c.medicoId,agendaAlvo,{reenvio:c.fatos.link.enviados>0,fala:decisao.fala,contatoTelefone:c.contatoOperador})??{ok:false,motivo:'AGENDA_INDISPONIVEL'}:{ok:false,motivo:'AGENDA_NAO_INFORMADA'};
         return {jaRespondida:r.ok&&r.motivo==='enviado',dados:{ferramenta:'pedir_link_agenda',...r}};
       }
+      if(decisao.acao==='associar_medico_agenda') {
+        const nomes=decisao.parametros?.medicos??[];
+        const agenda=agendaAcao==='tribemd'||agendaAcao==='amplimed'?agendaAcao:null;
+        if(nomes.length!==1||!agenda)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:'MEDICO_NAO_IDENTIFICADO'}};
+        const existentes=await listarMedicosDaConta(pool,c.medicoId);
+        const alvo=existentes.filter(m=>normalizarNomeMedico(m.nomeCompleto)===normalizarNomeMedico(nomes[0]!));
+        if(alvo.length!==1)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:alvo.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO'}};
+        if(!alvo[0]!.certificadoValido)return {falaAssinada:[`O certificado de ${alvo[0]!.nomeCompleto} ainda precisa ser validado antes de eu associar a agenda.`],
+          dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:'CERTIFICADO_PENDENTE'}};
+        const r=await associarMedicoAgendaSeguro(c.medicoId,alvo[0]!.id,alvo[0]!.nomeCompleto,agenda,c.agora);
+        if(!r.ok)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:r.motivo}};
+        const nomeAgenda=agenda==='tribemd'?'TribeMD':'Amplimed';
+        const fala=r.identificacao==='observada'
+          ? [`Associei ${alvo[0]!.nomeCompleto} à ${nomeAgenda}. Nessa leitura, a agenda identificou consultas com esse profissional. Mesmo assim, cada consulta só será usada quando vier identificada de forma compatível.`,
+             'Certificado e associação de agenda não liberam emissão sozinhos. As permissões, confirmações aplicáveis e os demais gates continuam valendo.']
+          : [`Associei ${alvo[0]!.nomeCompleto} à ${nomeAgenda} como você informou, mas ainda não consigo identificar as consultas dele com segurança nessa integração/leitura.`,
+             'Vou manter essa parte pendente e não atribuir consultas por suposição. Isso não bloqueia os outros médicos da conta.'];
+        return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'associar_medico_agenda',ok:true,agenda,identificacao:r.identificacao,...(r.motivo?{motivo:r.motivo}:{})}};
+      }
       if(decisao.acao==='pedir_link_certificado') {
         const solicitados=decisao.parametros?.medicos??[];
         if(!solicitados.length)return {dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'MEDICO_NAO_IDENTIFICADO'}};
@@ -543,47 +595,51 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           [c.medicoId,c.conversa]
         );
         let descobertos:string[]=[];
-        let descobertaFonte:'tribemd'|'amplimed'|null=null;
-        let referenciaMedicoId:string|null=null;
         try {
           const parsed=descobertaRows[0]?.texto?JSON.parse(descobertaRows[0].texto):null;
           if(Array.isArray(parsed?.profissionais))descobertos=parsed.profissionais.filter((x:unknown):x is string=>typeof x==='string'&&!!x.trim());
-          if(parsed?.fonte==='tribemd'||parsed?.fonte==='amplimed')descobertaFonte=parsed.fonte;
-          if(typeof parsed?.referenciaMedicoId==='string')referenciaMedicoId=parsed.referenciaMedicoId;
         } catch { descobertos=[]; }
-        const permitidos=[...existentes.map(m=>m.nomeCompleto),...descobertos];
-        const canonicos:string[]=[];
-        for(const informado of solicitados){
-          const chave=normalizarNomeMedico(informado);
-          const candidatos=[...new Map(permitidos.filter(n=>normalizarNomeMedico(n)===chave).map(n=>[normalizarNomeMedico(n),n])).values()];
-          if(candidatos.length!==1)return {falaAssinada:[`Não consegui identificar com segurança o médico "${informado}". Me diga o nome exatamente como apareceu na lista.`],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:candidatos.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO'}};
-          canonicos.push(candidatos[0]!);
-        }
-        const confirmados=await confirmarMedicosDaConta(pool,c.medicoId,canonicos);
+        const resolvidos=resolverNomesParaConfiguracao(solicitados,existentes.map(m=>m.nomeCompleto),descobertos,c.texto);
+        if(!resolvidos.ok)return {falaAssinada:[resolvidos.motivo==='MEDICO_AMBIGUO'
+          ? `Há mais de um cadastro compatível com "${resolvidos.nome}". Me diga o nome completo para eu não escolher por suposição.`
+          : 'Qual é o nome completo do médico que você quer adicionar? O nome inicia a configuração, mas ainda não comprova identidade nem libera emissão.'],
+          dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:resolvidos.motivo}};
+        const confirmados=await confirmarMedicosDaConta(pool,c.medicoId,resolvidos.nomes);
         if(!confirmados.ok)return {falaAssinada:[`Há ambiguidade no médico "${confirmados.nome}". Não criei vínculo nem enviei certificado.`],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:confirmados.motivo}};
-        if(descobertaFonte&&referenciaMedicoId){
-          const vinculou=await vincularReferenciaAgendaConta(pool,confirmados.medicos.map(m=>m.id),descobertaFonte,referenciaMedicoId);
-          if(!vinculou)return {falaAssinada:['Não consegui associar todos os médicos à agenda com segurança. Não vou atribuir consultas até confirmar esse vínculo.'],dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'MEDICO_AMBIGUO'}};
-        }
         if(!origemLinksSeguros)return {dados:{ferramenta:'pedir_link_certificado',ok:false,motivo:'ORIGEM_INDISPONIVEL'}};
         let enviados=0;
         const prontos:string[]=[];
+        const linksAtivos:string[]=[];
+        const reenvioExplicito=/\b(?:reenvi|manda|envia|novo link|link de novo)\b/i.test(c.texto);
         for(const medico of confirmados.medicos){
           if(medico.certificadoValido){prontos.push(medico.nomeCompleto);continue;}
+          const marcador=`contexto:certificado_link:${medico.id}`;
+          const anterior=(await pool.query('select 1 from conversa_mensagens where medico_id=$1 and mensagem_id=$2 limit 1',[c.medicoId,marcador])).rows.length>0;
+          if(anterior&&!reenvioExplicito){linksAtivos.push(medico.nomeCompleto);continue;}
           const url=linkCertificadoMedico(origemLinksSeguros,medico.id);
           const envio=await comunicacaoHomologacao.conversa({
             medicoId:c.medicoId,conversa:c.conversa,chave:`certificado:${medico.id}:${c.chave}`,
-            fala:[`Para ${medico.nomeCompleto}, o certificado A1 ainda está pendente. Use este link do painel:`,url],
-            falaMemoria:[`Para ${medico.nomeCompleto}, o certificado A1 ainda está pendente. Enviei o link do painel.`,'[LINK_SEGURO]'],
+            fala:[`Para ${medico.nomeCompleto}, use este link autenticado para enviar o A1. O nome informado ainda não comprova identidade nem autoriza emissão:`,url],
+            falaMemoria:[`Para ${medico.nomeCompleto}, enviei o link autenticado do A1. A identidade e os dados profissionais ainda precisam ser validados.`,'[LINK_SEGURO]'],
             contatoTelefone:c.contatoOperador
           });
-          if(envio==='enviado'||envio==='simulado')enviados++;
+          if(envio==='enviado'||envio==='simulado'){
+            enviados++;
+            await pool.query(`insert into conversa_mensagens(medico_id,conversa,mensagem_id,texto,papel) values($1,$2,$3,$4,'noto')
+              on conflict(medico_id,mensagem_id) do update set conversa=excluded.conversa,texto=excluded.texto,papel='noto',criada_em=now()`,
+              [c.medicoId,c.conversa,marcador,JSON.stringify({medicoId:medico.id,nome:medico.nomeCompleto,enviadoEm:c.agora.toISOString()})]);
+          }
         }
-        if(!enviados&&prontos.length){
+        if(linksAtivos.length){
+          await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`certificado:ativo:${c.chave}`,
+            fala:[`O link seguro de certificado já foi enviado para: ${linksAtivos.join(', ')}. Não vou reenviar sem necessidade. Depois da validação, retomo a configuração por aqui.`],contatoTelefone:c.contatoOperador});
+        }
+        if(!enviados&&!linksAtivos.length&&prontos.length){
           await comunicacaoHomologacao.conversa({medicoId:c.medicoId,conversa:c.conversa,chave:`certificado:prontos:${c.chave}`,
-            fala:[`O certificado já está cadastrado para: ${prontos.join(', ')}. Podemos seguir com esses médicos.`],contatoTelefone:c.contatoOperador});
+            fala:[`O certificado já está cadastrado para: ${prontos.join(', ')}. Isso ainda não significa "pronto para emitir". Vou continuar pela agenda e pelos demais gates.`],contatoTelefone:c.contatoOperador});
         }
-        return {jaRespondida:true,dados:{ferramenta:'pedir_link_certificado',ok:true,enviados,prontos}};
+        return {jaRespondida:true,dados:{ferramenta:'pedir_link_certificado',ok:true,enviados,linksAtivos,prontos,
+          aguardandoCertificado:confirmados.medicos.some(m=>!m.certificadoValido)}};
       }
       if(decisao.acao==='pedir_link_permissoes') {
         if(!permissoesNoto) return {dados:{ferramenta:'pedir_link_permissoes',ok:false,motivo:'PERMISSOES_INDISPONIVEIS'}};
@@ -680,6 +736,51 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       log: (nivel, mensagem) => nivel === 'info' ? console.info(mensagem) : registrarLinhaSincrona(mensagem)
     });
   };
+  const retomarConfiguracaoMedicoValidado = async (alvoMedicoId:string) => {
+    if(!memoriaPersistida)return;
+    try{
+      const alvo=(await pool.query('select id,conta_id,nome_completo from medicos where id=$1',[alvoMedicoId])).rows[0];
+      if(!alvo)return;
+      const status=await consultarStatusOnboarding(pool,alvoMedicoId,config.preparacaoFiscalAtiva);
+      if(!status.passos.passo3CertificadoValido||!status.passos.passoProfissionalAprovado)return;
+      const {rows}=await pool.query(`select cm.medico_id,cm.conversa,cm.texto
+        from conversa_mensagens cm join medicos base on base.id=cm.medico_id
+        where base.conta_id=$1 and cm.mensagem_id='contexto:plano_cognitivo'
+        order by cm.id desc limit 20`,[alvo.conta_id]);
+      const pendente=rows.flatMap((r:any)=>{try{
+        const p=JSON.parse(r.texto);
+        return p?.objetivo==='configurar:medicos'&&p?.etapa==='aguardando_certificado'&&Array.isArray(p.medicos)
+          &&p.medicos.some((n:string)=>normalizarNomeMedico(n)===normalizarNomeMedico(alvo.nome_completo))?[{...r,plano:p}]:[];
+      }catch{return [];}})[0];
+      if(!pendente)return;
+      const baseMedicoId=String(pendente.medico_id),conversa=String(pendente.conversa),plano=pendente.plano;
+      const agenda=plano.agenda==='tribemd'||plano.agenda==='amplimed'?plano.agenda:null;
+      if(!agenda){
+        await memoriaPersistida.registrarPlano(baseMedicoId,conversa,{...plano,etapa:'escolher_agenda',faltando:['agenda'],proximosPassos:['definir_agenda','associar_medico_agenda'],aguardando:'agenda'});
+        await comunicacaoHomologacao.conversa({medicoId:baseMedicoId,conversa,chave:`onboarding_medico:certificado:${alvoMedicoId}`,
+          fala:[`O certificado e os dados profissionais de ${alvo.nome_completo} foram validados. Agora continuo de onde paramos: ele atende em uma agenda já conectada ao Noto ou em outra agenda?`]});
+        return;
+      }
+      const agendas=await cofres.statusAgendas(baseMedicoId).catch(()=>null);
+      if(!agendas?.[agenda]?.conectada){
+        await memoriaPersistida.registrarPlano(baseMedicoId,conversa,{...plano,etapa:'conectar_agenda',faltando:['agenda'],proximosPassos:['pedir_link_agenda','associar_medico_agenda'],aguardando:'conexao da agenda',agenda});
+        const nomeAgenda=agenda==='tribemd'?'TribeMD':'Amplimed';
+        await cofres.links?.solicitarLinkCofre(baseMedicoId,agenda,{fala:[`O certificado e os dados profissionais de ${alvo.nome_completo} foram validados. Você já tinha indicado a ${nomeAgenda}. Vou te mandar o link seguro para conectá-la e depois continuo a associação.`]}).catch(()=>undefined);
+        return;
+      }
+      const associado=await associarMedicoAgendaSeguro(baseMedicoId,alvoMedicoId,alvo.nome_completo,agenda);
+      const observado=associado.ok&&associado.identificacao==='observada';
+      await memoriaPersistida.registrarPlano(baseMedicoId,conversa,{...plano,etapa:observado?'concluido':'aguardando_identificacao_consultas',
+        faltando:observado?[]:['identificacao_consultas'],proximosPassos:observado?[]:['verificar_identificacao_consultas'],
+        aguardando:observado?null:'identificacao segura das consultas',agenda});
+      const nomeAgenda=agenda==='tribemd'?'TribeMD':'Amplimed';
+      const fala=observado
+        ? [`O certificado e os dados profissionais de ${alvo.nome_completo} foram validados. Retomei a configuração e associei a ${nomeAgenda}. As consultas só entram quando identificam esse profissional.`]
+        : [`O certificado e os dados profissionais de ${alvo.nome_completo} foram validados e associei a ${nomeAgenda} informada, mas ainda falta identificar as consultas dele com segurança. Vou manter essa parte pendente sem misturar dados nem bloquear os demais médicos.`];
+      await comunicacaoHomologacao.conversa({medicoId:baseMedicoId,conversa,chave:`onboarding_medico:retomada:${alvoMedicoId}`,fala});
+    }catch{console.warn('[Onboarding médicos]',{codigo:'RETOMADA_CERTIFICADO_FALHOU'});}
+  };
+
   const aoConectarWhatsapp = (medicoId: string) => {
     void comunicarMedico(medicoId, 'onboarding');
     void (async () => {
@@ -696,6 +797,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.use('/api/conta/cadastro', criarRouterCadastroPainel({
     pool,repo:cadastroCertificado.repo,
     autenticar: async token => { const { data,error } = await authAdminService.supabaseClient.auth.getUser(token);return error?null:data.user?.id??null; },
+    aoAprovarProfissional: medicoId => { void retomarConfiguracaoMedicoValidado(medicoId); }
   }));
   app.use('/api/whatsapp', criarRouterStatusWhatsapp({
     pool,
@@ -1064,6 +1166,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
       await cadastroCertificado.agendar({medicoId, certificadoId:resultado.certificadoId, documentoTitular}).catch(() =>
         console.warn('[Cadastro automático]', {codigo:'AGENDAMENTO_FALHOU'}));
+      void retomarConfiguracaoMedicoValidado(medicoId);
 
       if (consentimentoFiscal === versaoConsentimentoFiscal) {
         await registrarConsentimentoFiscal(pool, medicoId, resultado.certificadoId);

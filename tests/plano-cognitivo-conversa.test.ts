@@ -63,3 +63,15 @@ it('decisor recebe o plano anterior e pode devolver estado operacional atualizad
   const entradaModelo = JSON.parse(String(completar.mock.calls[0]![2][1]!.content));
   expect(entradaModelo.plano).toEqual(plano);
 });
+
+
+it('plano de onboarding preserva médico e agenda para retomar sem reperguntar',async()=>{
+ const banco=new BancoConversaFalso();
+ const memoria=new PostgresMemoriaConversaMedico(banco as unknown as pg.Pool);
+ const p:PlanoConversa={objetivo:'configurar:medicos',etapa:'aguardando_certificado',faltando:['certificado'],
+   proximosPassos:['validar_certificado','definir_agenda'],aguardando:'validacao do certificado',medicos:['Bruno Souza'],agenda:'tribemd'};
+ await memoria.registrarPlano('m','c',p);
+ expect(await memoria.lerPlano('m','c')).toEqual(p);
+ const contexto=await memoria.lerContextoParaModelo('m','c');
+ expect(contexto.plano).toMatchObject({medicos:['Bruno Souza'],agenda:'tribemd',etapa:'aguardando_certificado'});
+});
