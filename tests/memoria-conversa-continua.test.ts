@@ -129,4 +129,3 @@ it('memória de conta usa chave da conta e leitura devolve o escopo',async()=>{
    origemConversa:'c',origemMensagemId:'20',confianca:.98
  }]);
 });
-
