@@ -186,6 +186,21 @@ it('N reentregas simultâneas mantêm um processamento, um par de falas e os ids
 it.each(['minha senha é segredo-ficticio','credencial-sem-rotulo','credencial-ficticia-987','Bearer segredo-ficticio-123456','https://example.invalid/c/'+'x'.repeat(43)])('credencial %j nunca chega a IA, memória ou log',async texto=>{
  const c=cenario();await c.turno('segredo',texto);expect(c.completar).not.toHaveBeenCalled();expect(c.executar).not.toHaveBeenCalled();expect(c.banco.mensagens.every(m=>m.papel==='noto')).toBe(true);expect(JSON.stringify([c.banco.mensagens,c.completar.mock.calls,c.deps.log.mock.calls])).not.toContain('segredo-ficticio');
 });
+it('CHECK antigo de origem_operador não interrompe a resposta do WhatsApp durante rolling deploy',async()=>{
+ const c=cenario();
+ const real=c.memoria.registrarFala.bind(c.memoria);
+ vi.spyOn(c.memoria,'registrarFala').mockImplementation(async(...args)=>{
+   if(args[4]==='medico'&&args[5]==='conta')throw Object.assign(new Error('check antigo'),{code:'23514'});
+   return real(...args);
+ });
+ await processarComunicacaoMedico({
+   medicoId:'m',chaveProcessamento:'origem-antiga',chaveConversa:'c',agora,
+   origemOperador:'conta',respostaMedico:{texto:'Oi',dataMensagem:'2026-10-21'}
+ },c.deps);
+ expect(c.enviar).toHaveBeenCalledWith(['Oi! O que você precisa?'],'origem-antiga');
+ expect(c.deps.log).toHaveBeenCalledWith('erro','CONVERSA_MEMORIA_FALHOU');
+});
+
 it('produção não chama decisor nem executa ação',async()=>{
  const c=cenario();c.fatos.ambiente='producao';await c.turno('producao','Pode emitir');expect(c.completar).not.toHaveBeenCalled();expect(c.executar).not.toHaveBeenCalled();expect(c.enviar).not.toHaveBeenCalled();
 });
