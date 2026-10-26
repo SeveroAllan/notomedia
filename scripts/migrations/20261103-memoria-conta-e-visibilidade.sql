@@ -76,7 +76,13 @@ revoke execute on function public.medicos_visiveis_para(uuid) from public, anon;
 grant execute on function public.medicos_visiveis_para(uuid) to authenticated, service_role;
 
 do $validar_memoria_acesso$
+declare
+  corpo_visibilidade text;
 begin
+  corpo_visibilidade := lower(translate(
+    pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure),
+    E' \n\r\t',''
+  ));
   if exists (
     select 1 from public.conversa_memorias_semanticas
     where escopo is null or conta_id is null
