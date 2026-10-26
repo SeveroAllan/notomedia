@@ -48,7 +48,7 @@ it('sincronização bloqueada por profissional não resolve paciente nem grava c
     fonte,
     {salvar},
     resolverPaciente,
-    cs=>filtrarConsultasDoProfissional(cs,'Médico que não aparece')
+    cs=>{const r=filtrarConsultasDoProfissional(cs,'Médico que não aparece');return r.ok?{ok:true as const,consultas:r.consultas}:{ok:false as const,codigo:r.motivo};}
   );
   expect(resultado).toEqual({tipo:'erro',codigo:'PROFISSIONAL_AMBIGUO'});
   expect(salvar).not.toHaveBeenCalled();

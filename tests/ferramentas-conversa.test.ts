@@ -5,9 +5,9 @@ import type {FatosConversa} from '../src/onboarding/conversador-medico.js';
 const anterior=(fatos:FatosConversa,retroativo:boolean)=>fatos.ambiente!=='homologacao'?[]:['aguardando_confirmacao_lote','confirmado','processando'].includes(fatos.lote?.estado??'')?['nenhuma']:
   ['nenhuma',...(!fatos.agenda.conectada&&!fatos.semAgendaDigital?['registrar_modo_sem_agenda']:[]),
    ...(!fatos.agenda.conectada&&!fatos.link.ativo&&!fatos.semAgendaDigital?['pedir_link_agenda']:[]),
-   ...(fatos.agenda.conectada&&!fatos.semAgendaDigital?['consultar_agenda','listar_pendencias',...(retroativo?['iniciar_lote']:[])]:[])];
+   ...(fatos.agenda.conectada&&!fatos.semAgendaDigital?[...(fatos.agenda.nome?.toLowerCase()==='tribemd'?['descobrir_medicos_agenda']:[]),'consultar_agenda','listar_pendencias',...(retroativo?['iniciar_lote']:[])]:[])];
 describe('catálogo de ferramentas da conversa',()=>{
- it('preserva as liberações anteriores e adiciona consulta de agenda somente quando conectada',()=>{
+ it('preserva as liberações anteriores e adiciona descoberta segura da TribeMD quando conectada',()=>{
   const amb=['homologacao','producao',null],conectada=[true,false],link=[true,false],sem=[true,false],lote=[undefined,'confirmado','processando','concluido'],retro=[true,false];
   let n=0;
   for(const a of amb)for(const c of conectada)for(const l of link)for(const s of sem)for(const e of lote)for(const r of retro){

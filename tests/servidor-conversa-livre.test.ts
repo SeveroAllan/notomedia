@@ -35,7 +35,7 @@ beforeEach(() => {
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set(); recebidas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks();
-  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', valorCobradoAoVivoCentavos: 30000, nomeAoVivo: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000 }] });
+  fronteiras.fonte.mockResolvedValue({ tipo: 'consultas', fonte: 'tribemd', consultas: [{ pacienteId: '456', telefonePaciente: '5551993527271', idExterno: 'pendente', valorCobradoAoVivoCentavos: 30000, nomeAoVivo: 'Paciente exemplo', dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 40000, profissional: 'Medica Ficticia' }] });
   banco = new BancoConversaFalso(); const historico = new BancoHistoricoFalso();
   config.comunicacaoMedicoAtiva = true; config.conversaLivreAtiva = true; config.envioMedicoRealAtivo = true;
   config.evolutionWebhookSecret = 'segredo-ficticio'; config.openaiApiKey = 'openai-ficticia';
@@ -318,7 +318,7 @@ it('conclusão aguarda leitura e salvamento antes de consultar 173 pendências, 
   let gravou = false;
   fronteiras.fonte.mockImplementation(async () => {
     iniciouFonte(); await leitura;
-    return { tipo: 'consultas', fonte: 'tribemd', consultas: Array.from({ length: 173 }, (_, i) => ({ pacienteId: '456', telefonePaciente: '5551993527271', nomeAoVivo: 'Pessoa Apenas Ao Vivo', idExterno: String(i), dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 30000 })) };
+    return { tipo: 'consultas', fonte: 'tribemd', consultas: Array.from({ length: 173 }, (_, i) => ({ pacienteId: '456', telefonePaciente: '5551993527271', nomeAoVivo: 'Pessoa Apenas Ao Vivo', idExterno: String(i), dataHora: '2026-10-19T14:00:00Z', status: 'realizada', valorConsultaCentavos: 30000, profissional: 'Medica Ficticia' })) };
   });
   const anterior = fronteiras.query.getMockImplementation()!;
   const consultar = vi.fn();
@@ -401,7 +401,7 @@ it.each(['Pode emitir as notas desse período','emite as notas','quero emtiir as
  const {formatarPendencias}=await import('../src/onboarding/pendencias-medico.js');
  const lista={ok:true as const,total:173,consultas:Array.from({length:20},()=>({paciente:'Pessoa Ficticia A',dataHora:'2026-10-19T14:00Z',valorCentavos:30000})),dataInicio:'2026-09-03'};
  vi.spyOn(PostgresConsultasSincronizadas.prototype,'listarConsultasSemNota').mockResolvedValue(lista);
- fronteiras.fonte.mockResolvedValue({tipo:'consultas',fonte:'tribemd',consultas:Array.from({length:173},(_,i)=>({pacienteId:'456',telefonePaciente:'5551993527271',idExterno:String(i),nomeAoVivo:'Pessoa Ficticia A',dataHora:'2026-10-19T14:00Z',status:'realizada',valorConsultaCentavos:40000,valorCobradoAoVivoCentavos:30000}))});
+ fronteiras.fonte.mockResolvedValue({tipo:'consultas',fonte:'tribemd',consultas:Array.from({length:173},(_,i)=>({pacienteId:'456',telefonePaciente:'5551993527271',idExterno:String(i),nomeAoVivo:'Pessoa Ficticia A',dataHora:'2026-10-19T14:00Z',status:'realizada',valorConsultaCentavos:40000,valorCobradoAoVivoCentavos:30000,profissional:'Medica Ficticia'}))});
  let atual:any=null;
  vi.spyOn(PostgresLotesEmissao.prototype,'ativo').mockImplementation(async()=>atual);
  const abrir=vi.spyOn(PostgresLotesEmissao.prototype,'abrir').mockImplementation(async(medicoId,conversa,_chave,agora)=>atual={id:'lote-pedido',medicoId,conversa,ate:agora.toISOString(),desde:null,estado:'aguardando_data_inicio' as const,totalConsultas:0,totalCentavos:0,semValor:0,mensagemConfirmacaoId:null,perguntaEm:null});
