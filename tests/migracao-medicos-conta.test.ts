@@ -24,7 +24,9 @@ it('migration verifica acesso necessário do backend antes do commit',()=>{
 it('runner usa a trava do projeto homolog antes de abrir conexão',()=>{
   expect(runner).toContain("validarProjetoHomolog(process.env.DATABASE_URL);");
   expect(runner.indexOf("validarProjetoHomolog(process.env.DATABASE_URL);")).toBeLessThan(runner.indexOf('new pg.Pool'));
+  expect(runner).toContain('20261031-contadores-delegacoes.sql');
   expect(runner).toContain('20261101-medicos-por-conta.sql');
+  expect(runner.indexOf('20261031-contadores-delegacoes.sql')).toBeLessThan(runner.indexOf('20261101-medicos-por-conta.sql'));
 });
 
 it('visibilidade RLS de médicos segue a conta, não o papel do usuário',()=>{
