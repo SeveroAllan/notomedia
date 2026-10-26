@@ -57,7 +57,13 @@ alter table public.noto_medico_agenda_referencias enable row level security;
 revoke all on table public.noto_medico_agenda_referencias from anon, authenticated;
 
 do $medicos_conta$
+declare
+  corpo_visibilidade text;
 begin
+  corpo_visibilidade := lower(translate(
+    pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure),
+    E' \n\r\t',''
+  ));
   if exists (
     select 1
     from pg_attribute a
@@ -92,20 +98,16 @@ begin
     raise exception 'FK medicos.usuario_id precisa usar ON DELETE SET NULL';
   end if;
 
-  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
-      !~ 'join public\\.medicos m on m\\.conta_id=i\\.conta_id' then
+  if position('joinpublic.medicosmonm.conta_id=i.conta_id' in corpo_visibilidade)=0 then
     raise exception 'medicos_visiveis_para não está escopada pela conta';
   end if;
 
-  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
-      !~ 'p_auth_user_id ?= ?auth\\.uid\\(\\)' then
+  if position('p_auth_user_id=auth.uid()' in corpo_visibilidade)=0 then
     raise exception 'medicos_visiveis_para aceita identidade arbitrária';
   end if;
 
-  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
-      !~ 'public\\.contador_medico'
-     or pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
-      !~ 'public\\.secretaria_medico' then
+  if position('public.contador_medico' in corpo_visibilidade)=0
+     or position('public.secretaria_medico' in corpo_visibilidade)=0 then
     raise exception 'delegações explícitas deixaram de ser preservadas';
   end if;
 
