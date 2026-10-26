@@ -94,7 +94,7 @@ it('descoberta é atalho: nome observado é reaproveitado e nome não observado 
 });
 
 it('repetir configuração do mesmo nome normalizado reutiliza médico e não duplica cadastro',async()=>{
- const medicos=[{id:'base',nome_completo:'Ana Lima',crm:'1/RS',certificado_valido:true}];
+ const medicos:Array<{id:string;nome_completo:string;crm:string|null;certificado_valido:boolean}>=[{id:'base',nome_completo:'Ana Lima',crm:'1/RS',certificado_valido:true}];
  let inserts=0;
  const query=vi.fn(async(sql:string,p:unknown[]=[])=>{
    const q=sql.replace(/\s+/g,' ').trim().toLowerCase();

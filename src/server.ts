@@ -754,7 +754,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }catch{return [];}})[0];
       if(!pendente)return;
       const baseMedicoId=String(pendente.medico_id),conversa=String(pendente.conversa),plano=pendente.plano;
-      const agenda=plano.agenda==='tribemd'||plano.agenda==='amplimed'?plano.agenda:null;
+      const agenda:'tribemd'|'amplimed'|null=plano.agenda==='tribemd'||plano.agenda==='amplimed'?plano.agenda:null;
       if(!agenda){
         await memoriaPersistida.registrarPlano(baseMedicoId,conversa,{...plano,etapa:'escolher_agenda',faltando:['agenda'],proximosPassos:['definir_agenda','associar_medico_agenda'],aguardando:'agenda'});
         await comunicacaoHomologacao.conversa({medicoId:baseMedicoId,conversa,chave:`onboarding_medico:certificado:${alvoMedicoId}`,
