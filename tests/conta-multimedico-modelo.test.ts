@@ -130,3 +130,18 @@ it('repetir configuração do mesmo nome normalizado reutiliza médico e não du
  expect(inserts).toBe(1);
  expect(medicos.filter(m=>m.id==='bruno-id')).toHaveLength(1);
 });
+
+it('configuração explícita de alvo sem perfil preserva origem da descoberta da mesma conversa',async()=>{
+ const {origemConfiguracaoAgendaNaConversa}=await import('../src/conta/medicos-conta.js');
+ const row={medico_id:'origem',nome_completo:'Allan Severo (teste Noto)',texto:JSON.stringify({fonte:'amplimed',profissionais:['Allan Severo (teste Noto)']})};
+ const query=vi.fn(async()=>({rows:[row]}));const pool={query} as unknown as pg.Pool;
+ expect(await origemConfiguracaoAgendaNaConversa(pool,'alvo','conversa','Quero associar Allan Severo (teste Noto) à Amplimed')).toBe('origem');
+ const sql=String((query.mock.calls as unknown as any[][])[0]![0]);
+ expect(sql).toContain('fonte.conta_id=alvo.conta_id');expect(sql).toContain('cm.conversa=$2');expect(sql).toContain('not exists(select 1 from medico_perfil_fiscal');
+ expect(await origemConfiguracaoAgendaNaConversa(pool,'alvo','conversa','Emitir notas de Allan Severo (teste Noto) na Amplimed')).toBe('alvo');
+ expect(await origemConfiguracaoAgendaNaConversa(pool,'alvo','conversa','Quero associar à Amplimed')).toBe('alvo');
+ query.mockResolvedValueOnce({rows:[row,{...row,medico_id:'outra-origem'}]});
+ expect(await origemConfiguracaoAgendaNaConversa(pool,'alvo','conversa','Quero associar Allan Severo (teste Noto) à Amplimed')).toBe('alvo');
+ query.mockResolvedValueOnce({rows:[{...row,texto:JSON.stringify({fonte:'tribemd',profissionais:['Allan Severo (teste Noto)']})}]});
+ expect(await origemConfiguracaoAgendaNaConversa(pool,'alvo','conversa','Quero associar Allan Severo (teste Noto) à Amplimed')).toBe('alvo');
+});

@@ -84,7 +84,7 @@ import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onbo
 import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
-import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, nomeProfissionalDescobertoNaConversa, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
+import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, nomeProfissionalDescobertoNaConversa, origemConfiguracaoAgendaNaConversa, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
 import { resolverVinculoAgendaConta, vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
 import { descobrirProfissionaisDoFiltroAmplimed, descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
@@ -638,7 +638,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           for(const row of descRows){
             try{
               const parsed=JSON.parse(row.texto);
-              if(parsed?.fonte==='amplimed'&&Array.isArray(parsed?.codigos)){
+              if(parsed?.fonte==='amplimed'&&parsed?.referenciaMedicoId===c.medicoId&&Array.isArray(parsed?.codigos)){
                 const hit=parsed.codigos.find((x:{codigo?:unknown;nome?:unknown})=>normalizarNomeMedico(String(x?.nome??''))===alvoNorm);
                 if(typeof hit?.codigo==='string'&&hit.codigo){codigoConfirmado=hit.codigo;break;}
               }
@@ -799,8 +799,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   };
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null, contatoOperador?:string, origemOperador?:'conta'|'medico'|'secretaria') => {
+  const comunicarMedico = async (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string, chaveWhatsApp?: import('./whatsapp/marcar-mensagem-lida.js').ChaveMensagemLeitura, eventoAgenda?: import('./cofre/links.js').ConclusaoAgenda & { chavesConversa: string[] }, chavePergunta?: string, enviadaEm?: string | null, contatoOperador?:string, origemOperador?:'conta'|'medico'|'secretaria') => {
     const agora = new Date();
+    // Configuração sem perfil fiscal usa só a origem observada nesta conversa,
+    // sem trocar o alvo escolhido nem copiar dados fiscais de outro médico.
+    if(texto && chaveConversa && origemOperador==='conta'){
+      medicoId=await origemConfiguracaoAgendaNaConversa(pool,medicoId,chaveConversa,texto);
+    }
     return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa, eventoAgenda, chavePergunta, contatoOperador, origemOperador,
       ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null, enviadaEm } } : {})
     }, { ferramentas:ferramentasConversa, ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, memoriaPersistida, conversador, interpretadorSemantico, conversaLivreAtiva: config.conversaLivreAtiva === true, orcamentoChamadas: config.conversaAgenteAtiva ? 6 : 2,

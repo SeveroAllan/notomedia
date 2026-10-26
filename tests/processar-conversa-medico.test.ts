@@ -912,3 +912,17 @@ it('médico validado em outra agenda conecta o alvo e, se identificação não f
  plano=(await c.memoria.lerContextoParaModelo('m','c')).plano;
  expect(plano).toMatchObject({etapa:'aguardando_identificacao_consultas',faltando:['identificacao_consultas'],medicos:['Bruno Souza'],agenda:'amplimed'});
 });
+
+it('fiscal ausente não registra regra legada simulada antes da conversa de configuração',async()=>{
+ const c=cenario();
+ c.deps.lerEstado=async()=>({nomeMedico:'Novo Medico',estado:{agora,fiscal:{certificado:'problema',dadosFiscais:'problema'},agenda:c.fatos.agenda,ultimaNota:null}}) as any;
+ await c.turno('sem-fiscal','Quero configurar Novo Medico');
+ expect((await c.deps.historico.ler('m','simulado')).problemaFiscalComunicado).toBe(false);
+ expect(c.completar).toHaveBeenCalled();
+});
+it('ambiente não habilitado relata pendência sem iniciar ferramenta ou IA',async()=>{
+ const c=cenario();c.fatos.ambiente=null;
+ await c.turno('sem-ambiente','Quero associar Novo Medico à Amplimed');
+ expect(c.executar).not.toHaveBeenCalled();expect(c.completar).not.toHaveBeenCalled();
+ expect(c.enviar.mock.calls[0]![0].join(' ')).toContain('Não associei a agenda nem emiti nada');
+});

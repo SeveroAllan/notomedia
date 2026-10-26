@@ -159,3 +159,33 @@ export function nomeProfissionalDescobertoNaConversa(
   }
   return undefined;
 }
+
+/** Retoma apenas a configuração explícita observada na mesma conversa e conta.
+ * O alvo sem perfil fiscal não vira origem operacional antes do vínculo.
+ * Não resolve emissão, não herda certificado, perfil fiscal ou autorização.
+ */
+export async function origemConfiguracaoAgendaNaConversa(
+  pool:pg.Pool, alvoId:string, conversa:string, texto:string
+):Promise<string>{
+  const atual=normalizarNomeMedico(texto);
+  if(!/\b(?:associar|vincular|configurar)\b/.test(atual))return alvoId;
+  const agendas=(['tribemd','amplimed'] as const).filter(a=>atual.includes(a));
+  if(agendas.length!==1)return alvoId;
+  const {rows}=await pool.query(`
+    select cm.medico_id,cm.texto,alvo.nome_completo
+    from medicos alvo
+    join medicos fonte on fonte.conta_id=alvo.conta_id
+    join medico_perfil_fiscal pf on pf.medico_id=fonte.id and pf.ambiente='homologacao'
+    join conversa_mensagens cm on cm.medico_id=fonte.id and cm.conversa=$2
+      and cm.mensagem_id like 'contexto:profissionais_agenda:%'
+    where alvo.id=$1 and not exists(select 1 from medico_perfil_fiscal p where p.medico_id=alvo.id)
+    order by cm.id desc limit 12
+  `,[alvoId,conversa]);
+  const origens=new Set<string>();
+  for(const row of rows){
+    const nome=String(row.nome_completo??'');
+    if(!nome||!atual.includes(normalizarNomeMedico(nome)))continue;
+    if(nomeProfissionalDescobertoNaConversa([row.texto],agendas[0]!,nome))origens.add(row.medico_id);
+  }
+  return origens.size===1?[...origens][0]!:alvoId;
+}

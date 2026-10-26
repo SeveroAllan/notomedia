@@ -110,7 +110,7 @@ export async function processarComunicacaoMedico(
       const texto=sanitizarTextoMedico(entrada.respostaMedico?.texto??'');
       const estado=await deps.lerEstado(medicoId,agora);
       if (!estado) throw Error('COMUNICACAO_ESTADO_AUSENTE');
-      if(estado.nomeMedico && !await memoria.temBoasVindas(medicoId,conversa)) {
+      if(estado.nomeMedico && estado.estado.fiscal.certificado==='ok' && estado.estado.fiscal.dadosFiscais==='ok' && !await memoria.temBoasVindas(medicoId,conversa)) {
         const historico=await deps.historico.ler(medicoId,'simulado');
         if(!historico.boasVindasComunicadas) {
           const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
@@ -124,7 +124,11 @@ export async function processarComunicacaoMedico(
       }
       const contexto=await memoria.lerContextoParaModelo(medicoId,conversa);
       const fatos=await deps.ferramentas.lerFatos(medicoId,agora);
-      if(fatos.ambiente!=='homologacao') return {tipo:'nenhuma'};
+      if(fatos.ambiente!=='homologacao') {
+        deps.log('info','CONVERSA_AMBIENTE_NAO_HABILITADO');
+        if(fatos.ambiente==null) await enviar(['Não consegui continuar a configuração deste profissional com segurança. O ambiente de operação ainda não está habilitado. Não associei a agenda nem emiti nada.']);
+        return {tipo:'nenhuma'};
+      }
       fatos.semAgendaDigital=contexto.marcas.semAgendaDigital && !fatos.agenda.conectada;
       fatos.entregasRecentes=contexto.entregasRecentes;
       if(entrada.eventoAgenda) fatos.eventoAgenda=entrada.eventoAgenda;
