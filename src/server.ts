@@ -646,11 +646,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           }
           const afirmacaoVinculo=/\b(sim|sou eu|isso|confirmo|confirmada?|pode|é (?:ele|ela|esse|essa)|esse mesmo|correto|certo|exato)\b/i.test(c.texto);
           if(!codigoConfirmado&&afirmacaoVinculo){
-            const propRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:associacao_proposta:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
+            const propRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:associacao_proposta:%' order by id desc limit 1",[c.medicoId,c.conversa])).rows;
             for(const row of propRows){
               try{
                 const parsed=JSON.parse(row.texto);
-                if(parsed?.medicoAlvoId===alvo[0]!.id&&parsed?.agenda===agenda&&typeof parsed?.codigo==='string'&&parsed.codigo){codigoConfirmado=parsed.codigo;break;}
+                if(parsed?.medicoAlvoId===alvo[0]!.id&&parsed?.agenda===agenda&&parsed?.referenciaMedicoId===c.medicoId&&Date.parse(parsed?.propostoEm)>c.agora.getTime()-30*60_000&&typeof parsed?.codigo==='string'&&parsed.codigo&&!parsed.codigo.includes('[OCULTO]')){codigoConfirmado=parsed.codigo;break;}
               }catch{/* sem proposta válida */}
             }
           }
@@ -660,7 +660,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(r.identificacao==='aguardando_confirmacao'&&'codigo' in r&&typeof r.codigo==='string'){
           await pool.query(`insert into conversa_mensagens(medico_id,conversa,mensagem_id,texto,papel) values($1,$2,$3,$4,'noto')
             on conflict(medico_id,mensagem_id) do update set conversa=excluded.conversa,texto=excluded.texto,papel='noto',criada_em=now()`,
-            [c.medicoId,c.conversa,`contexto:associacao_proposta:${c.chave}`,JSON.stringify({medicoAlvoId:alvo[0]!.id,agenda,codigo:r.codigo,nomeFiltro:r.profissionalAgenda,propostoEm:c.agora.toISOString()})]);
+            [c.medicoId,c.conversa,`contexto:associacao_proposta:${c.chave}`,JSON.stringify({medicoAlvoId:alvo[0]!.id,referenciaMedicoId:c.medicoId,agenda,codigo:r.codigo,nomeFiltro:r.profissionalAgenda,propostoEm:c.agora.toISOString()})]);
           const fala=[`Encontrei ${r.profissionalAgenda} na lista de profissionais da sua agenda. É esse profissional que vai emitir pelo Noto? Confirmando, eu guardo esse vínculo e sigo para o certificado.`];
           return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'associar_medico_agenda',ok:true,agenda,identificacao:'aguardando_confirmacao'}};
         }
