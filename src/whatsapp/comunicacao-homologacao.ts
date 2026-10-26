@@ -1,6 +1,7 @@
 import { PostgresMemoriaConversaMedico } from '../onboarding/memoria-conversa.js';
 import { REACOES_PERMITIDAS, type ReacaoMedico, type TransporteReacao } from './reagir-mensagem.js';
 import { registroErroNoto } from '../observabilidade/erros.js';
+import type { TransporteDigitacao, SessaoDigitacao } from './indicar-digitacao.js';
 import type { LeitorMensagemWhatsApp, ChaveMensagemLeitura } from './marcar-mensagem-lida.js';
 import { traduzirFalhaEmissao } from '../worker/notificar-erro-medico.js';
 import { montarBoasVindas } from '../onboarding/regras/decidir-proxima-acao.js';
@@ -70,7 +71,7 @@ function montarAvisoNotaFaseInicial(nota: { numeroNota: string | null; dataEmiss
 
 export class ComunicacaoHomologacao {
   constructor(private readonly pool: pg.Pool, private readonly config: AppConfig,
-    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & EnviarPdfDanfse>, private readonly log: (texto: string) => void = console.info,
+    private readonly transporte: EnviarMensagemPaciente & Partial<LeitorMensagemWhatsApp & TransporteReacao & EnviarPdfDanfse & TransporteDigitacao>, private readonly log: (texto: string) => void = console.info,
     private readonly permissoes?: import('../permissoes/permissoes.js').Permissoes) {}
 
   async medico(entrada: { medicoId: string; acao: AcaoMedico; chave: string; motivo?: string; texto?: string; contatoTelefone?: string;
@@ -112,6 +113,42 @@ export class ComunicacaoHomologacao {
       if (resultado === 'erro') this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' }));
       return resultado;
     } catch { this.log(registroErroNoto('LEITURA_MENSAGEM_FALHOU', 'tecnico', { medicoId, etapa: 'leitura' })); return 'erro'; }
+  }
+
+  async duranteDigitacao<T>(
+    medicoId: string,
+    chave: ChaveMensagemLeitura,
+    contatoTelefone: string | undefined,
+    executar: () => Promise<T>
+  ): Promise<T> {
+    let sessao: SessaoDigitacao | null = null;
+    if (this.config.conversaLivreAtiva && this.config.envioMedicoRealAtivo && chave.id && !chave.fromMe &&
+        /^\d+@(s\.whatsapp\.net|lid)$/.test(chave.remoteJid)) {
+      try {
+        if (await this.medicoPermitido(medicoId, contatoTelefone)) {
+          const contato = contatoTelefone?.trim() ||
+            (chave.remoteJidAlt && /^\d+@s\.whatsapp\.net$/.test(chave.remoteJidAlt) ? chave.remoteJidAlt : chave.remoteJid);
+          sessao = await this.transporte.iniciarDigitacao?.({
+            instanciaNome: this.config.evolutionAssistantInstanceName,
+            contatoTelefone: contato
+          }) ?? null;
+        }
+      } catch {
+        this.log(registroErroNoto('PRESENCA_DIGITACAO_FALHOU', 'tecnico', { medicoId, etapa: 'inicio' }));
+      }
+    }
+
+    try {
+      return await executar();
+    } finally {
+      if (sessao) {
+        try {
+          await sessao.parar();
+        } catch {
+          this.log(registroErroNoto('PRESENCA_DIGITACAO_FALHOU', 'tecnico', { medicoId, etapa: 'fim' }));
+        }
+      }
+    }
   }
 
   async reagir(medicoId: string, chave: ChaveMensagemLeitura, reacao: unknown, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
