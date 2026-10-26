@@ -39,6 +39,7 @@ describe('lembrete fiscal explícito na decisão pura', () => {
 
 function cenario(historico = new HistoricoComunicacaoEmMemoria()) {
   const logs: Array<{ nivel: 'info' | 'erro'; mensagem: string }> = [];
+  void historico.semearPerguntaAgendaFeita('medico-ficticio-a', 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-ficticio-a', 'simulado', '2026-01-01T00:00:00.000Z'); 
   return {
     historico, logs,
     dependencias: { historico, log: (nivel: 'info' | 'erro', mensagem: string) => { logs.push({ nivel, mensagem }); } },
@@ -88,14 +89,15 @@ describe('histórico por médico e modo', () => {
 
   it('registra pedido de agenda e listagem sem voltar a perguntar ou listar', async () => {
     const { entrada, dependencias, historico } = cenario();
+    await historico.semearPerguntaAgendaFeita(entrada.medicoId, 'simulado', null);
+    await historico.semearPerguntaAgendaFeita(entrada.medicoId, 'real', null);
     await orquestrarComunicacao(entrada, dependencias);
-    entrada.chaveProcessamento = 'pergunta'; await orquestrarComunicacao(entrada, dependencias);
-    await historico.gravarResposta(entrada.medicoId, 'simulado', { temNota: true, desde: '2026-10-01' }, instante);
     entrada.chaveProcessamento = 'agenda';
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
     expect((await historico.ler(entrada.medicoId, 'simulado')).perguntaAgenda.feitaEm).toBe(instante);
     entrada.chaveProcessamento = 'agenda-repetida';
-    expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'nenhuma' });
+    expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'perguntar_nota_pendente' });
+    await historico.gravarResposta(entrada.medicoId, 'simulado', { temNota: true, desde: '2026-10-01' }, instante);
     entrada.estado.agenda = { nome: 'TribeMD', conectada: true }; entrada.chaveProcessamento = 'listar';
     expect(await orquestrarComunicacao(entrada, dependencias)).toEqual({ tipo: 'listar_consultas_sem_nota', agenda: 'tribemd', desde: '2026-10-01' });
     entrada.chaveProcessamento = 'listar-repetida';

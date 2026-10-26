@@ -61,6 +61,11 @@ export class HistoricoComunicacaoEmMemoria implements HistoricoComunicacaoReposi
     return structuredClone(this.obterMedico(medicoId, modo).historico);
   }
 
+  /** Semeia a etapa de agenda como já perguntada; uso em cenários de teste focados no fluxo de notas. */
+  async semearPerguntaAgendaFeita(medicoId: string, modo: ModoComunicacao, quando: string | null): Promise<void> {
+    this.obterMedico(medicoId, modo).historico.perguntaAgenda.feitaEm = quando;
+  }
+
   async reservar(medicoId: string, modo: ModoComunicacao, chaveProcessamento: string): Promise<boolean> {
     const medico = this.obterMedico(medicoId, modo);
     if (medico.reserva !== null || medico.processamentos.has(chaveProcessamento)) return false;

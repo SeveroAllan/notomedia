@@ -25,7 +25,7 @@ export class BancoHistoricoFalso {
       if (sql.startsWith('insert into public.noto_historico_comunicacao_medico')) {
         if (!this.historicos.has(chave)) this.historicos.set(chave, { medico_id: medico, modo, boas_vindas_em: null,
           pergunta_nota_em: null, pergunta_nota_repeticoes: 0, resposta_nota: null, resposta_recebida_em: null,
-          pergunta_agenda_em: null, pergunta_agenda_repeticoes: 0, problema_fiscal_em: null, problema_fiscal_repeticoes: 0,
+          pergunta_agenda_em: '2026-01-01T00:00:00.000Z', pergunta_agenda_repeticoes: 0, problema_fiscal_em: null, problema_fiscal_repeticoes: 0,
           agendas_nao_atendidas: [], consultas_listadas: false, aguardando_comprovante: false });
         return { rows: [] };
       }

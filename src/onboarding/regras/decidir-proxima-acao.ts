@@ -56,17 +56,19 @@ export function decidirProximaAcao(
   if (campos.length) return historico.problemaFiscal
     ? decidirRepergunta(historico.problemaFiscal, 'problema_fiscal', agora, intervaloReperguntaDias) : { tipo: 'nenhuma' };
   if (!historico.boasVindasComunicadas) return { tipo: 'boas_vindas', ultimaNota: estado.ultimaNota ? { ...estado.ultimaNota } : null };
-  if (!historico.perguntaNota.feitaEm) return { tipo: 'perguntar_nota_pendente' };
 
   const resposta = historico.perguntaNota.resposta;
   const agenda = estado.agenda.nome?.trim() || null;
   const agendaAtendida = agenda?.toLowerCase() === 'tribemd';
-  if (resposta?.temNota && !estado.agenda.conectada && !historico.perguntaAgenda.feitaEm && (!agenda || agendaAtendida)) {
+  // Agenda em primeiro lugar: o pedido de conexão sai antes da pergunta sobre notas,
+  // sem depender da resposta sobre notas pendentes.
+  if (!estado.agenda.conectada && !historico.perguntaAgenda.feitaEm && (!agenda || agendaAtendida)) {
     return { tipo: 'pedir_agenda', agendaInformada: agenda };
   }
   if (agenda && !agendaAtendida && !historico.agendasNaoAtendidasComunicadas.some(nome => nome.trim().toLowerCase() === agenda.toLowerCase())) {
     return { tipo: 'agenda_nao_atendida', agenda, registrarInteresse: true };
   }
+  if (!historico.perguntaNota.feitaEm) return { tipo: 'perguntar_nota_pendente' };
   if (resposta?.temNota && estado.agenda.conectada && agendaAtendida && !historico.consultasListadas) {
     return { tipo: 'listar_consultas_sem_nota', agenda: 'tribemd', desde: resposta.desde };
   }

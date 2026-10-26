@@ -26,6 +26,7 @@ const instante = '2026-10-18T12:00:00.000Z';
 const nota = { paciente: 'Paciente Exemplo', dataEmissao: '2026-10-18', valorCentavos: 35000, diasDesdeEmissao: 0 };
 function cenario(historico = new HistoricoComunicacaoEmMemoria(), transporte = new TransporteFalso()) {
   const logs: Array<{ nivel: 'info' | 'erro'; mensagem: string }> = [];
+  void historico.semearPerguntaAgendaFeita('medico-ficticio', 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-ficticio', 'simulado', '2026-01-01T00:00:00.000Z'); 
   return {
     historico, transporte, logs,
     entrada: {

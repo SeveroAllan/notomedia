@@ -11,7 +11,7 @@ function estadoDoMedico(): EstadoMedicoAposOnboarding {
     historico: {
       problemaFiscalComunicado: false, boasVindasComunicadas: true,
       perguntaNota: { feitaEm: '2026-10-17T12:00:00Z', resposta: null, repeticoes: 0 },
-      perguntaAgenda: { feitaEm: null, repeticoes: 0 },
+      perguntaAgenda: { feitaEm: '2026-10-17T12:00:00Z', repeticoes: 0 },
       agendasNaoAtendidasComunicadas: [], consultasListadas: false, aguardandoComprovanteComunicado: false
     }
   };
@@ -31,17 +31,23 @@ describe('uma próxima ação estruturada após onboarding', () => {
     const estado = estadoDoMedico(); estado.historico.boasVindasComunicadas = false; estado.ultimaNota = null;
     expect(decidirProximaAcao(estado, agora, intervaloDias)).toEqual({ tipo: 'boas_vindas', ultimaNota: null });
   });
-  it('pergunta sobre nota pendente se ainda não foi feita', () => {
+  it('pergunta sobre nota pendente se ainda não foi feita e a etapa de agenda já passou', () => {
     const estado = estadoDoMedico(); estado.historico.perguntaNota.feitaEm = null;
-    estado.agenda = { nome: 'iClinic', conectada: false };
     expect(decidirProximaAcao(estado, agora, intervaloDias)).toEqual({ tipo: 'perguntar_nota_pendente' });
+  });
+  it('pede a agenda antes de perguntar sobre notas, sem depender da resposta sobre notas', () => {
+    const estado = estadoDoMedico(); estado.historico.perguntaNota.feitaEm = null;
+    estado.historico.perguntaAgenda.feitaEm = null;
+    expect(decidirProximaAcao(estado, agora, intervaloDias)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
   });
   it('pede agenda quando há notas e ainda não há conexão', () => {
     const estado = estadoDoMedico(); estado.historico.perguntaNota.resposta = { temNota: true, desde: '2026-10-01' };
+    estado.historico.perguntaAgenda.feitaEm = null;
     expect(decidirProximaAcao(estado, agora, intervaloDias)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
   });
   it('preserva nome de agenda suportada já informado ao pedir conexão', () => {
     const estado = estadoDoMedico(); estado.historico.perguntaNota.resposta = { temNota: true, desde: null };
+    estado.historico.perguntaAgenda.feitaEm = null;
     estado.agenda.nome = 'TribeMD';
     expect(decidirProximaAcao(estado, agora, intervaloDias)).toEqual({ tipo: 'pedir_agenda', agendaInformada: 'TribeMD' });
   });
@@ -159,9 +165,9 @@ describe('contrato decidirProximaAcao(estado)', () => {
       acao: { tipo: 'problema_fiscal', campos: ['certificado'] } },
     { nome: 'boas_vindas', preparar: estado => { estado.historico.boasVindasComunicadas = false; },
       acao: { tipo: 'boas_vindas', ultimaNota: estadoDoMedico().ultimaNota } },
-    { nome: 'perguntar_nota_pendente', preparar: estado => { estado.historico.perguntaNota.feitaEm = null; },
+    { nome: 'perguntar_nota_pendente', preparar: estado => { estado.historico.perguntaNota.feitaEm = null; estado.historico.perguntaAgenda.feitaEm = agora.toISOString(); },
       acao: { tipo: 'perguntar_nota_pendente' } },
-    { nome: 'pedir_agenda', preparar: estado => { estado.historico.perguntaNota.resposta = { temNota: true, desde: null }; },
+    { nome: 'pedir_agenda', preparar: estado => { estado.historico.perguntaAgenda.feitaEm = null; },
       acao: { tipo: 'pedir_agenda', agendaInformada: null } },
     { nome: 'agenda_nao_atendida', preparar: estado => { estado.agenda.nome = 'iClinic'; },
       acao: { tipo: 'agenda_nao_atendida', agenda: 'iClinic', registrarInteresse: true } },
@@ -169,9 +175,9 @@ describe('contrato decidirProximaAcao(estado)', () => {
       estado.agenda = { nome: 'TribeMD', conectada: true };
       estado.historico.perguntaNota.resposta = { temNota: true, desde: '2026-10-01' };
     }, acao: { tipo: 'listar_consultas_sem_nota', agenda: 'tribemd', desde: '2026-10-01' } },
-    { nome: 'aguardar_comprovante', preparar: estado => { estado.historico.perguntaNota.resposta = { temNota: false, desde: null }; },
+    { nome: 'aguardar_comprovante', preparar: estado => { estado.historico.perguntaNota.resposta = { temNota: false, desde: null }; estado.historico.perguntaAgenda.feitaEm = agora.toISOString(); },
       acao: { tipo: 'aguardar_comprovante' } },
-    { nome: 'reperguntar', preparar: estado => { estado.historico.perguntaNota.feitaEm = '2026-10-15T12:00:00Z'; },
+    { nome: 'reperguntar', preparar: estado => { estado.historico.perguntaNota.feitaEm = '2026-10-15T12:00:00Z'; estado.historico.perguntaAgenda.feitaEm = agora.toISOString(); },
       acao: { tipo: 'reperguntar', pergunta: 'nota_pendente' } },
     { nome: 'nenhuma', preparar: estado => {
       estado.historico.perguntaNota = { feitaEm: '2026-10-01T12:00:00Z', resposta: null, repeticoes: 1 };

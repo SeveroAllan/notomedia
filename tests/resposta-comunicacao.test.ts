@@ -28,6 +28,7 @@ describe('resposta determinística e textos aprovados', () => {
 
 async function cenario() {
   const historico = new HistoricoComunicacaoEmMemoria(); const medicoId = 'medico-ficticio';
+  void historico.semearPerguntaAgendaFeita(medicoId, 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita(medicoId, 'simulado', '2026-01-01T00:00:00.000Z'); 
   const agora = new Date('2026-10-18T15:00:00Z');
   const entrada = { medicoId, chaveProcessamento: 'inicio', estado: { agora,
     fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const }, agenda: { nome: null, conectada: false }, ultimaNota: null } };
@@ -37,14 +38,20 @@ async function cenario() {
   await orquestrarComunicacao({ ...entrada, chaveProcessamento: 'pergunta' }, deps);
   return { entrada, deps, historico, logs, medicoId };
 }
-it('resposta reconhecida é gravada em simulado e gera pedir_agenda com texto exato', async () => {
+it('agenda é pedida antes da pergunta de notas, com o texto exato', async () => {
+  const c = await cenario();
+  await c.historico.semearPerguntaAgendaFeita(c.medicoId, 'simulado', null);
+  await c.historico.semearPerguntaAgendaFeita(c.medicoId, 'real', null);
+  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'pedido-agenda' }, c.deps)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
+  expect(c.logs.at(-1)).toBe('enviaria pedir_agenda: ' + agenda);
+});
+it('resposta reconhecida é gravada em simulado e não toca o histórico real', async () => {
   const c = await cenario();
   const entrada = { ...c.entrada, chaveProcessamento: 'resposta', respostaMedico: { texto: 'sim, desde hoje', dataMensagem: hoje } };
-  expect(await orquestrarComunicacao(entrada, c.deps)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
+  expect(await orquestrarComunicacao(entrada, c.deps)).toEqual({ tipo: 'nenhuma' });
   expect((await c.historico.ler(c.medicoId, 'simulado')).perguntaNota.resposta).toEqual({ temNota: true, desde: hoje });
   expect((await c.historico.ler(c.medicoId, 'real')).perguntaNota.resposta).toBeNull();
   expect(c.logs).toContain('enviaria perguntar_nota_pendente: ' + pergunta);
-  expect(c.logs.at(-1)).toBe('enviaria pedir_agenda: ' + agenda);
 });
 it('ambígua não grava resposta, repergunta imediatamente uma vez e depois não insiste', async () => {
   const c = await cenario();

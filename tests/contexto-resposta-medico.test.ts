@@ -46,6 +46,7 @@ it('limita o contexto a quatro textos e não serializa campos extras do chamador
 
 async function cenario() {
   const historico = new HistoricoComunicacaoEmMemoria(); const logs: string[] = [];
+  void historico.semearPerguntaAgendaFeita('medico-ficticio', 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-ficticio', 'simulado', '2026-01-01T00:00:00.000Z'); 
   const extrair = vi.fn(async (..._args: unknown[]) => ({ temNota: 'sim' as 'sim' | 'fora_do_assunto' | 'incerto', desde: null as string | null, confianca: 0.95 }));
   const entrada = { medicoId: 'medico-ficticio', chaveProcessamento: 'inicio', estado: { agora: new Date('2026-03-02T15:00:00Z'),
     fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const }, agenda: { nome: null, conectada: false }, ultimaNota: null } };
@@ -69,7 +70,9 @@ it('fora do assunto não grava resposta nem ação e não força repergunta', as
 it('trocar de assunto não consome a resposta futura à pergunta pendente', async () => {
   const c = await cenario(); c.extrair.mockResolvedValueOnce({ temNota: 'fora_do_assunto', desde: null, confianca: 0.95 });
   await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'fora', respostaMedico: { texto: 'E a mensalidade?', dataMensagem: dia } }, c.deps as any);
-  expect(await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'resposta', respostaMedico: { texto: 'sim', dataMensagem: dia } }, c.deps as any)).toEqual({ tipo: 'pedir_agenda', agendaInformada: null });
+  expect((await c.historico.ler('medico-ficticio', 'simulado')).perguntaNota.resposta).toBeNull();
+  await orquestrarComunicacao({ ...c.entrada, chaveProcessamento: 'resposta', respostaMedico: { texto: 'sim', dataMensagem: dia } }, c.deps as any);
+  expect((await c.historico.ler('medico-ficticio', 'simulado')).perguntaNota.resposta).toEqual({ temNota: true, desde: null });
 });
 it('confiança baixa continua incerta e permite só a repergunta existente', async () => {
   const c = await cenario(); c.extrair.mockResolvedValue({ temNota: 'incerto', desde: null, confianca: 0.40 });

@@ -8,6 +8,7 @@ beforeEach(() => { rede = vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
 afterEach(() => { expect(rede).not.toHaveBeenCalled(); vi.restoreAllMocks(); });
 async function cenario(ativo = true) {
   const memoriaConversa = new MemoriaConversaMedico(); const historico = new HistoricoComunicacaoEmMemoria(); const logs: string[] = [];
+  void historico.semearPerguntaAgendaFeita('medico-a', 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-a', 'simulado', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-b', 'real', '2026-01-01T00:00:00.000Z'); void historico.semearPerguntaAgendaFeita('medico-b', 'simulado', '2026-01-01T00:00:00.000Z'); 
   const agora = new Date('2026-03-02T15:00:00Z');
   const extrair = vi.fn(async (..._argumentos: unknown[]) => ({ temNota: 'fora_do_assunto' as const, desde: null, confianca: 0.95 }));
   const lerEstado = vi.fn(async () => ({ nomeMedico: 'Medica Ficticia', estado: { agora, fiscal: { certificado: 'ok' as const, dadosFiscais: 'ok' as const }, ultimaNota: null, agenda: { nome: null, conectada: false } } }));
