@@ -28,9 +28,12 @@ it('runner usa a trava do projeto homolog antes de abrir conexão',()=>{
 });
 
 it('visibilidade RLS de médicos segue a conta, não o papel do usuário',()=>{
-  expect(sql).toMatch(/create\s+or\s+replace\s+function\s+public\.medicos_visiveis_para[\s\S]*join\s+public\.medicos\s+m\s+on\s+m\.conta_id=u\.conta_id/i);
+  expect(sql).toMatch(/create\s+or\s+replace\s+function\s+public\.medicos_visiveis_para[\s\S]*join\s+public\.medicos\s+m\s+on\s+m\.conta_id=i\.conta_id/i);
   expect(sql).toMatch(/revoke\s+execute\s+on\s+function\s+public\.medicos_visiveis_para\(uuid\)\s+from\s+public,\s*anon/i);
   expect(sql).toMatch(/grant\s+execute[\s\S]*to\s+authenticated,\s*service_role/i);
+  expect(sql).toContain('p_auth_user_id=auth.uid()');
+  expect(sql).toContain('join public.contador_medico cm');
+  expect(sql).toContain('join public.secretaria_medico sm');
 });
 
 it('referência de agenda é interna e protegida por RLS e revoke',()=>{
