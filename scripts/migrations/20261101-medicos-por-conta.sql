@@ -18,12 +18,28 @@ alter table public.medicos
 create or replace function public.medicos_visiveis_para(p_auth_user_id uuid)
 returns setof uuid
 language sql stable security definer
-set search_path = public
+set search_path = pg_catalog
 as $func$
+  with identidade as (
+    select u.id,u.conta_id
+    from public.usuarios u
+    where u.auth_user_id=p_auth_user_id
+      and u.ativo=true
+      and p_auth_user_id=auth.uid()
+  )
   select m.id
-  from public.usuarios u
-  join public.medicos m on m.conta_id=u.conta_id
-  where u.auth_user_id=p_auth_user_id and u.ativo=true
+  from identidade i
+  join public.medicos m on m.conta_id=i.conta_id
+  union
+  select sm.medico_id
+  from identidade i
+  join public.secretarias s on s.usuario_id=i.id
+  join public.secretaria_medico sm on sm.secretaria_id=s.id
+  union
+  select cm.medico_id
+  from identidade i
+  join public.contadores c on c.usuario_id=i.id
+  join public.contador_medico cm on cm.contador_id=c.id
 $func$;
 
 revoke execute on function public.medicos_visiveis_para(uuid) from public, anon;
@@ -77,8 +93,20 @@ begin
   end if;
 
   if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
-      !~ 'join public\\.medicos m on m\\.conta_id=u\\.conta_id' then
+      !~ 'join public\\.medicos m on m\\.conta_id=i\\.conta_id' then
     raise exception 'medicos_visiveis_para não está escopada pela conta';
+  end if;
+
+  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
+      !~ 'p_auth_user_id ?= ?auth\\.uid\\(\\)' then
+    raise exception 'medicos_visiveis_para aceita identidade arbitrária';
+  end if;
+
+  if pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
+      !~ 'public\\.contador_medico'
+     or pg_get_functiondef('public.medicos_visiveis_para(uuid)'::regprocedure)
+      !~ 'public\\.secretaria_medico' then
+    raise exception 'delegações explícitas deixaram de ser preservadas';
   end if;
 
   if has_function_privilege('anon','public.medicos_visiveis_para(uuid)','EXECUTE') then
