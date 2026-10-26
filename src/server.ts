@@ -614,7 +614,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(nomes.length!==1||!agenda)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:'MEDICO_NAO_IDENTIFICADO'}};
         const existentes=await listarMedicosDaConta(pool,c.medicoId);
         let alvo=existentes.filter(m=>normalizarNomeMedico(m.nomeCompleto)===normalizarNomeMedico(nomes[0]!));
-        if(!alvo.length){
+        // Confirmação humana exige a escolha explícita na mensagem atual; nome apenas
+        // presente no contexto (sem escolha neste turno) não confirma profissional nem código.
+        const escolhaExplicita=normalizarNomeMedico(c.texto).includes(normalizarNomeMedico(nomes[0]!));
+        if(!alvo.length&&escolhaExplicita){
           // Médico novo escolhido da descoberta da agenda nesta conversa: cria o registro mínimo
           // na mesma conta antes de associar, preservando a ordem descobrir → associar → certificado.
           const descRowsCriacao=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
@@ -631,7 +634,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         let codigoConfirmado:string|undefined;
         if(agenda==='amplimed'){
           const alvoNorm=normalizarNomeMedico(alvo[0]!.nomeCompleto);
-          const descRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
+          const descRows=escolhaExplicita?(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows:[];
           for(const row of descRows){
             try{
               const parsed=JSON.parse(row.texto);
