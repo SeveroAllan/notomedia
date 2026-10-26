@@ -42,6 +42,10 @@ export class BancoJornada {
     if (s.startsWith('insert into medicos')) { this.medico={id:randomUUID(),usuario_id:p[0],conta_id:p[1],nome_completo:p[2],crm:null,rqe:null,especialidade:null};return ret([this.medico]); }
     if (s.startsWith('select id from medicos where id')) return ret(this.medico?.id===p[0]?[{id:this.medico.id}]:[]);
     if (s.startsWith('select m.id from medicos m join usuarios')) { const vinculado=p.length===2?this.medico?.id===p[0]&&this.usuario?.auth_user_id===p[1]:this.usuario?.auth_user_id===p[0];return ret(vinculado?[{id:this.medico.id}]:[]); }
+    if (s.startsWith('select m.id from usuarios u join medicos m on m.conta_id=u.conta_id')) {
+      const alvo=p[1]??null,vinculado=this.usuario?.auth_user_id===p[0]&&this.usuario?.ativo&&this.medico?.conta_id===this.usuario?.conta_id&&(!alvo||this.medico?.id===alvo);
+      return ret(vinculado?[{id:this.medico.id}]:[]);
+    }
     if (s.startsWith('select 1 from usuarios u join medicos m on m.conta_id=u.conta_id')) return ret(this.usuario?.auth_user_id===p[1]&&this.usuario?.ativo&&this.medico?.id===p[0]&&this.medico?.conta_id===this.usuario?.conta_id?[{'?column?':1}]:[]);
     if (s.startsWith('update usuarios set nome')) {this.usuario.nome=p[1];return ret();}
     if (s.startsWith('update medicos set nome_completo=$2')) { Object.assign(this.medico,{nome_completo:p[1],crm:p[2],rqe:p[3]});return ret(); }
@@ -81,6 +85,7 @@ export class BancoJornada {
     if (s.startsWith("update cadastro_certificado_trabalhos set estado='concluido',dados=$2")) {Object.assign(this.trabalhos.find(t=>t.id===p[0]),{estado:'concluido',dados:JSON.parse(p[1]),snapshot:JSON.parse(p[2]),reserva:null});return ret();}
     if (s.startsWith('insert into cadastro_certificado_avisos')||s.startsWith('update cadastro_certificado_avisos')) return ret();
     if (s.startsWith('select u.ativo from usuarios')) return ret([{ativo:this.usuario.ativo}]);
+    if (s.startsWith('select exists(select 1 from usuarios u where u.conta_id=m.conta_id')) return ret([{ativo:!!this.usuario?.ativo&&this.medico?.conta_id===this.usuario?.conta_id}]);
     if (s.startsWith('select md5(')) return ret([{versao:this.versao()}]);
     if (s.startsWith('select m.nome_completo as nome,m.crm,m.rqe,to_jsonb(t)')) return ret([{nome:this.medico.nome_completo,crm:this.medico.crm,rqe:this.medico.rqe,trabalho:this.trabalho(),versao:this.versao(),whatsapp_conectado:this.whatsapp?.status==='conectado'}]);
     if (s.includes('as cert_ativos')) return ret([{...this.perfil,...this.medico,medico_id:this.medico.id,usuario_id:this.usuario.id,medico_nome:this.medico.nome_completo,usuario_nome:this.usuario.nome,telefone:this.usuario.telefone,email:this.usuario.email,parametros_emissao:this.servico?.parametros_emissao,aliquota_iss:this.servico?.aliquota_iss,revisao_profissional:this.trabalho(),cert_ativos:this.certificados.filter(c=>c.status==='ativo').length,whats_conectados:this.whatsapp?.status==='conectado'?1:0,whatsapp_vinculado:!!this.whatsapp?.conectado_em}]);
