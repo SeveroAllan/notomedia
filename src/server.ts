@@ -372,29 +372,26 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }) : false;
   }
 
-  const associarMedicoAgendaSeguro = async (baseMedicoId:string,alvoMedicoId:string,nomeMedico:string,agenda:'tribemd'|'amplimed',agora=new Date()) => {
+  const associarMedicoAgendaSeguro = async (baseMedicoId:string,alvoMedicoId:string,nomeMedico:string,agenda:'tribemd'|'amplimed',agora=new Date(),codigoConfirmado?:string) => {
     const agendas=await cofres.statusAgendas(baseMedicoId).catch(()=>null);
     if(!agendas?.[agenda]?.conectada)return {ok:false as const,motivo:'AGENDA_NAO_CONECTADA' as const};
-    let codigoProfissional:string|null=null;
-    let motivoAmplimed:'PROFISSIONAL_NAO_IDENTIFICADO'|'PROFISSIONAL_AMBIGUO'|'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA'|null=null;
     if(agenda==='amplimed'){
       // Vínculo por nome + código do filtro da própria agenda. Zero ou vários nomes iguais: fail-closed.
+      // O código só é persistido depois de confirmação humana do profissional (codigoConfirmado).
       const lista=await cofres.listarProfissionaisAmplimed(baseMedicoId);
-      if(!lista.ok)motivoAmplimed='PROFISSIONAL_NAO_IDENTIFICADO';
-      else{
-        const alvo=normalizarNomeMedico(nomeMedico);
-        const iguais=lista.profissionais.filter(p=>normalizarNomeMedico(p.nome)===alvo);
-        if(iguais.length===1)codigoProfissional=iguais[0]!.codigo;
-        else motivoAmplimed=iguais.length>1?'PROFISSIONAL_AMBIGUO':'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA';
-      }
+      if(!lista.ok)return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:'PROFISSIONAL_NAO_IDENTIFICADO' as const};
+      const alvo=normalizarNomeMedico(nomeMedico);
+      const iguais=lista.profissionais.filter(p=>normalizarNomeMedico(p.nome)===alvo);
+      if(iguais.length!==1)return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:iguais.length>1?'PROFISSIONAL_AMBIGUO' as const:'PROFISSIONAL_NAO_OBSERVADO_NA_JANELA' as const};
+      const codigo=iguais[0]!.codigo;
+      if(codigoConfirmado!==codigo)
+        return {ok:true as const,agenda,identificacao:'aguardando_confirmacao' as const,profissionalAgenda:iguais[0]!.nome,codigo};
+      const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId,codigo);
+      if(!vinculou)return {ok:false as const,motivo:'MEDICO_AMBIGUO' as const};
+      return {ok:true as const,agenda,identificacao:'observada' as const};
     }
-    const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId,codigoProfissional);
+    const vinculou=await vincularReferenciaAgendaConta(pool,[alvoMedicoId],agenda,baseMedicoId);
     if(!vinculou)return {ok:false as const,motivo:'MEDICO_AMBIGUO' as const};
-    if(agenda==='amplimed'){
-      return codigoProfissional
-        ? {ok:true as const,agenda,identificacao:'observada' as const}
-        : {ok:true as const,agenda,identificacao:'pendente' as const,motivo:motivoAmplimed??'PROFISSIONAL_NAO_IDENTIFICADO' as const};
-    }
     const bruto=await cofres.fonteAgenda.consultar({medicoId:baseMedicoId,referenciaCofre:baseMedicoId,janelaDias:90,agora});
     if(bruto.tipo==='erro')return {ok:true as const,agenda,identificacao:'pendente' as const,motivo:bruto.codigo};
     const descoberta=descobrirProfissionaisParaConta('tribemd',bruto.consultas);
@@ -502,7 +499,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'descobrir_medicos_agenda',ok:false,motivo:descobertaAmplimed.motivo}};
           }
           const profissionais=descobertaAmplimed.nomes.slice(0,12);
-          await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'amplimed',profissionais:lista.profissionais,referenciaMedicoId:c.medicoId,cobertura:{tipo:'filtro_profissionais_agenda',catalogoCompleto:false}}),'noto');
+          await memoriaPersistida?.registrar(c.medicoId,c.conversa,`contexto:profissionais_agenda:${c.chave}`,JSON.stringify({fonte:'amplimed',profissionais,codigos:lista.profissionais,referenciaMedicoId:c.medicoId,cobertura:{tipo:'filtro_profissionais_agenda',catalogoCompleto:false}}),'noto');
           const conhecidos=new Set((c.fatos.medicosConta??[]).map(m=>normalizarNomeMedico(m.nome)));
           const novos=profissionais.filter(nome=>!conhecidos.has(normalizarNomeMedico(nome)));
           if(!novos.length){
@@ -618,10 +615,41 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const existentes=await listarMedicosDaConta(pool,c.medicoId);
         const alvo=existentes.filter(m=>normalizarNomeMedico(m.nomeCompleto)===normalizarNomeMedico(nomes[0]!));
         if(alvo.length!==1)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:alvo.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO'}};
-        if(!alvo[0]!.certificadoValido)return {falaAssinada:[`O certificado de ${alvo[0]!.nomeCompleto} ainda precisa ser validado antes de eu associar a agenda.`],
-          dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:'CERTIFICADO_PENDENTE'}};
-        const r=await associarMedicoAgendaSeguro(c.medicoId,alvo[0]!.id,alvo[0]!.nomeCompleto,agenda,c.agora);
+        // Amplimed: o código do profissional só é gravado após confirmação humana.
+        // Confirmada quando (a) o nome veio da lista da agenda nesta conversa (descoberta: usuário escolheu
+        // da lista exibida) ou (b) já existe proposta registrada e o usuário respondeu sem negar neste turno.
+        let codigoConfirmado:string|undefined;
+        if(agenda==='amplimed'){
+          const alvoNorm=normalizarNomeMedico(alvo[0]!.nomeCompleto);
+          const descRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
+          for(const row of descRows){
+            try{
+              const parsed=JSON.parse(row.texto);
+              if(parsed?.fonte==='amplimed'&&Array.isArray(parsed?.codigos)){
+                const hit=parsed.codigos.find((x:{codigo?:unknown;nome?:unknown})=>normalizarNomeMedico(String(x?.nome??''))===alvoNorm);
+                if(typeof hit?.codigo==='string'&&hit.codigo){codigoConfirmado=hit.codigo;break;}
+              }
+            }catch{/* proposta abaixo decide */}
+          }
+          if(!codigoConfirmado&&c.texto.trim()&&!/\bn[aã]o\b/i.test(c.texto)){
+            const propRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:associacao_proposta:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
+            for(const row of propRows){
+              try{
+                const parsed=JSON.parse(row.texto);
+                if(parsed?.medicoAlvoId===alvo[0]!.id&&parsed?.agenda===agenda&&typeof parsed?.codigo==='string'&&parsed.codigo){codigoConfirmado=parsed.codigo;break;}
+              }catch{/* sem proposta válida */}
+            }
+          }
+        }
+        const r=await associarMedicoAgendaSeguro(c.medicoId,alvo[0]!.id,alvo[0]!.nomeCompleto,agenda,c.agora,codigoConfirmado);
         if(!r.ok)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:r.motivo}};
+        if(r.identificacao==='aguardando_confirmacao'&&'codigo' in r&&typeof r.codigo==='string'){
+          await pool.query(`insert into conversa_mensagens(medico_id,conversa,mensagem_id,texto,papel) values($1,$2,$3,$4,'noto')
+            on conflict(medico_id,mensagem_id) do update set conversa=excluded.conversa,texto=excluded.texto,papel='noto',criada_em=now()`,
+            [c.medicoId,c.conversa,`contexto:associacao_proposta:${c.chave}`,JSON.stringify({medicoAlvoId:alvo[0]!.id,agenda,codigo:r.codigo,nomeFiltro:r.profissionalAgenda,propostoEm:c.agora.toISOString()})]);
+          const fala=[`Encontrei ${r.profissionalAgenda} na lista de profissionais da sua agenda. É esse profissional que vai emitir pelo Noto? Confirmando, eu guardo esse vínculo e sigo para o certificado.`];
+          return {falaAssinada:fala,falaMemoria:fala,dados:{ferramenta:'associar_medico_agenda',ok:true,agenda,identificacao:'aguardando_confirmacao'}};
+        }
         const nomeAgenda=agenda==='tribemd'?'TribeMD':'Amplimed';
         const fala=r.identificacao==='observada'
           ? [`Associei ${alvo[0]!.nomeCompleto} à ${nomeAgenda}. Nessa leitura, a agenda identificou consultas com esse profissional. Mesmo assim, cada consulta só será usada quando vier identificada de forma compatível.`,
