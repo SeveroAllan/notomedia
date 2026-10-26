@@ -12,6 +12,20 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIGRATION_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +45,7 @@ jobs:
             tests/migracao-operador-seguranca.test.ts \
             tests/migracao-uso-mensal-medico-seguranca.test.ts \
             tests/migracao-medicos-conta.test.ts \
+            tests/migracao-contadores-aplicacao.test.ts \
             tests/migracao-compat-conta.test.ts \
             tests/conta-multimedico-modelo.test.ts \
             tests/profissionais-agenda-multimedico.test.ts \
