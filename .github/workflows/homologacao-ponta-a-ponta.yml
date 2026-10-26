@@ -31,6 +31,7 @@ jobs:
             tests/migracao-operador-seguranca.test.ts \
             tests/migracao-uso-mensal-medico-seguranca.test.ts \
             tests/migracao-medicos-conta.test.ts \
+            tests/migracao-compat-conta.test.ts \
             tests/conta-multimedico-modelo.test.ts \
             tests/profissionais-agenda-multimedico.test.ts \
             tests/referencia-agenda-conta.test.ts \
