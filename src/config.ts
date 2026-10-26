@@ -44,6 +44,7 @@ export interface AppConfig {
   envioMedicoRealAtivo?: boolean;
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
+  ambienteOperacao?: string;
   meuDanfeApiKey?: string;
   hubDesenvolvedorToken?: string;
 }
@@ -90,6 +91,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',
     envioRealAllowlist: (env['ENVIO_REAL_ALLOWLIST'] || '').split(/[,;\s]+/).filter(Boolean),
+    ambienteOperacao: env['NOTO_AMBIENTE_OPERACAO'],
     meuDanfeApiKey: env['MEU_DANFE_API_KEY'],
     hubDesenvolvedorToken: env['HUB_DESENVOLVEDOR_TOKEN'],
   };

@@ -11,6 +11,7 @@ import type { AppConfig } from '../config.js';
 import type { EnviarPdfDanfse } from './enviar-pdf-danfse.js';
 import type { EnviarMensagemPaciente } from './enviar-mensagem-paciente.js';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
+import { ambienteEfetivoConversa } from './ambiente-operacao-homolog.js';
 
 type AcaoMedico = 'perguntar_medico' | 'perguntar_pacote' | 'pedir_agenda' | 'falha_emissao' | 'nota_gerada' | 'instancia_indisponivel' | 'falha_entrega' | 'entrega_sem_permissao' | 'entrega_sem_permissao_link';
 const textos: Record<AcaoMedico, string> = {
@@ -83,7 +84,7 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
-      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular(acao);
+      if (!this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(destino?.ambiente, destino?.telefone), destino?.telefone)) return this.simular(acao);
       const texto = entrada.texto ?? (acao === 'falha_emissao' ? traduzirFalhaEmissao(motivo) : acao === 'falha_entrega' ? traduzirFalhaEmissao('FALHA_ENTREGA_PDF') : acao === 'instancia_indisponivel' ? traduzirFalhaEmissao('INSTANCIA_INDISPONIVEL') : acao === 'perguntar_medico' && motivo === 'MULTIPLAS_CONSULTAS_SEM_NOTA' && detalhe
         ? montarPerguntaMultiplasConsultas(detalhe)
         : acao === 'perguntar_medico' && motivo === 'NOTA_FASE_INICIAL' && detalheNota
@@ -99,7 +100,7 @@ export class ComunicacaoHomologacao {
     if (!this.config.envioMedicoRealAtivo) return false;
     const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
       left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
-    return this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, contatoTelefone??rows[0]?.telefone);
+    return this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(rows[0]?.ambiente, contatoTelefone??rows[0]?.telefone), contatoTelefone??rows[0]?.telefone);
   }
 
   async marcarLida(medicoId: string, chave: ChaveMensagemLeitura, contatoTelefone?:string): Promise<'simulado' | 'enviado' | 'erro' | 'repetido'> {
@@ -122,7 +123,7 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const tel = (contatoTelefone ?? rows[0]?.telefone ?? '').replace(/\D/g, '');
-      if (!/^\d{10,15}$/.test(tel) || !this.permitido(this.config.envioMedicoRealAtivo, rows[0]?.ambiente, tel)) return this.simular('presenca_digitando');
+      if (!/^\d{10,15}$/.test(tel) || !this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(rows[0]?.ambiente, tel), tel)) return this.simular('presenca_digitando');
       const ok = (await this.transporte.enviarPresenca?.({ instanciaNome: this.config.evolutionAssistantInstanceName,
         contatoTelefone: tel, presence, delayMs }))?.sucesso === true;
       return ok ? 'enviado' : 'erro';
@@ -149,7 +150,7 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [entrada.medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
-      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return { resultado: this.simular('confirmar_emissao') };
+      if (!this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(destino?.ambiente, destino?.telefone), destino?.telefone)) return { resultado: this.simular('confirmar_emissao') };
       const envio = new Date(entrada.dataEnvioPagamento), consulta = new Date(entrada.dataConsulta);
       if (!Number.isFinite(envio.getTime()) || !Number.isFinite(consulta.getTime()) || !entrada.paciente.trim()) return { resultado: 'erro' };
       const data = (d: Date) => d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -173,7 +174,7 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
-      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('boas_vindas');
+      if (!this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(destino?.ambiente, destino?.telefone), destino?.telefone)) return this.simular('boas_vindas');
       const escolhaEntrega=this.permissoes?await this.permissoes.ler(medicoId,'entregar_paciente').catch(()=>null):null;
       const baloes = montarBoasVindas(nomeMedico, ultimaNota, {
         permissoesAtivas:!!this.permissoes,
@@ -202,7 +203,7 @@ export class ComunicacaoHomologacao {
       const { rows } = await this.pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id = m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id = m.id where m.id = $1`, [medicoId]);
       const destino = {...rows[0],telefone:entrada.contatoTelefone??rows[0]?.telefone};
-      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('conversa_livre');
+      if (!this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(destino?.ambiente, destino?.telefone), destino?.telefone)) return this.simular('conversa_livre');
       if (!await this.reservarMensagem(medicoId, destino.telefone, chave, entrada.falaMemoria ?? fala, entrada.conversa)) return 'repetido';
       return await this.enviarUnico(medicoId, 'conversa_livre', chave, async () => {
         for (const texto of fala) {
@@ -226,7 +227,7 @@ export class ComunicacaoHomologacao {
         left join usuarios u on u.id=m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id=m.id
         where m.id=$1`, [medicoId])).rows[0];
       const destino={...base,telefone:contatoTelefone??base?.telefone};
-      if (!this.permitido(this.config.envioMedicoRealAtivo, destino?.ambiente, destino?.telefone)) return this.simular('cofre');
+      if (!this.permitido(this.config.envioMedicoRealAtivo, this.ambienteEfetivo(destino?.ambiente, destino?.telefone), destino?.telefone)) return this.simular('cofre');
       // Não gravar o texto: ele pode conter um link de uso único.
       const resultado = await this.transporte.enviarTexto({ instanciaNome: this.config.evolutionAssistantInstanceName,
         contatoTelefone: destino.telefone, texto });
@@ -339,6 +340,12 @@ export class ComunicacaoHomologacao {
       if (resultado === 'erro' && nota.origem !== 'lote') await this.medico({ medicoId, acao: 'falha_entrega', chave: nota.nota_fiscal_id });
       await registrarEntrega('paciente',resultado);return resultado;
     } catch { this.log('ENTREGA_COMPROVANTE_FALHOU'); return 'erro'; }
+  }
+
+  /** Perfil fiscal é a fonte primária; em deploy com operação homolog explícita,
+   *  telefone na allowlist responde mesmo antes do cadastro fiscal (conversa de configuração). */
+  private ambienteEfetivo(ambiente: unknown, telefone: unknown): string | null {
+    return ambienteEfetivoConversa(this.config, ambiente, telefone);
   }
 
   private permitido(ativo: boolean | undefined, ambiente: unknown, telefone: unknown): boolean {

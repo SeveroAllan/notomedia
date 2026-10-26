@@ -36,6 +36,7 @@ import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
+import { ambienteEfetivoConversa } from './whatsapp/ambiente-operacao-homolog.js';
 import { diagnosticoEntradaWebhook, diagnosticoResultadoWebhook, diagnosticoErroWebhook } from './whatsapp/diagnostico-webhook.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
@@ -408,7 +409,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const ferramentasConversa: FerramentasConversa = {
     lerFatos: async (medicoId,agora) => {
-      const {rows} = await pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1',[medicoId]);
+      const {rows} = await pool.query(`select u.telefone, pf.ambiente from medicos m
+        left join usuarios u on u.id=m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id=m.id where m.id=$1`,[medicoId]);
       const agendaAtiva=(await cofres.statusAgenda(medicoId))??{nome:null,conectada:false};
       const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const agendaEfetiva=estado?.estado.agenda??agendaAtiva;
@@ -442,7 +444,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         emitirAutonomoValor=emitir?.valor??null;entregarPacienteValor=entregar?.valor??null;solicitarCpfValor=cpf?.valor??null;
         faltantes=await permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[]);
       }
-      return {ambiente:rows[0]?.ambiente??null,agenda:estado?.estado.agenda??{nome:null,conectada:false},
+      return {ambiente:ambienteEfetivoConversa(config,rows[0]?.ambiente??null,rows[0]?.telefone),agenda:estado?.estado.agenda??{nome:null,conectada:false},
         agendas:{tribemd:{salva:agendas.tribemd.salvo,conectada:agendas.tribemd.conectada},amplimed:{salva:agendas.amplimed.salvo,conectada:agendas.amplimed.conectada}},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           agenda:conexao?.link?.agenda??null,
