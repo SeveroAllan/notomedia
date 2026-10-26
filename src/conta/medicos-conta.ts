@@ -168,7 +168,7 @@ export async function origemConfiguracaoAgendaNaConversa(
   pool:pg.Pool, alvoId:string, conversa:string, texto:string
 ):Promise<string>{
   const atual=normalizarNomeMedico(texto);
-  if(!/\b(?:associar|vincular|configurar)\b/.test(atual))return alvoId;
+  if(!/^\s*(?:quero|pode)\s+(?:associar|vincular|configurar)\b/.test(atual)||/\b(?:nao|cancelar|cancele)\b/.test(atual))return alvoId;
   const agendas=(['tribemd','amplimed'] as const).filter(a=>atual.includes(a));
   if(agendas.length!==1)return alvoId;
   const {rows}=await pool.query(`

@@ -926,3 +926,12 @@ it('ambiente não habilitado relata pendência sem iniciar ferramenta ou IA',asy
  expect(c.executar).not.toHaveBeenCalled();expect(c.completar).not.toHaveBeenCalled();
  expect(c.enviar.mock.calls[0]![0].join(' ')).toContain('Não associei a agenda nem emiti nada');
 });
+it('associação literal preenche nome único e agenda sem depender de parâmetros omitidos pelo decisor',async()=>{
+ const c=cenario();c.fatos.medicosConta=[{nome:'Allan Severo (teste Noto)',certificado:'pendente'}];
+ c.fatos.agenda={nome:'amplimed',conectada:true};
+ c.fatos.agendas={tribemd:{salva:false,conectada:false},amplimed:{salva:true,conectada:true}};
+ c.deps.ferramentas.permitidas=()=>['nenhuma','associar_medico_agenda'];
+ c.completar.mockResolvedValue('{"fala":["Conferi o resultado."],"acao":null}');
+ await c.turno('associar-literal','Quero associar Allan Severo (teste Noto) à agenda Amplimed.');
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'associar_medico_agenda',parametros:{medicos:['Allan Severo (teste Noto)'],agenda:'amplimed'}});
+});

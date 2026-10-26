@@ -1,3 +1,4 @@
+import {normalizarNomeMedico} from '../conta/medicos-conta.js';
 import {afirmaFatoDaAgendaSemFerramenta,consultaNaoIdentificada,normalizarBaloesSemPontoEVirgula} from './conversador-medico.js';
 import { ERRO_CONVERSA, periodoDecisao, faltasIntroducaoLink, validarAcaoConversa, type ConversadorMedico, type DecisaoConversa, type FatosConversa } from './conversador-medico.js';
 import { FALA_CONCLUSAO_AGENDA_CONECTADA, FALA_CONCLUSAO_AGENDA_FALHA_ACESSO, FALA_CONCLUSAO_AGENDA_FALHA_INSTAVEL, FALA_PEDIDO_CONEXAO_AGENDA, FALA_PROTECAO_CREDENCIAL_AGENDA, FALA_SEGURANCA_LINK_AGENDA } from './falas.js';
@@ -212,6 +213,15 @@ export async function processarComunicacaoMedico(
       if(!decisao&&entrada.eventoAgenda?.conectado&&planoMedicosEmCurso()&&planoAtual?.medicos?.length===1&&permitidas.includes('associar_medico_agenda')){
         const agenda=entrada.eventoAgenda.agenda==='amplimed'?'amplimed':'tribemd';
         decisao={fala:[`A ${agenda==='tribemd'?'TribeMD':'Amplimed'} conectou. Vou retomar a configuração de ${planoAtual.medicos[0]} e verificar a associação.`],acao:'associar_medico_agenda',parametros:{agenda,medicos:[planoAtual.medicos[0]]}};
+      }
+      // Pedido explícito de associação: nome na mensagem atual + agenda conectada.
+      // O executor ainda verifica a descoberta/código da mesma conexão e homônimos.
+      const agendasExplicitas=(['tribemd','amplimed'] as const).filter(a=>normalizarNomeMedico(texto).includes(a));
+      const nomesExplicitos=(fatos.medicosConta??[]).filter(m=>normalizarNomeMedico(texto).includes(normalizarNomeMedico(m.nome)));
+      if(/^\s*(?:quero|pode)\s+(?:associar|vincular)\b/i.test(texto)&&! /\b(?:n[aã]o|cancelar|cancele)\b/i.test(texto)&&agendasExplicitas.length===1&&nomesExplicitos.length===1&&permitidas.includes('associar_medico_agenda')){
+        const agenda=agendasExplicitas[0]!;
+        const conectada=fatos.agendas?.[agenda]?.conectada??(fatos.agenda.conectada&&fatos.agenda.nome?.toLowerCase()===agenda);
+        if(conectada)decisao={fala:[`Vou conferir a associação de ${nomesExplicitos[0]!.nome} à ${agenda==='amplimed'?'Amplimed':'TribeMD'}.`],acao:'associar_medico_agenda',parametros:{medicos:[nomesExplicitos[0]!.nome],agenda}};
       }
       if(!decisao) decisao=await decidir(permitidas);
       if(entrada.respostaMedico) {
