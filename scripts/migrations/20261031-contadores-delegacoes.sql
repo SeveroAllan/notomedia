@@ -193,7 +193,8 @@ begin
     select 1 from pg_indexes
     where schemaname='public' and tablename='contador_medico'
       and indexname='idx_contador_medico_medico'
-  ) then raise exception 'índice reverso de contador_medico ausente'; end if;
+      and position('(medico_id)' in replace(lower(indexdef),' ',''))>0
+  ) then raise exception 'índice reverso de contador_medico ausente ou incompatível'; end if;
 
   foreach tabela in array array['contadores','contador_medico'] loop
     if not exists (
