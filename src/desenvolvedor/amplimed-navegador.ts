@@ -240,8 +240,12 @@ export async function listarProfissionaisAgendaAmplimed(opcoes: { executavel: st
   let profissionais: ProfissionalFiltroAmplimed[] = [];
   const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
     if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
-    await page.waitForSelector('#seletor_profissional', { timeout: 15000 }).catch(() => {});
+    // O contêiner aparece antes dos checkboxes (carga assíncrona do filtro): esperar o primeiro .select_profs,
+    // não só o #seletor_profissional, senão a leitura vê zero entradas em página ainda populando.
+    const apareceuSeletor = await page.waitForSelector('#seletor_profissional', { timeout: 15000 }).then(() => true).catch(() => false);
+    const apareceuCheckbox = apareceuSeletor ? await page.waitForSelector('.select_profs', { timeout: 15000 }).then(() => true).catch(() => false) : false;
     profissionais = await page.evaluate(`[...document.querySelectorAll('.select_profs')].map(c => ({ codigo: String(c.getAttribute('valor') || ''), nome: String(c.getAttribute('prof') || (c.closest('label')?.textContent || '')).trim() })).filter(p => p.codigo && p.nome)`) as ProfissionalFiltroAmplimed[];
+    console.warn('AMPLIMED_LISTA_PROFS seletor=' + apareceuSeletor + ' checkbox=' + apareceuCheckbox + ' total=' + profissionais.length);
   } }, signal);
   return { codigo, profissionais };
 }
