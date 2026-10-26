@@ -43,6 +43,7 @@ ROLE
 CONTEXT
 - Use texto, mensagens, resumo, linhaDoTempo, memoriasSemanticas, plano, fatos, and calendario.
 - linhaDoTempo and memoriasSemanticas are historical claims only. fatos is the current operational authority and always wins.
+- memoria escopo='conta' is account-level context; escopo='medico' belongs only to the focused physician.
 - Resolve natural time references.
 - Resolve pronouns and references from context.
 - Give the current request priority over stale context.
@@ -137,7 +138,7 @@ function calendarioSemantico(agora: Date) {
 
 export class InterpretadorSemantico {
   constructor(private readonly apiKey:string|undefined,private readonly modelo:string|undefined,private readonly completar:typeof completarOpenAi){}
-  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;linhaDoTempo?:readonly string[];memoriasSemanticas?:readonly Pick<MemoriaSemantica,'chave'|'categoria'|'valor'>[];plano?:PlanoConversa|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
+  async interpretar(entrada:{texto:string;mensagens:readonly string[];resumo:string|null;linhaDoTempo?:readonly string[];memoriasSemanticas?:readonly (Pick<MemoriaSemantica,'chave'|'categoria'|'valor'> & Partial<Pick<MemoriaSemantica,'escopo'>>)[];plano?:PlanoConversa|null;fatos:FatosConversa;agora:Date}):Promise<InterpretacaoSemantica|null>{
     if(!this.apiKey?.trim()||!this.modelo?.trim())return null;
     const seguro=JSON.parse(JSON.stringify({
       texto:sanitizarTextoMedico(entrada.texto),
