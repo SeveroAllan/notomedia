@@ -14,8 +14,14 @@ import { CATALOGO_FERRAMENTAS } from './ferramentas-conversa.js';
 import { planejarPorSemantica, reconciliarInterpretacaoSemantica, type InterpretacaoSemantica, type InterpretadorSemantico } from './interpretador-semantico.js';
 
 type EntradaLegada = Parameters<typeof orquestrarComunicacao>[0];
+export function escopoMemoriaPorOrigem(m:{papel?:'medico'|'noto';origemOperador?:'medico'|'secretaria'|'conta'|null}):'medico'|'conta'|null {
+  if(m.papel==='noto')return null;
+  if(m.origemOperador==='conta'||m.origemOperador==='secretaria')return 'conta';
+  if(m.origemOperador===undefined||m.origemOperador===null||m.origemOperador==='medico')return 'medico';
+  return null;
+}
 export function origemPodeVirarMemoriaMedico(m:{papel?:'medico'|'noto';origemOperador?:'medico'|'secretaria'|'conta'|null}):boolean {
-  return (m.papel==='medico'||m.papel===undefined)&&(m.origemOperador===undefined||m.origemOperador==='medico');
+  return escopoMemoriaPorOrigem(m)==='medico';
 }
 
 export type EstadoComunicacaoMedico = Pick<EntradaLegada,'nomeMedico'|'estado'>;
@@ -82,7 +88,10 @@ export async function processarComunicacaoMedico(
         const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico},{historico:deps.historico,log:deps.log,extratorResposta:deps.extratorResposta});
         await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
         if(conversa && deps.memoriaConversa) {
-          if(entrada.respostaMedico) await deps.memoriaConversa.registrar(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto));
+          if(entrada.respostaMedico) {
+            try { await deps.memoriaConversa.registrar(medicoId,conversa,`medico:${chave}`,sanitizarTextoMedico(entrada.respostaMedico.texto),'medico',entrada.origemOperador??'medico'); }
+            catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
+          }
           const pergunta=montarPerguntaComunicacao(acao);
           if(pergunta) await deps.memoriaConversa.registrar(medicoId,conversa,`noto:${chave}`,pergunta,'noto');
         }
@@ -106,7 +115,10 @@ export async function processarComunicacaoMedico(
         if(!historico.boasVindasComunicadas) {
           const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
           await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
-          if(entrada.respostaMedico) await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico');
+          if(entrada.respostaMedico) {
+        try { await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico'); }
+        catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
+      }
           if(acao.tipo==='boas_vindas') return acao;
         }
       }
@@ -125,7 +137,7 @@ export async function processarComunicacaoMedico(
       fatos.avisarHomologacao=!!entrada.eventoAgenda?.conectado&&!fatos.homologacaoInformada;
       const mensagens=contexto.historicoRecente.filter(falaSemMarcaLegada);
       const linhaDoTempo=(contexto.linhaDoTempo??[]).map(c=>c.resumo);
-      const memoriasSemanticas=(contexto.memoriasSemanticas??[]).map(({chave,categoria,valor})=>({chave,categoria,valor}));
+      const memoriasSemanticas=(contexto.memoriasSemanticas??[]).map(({escopo,chave,categoria,valor})=>({escopo,chave,categoria,valor}));
       let chamadas=0; const orcamento=deps.orcamentoChamadas??2;
       const reservaPosFerramenta=orcamento>=5?2:0;
       const podeCorrigir=()=>chamadas<orcamento-reservaPosFerramenta;
@@ -352,9 +364,14 @@ export async function processarComunicacaoMedico(
             try {
               await memoria.registrarChunk(medicoId,conversa,0,inicioId,fimId,compactacao?.chunk??resumo);
               if(compactacao) {
-                const fontesMedico=new Set(antigas.filter(origemPodeVirarMemoriaMedico).map(m=>m.id));
-                for(const m of compactacao.memorias) if(fontesMedico.has(m.origemId))
-                  await memoria.registrarMemoriaSemantica(medicoId,{chave:m.chave,categoria:m.categoria,valor:m.valor,origemConversa:conversa,origemMensagemId:m.origemId,confianca:m.confianca});
+                const escopoPorFonte=new Map(antigas.flatMap(m=>{
+                  const escopo=escopoMemoriaPorOrigem(m);
+                  return escopo?[[m.id,escopo] as const]:[];
+                }));
+                for(const m of compactacao.memorias) {
+                  const escopo=escopoPorFonte.get(m.origemId);
+                  if(escopo) await memoria.registrarMemoriaSemantica(medicoId,{escopo,chave:m.chave,categoria:m.categoria,valor:m.valor,origemConversa:conversa,origemMensagemId:m.origemId,confianca:m.confianca});
+                }
               }
               // Compactação fractal: no máximo um merge por turno para limitar custo.
               for(let nivel=0;nivel<8;nivel++) {
