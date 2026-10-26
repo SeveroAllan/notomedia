@@ -1,4 +1,5 @@
 import type { TransporteReacao } from '../../whatsapp/reagir-mensagem.js';
+import type { TransporteDigitacao, ParametrosDigitacao, SessaoDigitacao } from '../../whatsapp/indicar-digitacao.js';
 import type { LeitorMensagemWhatsApp, ParamsLeitura } from '../../whatsapp/marcar-mensagem-lida.js';
 /**
  * Cliente HTTP para a Evolution API na VPS Hostinger (Easypanel).
@@ -24,7 +25,7 @@ import type {
 } from '../../whatsapp/enviar-pdf-danfse.js';
 
 export class EvolutionApiClient
-  implements EnviarOtpWhatsapp, EnviarMensagemPaciente, EnviarPdfDanfse, LeitorMensagemWhatsApp
+  implements EnviarOtpWhatsapp, EnviarMensagemPaciente, EnviarPdfDanfse, LeitorMensagemWhatsApp, TransporteDigitacao
 {
   constructor(
     private readonly baseUrl: string,
@@ -61,6 +62,31 @@ export class EvolutionApiClient
       await r.body?.cancel().catch(() => {});
       return { sucesso: r.ok };
     } catch { return { sucesso: false }; }
+  }
+
+  async iniciarDigitacao(params: ParametrosDigitacao): Promise<SessaoDigitacao | null> {
+    if (!params.instanciaNome || !params.contatoTelefone || params.instanciaNome === this.instanciaSomenteOtp) return null;
+    const destino = this.normalizarDestinoPresenca(params.contatoTelefone);
+    if (!destino) return null;
+
+    let ativo = true;
+    const ciclo = async () => {
+      while (ativo) {
+        const sucesso = await this.enviarPresenca(params.instanciaNome, destino, 'composing', 20_000);
+        if (!sucesso || !ativo) break;
+      }
+    };
+    void ciclo().catch(() => {});
+
+    let encerrada = false;
+    return {
+      parar: async () => {
+        if (encerrada) return;
+        encerrada = true;
+        ativo = false;
+        await this.enviarPresenca(params.instanciaNome, destino, 'paused', 1);
+      }
+    };
   }
 
   /** Consulta somente a identidade da própria instância assistente para o botão de retorno. */
@@ -245,6 +271,38 @@ export class EvolutionApiClient
     } catch (err: any) {
       return { sucesso: false, erro: err.message || 'Erro de conexão com Evolution API' };
     }
+  }
+
+  private async enviarPresenca(
+    instancia: string,
+    destino: string,
+    presence: 'composing' | 'paused',
+    delay: number
+  ): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this.baseUrl.replace(/\/$/, '')}/chat/sendPresence/${encodeURIComponent(instancia)}`, {
+        method: 'POST',
+        redirect: 'error',
+        signal: AbortSignal.timeout(25_000),
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: this.apiKey
+        },
+        body: JSON.stringify({ number: destino, presence, delay })
+      });
+      await resp.body?.cancel().catch(() => {});
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  private normalizarDestinoPresenca(contato: string): string | null {
+    const destino = contato.trim();
+    if (/^\d+@lid$/.test(destino)) return destino;
+    if (/^\d+@s\.whatsapp\.net$/.test(destino)) return destino.split('@')[0] || null;
+    const normalizado = this.normalizarTelefone(destino);
+    return /^\d{10,15}$/.test(normalizado) ? normalizado : null;
   }
 
   private normalizarTelefone(telefone: string): string {
