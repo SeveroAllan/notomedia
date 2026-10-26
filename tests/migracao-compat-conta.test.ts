@@ -37,8 +37,10 @@ it('função recusa identidade arbitrária e não fica disponível ao anon',()=>
 it('runner protegido aplica as duas correções em ordem',()=>{
   expect(runner).toContain("validarProjetoHomolog(process.env.DATABASE_URL);");
   expect(runner.indexOf("validarProjetoHomolog(process.env.DATABASE_URL);")).toBeLessThan(runner.indexOf('new pg.Pool'));
+  const pre=runner.indexOf('20261031-contadores-delegacoes.sql');
   const a=runner.indexOf('20261102-origem-operador-conta.sql');
   const b=runner.indexOf('20261103-memoria-conta-e-visibilidade.sql');
-  expect(a).toBeGreaterThan(0);
+  expect(pre).toBeGreaterThan(0);
+  expect(a).toBeGreaterThan(pre);
   expect(b).toBeGreaterThan(a);
 });
