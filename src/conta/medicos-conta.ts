@@ -135,3 +135,27 @@ export async function confirmarMedicosDaConta(
     client.release();
   }
 }
+
+/**
+ * Resolve o nome canônico de um profissional que apareceu na descoberta da agenda
+ * registrada nesta conversa (contexto:profissionais_agenda). Fail-closed: fonte
+ * diferente, nome ausente da lista ou contexto inválido não confirmam o profissional.
+ */
+export function nomeProfissionalDescobertoNaConversa(
+  contextos:readonly unknown[],
+  agenda:'tribemd'|'amplimed',
+  nomeInformado:string
+):string|undefined{
+  const alvo=normalizarNomeMedico(nomeInformado);
+  if(!alvo)return undefined;
+  for(const contexto of contextos){
+    try{
+      const parsed=typeof contexto==='string'?JSON.parse(contexto):contexto;
+      if(parsed?.fonte===agenda&&Array.isArray(parsed?.profissionais)){
+        const hit=parsed.profissionais.find((n:unknown)=>typeof n==='string'&&normalizarNomeMedico(n)===alvo);
+        if(typeof hit==='string'&&hit)return hit;
+      }
+    }catch{/* contexto inválido não confirma profissional */}
+  }
+  return undefined;
+}

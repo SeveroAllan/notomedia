@@ -1,7 +1,7 @@
 import {expect,it,vi} from 'vitest';
 import type pg from 'pg';
 import {PostgresAtendimentoRepositorio} from '../src/io/postgres/postgres-atendimento-repositorio.js';
-import {confirmarMedicosDaConta,linkCertificadoMedico,resolverMedicosPorNomes,resolverNomesParaConfiguracao} from '../src/conta/medicos-conta.js';
+import {confirmarMedicosDaConta,linkCertificadoMedico,nomeProfissionalDescobertoNaConversa,resolverMedicosPorNomes,resolverNomesParaConfiguracao} from '../src/conta/medicos-conta.js';
 import {perguntaSelecaoMedico} from '../src/onboarding/operador-medico.js';
 
 it('operador do WhatsApp recebe todos os médicos da conta, mesmo quando possui médico próprio',async()=>{
@@ -83,6 +83,20 @@ it('cada médico escolhido recebe alvo independente no link de certificado',()=>
  expect(urls[0].toString()).not.toBe(urls[1].toString());
 });
 
+
+it('associar cria médico só quando o nome veio da descoberta da mesma agenda nesta conversa',()=>{
+ const contexto=(fonte:string,profissionais:string[])=>JSON.stringify({fonte,profissionais,codigos:profissionais.map(nome=>({codigo:'1',nome}))});
+ expect(nomeProfissionalDescobertoNaConversa([contexto('amplimed',['Allan Severo (teste Noto)'])],'amplimed','allan severo teste noto'))
+   .toBe('Allan Severo (teste Noto)');
+ expect(nomeProfissionalDescobertoNaConversa([contexto('tribemd',['Allan Severo (teste Noto)'])],'amplimed','Allan Severo (teste Noto)'))
+   .toBeUndefined();
+ expect(nomeProfissionalDescobertoNaConversa([contexto('amplimed',['Ana Lima'])],'amplimed','Carla Mendes'))
+   .toBeUndefined();
+ expect(nomeProfissionalDescobertoNaConversa(['{json quebrado'],'amplimed','Ana Lima'))
+   .toBeUndefined();
+ expect(nomeProfissionalDescobertoNaConversa([],'amplimed','Ana Lima'))
+   .toBeUndefined();
+});
 
 it('descoberta é atalho: nome observado é reaproveitado e nome não observado pode iniciar configuração quando está explícito',()=>{
  expect(resolverNomesParaConfiguracao(['Bruno Souza'],['Ana Lima'],['Bruno Souza'],'Quero adicionar o Bruno'))

@@ -84,7 +84,7 @@ import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onbo
 import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
-import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
+import { confirmarMedicosDaConta, listarMedicosDaConta, linkCertificadoMedico, medicoPertenceAContaDoUsuario, nomeProfissionalDescobertoNaConversa, normalizarNomeMedico, resolverNomesParaConfiguracao } from './conta/medicos-conta.js';
 import { resolverVinculoAgendaConta, vincularReferenciaAgendaConta } from './conta/referencia-agenda-conta.js';
 import { descobrirProfissionaisDoFiltroAmplimed, descobrirProfissionaisParaConta, filtrarConsultasDoProfissional } from './agenda/profissionais-agenda.js';
 import { ZodError } from 'zod';
@@ -613,7 +613,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const agenda=agendaAcao==='tribemd'||agendaAcao==='amplimed'?agendaAcao:null;
         if(nomes.length!==1||!agenda)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:'MEDICO_NAO_IDENTIFICADO'}};
         const existentes=await listarMedicosDaConta(pool,c.medicoId);
-        const alvo=existentes.filter(m=>normalizarNomeMedico(m.nomeCompleto)===normalizarNomeMedico(nomes[0]!));
+        let alvo=existentes.filter(m=>normalizarNomeMedico(m.nomeCompleto)===normalizarNomeMedico(nomes[0]!));
+        if(!alvo.length){
+          // Médico novo escolhido da descoberta da agenda nesta conversa: cria o registro mínimo
+          // na mesma conta antes de associar, preservando a ordem descobrir → associar → certificado.
+          const descRowsCriacao=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:profissionais_agenda:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
+          const canonico=nomeProfissionalDescobertoNaConversa(descRowsCriacao.map(r=>r.texto),agenda,nomes[0]!);
+          if(canonico){
+            const criado=await confirmarMedicosDaConta(pool,c.medicoId,[canonico]);
+            if(criado.ok)alvo=criado.medicos;
+          }
+        }
         if(alvo.length!==1)return {dados:{ferramenta:'associar_medico_agenda',ok:false,motivo:alvo.length?'MEDICO_AMBIGUO':'MEDICO_NAO_IDENTIFICADO'}};
         // Amplimed: o código do profissional só é gravado após confirmação humana.
         // Confirmada quando (a) o nome veio da lista da agenda nesta conversa (descoberta: usuário escolheu
