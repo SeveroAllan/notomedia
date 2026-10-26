@@ -118,15 +118,18 @@ suite('migration de contadores aplicada sobre o estado da homologação',()=>{
       medicoA:'00000000-0000-4000-8000-000000000031',
       medicoB:'00000000-0000-4000-8000-000000000032'
     };
+    await pool.query('insert into public.contas(id) values($1),($2)',[ids.contaA,ids.contaB]);
+    await pool.query(
+      'insert into public.usuarios(id,auth_user_id,conta_id) values($1,$2,$3),($4,$5,$6)',
+      [ids.usuarioA,ids.authA,ids.contaA,ids.usuarioB,ids.authB,ids.contaB]);
+    await pool.query(
+      "insert into public.medicos(id,usuario_id,conta_id,nome_completo) values($1,$2,$3,'Médico A'),($4,$5,$6,'Médico B')",
+      [ids.medicoA,ids.usuarioA,ids.contaA,ids.medicoB,ids.usuarioB,ids.contaB]);
+    await pool.query('insert into public.contadores(usuario_id,conta_id) values($1,$2)',[ids.usuarioA,ids.contaA]);
     await pool.query(`
-      insert into public.contas(id) values($1),($2);
-      insert into public.usuarios(id,auth_user_id,conta_id) values($3,$5,$1),($4,$6,$2);
-      insert into public.medicos(id,usuario_id,conta_id,nome_completo)
-        values($7,$3,$1,'Médico A'),($8,$4,$2,'Médico B');
-      insert into public.contadores(usuario_id,conta_id) values($3,$1);
       insert into public.contador_medico(contador_id,medico_id)
-        select id,$8 from public.contadores where usuario_id=$3;
-    `,[ids.contaA,ids.contaB,ids.usuarioA,ids.usuarioB,ids.authA,ids.authB,ids.medicoA,ids.medicoB]);
+      select id,$2 from public.contadores where usuario_id=$1
+    `,[ids.usuarioA,ids.medicoB]);
 
     await pool.query(medicosConta);
     await pool.query(memoriaVisibilidade);
