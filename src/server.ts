@@ -631,7 +631,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               }
             }catch{/* proposta abaixo decide */}
           }
-          if(!codigoConfirmado&&c.texto.trim()&&!/\bn[aã]o\b/i.test(c.texto)){
+          const afirmacaoVinculo=/\b(sim|sou eu|isso|confirmo|confirmada?|pode|é (?:ele|ela|esse|essa)|esse mesmo|correto|certo|exato)\b/i.test(c.texto);
+          if(!codigoConfirmado&&afirmacaoVinculo){
             const propRows=(await pool.query("select texto from conversa_mensagens where medico_id=$1 and conversa=$2 and mensagem_id like 'contexto:associacao_proposta:%' order by id desc limit 3",[c.medicoId,c.conversa])).rows;
             for(const row of propRows){
               try{
