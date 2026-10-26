@@ -408,9 +408,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   };
 
   const ferramentasConversa: FerramentasConversa = {
-    lerFatos: async (medicoId,agora) => {
+    lerFatos: async (medicoId,agora,contatoOperador) => {
       const {rows} = await pool.query(`select u.telefone, pf.ambiente from medicos m
         left join usuarios u on u.id=m.usuario_id and u.ativo=true left join medico_perfil_fiscal pf on pf.medico_id=m.id where m.id=$1`,[medicoId]);
+      let telefoneConfiguracao=rows[0]?.telefone;
+      if(!telefoneConfiguracao && contatoOperador) {
+        const operadores=await pool.query(`select u.telefone from usuarios u join medicos m on m.conta_id=u.conta_id
+          where m.id=$1 and u.ativo=true`,[medicoId]);
+        const variantes=gerarVariantesTelefoneBrasileiro(contatoOperador);
+        telefoneConfiguracao=operadores.rows.find(u=>gerarVariantesTelefoneBrasileiro(u.telefone??'').some(t=>variantes.includes(t)))?.telefone;
+      }
       const agendaAtiva=(await cofres.statusAgenda(medicoId))??{nome:null,conectada:false};
       const estado = await lerEstadoComunicacaoMedico(pool,medicoId,agora,agendaAtiva,config.preparacaoFiscalAtiva===true);
       const agendaEfetiva=estado?.estado.agenda??agendaAtiva;
@@ -444,7 +451,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         emitirAutonomoValor=emitir?.valor??null;entregarPacienteValor=entregar?.valor??null;solicitarCpfValor=cpf?.valor??null;
         faltantes=await permissoesNoto.faltantes(medicoId,escopoPermissoes).catch(()=>[]);
       }
-      return {ambiente:ambienteEfetivoConversa(config,rows[0]?.ambiente??null,rows[0]?.telefone),agenda:estado?.estado.agenda??{nome:null,conectada:false},
+      return {canalConfiguracaoAutorizado:!!telefoneConfiguracao,ambiente:ambienteEfetivoConversa(config,rows[0]?.ambiente??null,telefoneConfiguracao),agenda:estado?.estado.agenda??{nome:null,conectada:false},
         agendas:{tribemd:{salva:agendas.tribemd.salvo,conectada:agendas.tribemd.conectada},amplimed:{salva:agendas.amplimed.salvo,conectada:agendas.amplimed.conectada}},
         link:{ativo:!!conexao?.link&&!conexao.link.usado&&!conexao.link.expirado,enviados:Number(enviados.rows[0]?.total??0),
           agenda:conexao?.link?.agenda??null,
@@ -835,8 +842,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro),contato) : false,
       aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave, contexto) => {
         if (acao.tipo === 'boas_vindas' && contexto?.nomeMedico) {
-          const resultado = await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota, contatoTelefone:contatoOperador });
-          if (resultado === 'enviado') await contextoPendencias.perguntarData(medicoId);
+          await comunicacaoHomologacao.boasVindas({ medicoId, nomeMedico: contexto.nomeMedico, ultimaNota: acao.ultimaNota, contatoTelefone:contatoOperador });
+          // O próximo passo é a agenda; a data de notas vem depois da configuração.
           return;
         }
         if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd',{contatoTelefone:contatoOperador}); return; }

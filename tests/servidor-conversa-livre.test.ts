@@ -672,3 +672,20 @@ it('semana passada não inclui hoje nem herda paciente antigo',async()=>{
   const falas=enviar.mock.calls.map((call: unknown[])=>(call[0] as {texto:string}).texto).join(' ');expect(falas).toContain('a 18/10/2026');expect(falas).not.toContain('Teste Hoje');expect(falas).toContain('Teste Anterior');
  }finally{vi.useRealTimers();}
 });
+
+it.each([true,false])('médico de conta sem usuario_id só usa telefone de operador da mesma conta: %s',async(mesmaConta)=>{
+ config.ambienteOperacao='homologacao';config.envioRealAllowlist=['+5551993527271'];
+ enviar.mockResolvedValue({sucesso:true});enviosEsperados=mesmaConta?1:0;
+ const anteriorQuery=fronteiras.query.getMockImplementation()!;
+ fronteiras.query.mockImplementation((sql:string,p:unknown[])=>{
+   if(sql.includes('select u.telefone, pf.ambiente from medicos m'))return {rows:[{telefone:null,ambiente:null}]};
+   if(sql.includes('select u.telefone from usuarios u join medicos m on m.conta_id=u.conta_id')){
+     expect(p).toEqual(['medico']);return {rows:[{telefone:mesmaConta?telefone:'+5511988887777'}]};
+   }
+   return anteriorQuery(sql,p);
+ });
+ await receber(criarAppExpress(),'oi-medico-sem-usuario','Oi');
+ if(mesmaConta)expect(enviar.mock.calls[0][0]).toMatchObject({contatoTelefone:telefone,texto:'Posso explicar o que o Noto faz hoje.'});
+ else expect(fronteiras.openai).not.toHaveBeenCalled();
+ expect(fronteiras.query.mock.calls.some(([sql])=>sql.includes('select u.telefone from usuarios u join medicos m on m.conta_id=u.conta_id'))).toBe(true);
+});

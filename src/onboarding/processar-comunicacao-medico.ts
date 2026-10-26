@@ -34,7 +34,7 @@ export interface ContextoAcaoConversa {
   fatos: FatosConversa; narrar: (dados: unknown) => Promise<string[]>;
 }
 export interface FerramentasConversa {
-  lerFatos: (medicoId:string, agora:Date) => Promise<FatosConversa>;
+  lerFatos: (medicoId:string, agora:Date, contatoOperador?:string) => Promise<FatosConversa>;
   permitidas: (fatos:FatosConversa) => readonly string[];
   guardarPeriodo: (medicoId:string, desde:string) => Promise<void>;
   executar: (decisao:DecisaoConversa, contexto:ContextoAcaoConversa) => Promise<ResultadoAcaoConversa>;
@@ -111,25 +111,27 @@ export async function processarComunicacaoMedico(
       const texto=sanitizarTextoMedico(entrada.respostaMedico?.texto??'');
       const estado=await deps.lerEstado(medicoId,agora);
       if (!estado) throw Error('COMUNICACAO_ESTADO_AUSENTE');
-      if(estado.nomeMedico && estado.estado.fiscal.certificado==='ok' && estado.estado.fiscal.dadosFiscais==='ok' && !await memoria.temBoasVindas(medicoId,conversa)) {
+      const fatos=await deps.ferramentas.lerFatos(medicoId,agora,entrada.contatoOperador);
+      if(fatos.ambiente!=='homologacao') {
+        deps.log('info','CONVERSA_AMBIENTE_NAO_HABILITADO');
+        if(fatos.ambiente==null && fatos.canalConfiguracaoAutorizado!==false) await enviar(['Não consegui continuar a configuração deste profissional com segurança. O ambiente de operação ainda não está habilitado. Não associei a agenda nem emiti nada.']);
+        return {tipo:'nenhuma'};
+      }
+      // A apresentação inicia a configuração. Ausência de cadastro fiscal não é
+      // falha fiscal e não pode impedir o pedido de conexão da agenda.
+      if(estado.nomeMedico && deps.aoDecidir && !await memoria.temBoasVindas(medicoId,conversa)) {
         const historico=await deps.historico.ler(medicoId,'simulado');
         if(!historico.boasVindasComunicadas) {
-          const acao=await orquestrarComunicacao({...entrada,...estado,respostaMedico:undefined},{historico:deps.historico,log:deps.log});
-          await deps.aoDecidir?.(acao,chave,{nomeMedico:estado.nomeMedico});
+          const acao:ProximaAcaoNoto={tipo:'boas_vindas',ultimaNota:estado.estado.ultimaNota};
+          await deps.aoDecidir(acao,chave,{nomeMedico:estado.nomeMedico});
           if(entrada.respostaMedico) {
             try { await memoria.registrarFala(medicoId,conversa,`medico:${chave}`,texto,'medico',entrada.origemOperador??'medico'); }
             catch { deps.log('erro','CONVERSA_MEMORIA_FALHOU'); }
           }
-          if(acao.tipo==='boas_vindas') return acao;
+          return acao;
         }
       }
       const contexto=await memoria.lerContextoParaModelo(medicoId,conversa);
-      const fatos=await deps.ferramentas.lerFatos(medicoId,agora);
-      if(fatos.ambiente!=='homologacao') {
-        deps.log('info','CONVERSA_AMBIENTE_NAO_HABILITADO');
-        if(fatos.ambiente==null) await enviar(['Não consegui continuar a configuração deste profissional com segurança. O ambiente de operação ainda não está habilitado. Não associei a agenda nem emiti nada.']);
-        return {tipo:'nenhuma'};
-      }
       fatos.semAgendaDigital=contexto.marcas.semAgendaDigital && !fatos.agenda.conectada;
       fatos.entregasRecentes=contexto.entregasRecentes;
       if(entrada.eventoAgenda) fatos.eventoAgenda=entrada.eventoAgenda;

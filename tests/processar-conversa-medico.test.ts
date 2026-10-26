@@ -935,3 +935,27 @@ it('associação literal preenche nome único e agenda sem depender de parâmetr
  await c.turno('associar-literal','Quero associar Allan Severo (teste Noto) à agenda Amplimed.');
  expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'associar_medico_agenda',parametros:{medicos:['Allan Severo (teste Noto)'],agenda:'amplimed'}});
 });
+
+it('primeiro Oi sem certificado nem perfil começa pelas boas-vindas e chega ao pedido de agenda',async()=>{
+ const c=cenario();
+ c.deps.lerEstado=async()=>({nomeMedico:'Bruna Botter',estado:{agora,fiscal:{certificado:'problema',dadosFiscais:'problema'},agenda:c.fatos.agenda,ultimaNota:null}}) as any;
+ const aoDecidir=vi.fn(async(acao:any)=>{
+   expect(acao.tipo).toBe('boas_vindas');
+   await c.memoria.registrarFala('m','c','noto:boas_vindas:unica','Boas-vindas. Qual agenda você usa?','noto');
+ });
+ Object.assign(c.deps,{aoDecidir});
+ expect(await c.turno('oi-inicial','Oi')).toEqual({tipo:'boas_vindas',ultimaNota:null});
+ expect(aoDecidir).toHaveBeenCalledOnce();expect(c.completar).not.toHaveBeenCalled();
+ expect((await c.deps.historico.ler('m','simulado')).problemaFiscalComunicado).toBe(false);
+ c.completar.mockResolvedValue(JSON.stringify({fala:introducao,acao:'pedir_link_agenda',parametros:{agenda:'Tribe',evidencia:'Tribe'}}));
+ await c.turno('escolha-agenda','Tribe');
+ expect(c.executar).toHaveBeenCalledOnce();
+ expect(c.executar.mock.calls[0]![0]).toMatchObject({acao:'pedir_link_agenda'});
+});
+it('primeiras boas-vindas não contornam gate de ambiente/canal',async()=>{
+ const c=cenario();c.fatos.ambiente=null;
+ c.deps.lerEstado=async()=>({nomeMedico:'Bruna Botter',estado:{agora,fiscal:{certificado:'problema',dadosFiscais:'problema'},agenda:c.fatos.agenda,ultimaNota:null}}) as any;
+ const aoDecidir=vi.fn();Object.assign(c.deps,{aoDecidir});
+ await c.turno('oi-nao-autorizado','Oi');
+ expect(aoDecidir).not.toHaveBeenCalled();expect(c.executar).not.toHaveBeenCalled();expect(c.completar).not.toHaveBeenCalled();
+});
