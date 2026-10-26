@@ -173,7 +173,7 @@ export async function processarComunicacaoMedico(
         if(conectada&&permitidas.includes('associar_medico_agenda')){
           decisao={fala:[`Vou associar ${planoAtual.medicos[0]} à ${agenda==='tribemd'?'TribeMD':'Amplimed'} e conferir se as consultas identificam esse profissional.`],acao:'associar_medico_agenda',parametros:{agenda,medicos:[planoAtual.medicos[0]]}};
         }else if(!conectada&&permitidas.includes('pedir_link_agenda')){
-          decisao={fala:[`Vou te mandar o link seguro para conectar a ${agenda==='tribemd'?'TribeMD':'Amplimed'} e depois retomo a associação de ${planoAtual.medicos[0]}.`,'Login e senha ficam apenas no link seguro. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda}};
+          decisao={fala:[`Vou conectar a ${agenda==='tribemd'?'TribeMD':'Amplimed'} somente para leitura da agenda e depois retomo a associação de ${planoAtual.medicos[0]}.`,'Login e senha ficam apenas no link seguro. Conectar a agenda não envia mensagem a pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda}};
         }
       }
       if(interpretacaoSemantica&&interpretacaoSemantica.confianca>=.8) {

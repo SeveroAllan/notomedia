@@ -664,6 +664,6 @@ it('semana passada não inclui hoje nem herda paciente antigo',async()=>{
  const ev=(paciente:string,idExterno:string)=>({paciente,idExterno,dataHora:'2026-10-19T14:00:00-03:00',valorCentavos:35000});
  fronteiras.amplimed.mockResolvedValue({ok:true,dias:[{data:'2026-10-20',lidos:1,elegiveis:[ev('Teste Hoje','hoje')]},{data:'2026-10-18',lidos:1,elegiveis:[ev('Teste Anterior','anterior')]}]});
  fronteiras.openai.mockResolvedValue(JSON.stringify({fala:['Vou conferir a semana passada.'],acao:'listar_pendencias',parametros:{periodo:'semana_passada',pedidoExplicito:{evidencia:'conferir',confianca:1}}}));
- await receber(criarAppExpress(),'semana-fechada','Quero conferir a semana passada sem emitir.');
+ await receber(criarAppExpress(),'semana-fechada','Quero conferir a semana passada sem emitir.',true,undefined,Math.floor(Date.parse('2026-10-21T15:00:00Z')/1000));
  const falas=enviar.mock.calls.map((call: unknown[])=>(call[0] as {texto:string}).texto).join(' ');expect(falas).toContain('a 18/10/2026');expect(falas).not.toContain('Teste Hoje');expect(falas).toContain('Teste Anterior');
 });
