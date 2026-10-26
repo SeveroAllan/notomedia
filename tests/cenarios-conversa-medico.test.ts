@@ -20,6 +20,8 @@ const casos:C[]=[
  {nome:'período absurdo no futuro é recusado',d:dec('iniciar_lote',{parametros:{desde:'2030-01-01'}}),esperado:'PERIODO_INVALIDO'},
  {nome:'Amplimed conectado: listar pendências passa (observação)',fatos:f=>{f.agenda.nome='Amplimed';},d:dec('listar_pendencias'),esperado:null},
  {nome:'Amplimed conectado: lote passa (emissão em homologação, com confirmação do médico)',fatos:f=>{f.agenda.nome='Amplimed';},d:dec('iniciar_lote'),esperado:null},
+ {nome:'Amplimed conectado: descobrir_medicos_agenda passa',fatos:f=>{f.agenda.nome='Amplimed';f.agendas={tribemd:{salva:false,conectada:false},amplimed:{salva:true,conectada:true}};},d:dec('descobrir_medicos_agenda',{parametros:{agenda:'amplimed'}}),perm:['nenhuma','descobrir_medicos_agenda'],esperado:null},
+ {nome:'descoberta com agenda não conectada é recusada',fatos:f=>{f.agenda.conectada=false;f.agendas={tribemd:{salva:false,conectada:false},amplimed:{salva:false,conectada:false}};},d:dec('descobrir_medicos_agenda',{parametros:{agenda:'amplimed'}}),perm:['nenhuma','descobrir_medicos_agenda'],esperado:'AGENDA_NAO_CONECTADA'},
  {nome:'listar pendências sem agenda é recusado',fatos:f=>{f.agenda.conectada=false;},d:dec('listar_pendencias'),esperado:'AGENDA_NAO_CONECTADA'},
  {nome:'lista repetida sem pedido explícito é recusada',fatos:f=>{f.listaRecente=true;},d:dec('listar_pendencias'),esperado:'LISTA_JA_ENVIADA'},
  {nome:'lote anterior com erro: listar em vez de iniciar_lote é recusado',fatos:f=>{f.ultimoLote={comErro:3,emitidas:0};},d:dec('listar_pendencias'),esperado:'LISTA_EM_VEZ_DE_LOTE'},

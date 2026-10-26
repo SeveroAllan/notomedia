@@ -232,7 +232,7 @@ export function validarAcaoConversa(d: DecisaoConversa, fatos: FatosConversa, pe
   }
   if (acao === 'descobrir_medicos_agenda') {
     const ag=agendaDaAcao;
-    if(ag!=='tribemd'||!agendaDaAcaoConectada||fatos.semAgendaDigital)return 'AGENDA_NAO_CONECTADA';
+    if(!(ag==='tribemd'||ag==='amplimed')||!agendaDaAcaoConectada||fatos.semAgendaDigital)return 'AGENDA_NAO_CONECTADA';
     return null;
   }
   if (acao === 'associar_medico_agenda') {
