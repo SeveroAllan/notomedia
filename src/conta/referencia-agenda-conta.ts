@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import type {AgendaSuportada} from '../agenda/agendas-suportadas.js';
+import {normalizarNomeMedico} from './medicos-conta.js';
 
 export async function resolverVinculoAgendaConta(
   pool:pg.Pool,
@@ -53,4 +54,31 @@ export async function vincularReferenciaAgendaConta(
     select medico_id from gravados
   `,[medicoIds,agenda,referenciaMedicoId,profissionalExternoId??null]);
   return rows.length===new Set(medicoIds).size;
+}
+
+export type RevalidacaoVinculoAmplimed =
+  | {status:'sem_vinculo'}
+  | {status:'ok';profissionalExternoId:string}
+  | {status:'divergente';nomeAgenda:string|null}
+  | {status:'indisponivel'};
+
+/** Fail-closed na LEITURA do vínculo existente: o nome do profissional da agenda para o
+ *  código vinculado precisa continuar correspondendo ao médico Noto. Conexão+código seguem
+ *  âncora; divergência de nome (rename, reatribuição) ou lista indisponível bloqueia a leitura
+ *  até revisão confirmada — nunca reatribui nem quebra o vínculo silenciosamente. */
+export async function revalidarVinculoProfissionalAmplimed(
+  pool:pg.Pool,
+  deps:{listarProfissionaisAmplimed:(medicoId:string)=>Promise<{ok:true;profissionais:Array<{codigo:number|string;nome:string}>}|{ok:false;motivo:string}>},
+  medicoId:string
+):Promise<RevalidacaoVinculoAmplimed>{
+  const vinculo=await resolverVinculoAgendaConta(pool,medicoId,'amplimed').catch(()=>null);
+  if(!vinculo?.profissionalExternoId) return {status:'sem_vinculo'};
+  const lista=await deps.listarProfissionaisAmplimed(medicoId).catch(()=>null);
+  if(!lista||!lista.ok) return {status:'indisponivel'};
+  const {rows}=await pool.query('select nome_completo from medicos where id=$1',[medicoId]);
+  const nomeMedico=String(rows[0]?.nome_completo??'');
+  const profissional=lista.profissionais.find(p=>String(p.codigo)===String(vinculo.profissionalExternoId));
+  if(!profissional) return {status:'divergente',nomeAgenda:null};
+  if(normalizarNomeMedico(profissional.nome)!==normalizarNomeMedico(nomeMedico)) return {status:'divergente',nomeAgenda:profissional.nome};
+  return {status:'ok',profissionalExternoId:String(vinculo.profissionalExternoId)};
 }
