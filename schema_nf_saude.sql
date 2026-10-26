@@ -639,17 +639,34 @@ create trigger trg_notas_uso_mensal after insert on notas_fiscais
 -- 10. ISOLAMENTO ENTRE MÉDICOS (Row Level Security)
 -- =============================================================================
 -- Com Supabase Auth, `auth.uid()` identifica o usuário logado. Esta função
--- devolve todos os médicos da conta do usuário autenticado. O papel do usuário
--- não reduz esse escopo. `security definer` permite à policy resolver a conta
--- sem expor diretamente a tabela de usuários ao cliente.
+-- devolve todos os médicos da conta do usuário autenticado e preserva
+-- delegações explícitas de secretária/contador, inclusive cross-account.
+-- O parâmetro só vale quando coincide com auth.uid(), impedindo consulta da
+-- visibilidade de outra identidade.
 create or replace function medicos_visiveis_para(p_auth_user_id uuid)
 returns setof uuid
 language sql stable security definer
-set search_path = public as $$
+set search_path = pg_catalog as $$
+  with identidade as (
+    select u.id,u.conta_id
+    from public.usuarios u
+    where u.auth_user_id=p_auth_user_id
+      and u.ativo=true
+      and p_auth_user_id=auth.uid()
+  )
   select m.id
-  from usuarios u
-  join medicos m on m.conta_id=u.conta_id
-  where u.auth_user_id=p_auth_user_id and u.ativo=true
+  from identidade i
+  join public.medicos m on m.conta_id=i.conta_id
+  union
+  select sm.medico_id
+  from identidade i
+  join public.secretarias s on s.usuario_id=i.id
+  join public.secretaria_medico sm on sm.secretaria_id=s.id
+  union
+  select cm.medico_id
+  from identidade i
+  join public.contadores c on c.usuario_id=i.id
+  join public.contador_medico cm on cm.contador_id=c.id
 $$;
 
 alter table medico_perfil_fiscal enable row level security;
