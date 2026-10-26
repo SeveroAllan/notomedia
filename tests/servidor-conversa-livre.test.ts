@@ -1,3 +1,4 @@
+import { LinksCofre } from '../src/cofre/links.js';
 import { PostgresLotesEmissao } from '../src/io/postgres/postgres-lotes-emissao.js';
 import { PostgresEmissorDpsService } from '../src/io/fiscal/postgres-emissor-dps-service.js';
 import type pg from 'pg';
@@ -14,13 +15,13 @@ import { EvolutionApiClient } from '../src/io/evolution/evolution-api-client.js'
 import { BancoHistoricoFalso } from './fakes/banco-historico.js';
 import { BancoConversaFalso } from './fakes/banco-conversa.js';
 
-const fronteiras = vi.hoisted(() => ({ registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn<typeof completarOpenAi>(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, amplimed:vi.fn(), agenda: { nome: null as string | null, conectada: false } }));
+const fronteiras = vi.hoisted(() => ({ links:undefined as LinksCofre|undefined, registrarTextoLink: undefined as undefined | ((entrada: { medicoId:string; telefoneMedico:string; linkId:string; indice:number; texto:string })=>Promise<void>), query: vi.fn(), connect: vi.fn(), openai: vi.fn<typeof completarOpenAi>(), fonte: vi.fn(), detalhe: vi.fn(), concluirAgenda: undefined as undefined | ((id: string, evento: { agenda: 'tribemd'; conectado: boolean; chave: string }) => Promise<void>), emitir: vi.fn(), alterarAcesso: undefined as undefined | ((id:string)=>void), nomeMedico: undefined as string | undefined, amplimed:vi.fn(), agenda: { nome: null as string | null, conectada: false } }));
 vi.mock('../src/io/postgres/pool.js', () => ({ pool: { query: fronteiras.query, connect: fronteiras.connect } }));
 vi.mock('../src/io/nvidia/chat-client.js', async (importOriginal) => ({ ...(await importOriginal() as object), completarOpenAi: fronteiras.openai }));
 vi.mock('../src/api/nfse/processar-solicitacao-emissao-api.js', () => ({ processarSolicitacaoEmissaoApi: fronteiras.emitir }));
 vi.mock('../src/cofre/router.js', async () => {
   const express = await import('express');
-  return { criarCofreContas: (deps: any) => { fronteiras.registrarTextoLink = deps.registrarTextoLink; fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { app: express.default(), statusAgenda: async () => null, lerAgendaAmplimed:fronteiras.amplimed, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
+  return { criarCofreContas: (deps: any) => { fronteiras.registrarTextoLink = deps.registrarTextoLink; fronteiras.concluirAgenda = deps.aoConcluirAgenda; fronteiras.alterarAcesso = deps.aoAlterarAcesso; return { links:fronteiras.links, app: express.default(), statusAgenda: async () => null, lerAgendaAmplimed:fronteiras.amplimed, fonteAgenda: { consultar: fronteiras.fonte }, detalheAoVivo: fronteiras.detalhe, encerrar: async () => {} }; } };
 });
 vi.mock('../src/onboarding/io/ler-estado-comunicacao-medico.js', () => ({ lerEstadoComunicacaoMedico: async () => ({
   nomeMedico: fronteiras.nomeMedico, estado: { agora: new Date('2026-10-20T15:00:00Z'), fiscal: { certificado: 'ok', dadosFiscais: 'ok' }, agenda: fronteiras.agenda, ultimaNota: null }
@@ -31,7 +32,7 @@ let reservas: Set<string>; let recebidas: Set<string>;
 let ler: ReturnType<typeof vi.spyOn>; let reagir: ReturnType<typeof vi.spyOn>;
 let enviar: ReturnType<typeof vi.spyOn>, pdf: ReturnType<typeof vi.spyOn>, rede: ReturnType<typeof vi.spyOn>, logs: ReturnType<typeof vi.spyOn>, erros: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
-  errosEsperados = 0; errosExtras=[]; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
+  fronteiras.links=undefined; errosEsperados = 0; errosExtras=[]; fronteiras.nomeMedico = undefined; fronteiras.agenda = { nome: null, conectada: false };
   telefone = '+5551993527271'; jid = '5551993527271'; ambiente = 'homologacao'; enviosEsperados = 0; reservas = new Set(); recebidas = new Set();
   config.envioRealAllowlist = []; config.envioPacienteRealAtivo = false;
   vi.clearAllMocks();
@@ -183,7 +184,7 @@ it.each(['5551993527271', '555193527271'])('boas-vindas reais ficam no históric
   const registro = banco.mensagens.find(m => m.mensagemId === 'noto:boas_vindas:unica');
   expect(await new PostgresMemoriaConversaMedico({ query: fronteiras.query } as unknown as pg.Pool).ler('medico', chave)).toContain(baloes.join('\n'));
   expect(registro).toMatchObject({ medico: 'medico', papel: 'noto', texto: baloes.join('\n') });
-  expect(baloes[3]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.');
+  expect(baloes[3]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos. Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?');
   await receber(criarAppExpress(), 'resposta', 'quero');
   expect(fronteiras.openai).toHaveBeenCalledTimes(1);
   const dados = JSON.parse(String(fronteiras.openai.mock.calls[0]![2][1]!.content));
@@ -688,4 +689,52 @@ it.each([true,false])('médico de conta sem usuario_id só usa telefone de opera
  if(mesmaConta)expect(enviar.mock.calls[0][0]).toMatchObject({contatoTelefone:telefone,texto:'Posso explicar o que o Noto faz hoje.'});
  else expect(fronteiras.openai).not.toHaveBeenCalled();
  expect(fronteiras.query.mock.calls.some(([sql])=>sql.includes('select u.telefone from usuarios u join medicos m on m.conta_id=u.conta_id'))).toBe(true);
+});
+
+it('HTTP Oi → Amplimed gera link real para cadastro existente sem usuario_id pelo operador da conta',async()=>{
+ fronteiras.nomeMedico='Bruna Botter';config.ambienteOperacao='homologacao';config.envioRealAllowlist=['+5551993527271'];
+ enviar.mockResolvedValue({sucesso:true});enviosEsperados=7;
+ const anteriorQuery=fronteiras.query.getMockImplementation()!;
+ fronteiras.query.mockImplementation((sql:string,p:unknown[])=>{
+   if(sql.includes('select u.telefone, pf.ambiente from medicos m'))return {rows:[{telefone:null,ambiente:null}]};
+   if(sql.includes('select u.telefone from usuarios u join medicos m on m.conta_id=u.conta_id'))return {rows:[{telefone}]};
+   return anteriorQuery(sql,p);
+ });
+ const registros:any[]=[];
+ const cliente={release:vi.fn(),query:vi.fn(async(sql:string,p:unknown[]=[])=>{
+   if(['begin','commit','rollback'].includes(sql))return {rows:[]};
+   if(sql.includes('from medicos m')&&sql.includes('for update of m')){
+     expect(sql).toContain('left join usuarios');expect(p).toEqual(['medico']);return {rows:[{ativo:null,telefone:null}]};
+   }
+   if(sql.includes('join medicos m on m.conta_id=u.conta_id'))return {rows:[{ativo:true,telefone}]};
+   if(sql.includes('pedidos_contados'))return {rows:[{total:0,substitui_valido:false,instante:new Date().toISOString()}]};
+   if(sql.includes('insert into cofre_links (')){registros.push(p);return {rows:[{id:'link-bruna'}]};}
+   if(sql.includes('cofre_links_auditoria'))return {rows:[]};
+   throw Error('SQL_LINK_NAO_MODELADO');
+ })};
+ fronteiras.links=new LinksCofre({pool:{connect:async()=>cliente,query:cliente.query} as unknown as pg.Pool,origem:'https://homolog.example.invalid',
+   cofre:{status:async()=>({estado:'vazio'}),iniciar:vi.fn()},cofres:{amplimed:{status:async()=>({estado:'vazio'}),iniciar:vi.fn()}},
+   enviar:async(_id,texto,destino)=>{await enviar({instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:destino!,texto});return 'enviado';}});
+ fronteiras.openai.mockResolvedValue(JSON.stringify({fala:['O link conecta só a agenda Amplimed em leitura para conferir consultas.','Login e senha vão somente no link seguro. Conectar não envia mensagens aos pacientes. Aqui está o link seguro:'],acao:'pedir_link_agenda',parametros:{agenda:'amplimed',evidencia:'Amplimed'}}));
+ const app=criarAppExpress();await receber(app,'oi-jornada-cofre','Oi');await receber(app,'amplimed-jornada-cofre','Amplimed');
+ expect(enviar.mock.calls[3][0].texto).toContain('Qual agenda você usa');
+ expect(registros).toHaveLength(1);expect(registros[0][0]).toBe('medico');expect(registros[0][1]).toBe('amplimed');
+ expect(registros[0][4]).toBe(telefone);
+ expect(enviar.mock.calls.at(-1)![0]).toMatchObject({contatoTelefone:telefone,texto:expect.stringMatching(/^https:\/\/homolog.example.invalid\/c\/[A-Za-z0-9_-]{43}$/)});
+ expect(enviar.mock.calls.map(c=>c[0].texto).join(' ')).not.toContain('cadastro não');
+});
+
+it('link de médico sem usuário recusa contato que não pertence a operador da conta',async()=>{
+ const cliente={release:vi.fn(),query:vi.fn(async(sql:string)=>{
+   if(['begin','commit','rollback'].includes(sql))return {rows:[]};
+   if(sql.includes('for update of m'))return {rows:[{ativo:null,telefone:null}]};
+   if(sql.includes('join medicos m on m.conta_id=u.conta_id'))return {rows:[{ativo:true,telefone:'+551188887777'}]};
+   throw Error('NAO_DEVE_CRIAR_LINK');
+ })};
+ const enviarLink=vi.fn();
+ const servico=new LinksCofre({pool:{connect:async()=>cliente} as unknown as pg.Pool,origem:'https://homolog.example.invalid',
+ cofre:{status:async()=>({estado:'vazio'}),iniciar:vi.fn()},enviar:enviarLink});
+ expect(await servico.solicitarLinkCofre('medico','tribemd',{contatoTelefone:telefone})).toEqual({ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'});
+ expect(enviarLink).not.toHaveBeenCalled();
+ expect(cliente.query.mock.calls.some(([sql])=>sql.includes('insert into cofre_links'))).toBe(false);
 });

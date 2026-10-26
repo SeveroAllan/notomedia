@@ -1,6 +1,7 @@
 import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, FALA_NOVO_LINK_AGENDA } from '../onboarding/falas.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
+import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { AGENDAS_SUPORTADAS, agendaSuportada, type AgendaSuportada } from '../agenda/agendas-suportadas.js';
 
 export interface ContextoConexaoAgenda {
@@ -54,9 +55,18 @@ export class LinksCofre {
         try {
             await cliente.query('begin');
             // A linha do médico serializa limite e invalidação, inclusive entre réplicas.
-            const medico = (await cliente.query(`select u.ativo, u.telefone from medicos m
-                join usuarios u on u.id=m.usuario_id where m.id=$1 for update of m, u`, [medicoId])).rows[0];
+            let medico = (await cliente.query(`select u.ativo, u.telefone from medicos m
+                left join usuarios u on u.id=m.usuario_id where m.id=$1 for update of m`, [medicoId])).rows[0];
             if (!medico) return { ok: false, motivo: 'MEDICO_INEXISTENTE' };
+            // Médico da conta pode não ter usuário próprio. Só o operador ativo
+            // da mesma conta, identificado pelo contato recebido, pode pedir seu link.
+            if(medico.ativo==null && opcoes.contatoTelefone) {
+                const operadores=(await cliente.query(`select u.ativo, u.telefone from usuarios u
+                    join medicos m on m.conta_id=u.conta_id where m.id=$1 and u.ativo=true`,[medicoId])).rows;
+                const variantes=gerarVariantesTelefoneBrasileiro(opcoes.contatoTelefone);
+                medico=operadores.find(u=>gerarVariantesTelefoneBrasileiro(u.telefone??'').some(t=>variantes.includes(t)));
+                if(!medico)return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
+            }
             if (!medico.ativo) return { ok: false, motivo: 'MEDICO_INATIVO' };
             if (!medico.telefone?.trim()) return { ok: false, motivo: 'SEM_TELEFONE' };
             telefoneMedico = opcoes.contatoTelefone?.trim() || medico.telefone;

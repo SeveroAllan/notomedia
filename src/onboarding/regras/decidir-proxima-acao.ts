@@ -108,7 +108,7 @@ export function montarBoasVindas(
   const entrega = !capacidade.envioPacienteRealAtivo
     ? capacidade.entregarPaciente==='paciente'
       ? 'Sua escolha de entrega ao paciente está salva, mas esse envio está desligado neste ambiente. Por enquanto não envio notas ao paciente.'
-      : 'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.'
+      : 'Por enquanto, as notas ficam por aqui. O envio direto ao paciente está desligado.'
     : !capacidade.permissoesAtivas || !capacidade.entregarPaciente
       ? 'Antes de qualquer entrega ao paciente, preciso da sua escolha. Sem ela, não envio.'
       : capacidade.entregarPaciente==='so_medico'
@@ -119,14 +119,14 @@ export function montarBoasVindas(
     'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
     entrega
   ];
-  if (!ultimaNota?.paciente) return [...baloes, FALA_PEDIDO_CONEXAO_AGENDA];
+  if (!ultimaNota?.paciente) return [...baloes, FALA_PEDIDO_CONEXAO_AGENDA+' Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?'];
   const dias = ultimaNota.diasDesdeEmissao;
   const quando = dias === 0 ? 'hoje' : dias === 1 ? 'ontem' : `há ${dias} dias`;
   const valor = (ultimaNota.valorCentavos / 100).toLocaleString('pt-BR', {
     minimumFractionDigits: 2, maximumFractionDigits: 2
   });
   const resumo = `Vi que sua última nota foi para ${ultimaNota.paciente}, de R$ ${valor}, emitida ${quando}.`;
-  const pergunta = FALA_PEDIDO_CONEXAO_AGENDA;
+  const pergunta = FALA_PEDIDO_CONEXAO_AGENDA+' Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?';
   return [...baloes, resumo.slice(0, 500), pergunta];
 }
 

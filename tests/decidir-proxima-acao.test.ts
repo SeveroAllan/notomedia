@@ -226,9 +226,9 @@ describe('boas-vindas com última nota em cinco balões', () => {
       expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
         'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
         'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
-        'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.',
+        'Por enquanto, as notas ficam por aqui. O envio direto ao paciente está desligado.',
         `Vi que sua última nota foi para Paciente Exemplo, de R$ 1.234,56, emitida ${quando}.`,
-        'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.'
+        'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos. Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?'
       ]);
       expect(nota).toEqual(antes);
     }
@@ -249,8 +249,8 @@ describe('boas-vindas sem última nota com paciente conhecido', () => {
     expect(montarBoasVindas('Ana Exemplo', nota)).toEqual([
       'Olá, Dr(a). Ana! Sou o Noto, seu assistente de notas fiscais.',
       'Quando chega um comprovante, eu confiro a consulta e conduzo o fluxo da nota conforme suas escolhas e confirmações.',
-      'Neste momento, o envio direto de notas ao paciente está desligado. Não vou prometer essa entrega.',
-      'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.'
+      'Por enquanto, as notas ficam por aqui. O envio direto ao paciente está desligado.',
+      'Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos. Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?'
     ]);
   });
 });
@@ -271,12 +271,12 @@ it.each(['ALICE CASTRO MENEZES XAVIER', '  alice Castro  ', 'Alice'])('saúda so
   expect(baloes[0]).toBe('Olá, Dr(a). Alice! Sou o Noto, seu assistente de notas fiscais.');
   expect(baloes).toHaveLength(4);
   expect(baloes.every(texto => texto.length <= 500)).toBe(true);
-  expect(baloes[3]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.');
+  expect(baloes[3]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos. Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?');
 });
 it('limita os balões a 500 caracteres sem perder a pergunta final', () => {
   const baloes = montarBoasVindas('A'.repeat(800), { paciente: 'P'.repeat(800), dataEmissao: '2026-10-20', valorCentavos: 30000, diasDesdeEmissao: 0 });
   expect(baloes.every(texto => texto.length <= 500)).toBe(true);
   expect(baloes).toHaveLength(5);
   expect(baloes[3]).toHaveLength(500);
-  expect(baloes[4]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos.');
+  expect(baloes[4]).toBe('Para conseguir emitir suas notas, preciso conectar sua agenda para cruzar consultas e pagamentos. Qual agenda você usa: Amplimed, TribeMD ou não usa agenda digital?');
 });
