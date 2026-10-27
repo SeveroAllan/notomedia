@@ -7,6 +7,8 @@ import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PostgresAssistente } from '../src/assistente/postgres-assistente.js';
 import { executarPassoAssistente, type DependenciasWorkerAssistente } from '../src/assistente/worker.js';
+import { diagnosticarFalhaAssistente } from '../src/assistente/diagnostico.js';
+import { ErroNvidiaChat } from '../src/io/nvidia/chat-client.js';
 
 const conexao = process.env.ASSISTENTE_TESTE_DATABASE_URL;
 if (conexao) {
@@ -196,6 +198,41 @@ describe.skipIf(!conexao)('persistência do assistente em PostgreSQL descartáve
     expect(await repo.destinoPermitido(conversa)).toBe(true);
     await pool.query('update usuarios set telefone=$1 where id=$2', [entrada.telefone, outroUsuario]);
     expect(await repo.destinoPermitido(conversa)).toBe(false);
+  });
+
+  it('persiste causa e etapa sem salvar agenda ou prometer recuperação automática', async () => {
+    await repo.registrar({ ...entrada, texto: 'Amplimed' });
+    const trabalho = (await repo.reservar('conversa'))!;
+    const diagnostico = diagnosticarFalhaAssistente(new ErroNvidiaChat('IA_HTTP_ERRO', 429), 'decidir_conversa');
+    await repo.falhar(trabalho, diagnostico);
+    await repo.falhar(trabalho, diagnostico);
+    const salvo = (await pool.query('select estado,resultado from assistente_trabalhos where id=$1', [trabalho.id])).rows[0];
+    expect(salvo).toMatchObject({ estado: 'falhou', resultado: { diagnostico: {
+      etapa: 'decidir_conversa', codigo: 'IA_HTTP_ERRO', statusHttp: 429 } } });
+    expect((await repo.contexto(trabalho)).memoria.agenda).toBeNull();
+    expect(await repo.reservar('preparacao')).toBeNull();
+    expect(await repo.reservar('conversa')).toBeNull();
+    const saidas = (await pool.query("select conteudo from assistente_trabalhos where tipo='envio'")).rows;
+    expect(saidas).toHaveLength(1);
+    expect(saidas[0].conteudo.texto).toBe('Não consegui concluir esse pedido. A execução parou e não está sendo retomada automaticamente.');
+  });
+
+  it('guarda diagnóstico de envio incerto sem mudar estado, reenviar ou confirmar entrega', async () => {
+    await repo.registrar(entrada);
+    const conversa = (await repo.reservar('conversa'))!;
+    await repo.concluirConversa(conversa, { resposta: 'Olá',
+      memoria: { agenda: null, periodo: null, profissionais: [] }, consultarPreparacao: [] });
+    const envio = (await repo.reservar('envio'))!;
+    const diagnostico = diagnosticarFalhaAssistente(Error('ENVIO_NAO_CONFIRMADO'), 'enviar_mensagem');
+    await repo.registrarDiagnosticoEnvio(envio, diagnostico);
+    expect((await pool.query('select estado,resultado from assistente_trabalhos where id=$1', [envio.id])).rows[0])
+      .toMatchObject({ estado: 'incerto', resultado: { diagnostico } });
+    expect(await repo.reservar('envio')).toBeNull();
+    expect((await pool.query("select * from assistente_mensagens where papel='noto'")).rowCount).toBe(0);
+    await repo.confirmarEnvio(envio, 'confirmado-depois');
+    await repo.registrarDiagnosticoEnvio(envio, diagnostico);
+    expect((await pool.query('select estado,resultado from assistente_trabalhos where id=$1', [envio.id])).rows[0])
+      .toEqual({ estado: 'concluido', resultado: { mensagemId: 'confirmado-depois' } });
   });
 
   it('inicia o serviço isolado e atende health e webhook com banco real', async () => {

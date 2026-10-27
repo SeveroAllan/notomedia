@@ -119,6 +119,49 @@ ao cliente, sem pedir investigação técnica. Nesta etapa o acompanhamento de
 falhas é operacional por logs/banco; não existe especialista de recuperação
 automática. Não se apresenta esse aviso como resolução do pedido.
 
+### Diagnóstico de execução interrompida
+
+O piloto relatado respondeu ao “oi” e falhou ao processar “Amplimed”, antes de
+salvar a agenda ou executar preparação. O registro antigo guardou somente um
+erro genérico. Não é possível reconstruir sua causa com essa evidência.
+
+Para novas falhas, o worker registra a etapa exata, classe, código técnico e
+mensagem com dados sensíveis ocultados. Preserva status HTTP quando o cliente
+compartilhado o fornece e SQLSTATE/restrição quando disponíveis. Erros de
+contrato registram caminho do campo e código da validação, sem valores ou
+chaves inesperadas. JSON inválido não tem seu conteúdo copiado para o erro.
+Não se guardam corpo bruto do provedor, detalhes de linhas SQL ou credenciais.
+
+O mesmo diagnóstico vai para o log JSON e `resultado.diagnostico` do trabalho.
+Se gravar a falha no banco também falhar, o log conserva o erro original e
+registra separadamente a falha em `registrar_falha`. Envios incertos recebem
+diagnóstico sem mudar seu estado ou permitir nova tentativa. Falhas ao reservar
+trabalho ficam apenas no log, pois ainda não há um trabalho reservado.
+
+O aviso agora é: “Não consegui concluir esse pedido. A execução parou e não
+está sendo retomada automaticamente.” Registrar a falha não agenda recuperação,
+não pede repetição da mensagem e não confirma resultado. Esse texto vale para
+novas falhas; saídas já persistidas não são reescritas ou reenviadas pelo ajuste.
+Nenhum trabalho antigo é reaberto automaticamente. Os erros 429/503 dos testes
+são cenários simulados, não um diagnóstico da falha real com “Amplimed”.
+
+Validação do ajuste: execução direta da suíte antes com 1760 aprovados e 20
+ignorados, sem banco de teste. Depois, com PostgreSQL descartável e os testes de
+banco habilitados: 1783 aprovados e 8 ignorados. Foram adicionados 11 testes de
+diagnóstico, fluxo de erro e persistência; os outros 12 testes de banco já
+existiam. Tipagem de produção e dos testes da assistente aprovada. `npm test`
+permanece bloqueado pelo TS7006 herdado descrito ao final deste documento.
+Não houve chamada paga, mensagem real, migração nova ou reativação do piloto.
+
+Consulta de diagnóstico, somente pelo backend:
+
+```sql
+select id, tipo, estado, resultado->'diagnostico' as diagnostico
+from assistente_trabalhos
+where estado in ('falhou','incerto')
+order by atualizado_em desc;
+```
+
 ## Permissões
 
 O usuário ativo consulta os médicos da mesma conta, sem filtro de papel e

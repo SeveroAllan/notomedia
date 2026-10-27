@@ -4,6 +4,7 @@ import pg from 'pg';
 import { z } from 'zod';
 import { carregarConfig } from '../config.js';
 import { criarModeloAssistente, criarEnvioAssistente } from './integracoes.js';
+import { diagnosticarFalhaAssistente } from './diagnostico.js';
 import { consultarStatusOnboarding } from '../onboarding/io/consultar-status-onboarding.js';
 import { receberMensagemAssistente } from './entrada.js';
 import { PostgresAssistente, type TipoTrabalho } from './postgres-assistente.js';
@@ -48,7 +49,7 @@ const deps: DependenciasWorkerAssistente = {
       liberadoParaEmitir: status.liberadoParaEmitir, consultadoEm: new Date().toISOString(), fonte: 'consultarStatusOnboarding' };
   },
   enviar: criarEnvioAssistente(config),
-  registrarFalha: (id, tipo) => console.warn('[Assistente] TRABALHO_NAO_CONCLUIDO', { id, tipo })
+  registrarFalha: (id, tipo, diagnostico) => console.warn('[Assistente] TRABALHO_NAO_CONCLUIDO', JSON.stringify({ id, tipo, diagnostico }))
 };
 const app = express();
 app.disable('x-powered-by');
@@ -76,7 +77,8 @@ let encerrando = false;
 function disparar(tipo: TipoTrabalho) {
   if (encerrando || emExecucao.has(tipo)) return;
   const passagem = executarPassoAssistente(tipo, deps)
-    .catch(() => console.warn('[Assistente] FILA_INDISPONIVEL', { tipo }))
+    .catch(erro => console.warn('[Assistente] FILA_INDISPONIVEL', JSON.stringify({ tipo,
+      diagnostico: diagnosticarFalhaAssistente(erro, 'reservar_trabalho') })))
     .finally(() => emExecucao.delete(tipo));
   emExecucao.set(tipo, passagem);
 }

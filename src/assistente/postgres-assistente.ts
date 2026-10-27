@@ -3,6 +3,7 @@ import type pg from 'pg';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { memoriaSchema, type ContextoAssistente, type DecisaoAssistente } from './conversa.js';
 import type { EntradaAssistente } from './entrada.js';
+import type { DiagnosticoAssistente } from './diagnostico.js';
 
 export type TipoTrabalho = 'conversa' | 'preparacao' | 'envio';
 export interface TrabalhoAssistente {
@@ -164,14 +165,21 @@ export class PostgresAssistente {
     });
   }
 
-  async falhar(trabalho: TrabalhoAssistente): Promise<void> {
+  async registrarDiagnosticoEnvio(trabalho: TrabalhoAssistente, diagnostico: DiagnosticoAssistente): Promise<void> {
+    await this.pool.query(`update assistente_trabalhos set resultado=coalesce(resultado,'{}'::jsonb)
+      || jsonb_build_object('diagnostico',$3::jsonb),atualizado_em=now()
+      where id=$1 and token=$2 and estado='incerto'`, [trabalho.id, trabalho.token, JSON.stringify(diagnostico)]);
+  }
+
+  async falhar(trabalho: TrabalhoAssistente, diagnostico: DiagnosticoAssistente): Promise<void> {
     await this.transacao(async client => {
       const falhou = await client.query(`update assistente_trabalhos set estado='falhou',
-        resultado='{"codigo":"TRABALHO_NAO_CONCLUIDO"}',atualizado_em=now()
-        where id=$1 and token=$2 and estado='executando' and lease_ate>now() returning id`, [trabalho.id, trabalho.token]);
+        resultado=$3,atualizado_em=now()
+        where id=$1 and token=$2 and estado='executando' and lease_ate>now() returning id`,
+      [trabalho.id, trabalho.token, JSON.stringify({ codigo: 'TRABALHO_NAO_CONCLUIDO', diagnostico })]);
       if (!falhou.rowCount) return;
       await this.enfileirar(client, trabalho, 'envio', `falha:${trabalho.id}`, { telefone: trabalho.conteudo.telefone,
-        texto: 'Ainda não consegui concluir essa consulta. Seu pedido ficou registrado como pendente de acompanhamento.' });
+        texto: 'Não consegui concluir esse pedido. A execução parou e não está sendo retomada automaticamente.' });
     });
   }
 }
