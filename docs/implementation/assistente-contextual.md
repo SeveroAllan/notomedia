@@ -125,12 +125,22 @@ O piloto relatado respondeu ao “oi” e falhou ao processar “Amplimed”, an
 salvar a agenda ou executar preparação. O registro antigo guardou somente um
 erro genérico. Não é possível reconstruir sua causa com essa evidência.
 
-Para novas falhas, o worker registra a etapa exata, classe, código técnico e
-mensagem com dados sensíveis ocultados. Preserva status HTTP quando o cliente
-compartilhado o fornece e SQLSTATE/restrição quando disponíveis. Erros de
-contrato registram caminho do campo e código da validação, sem valores ou
-chaves inesperadas. JSON inválido não tem seu conteúdo copiado para o erro.
-Não se guardam corpo bruto do provedor, detalhes de linhas SQL ou credenciais.
+Para novas falhas, o worker registra somente etapas e códigos de catálogos
+explícitos, categorias e mensagens fixas. Preserva HTTP inteiro entre 100 e 599
+quando o cliente compartilhado o fornece e SQLSTATE conhecido no catálogo.
+Códigos desconhecidos viram `ERRO_NAO_MAPEADO`. O texto original pode selecionar
+um código interno somente por igualdade exata, sem ser copiado para o registro.
+
+Não se copiam mensagem livre, nome da exceção, nome do construtor, restrição
+SQL, stack, causa, detalhes ou corpo do provedor. Máscaras por padrão não são
+usadas como garantia de privacidade neste diagnóstico. Isso impede o registro
+de nomes, dados clínicos e segredos sem rótulo vindos desses campos.
+
+Erros de contrato registram apenas códigos/tipos conhecidos do Zod e a validação
+UUID usada pelo contrato. Caminhos aceitam nomes de campos definidos e índices
+inteiros de 0 a 49; outros segmentos viram marcadores fixos. Há limites de 20
+problemas e 8 segmentos por caminho. Valores, chaves inesperadas e conteúdo de
+JSON inválido não são copiados. Etapas desconhecidas também têm marcador fixo.
 
 O mesmo diagnóstico vai para o log JSON e `resultado.diagnostico` do trabalho.
 Se gravar a falha no banco também falhar, o log conserva o erro original e
@@ -152,6 +162,14 @@ diagnóstico, fluxo de erro e persistência; os outros 12 testes de banco já
 existiam. Tipagem de produção e dos testes da assistente aprovada. `npm test`
 permanece bloqueado pelo TS7006 herdado descrito ao final deste documento.
 Não houve chamada paga, mensagem real, migração nova ou reativação do piloto.
+
+Na revisão seguinte, o diagnóstico passou a usar somente catálogos e mensagens
+fixas. Antes: 1769 testes aprovados e 22 ignorados. Depois: 1781 aprovados e os
+mesmos 22 ignorados, incluindo os testes opcionais de banco não executados nessa
+revisão. Os 12 testes adicionados cobrem texto livre, códigos desconhecidos,
+metadados de validação, HTTP e etapa fora dos valores permitidos. Tipagem de
+produção e dos testes da assistente aprovada. A falha herdada do `npm test`
+continua sem alteração. A revisão não toca persistência, filas ou integrações.
 
 Consulta de diagnóstico, somente pelo backend:
 

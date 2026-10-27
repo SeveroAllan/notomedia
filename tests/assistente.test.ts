@@ -127,7 +127,9 @@ describe('execução dos especialistas e comunicação', () => {
     await executarPassoAssistente('preparacao', deps);
     expect(deps.repositorio.concluirPreparacao).not.toHaveBeenCalled();
     expect(deps.registrarFalha).toHaveBeenCalledWith('trabalho', 'preparacao',
-      expect.objectContaining({ etapa: 'consultar_preparacao', mensagem: 'detalhe técnico restrito' }));
+      expect.objectContaining({ etapa: 'consultar_preparacao', mensagem: 'A execução não foi concluída.' }));
+    expect(JSON.stringify(vi.mocked(deps.registrarFalha).mock.calls)).not.toContain('detalhe técnico restrito');
+    expect(JSON.stringify(vi.mocked(deps.repositorio.falhar).mock.calls)).not.toContain('detalhe técnico restrito');
     expect(deps.enviar).not.toHaveBeenCalled();
   });
 
@@ -181,11 +183,11 @@ describe('execução dos especialistas e comunicação', () => {
   it('preserva o diagnóstico original mesmo quando registrar a falha no banco também falha', async () => {
     const deps = dependenciasWorker();
     vi.mocked(deps.modelo).mockRejectedValue(new ErroNvidiaChat('IA_HTTP_ERRO', 503));
-    vi.mocked(deps.repositorio.falhar).mockRejectedValue(Error('BANCO_INDISPONIVEL'));
+    vi.mocked(deps.repositorio.falhar).mockRejectedValue(Object.assign(Error('BANCO_INDISPONIVEL'), { code: 'ECONNREFUSED' }));
     await executarPassoAssistente('conversa', deps);
     expect(deps.registrarFalha).toHaveBeenNthCalledWith(1, 'trabalho', 'conversa',
       expect.objectContaining({ etapa: 'decidir_conversa', statusHttp: 503 }));
     expect(deps.registrarFalha).toHaveBeenNthCalledWith(2, 'trabalho', 'conversa',
-      expect.objectContaining({ etapa: 'registrar_falha', codigo: 'BANCO_INDISPONIVEL' }));
+      expect.objectContaining({ etapa: 'registrar_falha', codigo: 'ECONNREFUSED' }));
   });
 });
