@@ -35,6 +35,8 @@ export interface AppConfig {
   openaiVisaoModel?: string;
   openaiTextoModel?: string;
   agenteFiscalAtivo?: boolean;
+  notoAgentAtivo?: boolean;
+  notoAgentEnvioAtivo?: boolean;
   retomadaRecusaSefinAtiva?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
@@ -79,6 +81,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     openaiVisaoModel: env['OPENAI_VISAO_MODEL']?.trim() || 'gpt-4o-mini',
     openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
+    notoAgentAtivo: env['NOTO_AGENT_ATIVO'] === 'true',
+    notoAgentEnvioAtivo: env['NOTO_AGENT_ENVIO_ATIVO'] === 'true',
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
