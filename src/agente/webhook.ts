@@ -39,10 +39,14 @@ export function criarRouterWebhookAgente(deps: {
   completar: CompletarAgente;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
+  painelUrl?: string;
 }) {
   const router = Router();
   // Deduplicação provisória em uma única réplica; persistência distribuída é parte da entrega B.
   const mensagensVistas = new Set<string>();
+  // Apenas as últimas respostas do Noto, para continuidade de perguntas no piloto.
+  // Sem mensagens do operador, senhas ou histórico durável; a Entrega B substitui por memória persistida.
+  const contextoPorConta = new Map<string, string[]>();
 
   router.post('/', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -78,22 +82,33 @@ export function criarRouterWebhookAgente(deps: {
         "select distinct conta_id from usuarios where ativo = true and regexp_replace(telefone, '[^0-9]', '', 'g') = any($1::text[]) limit 2",
         [variantes]
       );
-      // Identidade ambígua ou não cadastrada: falha fechada; nunca escolhe uma conta.
-      if (conta.rows.length !== 1) { res.sendStatus(204); return; }
-      const medicos = await deps.pool.query(
+      // Uma mesma identidade em duas contas exige esclarecimento fora deste webhook.
+      if (conta.rows.length > 1) { res.sendStatus(204); return; }
+      const contaId: string | null = conta.rows[0]?.conta_id ?? null;
+      const medicos = contaId ? await deps.pool.query(
         'select id, nome_completo from medicos where conta_id = $1 order by nome_completo, id limit 21',
-        [conta.rows[0].conta_id]
-      );
+        [contaId]
+      ) : { rows: [] };
 
-      const resposta = await responderAgente({
+      const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
+      const resposta = contaId ? await responderAgente({
         texto,
+        painelUrl: deps.painelUrl,
+        contexto: contextoPorConta.get(chaveContexto) ?? [],
         profissionais: medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
           id: m.id, nome: String(m.nome_completo ?? '')
         }))
+      }, { completar: deps.completar, consultarStatus: deps.consultarStatus }) : await responderAgente({
+        texto, profissionais: [], painelUrl: deps.painelUrl, semConta: true
       }, { completar: deps.completar, consultarStatus: deps.consultarStatus });
 
       const enviado = await deps.enviar(telefone, resposta);
       if (!enviado) { res.sendStatus(503); return; }
+      contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
+      if (contextoPorConta.size > 300) {
+        const primeiro = contextoPorConta.keys().next().value;
+        if (primeiro) contextoPorConta.delete(primeiro);
+      }
       res.sendStatus(200);
     } catch {
       // Nunca registrar texto, telefones, nomes de pacientes ou resposta do provedor.
