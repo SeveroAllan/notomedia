@@ -114,7 +114,7 @@ describe('Webhook do agente — identidade e segurança', () => {
   });
   it('orienta um número de teste sem cadastro a começar pelo painel, sem acesso fiscal', async () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
-    const completar = vi.fn();
+    const completar = vi.fn().mockResolvedValue(JSON.stringify({ agenda: null }));
     const { app, enviar } = preparar({
       pool: { query } as unknown as pg.Pool, completar, painelUrl: 'https://noto.exemplo.com/'
     });
@@ -122,8 +122,8 @@ describe('Webhook do agente — identidade e segurança', () => {
       expect((await postar(evento)).status).toBe(200);
     });
     expect(query).toHaveBeenCalledTimes(1);
-    expect(completar).not.toHaveBeenCalled();
-    expect(enviar).toHaveBeenCalledWith('5551999998888', expect.stringContaining('cadastro'));
+    expect(completar).toHaveBeenCalledTimes(1);
+    expect(enviar).toHaveBeenCalledWith('5551999998888', expect.stringContaining('qual agenda'));
   });
 
   it('preserva a última pergunta de maneira isolada ao longo da conversa de teste', async () => {
