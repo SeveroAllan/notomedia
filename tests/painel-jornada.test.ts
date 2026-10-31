@@ -50,6 +50,8 @@ function painel() {
       return { ok: resposta.ok ?? true, json: async () => resposta.data };
     },
     sessaoAtual: { usuario: { medicoId: 'medico-1' }, tokenAcesso: 'token-ficticio' },
+    medicoIdAlvoUrl: null,
+    medicoIdSelecionado: () => 'medico-1',
     cardOnboarding: new Elemento(), cardAuth: new Elemento(), alertOnboarding: new Elemento(),
     certArquivoBase64: 'Y2VydGlmaWNhZG8=', certNomeArquivo: 'certificado.pfx', leituraCertificado: 0,
     painelDisponivel: true, localStorage: { setItem() {} },

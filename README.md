@@ -15,10 +15,11 @@ comando ou serviço separado de worker, Noto Fiscal ou Noto IA nesta versão.
 - API de pesquisa de nome completo, CRM e RQE (OpenSerp), com cache no Supabase.
 - API de emissão fiscal atual (`/api/v1/nfse`, `/v2/nfse`, `/v2/nfsen`): fila,
   assinatura, transmissão, armazenamento do XML autorizado e conversão PDF.
-- Navegador virtual para logar e ver agendas (TribeMD).
+- Navegador virtual para logar e ver agendas (TribeMD e Amplimed).
 - Cofres de agenda e certificado: credenciais, cookies e certificados
   criptografados por conta no painel, com conexão, leitura da agenda,
-  reconexão, alteração, desconexão e exclusão.
+  reconexão, alteração, desconexão e exclusão. A escolha entre TribeMD e
+  Amplimed usa a agenda conectada mais recente.
 
 Os motores antigos de candidatos, pedidos, aprovação conversacional, varredura,
 assistente e webhooks de conversa foram removidos. A fila desta base consome
@@ -39,6 +40,6 @@ exclusões no banco.
 
 ## Cofre e próximas integrações
 
-O card TribeMD e a seção **Cofre** substituem Google Planilhas no painel. O acesso
+Os cards TribeMD e Amplimed e a seção **Cofre** substituem Google Planilhas no painel. O acesso
 é vinculado à conta Supabase; o usuário autoriza a leitura ao salvar as credenciais.
 Configuração e limites: [cofre TribeMD](docs/implementation/cofre-tribemd.md).

@@ -1070,7 +1070,7 @@
     .cofre-dialog input.input-data-field { box-sizing:border-box;width:100%; }
     .cofre-autorizacao { display:flex;align-items:flex-start;gap:10px;margin-top:18px; }
     .cofre-autorizacao input { flex-shrink:0;margin-top:4px; }
-    #cofreMensagem,#cofreCardMensagem { color:#b42318; }
+    #cofreMensagem,#cofreCardMensagem,#cofreAmplimedMensagem { color:#b42318; }
   </style>
 </head>
 <body class="onboarding-active">
@@ -1317,6 +1317,20 @@
                 <button type="button" class="sheets-btn-conectar" id="btnCofreConectar">Conectar</button>
               </div>
               <p id="cofreCardMensagem" role="status" aria-live="polite"></p>
+            </div>
+
+            <div id="cardCofreAmplimed" class="sheets-card">
+              <div class="sheets-card-main">
+                <div class="sheets-card-left">
+                  <div class="sheets-info-wrapper">
+                    <span class="sheets-title">Amplimed</span>
+                    <span class="sheets-subtitle" id="cofreAmplimedDescricao">Conecte sua agenda para o Noto conferir suas consultas. Só leitura.</span>
+                  </div>
+                </div>
+                <button type="button" class="sheets-btn-conectar" id="btnCofreAmplimed">Conectar</button>
+              </div>
+              <p><button type="button" class="btn-link" id="btnCofreAmplimedReverificar" hidden>Verificar de novo</button> <button type="button" class="btn-link" id="btnCofreAmplimedExcluir" hidden>Excluir acesso</button></p>
+              <p id="cofreAmplimedMensagem" role="status" aria-live="polite"></p>
             </div>
 
             <!-- SEÇÕES INTERNAS (ABERTAS A PARTIR DO MENU, COM BOTÃO VOLTAR PARA O PAINEL) -->
@@ -1591,7 +1605,20 @@
     <p>O acesso será interrompido e o e-mail, a senha e a sessão salvos serão apagados. Para conectar novamente, você precisará informar as credenciais.</p>
     <div class="cofre-acoes"><button id="confirmarExcluirCofre" class="btn-action" type="button">Excluir acesso</button><button id="cancelarExcluirCofre" class="btn-link" type="button">Cancelar</button></div>
   </dialog>
+  <dialog id="modalCofreAmplimed" class="cofre-dialog" aria-labelledby="tituloModalCofreAmplimed">
+    <div class="cofre-provedor"><h2 id="tituloModalCofreAmplimed">Conectar Amplimed</h2></div>
+    <p>Informe seu acesso ao Amplimed. Ao salvar, seu e-mail e sua senha serão criptografados.</p>
+    <p>O Noto só lê sua agenda para conferir consultas. Esse acesso não altera nada no Amplimed nem emite notas por si só.</p>
+    <form id="formCofreAmplimed">
+      <label for="cofreAmplimedEmail">E-mail ou usuário do Amplimed</label><input id="cofreAmplimedEmail" name="email" class="input-data-field" type="text" autocomplete="off" maxlength="254" required>
+      <label for="cofreAmplimedSenha">Senha do Amplimed</label><input id="cofreAmplimedSenha" name="senha" class="input-data-field" type="password" autocomplete="new-password" maxlength="256" required>
+      <label class="cofre-autorizacao"><input name="autorizacao" type="checkbox" required>Autorizo o Noto a consultar minha agenda no Amplimed, somente leitura.</label>
+      <p id="cofreAmplimedModalMensagem" role="status"></p>
+      <div class="cofre-acoes"><button class="btn-action" type="submit">Salvar e conectar</button><button id="fecharModalCofreAmplimed" class="btn-link" type="button">Cancelar</button></div>
+    </form>
+  </dialog>
   <script src="/assets/cofre.js"></script>
+  <script src="/assets/cofre-amplimed.js"></script>
   <script>
     // Gerenciador de estado local
     let sessaoAtual = null;
@@ -1600,6 +1627,8 @@
       if (salva?.usuario && typeof salva.tokenAcesso === 'string' && salva.tokenAcesso) sessaoAtual = salva;
       else localStorage.removeItem('notomed_sessao');
     } catch { localStorage.removeItem('notomed_sessao'); }
+    const medicoIdAlvoUrl = new URLSearchParams(window.location.search).get('medicoId');
+    const medicoIdSelecionado = () => medicoIdAlvoUrl || sessaoAtual?.usuario?.medicoId || sessaoAtual?.usuario?.usuarioId || null;
     let certArquivoBase64 = '';
     let certNomeArquivo = '';
     let telefoneAtual = '';
@@ -1870,7 +1899,8 @@
       if (!sessaoAtual?.usuario || !sessaoAtual.tokenAcesso) { efetuarLogout(); return; }
       cardOnboarding.classList.add('hidden');
 
-      const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
+      const medicoId = medicoIdSelecionado();
+      if(!medicoId){efetuarLogout();return;}
       try {
         const res = await fetch(`/api/onboarding/status?medicoId=${medicoId}`, {
           headers: { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }
@@ -1885,8 +1915,8 @@
           cardAuth.classList.add('hidden');
           cardOnboarding.classList.remove('hidden');
           if (data.medicoId || data.status.medicoId) {
-            sessaoAtual.usuario.medicoId = data.medicoId || data.status.medicoId;
-            if (data.status.nomeUsuario) sessaoAtual.usuario.nome = data.status.nomeUsuario;
+            if(!medicoIdAlvoUrl)sessaoAtual.usuario.medicoId = data.medicoId || data.status.medicoId;
+            if (!medicoIdAlvoUrl && data.status.nomeUsuario) sessaoAtual.usuario.nome = data.status.nomeUsuario;
             localStorage.setItem('notomed_sessao', JSON.stringify(sessaoAtual));
           }
           renderizarPassos(data.status);
@@ -2300,14 +2330,15 @@
         showAlert('Selecione o arquivo do certificado e digite a senha.', true, alertOnboarding);
         return;
       }
-      const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
+      const medicoId = medicoIdSelecionado();
+      if(!medicoId){showAlert('Médico não identificado.',true,alertOnboarding);return;}
       const btn = document.getElementById('btnSalvarCertificado');
       btn.disabled = true;
       btn.textContent = 'Buscando última NFS-e...';
       try {
         const res = await fetch('/api/onboarding/certificado', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify({
             medicoId,
             arquivoBase64: certArquivoBase64,
@@ -2711,7 +2742,7 @@
       if (cadastroSessao !== sessaoAtual) { cadastroSessao = sessaoAtual;cadastroRevisao = null;cadastroEdicaoPendente = false; }
       const sessao = sessaoAtual, edicaoInicio = versaoEdicaoCadastro;consultaCadastroPendente = true;
       try {
-        const res = await fetch('/api/conta/cadastro', { headers: { Authorization: 'Bearer ' + sessao.tokenAcesso }, cache: 'no-store', signal: AbortSignal.timeout(10000) });
+        const res = await fetch('/api/conta/cadastro?medicoId='+encodeURIComponent(medicoIdSelecionado()||''), { headers: { Authorization: 'Bearer ' + sessao.tokenAcesso }, cache: 'no-store', signal: AbortSignal.timeout(10000) });
         const data = await res.json();
         if (sessao !== sessaoAtual || (!painelDisponivel && !etapaProfissionalAtiva)) return;
         if (!res.ok || !data.ok) throw Error('consulta');
@@ -2751,7 +2782,7 @@
       const revisao=cadastroRevisao,nome=nomeParaPesquisaProfissional(),sessao=sessaoAtual;
       if(!revisao?.trabalhoId||!nome||pesquisandoResponsavel||!sessao?.tokenAcesso)return;
       pesquisandoResponsavel=true;cadastroEl('btnPesquisarResponsavel').disabled=true;cadastroEl('contaRevisaoProfissionalStatus').textContent='Pesquisando registros públicos do responsável selecionado…';
-      try{const res=await fetch('/api/conta/cadastro/pesquisar',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessao.tokenAcesso},body:JSON.stringify({trabalhoId:revisao.trabalhoId,versao:revisao.versao,nome})});const data=await res.json();
+      try{const res=await fetch('/api/conta/cadastro/pesquisar?medicoId='+encodeURIComponent(medicoIdSelecionado()||''),{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+sessao.tokenAcesso},body:JSON.stringify({trabalhoId:revisao.trabalhoId,versao:revisao.versao,nome})});const data=await res.json();
         if(sessao!==sessaoAtual||(!painelDisponivel && !etapaProfissionalAtiva))return;
         if(!res.ok||!data.ok){cadastroEl('contaRevisaoProfissionalStatus').textContent=data.detalhe||'Não foi possível iniciar a pesquisa.';return;}
         cadastroEdicaoPendente=false;await atualizarRevisaoCadastro(true);
@@ -2763,7 +2794,7 @@
       const sessao = sessaoAtual, revisao = cadastroRevisao, btn = cadastroEl('btnConfirmarProfissional');
       aprovandoCadastro = true;btn.disabled = true;cadastroEl('contaRevisaoProfissionalStatus').textContent = 'Confirmando dados profissionais…';
       try {
-        const res = await fetch('/api/conta/cadastro/aprovar', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessao.tokenAcesso },
+        const res = await fetch('/api/conta/cadastro/aprovar?medicoId='+encodeURIComponent(medicoIdSelecionado()||''), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessao.tokenAcesso },
           body: JSON.stringify({ trabalhoId: revisao.trabalhoId, versao: revisao.versao, nome: cadastroEl('inputContaNome').value.trim(), crm: cadastroEl('inputContaCrm').value.trim(), rqe: cadastroEl('inputContaRqe').value.trim() || null }) });
         const data = await res.json();if (sessao !== sessaoAtual || (!painelDisponivel && !etapaProfissionalAtiva)) return;
         if (!res.ok || !data.ok) { cadastroEl('contaRevisaoProfissionalStatus').textContent = data.detalhe || 'Não foi possível confirmar os dados.';return; }

@@ -40,18 +40,18 @@ describe('adaptador real de emissão com SQL fake, sem prefeitura', () => {
   });
   it('ausência de dados profissionais impede acesso ao perfil e ao paciente', async () => {
     const banco = cadastroFiscal({ profissional: false });
-    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.', dadosProfissionaisPendentes: true, contextoTecnico: { etapa: 'dados_profissionais', transmitida: false } });
+    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.', codigoErroSefin: 'DADOS_PROFISSIONAIS_INCOMPLETOS', dadosProfissionaisPendentes: true, contextoTecnico: { etapa: 'dados_profissionais', transmitida: false } });
     expect(banco.consultas).toHaveLength(1);
   });
   it('modo conservador sem integrações não permite simulação', async () => {
     const banco = cadastroFiscal();
     expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia', undefined, undefined, undefined, undefined, true).emitir(item))
-      .toEqual({ sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.' });
+      .toEqual({ sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' });
     expect(banco.consultas).toHaveLength(1);
   });
   it('perfil fiscal ausente bloqueia emissão', async () => {
     const banco = cadastroFiscal({ perfil: false });
-    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Perfil fiscal não cadastrado para o médico medico-1' });
+    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Perfil fiscal não cadastrado para o médico medico-1', codigoErroSefin: 'PERFIL_FISCAL_INCOMPLETO' });
   });
   it('referência importada exige preparação fiscal ativa', async () => {
     const banco = cadastroFiscal({ referencia: true });
@@ -61,7 +61,7 @@ describe('adaptador real de emissão com SQL fake, sem prefeitura', () => {
   });
   it('paciente sem CPF não avança para numeração nem PDF', async () => {
     const banco = cadastroFiscal({ cpf: '' });
-    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Paciente paciente-1 sem CPF válido para emissão' });
+    expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Paciente paciente-1 sem CPF válido para emissão', codigoErroSefin: 'PACIENTE_CPF_INVALIDO' });
     expect(banco.consultas.some(c => c.sql.includes('max(ndps)'))).toBe(false);
   });
 });

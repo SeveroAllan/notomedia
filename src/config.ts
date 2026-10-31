@@ -9,6 +9,7 @@ import 'dotenv/config';
 export interface AppConfig {
   porta: number;
   host: string;
+  appPublicOrigin?: string;
   databaseUrl: string;
   supabaseUrl: string;
   supabaseServiceRoleKey: string;
@@ -34,6 +35,7 @@ export interface AppConfig {
   openaiVisaoModel?: string;
   openaiTextoModel?: string;
   agenteFiscalAtivo?: boolean;
+  retomadaRecusaSefinAtiva?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
   emissaoComprovanteHomologacaoAtiva?: boolean;
@@ -51,6 +53,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
   return {
     porta: Number.parseInt(env['PORT'] || '3000', 10),
     host: env['HOST'] || '0.0.0.0',
+    appPublicOrigin: env['APP_PUBLIC_ORIGIN']?.trim() || env['COFRE_ORIGEM']?.trim() || undefined,
     databaseUrl: env['DATABASE_URL'] || '',
     supabaseUrl: env['SUPABASE_URL'] || '',
     supabaseServiceRoleKey: env['SUPABASE_SERVICE_ROLE_KEY'] || '',
@@ -76,6 +79,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     openaiVisaoModel: env['OPENAI_VISAO_MODEL']?.trim() || 'gpt-4o-mini',
     openaiTextoModel: env['OPENAI_TEXTO_MODEL']?.trim() || 'gpt-4o-mini',
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
+    retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',

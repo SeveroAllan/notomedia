@@ -1,6 +1,23 @@
 import type { Page, Request, Response } from 'playwright-core';
 import type { ObservadorRedeLoginTribemd } from './tribemd-rede.js';
 import { dataISOTribemd, type ConsultaTribemd } from './tribemd-leitura.js';
+const CHAVES_PROFISSIONAL=['profissional','profissionais','medico','medicos','usuario','usuarios','responsavel'] as const;
+/** Só o nome do profissional, se o portal trouxer. Chaves não confirmadas: ausente vira undefined. */
+export function nomeProfissionalTribemd(item:Record<string,unknown>):string|undefined{
+ for(const k of CHAVES_PROFISSIONAL){
+  const v=item[k];const o=Array.isArray(v)?v[0]:v;
+  const nome=typeof o==='string'?o:objeto(o)&&typeof o.nome==='string'?o.nome:'';
+  const limpo=nome.trim().replace(/\s+/g,' ').slice(0,120);
+  if(limpo)return limpo;
+ }
+ return undefined;
+}
+/** Descoberta: nomes distintos de profissionais (sem paciente, horário ou valor). */
+export function descobrirProfissionais(consultas:ReadonlyArray<{profissional?:string}>):string[]{
+ const mapa=new Map<string,string>();
+ for(const c of consultas){if(!c.profissional)continue;const chave=c.profissional.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();if(!mapa.has(chave))mapa.set(chave,c.profissional);}
+ return [...mapa.values()].sort((a,b)=>a.localeCompare(b,'pt-BR'));
+}
 export class ErroAgendaTribemd extends Error { constructor(public codigo:string){super(codigo);} }
 export interface RecorteAgendaTribemd {
  consultas:ConsultaTribemd[];totalAtendimentos:number;limitado:boolean;
@@ -21,7 +38,7 @@ export function extrairAgendaTribemd(dados:unknown,hoje:string):Omit<RecorteAgen
   const valor=item[campo],data=typeof valor==='string'?dataISOTribemd(valor):null;
   if(!nome||!data||data>hoje)continue;
   const id=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0?String(v):typeof v==='string'&&/^[1-9]\d{0,15}$/.test(v)?v:undefined;
-  consultas.push({atendimentoId:id(item.id),pacienteId:id(item.paciente_id)??id(paciente?.id),situacao:Number(item.status)===10?'finalizado':'atendido',nome,ultimaConsulta:null,dataConsultaObservada:data,evidencia:'consulta_realizada_observada',origemData:campo});
+  consultas.push({atendimentoId:id(item.id),pacienteId:id(item.paciente_id)??id(paciente?.id),situacao:Number(item.status)===10?'finalizado':'atendido',nome,ultimaConsulta:null,dataConsultaObservada:data,evidencia:'consulta_realizada_observada',origemData:campo,profissional:nomeProfissionalTribemd(item)});
  }
  return {consultas,totalAtendimentos:corpo.atendimentos.length,limitado:corpo.atendimentos.length>100};
 }
@@ -97,6 +114,30 @@ export class LeitorAgendaTribemd {
    const restante=prazo-Date.now();if(restante<=0)throw new ErroAgendaTribemd('LEITURA_AGENDA_TEMPO_ESGOTADO');await this.esperar(restante);
   }
   throw new ErroAgendaTribemd('SESSAO_ENCERRADA');
+ }
+ /** Retrocede pela UI; somente o GET disparado pelo próprio portal é lido. */
+ async lerJanela(hoje:string,janelaDias=90,processar?:(recorte:RecorteAgendaTribemd)=>Promise<ConsultaTribemd[]>):Promise<RecorteAgendaTribemd>{
+  if(!dataISOTribemd(hoje)||!Number.isInteger(janelaDias)||janelaDias<1||janelaDias>365)throw new ErroAgendaTribemd('JANELA_AGENDA_INVALIDA');
+  const inicio=new Date(hoje+'T12:00:00Z');inicio.setUTCDate(inicio.getUTCDate()-janelaDias);
+  const desde=inicio.toISOString().slice(0,10),consultas=new Map<string,ConsultaTribemd>();
+  let recorte=await this.ler(hoje),fim=recorte.intervalo.fim,totalAtendimentos=0;
+  if(!fim||fim<hoje||!recorte.intervalo.inicio||recorte.intervalo.inicio>hoje)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+  for(let pagina=0;pagina<55;pagina++){
+   if(recorte.limitado)throw new ErroAgendaTribemd('LEITURA_AGENDA_LIMITE_EXCEDIDO');
+   const inicioRecorte=recorte.intervalo.inicio;
+   if(!inicioRecorte)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+   totalAtendimentos+=recorte.totalAtendimentos;
+   const lidas=processar?await processar(recorte):recorte.consultas;
+   for(const c of lidas)if(c.atendimentoId&&c.dataConsultaObservada&&c.dataConsultaObservada>=desde&&c.dataConsultaObservada<=hoje)consultas.set(c.atendimentoId,c);
+   if(inicioRecorte<=desde)return {consultas:[...consultas.values()],totalAtendimentos,limitado:false,intervalo:{inicio:inicioRecorte,fim}};
+   const botao=this.page.getByRole('button',{name:/^(semana anterior|anterior|previous(?: week)?)$/i}).or(this.page.locator('button.fc-prev-button'));
+   if(await botao.count()!==1||!await botao.isVisible()||!await botao.isEnabled())throw new ErroAgendaTribemd('PAGINACAO_AGENDA_NAO_RECONHECIDA');
+   await Promise.all([this.page.waitForRequest(r=>r.method()==='GET'&&new URL(r.url()).origin==='https://app.tribemd.com'&&new URL(r.url()).pathname==='/api/atendimentos/agenda',{timeout:10000}),botao.click()]);
+   const proximo=await this.ler(hoje),anterior=new Date(inicioRecorte+'T12:00:00Z');anterior.setUTCDate(anterior.getUTCDate()-1);
+   if(!proximo.intervalo.inicio||!proximo.intervalo.fim||proximo.intervalo.inicio>=inicioRecorte||proximo.intervalo.fim<anterior.toISOString().slice(0,10))throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
+   recorte=proximo;
+  }
+  throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
  }
  encerrar(){this.fechado=true;this.page.off('request',this.requisicao);this.page.off('response',this.resposta);this.page.off('requestfailed',this.falha);this.atual=undefined;this.avisar();}
 }

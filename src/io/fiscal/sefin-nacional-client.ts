@@ -9,6 +9,7 @@ import { rootCertificates } from 'node:tls';
 import zlib from 'node:zlib';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { classificarStatusConsultaDps, type ResultadoConsultaDps } from '../../fiscal/retomada-recusa.js';
 
 export interface EnviarDpsSefinInput {
   xmlAssinado: string;
@@ -88,6 +89,7 @@ export class SefinNacionalClient {
     } catch (err: any) {
       return {
         sucesso: false,
+        codigoErro: ['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(err?.code) || err?.name === 'AbortError' ? 'SEFIN_TIMEOUT' : 'SEFIN_INDISPONIVEL',
         falhaAntesDoEnvio: ['EAI_AGAIN', 'ECONNREFUSED'].includes(err?.code) ? err.code : undefined,
         motivo: `Falha de conexão com SEFIN Nacional (${url}): ${err?.message || err}`
       };
@@ -105,6 +107,7 @@ export class SefinNacionalClient {
     } catch {
       return {
         sucesso: false,
+        httpStatus: status,
         motivo: `Resposta HTTP ${status} da SEFIN não é JSON válido: ${corpo.slice(0, 300)}`
       };
     }
@@ -134,6 +137,7 @@ export class SefinNacionalClient {
       if (json['motivo'] || json['message']) {
         return {
           sucesso: false,
+          httpStatus: status,
           motivo: `SEFIN [HTTP ${status}]: ${json['motivo'] || json['message']}`,
           respostaRaw: json
         };
@@ -195,12 +199,34 @@ export class SefinNacionalClient {
     };
   }
 
+  /**
+   * Reconciliação somente-leitura (Manual dos Contribuintes v1.2 out/2025, seção 1.4.2):
+   * HEAD /dps/{id} informa se uma NFS-e foi gerada a partir do identificador da DPS.
+   * Usada para provar recusa definitiva antes de qualquer retomada. Nunca transmite nada.
+   */
+  async consultarDpsGerada(
+    dpsId: string,
+    input: { pfxBuffer: Buffer; senhaCertificado: string; ambiente: 1 | 2 }
+  ): Promise<{ resultado: ResultadoConsultaDps; httpStatus?: number }> {
+    if (!/^DPS\d{42}$/.test(dpsId)) return { resultado: 'indeterminado' };
+    const base = input.ambiente === 1
+      ? 'https://sefin.nfse.gov.br'
+      : 'https://sefin.producaorestrita.nfse.gov.br';
+    try {
+      const resp = await this.executarRequisicaoMtls(`${base}/SefinNacional/dps/${dpsId}`, '', input.pfxBuffer, input.senhaCertificado, this.defaultCaBundle, 'HEAD');
+      return { resultado: classificarStatusConsultaDps(resp.status), httpStatus: resp.status };
+    } catch {
+      return { resultado: 'indeterminado' };
+    }
+  }
+
   private executarRequisicaoMtls(
     urlStr: string,
     body: string,
     pfx: Buffer,
     passphrase: string,
-    caBundle?: Buffer
+    caBundle?: Buffer,
+    metodo: 'POST' | 'HEAD' = 'POST'
   ): Promise<{ status: number; corpo: string }> {
     return new Promise((resolve, reject) => {
       const url = new URL(urlStr);
@@ -208,7 +234,7 @@ export class SefinNacionalClient {
         hostname: url.hostname,
         port: url.port || 443,
         path: url.pathname + url.search,
-        method: 'POST',
+        method: metodo,
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),

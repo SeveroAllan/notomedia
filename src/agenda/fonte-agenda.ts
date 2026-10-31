@@ -4,13 +4,16 @@ import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone
 const consultaSchema = z.object({
   pacienteId: z.string().min(1), telefonePaciente: z.string().min(1).optional(), idExterno: z.string().min(1), dataHora: z.string().min(1),
   status: z.enum(['realizada', 'cancelada', 'faltou', 'agendada']),
+  valorCobradoAoVivoCentavos: z.number().int().nullable().optional(),
+  nomeAoVivo: z.string().trim().min(1).max(200).nullable().optional(),
+  profissional: z.string().trim().min(1).max(200).nullable().optional(),
   valorConsultaCentavos: z.number().int().nullable().optional()
 }).strict();
 const resultadoSchema = z.discriminatedUnion('tipo', [
   z.object({ tipo: z.literal('consultas'), fonte: z.string().min(1), consultas: z.array(consultaSchema) }).strict(),
-  z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA']) }).strict()
+  z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA', 'SINCRONIZACAO_INCOMPLETA', 'PROFISSIONAL_NAO_IDENTIFICADO', 'PROFISSIONAL_AMBIGUO']) }).strict()
 ]);
-export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string }
+export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string; janelaDias?: number; agora?: Date }
 export type ResultadoFonteAgenda = z.infer<typeof resultadoSchema>;
 export type ConsultaSincronizada = Omit<z.infer<typeof consultaSchema>, 'valorConsultaCentavos'> & { valorConsultaCentavos: number | null };
 export interface FonteAgenda { consultar(entrada: EntradaFonteAgenda): Promise<ResultadoFonteAgenda> }
@@ -46,4 +49,12 @@ export function selecionarConsultaComprovante(consultas: z.infer<typeof consulta
   realizadas.sort((a, b) => Date.parse(b.dataHora) - Date.parse(a.dataHora));
   if (realizadas[1] && Date.parse(realizadas[0].dataHora) === Date.parse(realizadas[1].dataHora)) return { tipo: 'perguntar_medico' as const, motivo: 'CONSULTA_AMBIGUA_OU_AUSENTE' as const };
   return { tipo: 'consulta' as const, consulta: realizadas[0] };
+}
+
+/** Dois contatos válidos diferentes não permitem escolher o destinatário de uma nota. */
+export function resolverContatoConsulta(contato?: { celular?: string | null; telefone?: string | null }): string | null {
+  const valido = (valor?: string | null) => { const telefone = valor?.replace(/\D/g, '') ?? ''; return /^\d{10,13}$/.test(telefone) ? telefone : null; };
+  const celular = valido(contato?.celular), telefone = valido(contato?.telefone);
+  if (celular && telefone && celular !== telefone) return null;
+  return celular ?? telefone;
 }

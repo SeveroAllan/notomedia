@@ -5,6 +5,10 @@
  */
 
 import type pg from 'pg';
+import { sanitizarErroFiscal } from '../../observabilidade/erros.js';
+import { ehRejeicaoRegraNegocio } from '../../fiscal/retomada-recusa.js';
+import type { ResultadoTransmissaoSefin } from './sefin-nacional-client.js';
+import { validarCpf } from '../../paciente/validar-cpf.js';
 import { dadosProfissionaisCompletos } from '../../conta/validar-dados-emissao.js';
 import { montarDescricaoServico } from '../../emissao/montar-descricao-servico.js';
 import { carregarEvidenciasEmissao } from './carregar-evidencias-emissao.js';
@@ -32,6 +36,13 @@ import type { MeuDanfeClient } from '../meudanfe/meu-danfe-client.js';
 import type { ConsultaCpfProvider } from '../../paciente/consulta-cpf-provider.js';
 import { ehNomeCivilValido } from '../../paciente/regras/validar-nome-civil.js';
 
+export interface TomadorAoVivo { nome: string | null; cpf: string | null; valorCobradoCentavos: number | null; contato?: { celular?: string | null; telefone?: string | null } }
+export function prepararTomadorAoVivo(dados: TomadorAoVivo) {
+  if (!ehNomeCivilValido(dados.nome) || !validarCpf(dados.cpf) || !Number.isSafeInteger(dados.valorCobradoCentavos) || dados.valorCobradoCentavos! <= 0)
+    return { ok: false as const };
+  return { ok: true as const, nome: dados.nome!.trim(), cpf: dados.cpf!.replace(/\D/g, ''), nomeValidado: true, valorCentavos: dados.valorCobradoCentavos! };
+}
+
 export type ConfigPrestadorCompleto = ConfigPrestador & {
   referenciaImportada?: boolean;
   serie: string;
@@ -52,8 +63,18 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly supabaseClient?: SupabaseClient,
     private readonly sefinClient?: SefinNacionalClient,
     private readonly modoAgenteConservador = false,
-    private readonly preparacaoFiscalAtiva = false
+    private readonly preparacaoFiscalAtiva = false,
+    private readonly retomadaRecusaAtiva = false
   ) {}
+
+  /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
+  async simularConsultaAgenda(medicoId: string, dados: TomadorAoVivo): Promise<{ ok: boolean }> {
+    if (!prepararTomadorAoVivo(dados).ok) return { ok: false };
+    const { rows } = await this.pool.query('select ambiente from medico_perfil_fiscal where medico_id=$1', [medicoId]);
+    if (rows[0]?.ambiente !== 'homologacao') return { ok: false };
+    const perfil = await this.carregarPerfilFiscal(medicoId);
+    return { ok: perfil?.ambiente === 2 };
+  }
 
   emitir(item: SolicitacaoEmissaoItem & { emissaoComprovante?: never }): Promise<
     ResultadoEmissaoDps & ({ sucesso: false } | { pdfStoragePath: string })>;
@@ -70,13 +91,18 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
   }
 
   private async emitirPreparado(item: SolicitacaoEmissaoItem, correcao?: FalhaEmissao): Promise<ResultadoEmissaoDps> {
+    const aoVivo = item.origemLote && item.tomadorAoVivo ? prepararTomadorAoVivo(item.tomadorAoVivo) : undefined;
+    if (item.origemLote && (!aoVivo?.ok || aoVivo.valorCentavos !== item.valorServicoCentavos))
+      return { sucesso: false, erro: 'Dados da consulta precisam de conferência.', codigoErroSefin: 'TOMADOR_AO_VIVO_INVALIDO' };
+    if (item.origemLote && (!this.modoAgenteConservador || !this.preparacaoFiscalAtiva || !this.supabaseClient || !this.sefinClient))
+      return { sucesso: false, erro: 'Integração fiscal indisponível.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' };
     // Um mesmo instante define competência e dhEmi, inclusive na virada do dia.
     // Correções preservam o instante da DPS original, sem gerar outra emissão.
     const dataGeracao = correcao ? new Date(String(correcao.contextoTecnico!.dataGeracao)) : new Date();
     const { rows: profissionais } = await this.pool.query(
       'select m.nome_completo, m.crm, m.rqe, m.especialidade, s.aguardando_confirmacao_medico from medicos m join solicitacoes_nota s on s.medico_id=m.id where m.id=$1 and s.id=$2', [item.medicoId,item.id]);
     if (!profissionais[0] || !dadosProfissionaisCompletos(profissionais[0])) {
-      return { sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.',
+      return { sucesso: false, erro: 'Informe nome completo e CRM para emitir suas notas.', codigoErroSefin: 'DADOS_PROFISSIONAIS_INCOMPLETOS',
         dadosProfissionaisPendentes: true, contextoTecnico: { etapa: 'dados_profissionais', transmitida: false } };
     }
     // Um item já reservado pode conter a identidade anterior à resposta do médico.
@@ -87,17 +113,17 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         crm:medico.crm, rqe:medico.rqe, especialidade:medico.especialidade}, datas)};
     }
     if ((this.modoAgenteConservador || this.preparacaoFiscalAtiva) && (!this.supabaseClient || !this.sefinClient)) {
-      return { sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.' };
+      return { sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' };
     }
     const prestadorConfig = await this.carregarPerfilFiscal(item.medicoId);
     if (!prestadorConfig) {
-      return { sucesso: false, erro: `Perfil fiscal não cadastrado para o médico ${item.medicoId}` };
+      return { sucesso: false, erro: `Perfil fiscal não cadastrado para o médico ${item.medicoId}`, codigoErroSefin: 'PERFIL_FISCAL_INCOMPLETO' };
     }
-    if (item.emissaoComprovante && prestadorConfig.ambiente !== 2) {
+    if ((item.emissaoComprovante || item.origemLote) && prestadorConfig.ambiente !== 2) {
       return { sucesso: false, erro: 'AMBIENTE_FISCAL_BLOQUEADO', codigoErroSefin: 'AMBIENTE_FISCAL_BLOQUEADO' };
     }
     if (prestadorConfig.referenciaImportada && !this.preparacaoFiscalAtiva) {
-      return { sucesso: false, erro: 'Ative a preparação fiscal para emitir com os parâmetros da referência importada.',
+      return { sucesso: false, erro: 'Ative a preparação fiscal para emitir com os parâmetros da referência importada.', codigoErroSefin: 'PREPARACAO_NECESSARIA',
         pendenciasFiscais: [{ campo: 'configuracao', codigo: 'PREPARACAO_NECESSARIA', mensagem: 'A preparação fiscal precisa estar ativa para validar os parâmetros importados.' }],
         contextoTecnico: { etapa: 'preparacao', transmitida: false } };
     }
@@ -106,12 +132,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }))
       : undefined;
     if (preparacao && !preparacao.ok) {
-      return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.',
+      return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
         pendenciasFiscais: preparacao.pendencias, contextoTecnico: { etapa: 'preparacao', transmitida: false } };
     }
-    const tomador = await this.carregarDadosTomador(item.pacienteId);
+    const tomador = aoVivo?.ok ? { ...aoVivo, endereco: undefined, telefone: undefined, enderecoCompleto: undefined } : await this.carregarDadosTomador(item.pacienteId);
     if (!tomador || !tomador.cpf) {
-      return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão` };
+      return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
 
     // Se o nome ainda não foi validado, tenta obter via cadastro existente no banco ou API da Receita
@@ -152,7 +178,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     if (!ehNomeCivilValido(tomador.nome)) {
       return {
         sucesso: false,
-        erro: `Paciente ${item.pacienteId} sem nome civil completo válido para emissão de NFS-e (nome atual: '${tomador.nome || 'nulo'}').`
+        erro: `Paciente ${item.pacienteId} sem nome civil completo válido para emissão de NFS-e (nome atual: '${tomador.nome || 'nulo'}').`, codigoErroSefin: 'PACIENTE_NOME_INVALIDO'
       };
     }
 
@@ -181,7 +207,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       prestadorConfig.regTrib.regEspTrib = p.regimeEspecialTributacao;
       prestadorConfig.pTotTribSN = p.percentualTotTribSN ?? 0; // MEI não serializa percentual.
       const pendencias = validarDadosDps(emissaoInput, prestadorConfig);
-      if (pendencias.length) return { sucesso: false, erro: 'Dados da DPS precisam de revisão antes do envio.',
+      if (pendencias.length) return { sucesso: false, erro: 'Dados da DPS precisam de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
         pendenciasFiscais: pendencias, contextoTecnico: { etapa: 'validacao', transmitida: false, origem: preparacao.origem } };
     }
     let ndpsAtual = correcao ? Number(correcao.contextoTecnico!.ndps) : ndps;
@@ -197,7 +223,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       if (!cert) {
         return {
           sucesso: false,
-          erro: `Médico ${item.medicoId} não possui certificado digital A1 ativo cadastrado no sistema para emissão com validade jurídica na SEFIN.`
+          erro: `Médico ${item.medicoId} não possui certificado digital A1 ativo cadastrado no sistema para emissão com validade jurídica na SEFIN.`, codigoErroSefin: 'CERTIFICADO_AUSENTE'
         };
       }
 
@@ -207,16 +233,18 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       } catch (err: any) {
         return {
           sucesso: false,
-          erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`
+          erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`, codigoErroSefin: 'CERTIFICADO_INVALIDO'
         };
       }
 
       let resSefinFinal: any;
       const MAX_INCREMENTOS_SEQUENCIA = 5;
 
+      let dpsIdFinal: string | undefined;
       for (let seq = 0; seq <= MAX_INCREMENTOS_SEQUENCIA; seq++) {
         emissaoInput.nDPS = String(ndpsAtual);
         const { dpsId, xml: xmlGerado } = gerarXmlDps(emissaoInput, prestadorConfig, dataGeracao);
+        dpsIdFinal = dpsId;
         xmlDpsOriginal = xmlGerado;
         if (correcao && xmlGerado !== correcao.xmlDpsOriginal) {
           return { sucesso: false, erro: 'Dados da emissão mudaram desde a rejeição. Correção interrompida sem transmitir.' };
@@ -330,9 +358,15 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
 
       if (!resSefinFinal || !resSefinFinal.sucesso) {
+        await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
+        const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
+        const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
+          prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
+          profissionais[0].nome_completo, profissionais[0].crm, profissionais[0].rqe,
+          String(item.valorServicoCentavos), (item.valorServicoCentavos / 100).toFixed(2), (item.valorServicoCentavos / 100).toFixed(2).replace('.', ',')];
         return {
           sucesso: false,
-          erro: resSefinFinal?.motivo || 'Erro na transmissão à SEFIN',
+          erro: item.origemLote ? sanitizarErroFiscal(motivo, identificadores) : motivo,
           codigoErroSefin: resSefinFinal?.codigoErro,
           httpStatus: resSefinFinal?.httpStatus,
           xmlDpsOriginal: correcao ? undefined : xmlDpsOriginal,
@@ -349,6 +383,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         };
       }
 
+      await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
       chaveAcessoFinal = resSefinFinal.chaveAcesso;
       respostaSefinRaw = resSefinFinal.respostaRaw;
       xmlAutorizadoFinal = resSefinFinal.xmlAutorizado;
@@ -456,7 +491,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
             upsert: true
           });
       } catch (err: any) {
-        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', err?.message || err);
+        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote ? 'XML_STORAGE_FALHOU' : err?.message || err);
       }
     }
 
@@ -581,5 +616,35 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const { rows } = await this.pool.query(sql, [medicoId]);
     const proximoLocal = Number.parseInt(rows[0].proximo, 10);
     return Math.max(proximoLocal, numeroConfigurado || 1);
+  }
+
+  /**
+   * Retomada (inativa por padrão): persiste o identificador oficial da DPS transmitida e, em
+   * rejeição estruturada de regra de negócio, reconcilia com HEAD /dps/{id}. Só marca
+   * recusa_definitiva quando a consulta confirma que NENHUMA NFS-e foi gerada; qualquer falha
+   * ou resposta indeterminada deixa a tentativa travada. Nunca interfere na emissão.
+   */
+  private async registrarResultadoParaRetomada(
+    solicitacaoId: string,
+    dpsId: string | undefined,
+    resSefin: ResultadoTransmissaoSefin | undefined,
+    cert: { pfxBuffer: Buffer; senhaCertificado: string },
+    ambiente: 1 | 2
+  ): Promise<void> {
+    if (!this.retomadaRecusaAtiva || !dpsId) return;
+    try {
+      await this.pool.query(`update public.noto_emissoes_comprovantes set dps_id = $2, atualizado_em = now()
+        where solicitacao_id = $1 and dps_id is null`, [solicitacaoId, dpsId]);
+      if (resSefin && !resSefin.sucesso && this.sefinClient &&
+          ehRejeicaoRegraNegocio({ httpStatus: resSefin.httpStatus, codigoErro: resSefin.codigoErro, respostaRaw: resSefin.respostaRaw })) {
+        const consulta = await this.sefinClient.consultarDpsGerada(dpsId, { pfxBuffer: cert.pfxBuffer, senhaCertificado: cert.senhaCertificado, ambiente });
+        if (consulta.resultado === 'nao_gerada') {
+          await this.pool.query(`update public.noto_emissoes_comprovantes set recusa_definitiva = true, atualizado_em = now()
+            where solicitacao_id = $1 and estado = 'erro' and nota_fiscal_id is null`, [solicitacaoId]);
+        }
+      }
+    } catch (erro) {
+      console.warn('[PostgresEmissorDpsService] Reconciliação de retomada falhou (tentativa permanece travada):', (erro as Error)?.message);
+    }
   }
 }

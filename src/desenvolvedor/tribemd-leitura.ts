@@ -3,7 +3,7 @@ export const origemTribemd='https://app.tribemd.com';
 export const agendaTribemd='/atendimentos/agenda';
 export const loginTribemd=origemTribemd+'/login?continue='+agendaTribemd;
 const normalizar=(s:string)=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[:*]/g,'').trim();
-export interface ConsultaTribemd { atendimentoId?:string;pacienteId?:string;situacao?:'atendido'|'finalizado';dados?:DadosConsultaTribemd;nome:string; ultimaConsulta:string|null; dataConsultaObservada?:string; evidencia:'coluna_ultima_consulta'|'consulta_realizada_observada'; origemData?:'datahora_atendimento'|'datahora_marcada' }
+export interface ConsultaTribemd { atendimentoId?:string;pacienteId?:string;situacao?:'atendido'|'finalizado';dados?:DadosConsultaTribemd;nome:string; profissional?:string; ultimaConsulta:string|null; dataConsultaObservada?:string; evidencia:'coluna_ultima_consulta'|'consulta_realizada_observada'; origemData?:'datahora_atendimento'|'datahora_marcada' }
 export interface TabelaConsulta { colunas:string[]; linhas:string[][] }
 export function dataISOTribemd(v:string):string|null {
  const m=v.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s|$)/), n=v.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|\s|$)/);

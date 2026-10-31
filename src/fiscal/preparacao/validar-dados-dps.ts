@@ -28,7 +28,7 @@ export function validarDadosDps(input: EmissaoInput, cfg: ConfigPrestador): Pend
   }
   exigir([1, 2].includes(cfg.ambiente), 'ambiente', 'Confirmar produção ou homologação.');
   exigir(/^\d{7}$/.test(cfg.codMunicipio), 'municipio', 'Conferir o código IBGE do emitente.');
-  exigir(/^\d{1,5}$/.test(cfg.serie ?? ''), 'serie', 'Informar série da DPS de um a cinco dígitos.');
+  exigir(/^\d{1,5}$/.test(cfg.serie ?? '') && Number(cfg.serie) <= 49999, 'serie', 'Informar série da DPS de 0 a 49999 para emissão pelo aplicativo próprio.');
   exigir(/^[1-9]\d{0,14}$/.test(input.nDPS), 'numeroDps', 'Conferir numeração da DPS.');
   exigir(input.tomador.xNome.trim().length >= 2 && input.tomador.xNome.length <= 150, 'tomador.nome', 'Conferir nome do tomador.');
   if (input.tomador.end) {
