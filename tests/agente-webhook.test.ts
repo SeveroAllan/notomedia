@@ -112,4 +112,37 @@ describe('Webhook do agente — identidade e segurança', () => {
     });
     expect(query).not.toHaveBeenCalled();
   });
+  it('orienta um número de teste sem cadastro a começar pelo painel, sem acesso fiscal', async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const completar = vi.fn();
+    const { app, enviar } = preparar({
+      pool: { query } as unknown as pg.Pool, completar, painelUrl: 'https://noto.exemplo.com/'
+    });
+    await comServidor(app, async postar => {
+      expect((await postar(evento)).status).toBe(200);
+    });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(completar).not.toHaveBeenCalled();
+    expect(enviar).toHaveBeenCalledWith('5551999998888', expect.stringContaining('cadastro'));
+  });
+
+  it('preserva a última pergunta de maneira isolada ao longo da conversa de teste', async () => {
+    const completar = vi.fn()
+      .mockResolvedValueOnce(JSON.stringify({ acao: 'orientar', profissional: null }))
+      .mockResolvedValueOnce('Olá! Sou o Noto. Para começar, você usa TribeMD ou Amplimed?')
+      .mockResolvedValueOnce(JSON.stringify({ acao: 'conectar_agenda', agenda: 'amplimed', profissional: null }));
+    const { app, enviar } = preparar({ completar, painelUrl: 'https://noto.exemplo.com/' });
+    await comServidor(app, async postar => {
+      expect((await postar(evento)).status).toBe(200);
+      expect((await postar({
+        ...evento, data: { ...evento.data, key: { ...evento.data.key, id: 'mensagem-2' }, message: { conversation: 'Amplimed' } }
+      })).status).toBe(200);
+    });
+    expect(completar).toHaveBeenCalledTimes(3);
+    const argumento = JSON.stringify(completar.mock.calls[2]?.[0]);
+    expect(argumento).toContain('TribeMD ou Amplimed');
+    expect(enviar).toHaveBeenCalledTimes(2);
+    expect(enviar.mock.calls[1]?.[1]).toContain('Cofre');
+  });
+
 });
