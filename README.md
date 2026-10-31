@@ -43,3 +43,34 @@ exclusões no banco.
 Os cards TribeMD e Amplimed e a seção **Cofre** substituem Google Planilhas no painel. O acesso
 é vinculado à conta Supabase; o usuário autoriza a leitura ao salvar as credenciais.
 Configuração e limites: [cofre TribeMD](docs/implementation/cofre-tribemd.md).
+
+
+## Noto Agent — Entrega A (experimental)
+
+O novo agente de leitura entra pelo webhook `POST /webhook/evolution`, **somente**
+para a instância `EVOLUTION_ASSISTANT_INSTANCE_NAME`, com evento
+`messages.upsert` e cabeçalho `x-webhook-secret`. O Noto Oficial continua
+reservado para OTP, e as instâncias dos consultórios não acionam o agente.
+
+A funcionalidade está **desligada por padrão**. Para um teste autorizado em
+ambiente isolado, configure `NOTO_AGENT_ATIVO=true`,
+`NOTO_AGENT_ENVIO_ATIVO=true`, `EVOLUTION_ASSISTANT_WEBHOOK_SECRET`
+com valor próprio e `ENVIO_REAL_ALLOWLIST` com os números de teste.
+Nunca use o segredo/API key do Noto Oficial como segredo do assistente.
+
+O agente resolve a conta pelo telefone cadastrado do remetente; números que
+apontem para mais de uma conta não são atendidos. Sua única ferramenta lê o
+estado das conexões TribeMD e Amplimed **por profissional autorizado**. Além disso,
+o agente se apresenta e orienta o início: sem cadastro, se apresenta e pergunta qual agenda utiliza; ao receber a escolha,
+orienta o cadastro seguro no painel; sem profissional, não presume dados;
+sem conexão, pergunta qual agenda usa; quando a
+agenda já está conectada, não solicita uma nova conexão. Ao escolher TribeMD ou
+Amplimed, orienta a usar a seção Cofre, sem solicitar senha pelo WhatsApp.
+**O envio automático de links de conexão não foi habilitado neste piloto.**
+Não lê pacientes, não verifica notas pendentes e não emite ou cancela NFS-e.
+Uma resposta de estado não significa que as consultas foram conciliadas.
+
+A prevenção de repetição de mensagens e o contexto das últimas perguntas nesta entrega são **apenas em memória,
+para uma réplica**. Esse contexto é perdido em reinicializações, não substitui a memória contínua e não armazena mensagens do usuário. Não habilitar para usuários gerais até implementar a
+persistência de conversas/objetivos e a deduplicação durável da Entrega B.
+Nenhum deploy ou migração foi executado por esta alteração.

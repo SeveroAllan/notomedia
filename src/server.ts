@@ -9,6 +9,7 @@ import { criarRouterStatusWhatsapp } from './whatsapp/status-router.js';
 import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
+import { criarRouterWebhookAgente } from './agente/webhook.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -103,6 +104,32 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
+  // A instância de emissão/pacientes não é encaminhada para o agente.
+  const transporteAgente = new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+    config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+  );
+  app.use('/webhook/evolution', criarRouterWebhookAgente({
+    pool,
+    ativo: Boolean(config.notoAgentAtivo),
+    envioAtivo: Boolean(config.notoAgentEnvioAtivo),
+    segredo: config.notoAgentWebhookSecret ?? '',
+    instancia: config.evolutionAssistantInstanceName,
+    allowlist: config.envioRealAllowlist ?? [],
+    painelUrl: config.appPublicOrigin,
+    completar: (mensagens, formatoJson) => completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, {
+      timeoutMs: 20_000, temperature: 0.1, formatoJson: Boolean(formatoJson), maxTokens: 600, tentativasMax: 1
+    }),
+    consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    enviar: async (telefone, texto) => {
+      const resultado = await transporteAgente.enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+      });
+      return resultado.sucesso;
+    }
+  }));
+
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
     ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
