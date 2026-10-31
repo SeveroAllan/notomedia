@@ -1,6 +1,5 @@
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
-import { chaveComprovante } from './atendimento/comprovante.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
 import { criarCofreContas } from './cofre/router.js';
 import { PostgresCadastro } from './cadastro/postgres-cadastro.js';
@@ -9,8 +8,6 @@ import { criarConsultaEmpresa, PesquisaRegistroIndisponivel } from './cadastro/c
 import { criarRouterStatusWhatsapp } from './whatsapp/status-router.js';
 import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
-import { randomUUID } from 'node:crypto';
-import { diagnosticoEntradaWebhook, diagnosticoResultadoWebhook, diagnosticoErroWebhook } from './whatsapp/diagnostico-webhook.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -26,21 +23,11 @@ import { dirname, join } from 'node:path';
 import { config } from './config.js';
 import { pool } from './io/postgres/pool.js';
 import { PostgresOtpRepositorio, PostgresOtpEmailRepositorio } from './io/postgres/postgres-otp-repositorio.js';
-import { PostgresAtendimentoRepositorio } from './io/postgres/postgres-atendimento-repositorio.js';
 import { EvolutionApiClient } from './io/evolution/evolution-api-client.js';
 import { SupabaseAuthAdminService } from './io/supabase/supabase-auth-admin-service.js';
 
 import { solicitarOtp } from './otp/solicitar-otp.js';
 import { autenticarComOtp } from './auth/autenticar-com-otp.js';
-import { processarMensagemWebhook } from './fluxos/processar-mensagem-webhook.js';
-import { MemoriaConversaMedico } from './onboarding/contexto-conversa-medico.js';
-import { processarComunicacaoMedico } from './onboarding/processar-comunicacao-medico.js';
-import { lerEstadoComunicacaoMedico } from './onboarding/io/ler-estado-comunicacao-medico.js';
-import { orquestrarComprovante } from './fluxos/processar-comprovante.js';
-import { PostgresEmissaoComprovante } from './io/postgres/postgres-emissao-comprovante.js';
-import { PostgresHistoricoComunicacao } from './io/postgres/postgres-historico-comunicacao.js';
-import { ExtratorRespostaMedicoNvidia } from './io/nvidia/extrator-resposta-medico.js';
-import { ExtratorComprovanteNvidia } from './io/nvidia/extrator-comprovante.js';
 import { completarNvidia, completarOpenAi } from './io/nvidia/chat-client.js';
 
 import { processarOnboardingXml } from './onboarding/fluxos/processar-onboarding-xml.js';
@@ -59,9 +46,7 @@ import { HubDesenvolvedorCpfClient } from './io/hubdodesenvolvedor/hub-desenvolv
 import { AdnNfseClient } from './io/fiscal/adn-nfse-client.js';
 import { extrairChavesCertificado } from './io/fiscal/extrair-chaves-certificado.js';
 import { carregarCertificadoMedico } from './io/fiscal/carregar-certificado-medico.js';
-import { sincronizarHistoricoEvolutionUmaVez } from './onboarding/io/sincronizar-historico-evolution.js';
 import { PostgresDadosProfissionaisService } from './io/postgres/postgres-dados-profissionais-service.js';
-import { registrarConexaoWhatsapp } from './onboarding/io/registrar-conexao-whatsapp.js';
 import { configurarDesempenhoHttp, OPCOES_ARQUIVOS_ESTATICOS } from './http/configurar-desempenho-http.js';
 import { tratarErrosHttp } from './http/tratar-erros-http.js';
 import { criarEncerramentoGracioso } from './processo/encerrar-gracioso.js';
@@ -76,9 +61,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   // Instanciação dos adaptadores de infraestrutura
   const otpRepo = new PostgresOtpRepositorio(pool);
-  const atendimentoRepo = new PostgresAtendimentoRepositorio(pool, config.encryptionKey);
-  const historicoComunicacao = new PostgresHistoricoComunicacao(pool, config.appPepper);
-  const memoriaConversa = new MemoriaConversaMedico();
   const evolutionClient = new EvolutionApiClient(
     config.evolutionApiUrl,
     config.evolutionGlobalApiKey,
@@ -121,7 +103,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
-  const iaModeloVisao=(iaOpenAiAtiva?config.openaiVisaoModel:config.nvidiaRegistroModel) ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
     ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
@@ -142,38 +123,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   }
 
   const adnNfseClient = new AdnNfseClient();
-  const sincronizarHistoricoInstancia = (nomeInstancia: string) =>
-    sincronizarHistoricoEvolutionUmaVez({
-      baseUrl: config.evolutionApiUrl,
-      apiKey: config.evolutionGlobalApiKey,
-      nomeInstancia,
-      repositorio: atendimentoRepo,
-      consultaCpfProvider: hubCpfClient,
-      pepper: config.appPepper
-    });
 
-  const comunicarMedico = (medicoId: string, chaveProcessamento: string, texto?: string, dataMensagem?: string | null, chaveConversa?: string) => {
-    const agora = new Date();
-    return processarComunicacaoMedico({ medicoId, chaveProcessamento, agora, chaveConversa,
-      ...(texto !== undefined ? { respostaMedico: { texto, dataMensagem: dataMensagem ?? null } } : {})
-    }, { ativo: config.comunicacaoMedicoAtiva === true, memoriaConversa, extratorResposta: new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa), historico: historicoComunicacao,
-      tratarCofre: async (id, mensagem) => cofres.links ? cofres.links.tratarMensagem(id, mensagem,
-        textoSeguro => new ExtratorRespostaMedicoNvidia(iaApiKey, iaModeloTexto, completarIa).classificarAgenda(textoSeguro)) : false,
-      aoDecidir: config.envioMedicoRealAtivo ? async (acao, chave) => {
-        if (acao.tipo === 'pedir_agenda' && acao.agendaInformada === 'tribemd') { await cofres.links?.solicitarLinkCofre(medicoId, 'tribemd'); return; }
-        if (acao.tipo === 'pedir_agenda') await comunicacaoHomologacao.medico({ medicoId, acao: 'pedir_agenda', chave });
-      } : undefined,
-      lerEstado: async (id, instante) => lerEstadoComunicacaoMedico(pool, id, instante, await cofres.statusAgenda(id), config.preparacaoFiscalAtiva === true),
-      log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
-    });
-  };
-  const aoConectarWhatsapp = (medicoId: string) => {
-    void comunicarMedico(medicoId, 'onboarding');
-    void (async () => {
-    const { rows } = await pool.query("select nome_instancia from whatsapp_instancias where medico_id=$1 and oficial=false and status='conectado' limit 1", [medicoId]);
-    if(rows[0]?.nome_instancia)await sincronizarHistoricoInstancia(rows[0].nome_instancia);
-    })().catch(() => console.warn('[WhatsApp]', {codigo:'HISTORICO_POS_CONEXAO_FALHOU'}));
-  };
+  const aoConectarWhatsapp = (_medicoId: string) => {};
 
   // Healthcheck para o Easypanel
   app.get('/health', (_req: Request, res: Response) => {
@@ -195,8 +146,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   // API de Emissão de NFS-e (compatível com Focus NFe + Zero-Config)
   const emissaoApiRepo = new PostgresEmissaoApiRepositorio(pool, config.encryptionKey, config.appPepper);
-  const emissaoComprovante = config.emissaoComprovanteHomologacaoAtiva === true
-    ? new PostgresEmissaoComprovante(pool, config.encryptionKey, config.appPepper) : null;
   const routerNfse = criarRouterNfse({
     repositorio: emissaoApiRepo,
     autenticar: async token => {
@@ -489,7 +438,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         usarReferencia: usarReferencia === true
       });
 
-      await comunicarMedico(medicoId, 'confirmacao_fiscal');
       return res.json({ ok: true, mensagem: 'Parâmetros fiscais confirmados com sucesso', medicoId });
     } catch (err: any) {
       if (req.body?.usarReferencia === true) {
@@ -659,117 +607,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }
   });
-
-  // Rota Webhook da Evolution API (suporta rota direta e subrotas com eventos)
-  const webhookHandler = async (req: Request, res: Response) => {
-    const referencia = randomUUID(), inicio = Date.now();
-    console.info('[Webhook Evolution]', { etapa: 'recebido', referencia, ...diagnosticoEntradaWebhook(req.body) });
-    try {
-      const tokenRecebido =
-        (req.headers['apikey'] as string) ||
-        (req.headers['x-webhook-secret'] as string) ||
-        (req.headers['authorization'] as string) ||
-        (req.query['secret'] as string) ||
-        (req.query['apikey'] as string) ||
-        (req.query['token'] as string);
-
-      // Autentica com segredo do webhook ou API key global da Evolution (oficial ou assistente)
-      let segredoEsperado = config.evolutionWebhookSecret;
-      if (
-        tokenRecebido &&
-        (tokenRecebido === config.evolutionGlobalApiKey ||
-          tokenRecebido === config.evolutionWebhookSecret ||
-          tokenRecebido === config.evolutionAssistantApiKey ||
-          tokenRecebido === config.evolutionAssistantWebhookSecret)
-      ) {
-        segredoEsperado = tokenRecebido;
-      }
-
-      const resultado = await processarMensagemWebhook(req.body, tokenRecebido, {
-        repositorio: atendimentoRepo,
-        segredoConfigurado: segredoEsperado,
-        pepper: config.appPepper,
-        consultaCpfProvider: hubCpfClient,
-        instanciaOficialNome: config.evolutionOfficialInstanceName,
-        instanciaAssistenteNome: config.evolutionAssistantInstanceName,
-        comunicacaoMedicoAtiva: config.comunicacaoMedicoAtiva,
-        aoReceberMensagemMedico: contexto => comunicarMedico(contexto.medicoId, `assistente:${contexto.chaveMensagem}`, contexto.texto, contexto.dataMensagem, contexto.chaveConversa),
-        aoReceberComprovante: contexto => orquestrarComprovante(contexto, {
-          historico: historicoComunicacao,
-          fonteAgenda: config.emissaoComprovanteHomologacaoAtiva ? cofres.fonteAgenda : undefined,
-          consultaJaFaturada: emissaoComprovante ? (fonte, id) => emissaoComprovante.consultaJaFaturada(contexto.medicoId, fonte, id) : undefined,
-          medicoEmFaseInicial: async medicoId => {
-            const { rows } = await pool.query('select 1 from notas_fiscais where medico_id = $1 limit 1', [medicoId]);
-            return rows.length === 0;
-          },
-          aoComunicar: config.envioMedicoRealAtivo ? async (decisao, lido) => {
-            if (decisao.tipo === 'perguntar_medico' || decisao.tipo === 'perguntar_pacote' || decisao.tipo === 'pedir_agenda') {
-              await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: decisao.tipo, motivo: decisao.motivo,
-                ...(decisao.tipo === 'perguntar_medico' && decisao.detalhe ? { detalhe: decisao.detalhe } : {}),
-                ...(decisao.tipo === 'perguntar_medico' && decisao.detalheNota ? { detalheNota: decisao.detalheNota } : {}),
-                chave: chaveComprovante(config.appPepper, lido) ?? JSON.stringify([contexto.mensagem.key.remoteJid, contexto.mensagem.key.id]) });
-            }
-          } : undefined,
-          aoDecidir: emissaoComprovante ? async (decisao, lido, estado) => {
-            const resultado = await emissaoComprovante.enfileirar({ ...contexto, decisao, lido, consulta: estado.consulta });
-            if (resultado.tipo === 'perguntar_medico') await comunicacaoHomologacao.medico({ medicoId: contexto.medicoId, acao: 'perguntar_medico', motivo: resultado.motivo,
-              chave: chaveComprovante(config.appPepper, lido) ?? contexto.mensagem.key.id });
-            if (resultado.tipo === 'enfileirada') console.info('Solicitação enfileirada por comprovante.');
-          } : undefined,
-          lerEstado: atendimentoRepo.lerEstado.bind(atendimentoRepo),
-          extrator: new ExtratorComprovanteNvidia(iaApiKey, iaModeloVisao,
-            mensagem => evolutionClient.obterBase64MensagemMidia(req.body.instance, mensagem.key.id), completarIa),
-          log: (nivel, mensagem) => console[nivel === 'info' ? 'info' : 'error'](mensagem)
-        }),
-        async aoAtualizarConexao(evento) {
-          if (
-            evento.instancia === config.evolutionOfficialInstanceName ||
-            evento.instancia === config.evolutionAssistantInstanceName
-          ) return;
-          const medicoId = await registrarConexaoWhatsapp(pool, evento);
-          if (medicoId && evento.state === 'open') {
-            await comunicarMedico(medicoId, 'onboarding');
-            void sincronizarHistoricoInstancia(evento.instancia).catch(() => console.warn('[WhatsApp]', {codigo:'HISTORICO_POS_CONEXAO_FALHOU'}));
-          }
-        }
-      });
-
-      console.info('[Webhook Evolution]', { etapa: 'concluido', referencia, duracaoMs: Date.now() - inicio, ...diagnosticoResultadoWebhook(resultado) });
-      if (!resultado.ok) {
-        const status = resultado.motivo === 'autenticacao_invalida' ? 401 : 400;
-        return res.status(status).json(resultado);
-      }
-
-      return res.json(resultado);
-    } catch (erro) {
-      console.error('[Webhook Evolution]', { etapa: 'falha', referencia, duracaoMs: Date.now() - inicio, ...diagnosticoErroWebhook(erro) });
-      return res.status(500).json({ ok: false, motivo: 'falha_processamento', referencia });
-    }
-  };
-
-  app.post('/webhook/evolution', webhookHandler);
-  app.post('/webhook/evolution/:evento', webhookHandler);
-
-  if (process.env['NODE_ENV'] !== 'test') {
-    setTimeout(() => {
-      void pool.query(
-        `select nome_instancia, medico_id
-         from whatsapp_instancias
-         where status = 'conectado' and oficial = false`
-      ).then(async ({ rows }) => {
-        for (const row of rows) {
-          try {
-            const resultado = await sincronizarHistoricoInstancia(row.nome_instancia);
-            console.info('[Evolution] Histórico recuperado ao iniciar:', resultado);
-          } catch (erro: any) {
-            console.warn('[Evolution] Histórico não recuperado ao iniciar:', erro?.message || erro);
-          }
-        }
-      }).catch((erro: any) => {
-        console.warn('[Evolution] Falha ao listar instâncias para histórico:', erro?.message || erro);
-      });
-    }, 5_000);
-  }
 
   app.use(tratarErrosHttp);
 

@@ -117,7 +117,7 @@ async function aprovar(){
   expect(r.status).toBe(200);expect(r.body.revisao).toMatchObject({aprovado:true,nome,crm:'54321/SC',rqe:'9876'});
 }
 
-it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, WhatsApp %s, painel fiscal e boas-vindas secas com flag padrão',async modoConexao=>{
+it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, WhatsApp %s, painel fiscal com flag padrão',async modoConexao=>{
   const medicoId=await entrar();
   const statusInicial=await chamar(`/api/onboarding/status?medicoId=${medicoId}`);expect(statusInicial.status).toBe(200);expect(statusInicial.body.status.liberadoParaEmitir).toBe(false);
   expect((await chamar(`/api/onboarding/status?medicoId=${medicoId}`,undefined,'invalido')).status).toBe(401);
@@ -140,10 +140,6 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, What
   expect(final.liberadoParaEmitir).toBe(true);expect(final.perfilFiscal).toMatchObject({confirmadoPeloMedico:true,razaoSocial:'Consultorio Revisado Ficticio',serieDps:'2',proximoNumeroDps:20});
   expect((await chamar('/api/onboarding/confirmar-fiscal',{medicoId,referenciaHash,parametrosEmissao:politica.parametros,serieDps:'2',proximoNumeroDps:20,razaoSocial:'Consultorio Revisado Ficticio'})).status).toBe(200);
   await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`);
-  await vi.waitFor(()=>expect(logs.mock.calls.filter((a: any[])=>a[0]==='enviaria boas_vindas')).toHaveLength(1));
-  expect(banco.historico.historicos.size).toBe(1);
-  expect([...banco.historico.historicos.values()].every(h=>h.modo==='simulado')).toBe(true);
-  expect(banco.historico.envios.size).toBe(0);
   expect(banco.consultas.some(s=>s.includes('parametros_emissao = $3'))).toBe(true);
 });
 
