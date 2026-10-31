@@ -61,8 +61,9 @@ Nunca use o segredo/API key do Noto Oficial como segredo do assistente.
 O agente resolve a conta pelo telefone cadastrado do remetente; números que
 apontem para mais de uma conta não são atendidos. Sua única ferramenta lê o
 estado das conexões TribeMD e Amplimed **por profissional autorizado**. Além disso,
-o agente se apresenta e orienta o início: sem cadastro, direciona ao painel; sem
-profissional, pede o cadastro; sem conexão, pergunta qual agenda usa; quando a
+o agente se apresenta e orienta o início: sem cadastro, se apresenta e pergunta qual agenda utiliza; ao receber a escolha,
+orienta o cadastro seguro no painel; sem profissional, não presume dados;
+sem conexão, pergunta qual agenda usa; quando a
 agenda já está conectada, não solicita uma nova conexão. Ao escolher TribeMD ou
 Amplimed, orienta a usar a seção Cofre, sem solicitar senha pelo WhatsApp.
 **O envio automático de links de conexão não foi habilitado neste piloto.**
