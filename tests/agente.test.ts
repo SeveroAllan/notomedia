@@ -15,7 +15,7 @@ describe('Noto Agent — entrada natural guiada por fatos', () => {
       { texto: 'Oi', profissionais: [], semConta: true, painelUrl: 'https://noto.exemplo.com/' },
       { completar, consultarStatus }
     );
-    expect(resposta).toContain('Sou o Noto');
+    expect(resposta).toContain('sou o Noto');
     expect(resposta).toContain('cadastro');
     expect(resposta).toContain('https://noto.exemplo.com');
     expect(consultarStatus).not.toHaveBeenCalled();
@@ -121,7 +121,7 @@ describe('Noto Agent — entrada natural guiada por fatos', () => {
       }
     );
     expect(resposta).toContain('Eu sou o Noto');
-    expect(resposta).toContain('qual agenda');
+    expect(resposta).toContain('TribeMD, Amplimed ou outra agenda');
   });
 
   it('não inventa conexão quando não consegue consultar a fonte', async () => {
