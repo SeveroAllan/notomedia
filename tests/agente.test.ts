@@ -9,7 +9,7 @@ const estado = { tribemd: { salvo: true, conectada: true }, amplimed: { salvo: f
 
 describe('Noto Agent — primeira ferramenta de leitura', () => {
   it('interpreta linguagem natural e consulta somente o profissional identificado', async () => {
-    const completar = vi.fn()
+    const completar = vi.fn(async (_mensagens: Array<{ role: 'system' | 'user'; content: string }>, _formatoJson?: boolean): Promise<string> => '')
       .mockResolvedValueOnce(JSON.stringify({ acao: 'consultar_agendas', profissional: 'Alice' }))
       .mockResolvedValueOnce('A agenda TribeMD de Alice está conectada. A Amplimed ainda não foi configurada.');
     const consultarStatus = vi.fn().mockResolvedValue(estado);
