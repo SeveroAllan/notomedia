@@ -9,26 +9,50 @@ const conectada = { tribemd: { salvo: true, conectada: true }, amplimed: { salvo
 const desconectada = { tribemd: { salvo: false, conectada: false }, amplimed: { salvo: false, conectada: false } };
 
 describe('Noto Agent — entrada natural guiada por fatos', () => {
-  it('explica como começar quando não há cadastro da conta neste WhatsApp', async () => {
-    const completar = vi.fn(), consultarStatus = vi.fn();
+  it('se apresenta e pergunta a agenda antes de assumir dados no cadastro vazio', async () => {
+    const completar = vi.fn().mockResolvedValue(JSON.stringify({ agenda: null }));
+    const consultarStatus = vi.fn();
     const resposta = await responderAgente(
       { texto: 'Oi', profissionais: [], semConta: true, painelUrl: 'https://noto.exemplo.com/' },
       { completar, consultarStatus }
     );
     expect(resposta).toContain('sou o Noto');
-    expect(resposta).toContain('cadastro');
-    expect(resposta).toContain('https://noto.exemplo.com');
+    expect(resposta).toContain('qual agenda');
+    expect(resposta).toContain('TribeMD, Amplimed ou outra');
     expect(consultarStatus).not.toHaveBeenCalled();
-    expect(completar).not.toHaveBeenCalled();
   });
 
-  it('não inventa Alice quando a conta ainda não possui profissionais', async () => {
+  it('entende a agenda escolhida e orienta a criação segura de conta', async () => {
+    const resposta = await responderAgente(
+      { texto: 'Uso Amplimed', profissionais: [], semConta: true, painelUrl: 'https://noto.exemplo.com/' },
+      {
+        completar: vi.fn().mockResolvedValue(JSON.stringify({ agenda: 'amplimed' })),
+        consultarStatus: vi.fn()
+      }
+    );
+    expect(resposta).toContain('você usa Amplimed');
+    expect(resposta).toContain('vincular seu WhatsApp');
+    expect(resposta).toContain('https://noto.exemplo.com');
+    expect(resposta).toContain('sem enviar senhas');
+  });
+
+  it('não inventa Alice quando não há profissionais, mas conduz ao próximo passo', async () => {
     const resposta = await responderAgente(
       { texto: 'Consulte a agenda da Alice', profissionais: [] },
-      { completar: vi.fn(), consultarStatus: vi.fn() }
+      { completar: vi.fn().mockResolvedValue(JSON.stringify({ agenda: null })), consultarStatus: vi.fn() }
     );
-    expect(resposta).toContain('profissional cadastrado');
-    expect(resposta).toContain('Depois eu te ajudo com a agenda');
+    expect(resposta).toContain('qual agenda');
+    expect(resposta).not.toContain('agenda da Alice está');
+  });
+
+  it('não envia credenciais recebidas ao modelo', async () => {
+    const completar = vi.fn();
+    const resposta = await responderAgente(
+      { texto: 'Minha senha: chaveMuitoSecreta123', profissionais: [] },
+      { completar, consultarStatus: vi.fn() }
+    );
+    expect(resposta).toContain('não envie senhas');
+    expect(completar).not.toHaveBeenCalled();
   });
 
   it('apresenta o Noto e pergunta qual agenda usa quando não há conexão', async () => {
