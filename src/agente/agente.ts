@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
+import { contemCredencialAgenda } from '../cofre/links.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean }
@@ -67,6 +68,7 @@ export async function responderAgente(
   entrada: { texto: string; profissionais: ProfissionalAgente[]; painelUrl?: string; contexto?: readonly string[]; semConta?: boolean },
   deps: { completar: CompletarAgente; consultarStatus: (medicoId: string) => Promise<StatusFontes> }
 ): Promise<string> {
+  if (contemCredencialAgenda(entrada.texto)) return 'Por segurança, não envie senhas, tokens ou credenciais por aqui. Quando chegarmos à conexão, eu te oriento a usar a área segura do Noto.';
   const profissionais = entrada.profissionais.filter(p => p.nome.trim());
   const painel = linkPainel(entrada.painelUrl);
   if (entrada.semConta || !profissionais.length) {
