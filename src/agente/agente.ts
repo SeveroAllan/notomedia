@@ -64,11 +64,14 @@ async function explicarPedido(
 
 /** Primeira entrega: conhece a situação da conta, explica o próximo passo e só lê conexões. */
 export async function responderAgente(
-  entrada: { texto: string; profissionais: ProfissionalAgente[]; painelUrl?: string; contexto?: readonly string[] },
+  entrada: { texto: string; profissionais: ProfissionalAgente[]; painelUrl?: string; contexto?: readonly string[]; semConta?: boolean },
   deps: { completar: CompletarAgente; consultarStatus: (medicoId: string) => Promise<StatusFontes> }
 ): Promise<string> {
   const profissionais = entrada.profissionais.filter(p => p.nome.trim());
   const painel = linkPainel(entrada.painelUrl);
+  if (entrada.semConta) {
+    return introducao() + ' Ainda não encontrei um cadastro associado a este WhatsApp. Para usar suas informações com segurança, comece pelo cadastro ' + painel + '. Depois seguimos pela agenda, passo a passo.';
+  }
   if (!profissionais.length) {
     return introducao() + ' Ainda não encontrei um profissional cadastrado nesta conta. Primeiro precisamos identificar quem vai emitir as notas. Você pode concluir o cadastro profissional ' + painel + '. Depois eu te ajudo com a agenda.';
   }
