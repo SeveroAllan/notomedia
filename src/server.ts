@@ -114,7 +114,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     pool,
     ativo: Boolean(config.notoAgentAtivo),
     envioAtivo: Boolean(config.notoAgentEnvioAtivo),
-    segredo: config.evolutionAssistantWebhookSecret,
+    segredo: config.notoAgentWebhookSecret ?? '',
     instancia: config.evolutionAssistantInstanceName,
     allowlist: config.envioRealAllowlist ?? [],
     completar: (mensagens, formatoJson) => completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, {
