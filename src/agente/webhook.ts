@@ -67,6 +67,12 @@ export function criarRouterWebhookAgente(deps: {
 
     const chave = createHash('sha256').update(JSON.stringify([evento.instance, evento.data.key.id, telefone])).digest('hex');
     if (mensagensVistas.has(chave)) { res.sendStatus(200); return; }
+    // Reserva antes do primeiro await; duas entregas concorrentes não processam a mesma mensagem.
+    mensagensVistas.add(chave);
+    if (mensagensVistas.size > 2500) {
+      const primeiro = mensagensVistas.values().next().value;
+      if (primeiro) mensagensVistas.delete(primeiro);
+    }
     try {
       const conta = await deps.pool.query(
         "select distinct conta_id from usuarios where ativo = true and regexp_replace(telefone, '[^0-9]', '', 'g') = any($1::text[]) limit 2",
@@ -79,11 +85,6 @@ export function criarRouterWebhookAgente(deps: {
         [conta.rows[0].conta_id]
       );
 
-      mensagensVistas.add(chave);
-      if (mensagensVistas.size > 2500) {
-        const primeiro = mensagensVistas.values().next().value;
-        if (primeiro) mensagensVistas.delete(primeiro);
-      }
       const resposta = await responderAgente({
         texto,
         profissionais: medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
