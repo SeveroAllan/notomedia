@@ -78,7 +78,7 @@ export async function responderAgente(
   if (profissionais.length > 20) return 'Encontrei muitos profissionais nesta conta. Qual profissional você deseja atender primeiro?';
 
   // Verifica a realidade antes de decidir: nunca presume que agenda não existe porque o modelo não a viu.
-  const registros = await Promise.all(profissionais.map(async p: ProfissionalAgente): Promise<Registro> => {
+  const registros = await Promise.all(profissionais.map(async (p: ProfissionalAgente): Promise<Registro> => {
     try { return { nome: p.nome, status: await deps.consultarStatus(p.id) }; }
     catch { return { nome: p.nome, status: null }; }
   }));
