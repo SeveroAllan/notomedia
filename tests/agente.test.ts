@@ -17,7 +17,8 @@ describe('Noto Agent — primeira ferramenta de leitura', () => {
       { texto: 'Noto, como está a agenda da Alice?', profissionais },
       { completar, consultarStatus }
     );
-    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('alice-id');
+    expect(consultarStatus).toHaveBeenCalledTimes(1);
+    expect(consultarStatus).toHaveBeenCalledWith('alice-id');
     expect(completar).toHaveBeenCalledTimes(2);
     expect(completar.mock.calls[0]?.[1]).toBe(true);
     expect(resposta).toContain('TribeMD');
