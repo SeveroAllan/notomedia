@@ -56,7 +56,7 @@ export function criarRouterWebhookAgente(deps: {
     if (evento.instance !== deps.instancia || evento.event?.toLowerCase() !== 'messages.upsert' || evento.data.key.fromMe) {
       res.sendStatus(204); return;
     }
-    const jid = /^(\\d{10,13})@s\\.whatsapp\\.net$/.exec(evento.data.key.remoteJid);
+    const jid = /^(\d{10,13})@s\.whatsapp\.net$/.exec(evento.data.key.remoteJid);
     const telefone = jid?.[1];
     const texto = evento.data.message?.conversation || evento.data.message?.extendedTextMessage?.text || '';
     if (!telefone || !texto.trim() || texto.length > 1500) { res.sendStatus(204); return; }
