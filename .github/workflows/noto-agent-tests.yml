@@ -1,0 +1,34 @@
+name: Noto Agent - validação do PR
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/agente/**'
+      - 'src/server.ts'
+      - 'src/config.ts'
+      - 'tests/agente*.test.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/noto-agent-tests.yml'
+  push:
+    branches: [feat/noto-agent-entrega-a]
+permissions:
+  contents: read
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependências
+        run: npm ci
+      - name: Verificar tipos
+        run: npm run typecheck
+      - name: Executar testes
+        run: npm test
