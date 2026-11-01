@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ScriptedModel, assistantMessage, functionCall } from '@openai/agents/testing';
 import { responderAgente } from '../src/agente/agente.js';
 
 const profissionais = [
@@ -6,157 +7,113 @@ const profissionais = [
   { id: 'bruno-id', nome: 'Dr. Bruno Lima' }
 ];
 const conectada = { tribemd: { salvo: true, conectada: true }, amplimed: { salvo: false, conectada: false } };
-const desconectada = { tribemd: { salvo: false, conectada: false }, amplimed: { salvo: false, conectada: false } };
+const vazia = { tribemd: { salvo: false, conectada: false }, amplimed: { salvo: false, conectada: false } };
 
-describe('Noto Agent — entrada natural guiada por fatos', () => {
-  it('se apresenta e pergunta a agenda antes de assumir dados no cadastro vazio', async () => {
-    const completar = vi.fn().mockResolvedValue(JSON.stringify({ agenda: null }));
+describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
+  it('começa sem cadastro, chama contexto e pergunta qual agenda sem inventar médico', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('consultar_contexto_conta', {}, { callId: 'c1' })],
+      [assistantMessage('Olá! Sou o Noto. Posso ajudar com notas fiscais. Qual agenda você utiliza: TribeMD, Amplimed ou outra?')]
+    ]);
     const consultarStatus = vi.fn();
-    const resposta = await responderAgente(
-      { texto: 'Oi', profissionais: [], semConta: true, painelUrl: 'https://noto.exemplo.com/' },
-      { completar, consultarStatus }
-    );
-    expect(resposta).toContain('sou o Noto');
-    expect(resposta).toContain('qual agenda');
-    expect(resposta).toContain('TribeMD, Amplimed ou outra');
+    const resposta = await responderAgente({ texto: 'Oi Noto', profissionais: [], semConta: true }, {
+      modeloTeste: modelo, consultarStatus
+    });
+    expect(resposta).toContain('Qual agenda');
     expect(consultarStatus).not.toHaveBeenCalled();
+    expect(modelo.calls).toHaveLength(2);
+    const retorno = JSON.stringify(modelo.lastCall?.request.input);
+    expect(retorno).toContain('contaCadastrada');
+    expect(retorno).toContain('false');
+    modelo.assertComplete();
   });
 
-  it('entende a agenda escolhida e orienta a criação segura de conta', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Uso Amplimed', profissionais: [], semConta: true, painelUrl: 'https://noto.exemplo.com/' },
-      {
-        completar: vi.fn().mockResolvedValue(JSON.stringify({ agenda: 'amplimed' })),
-        consultarStatus: vi.fn()
-      }
-    );
-    expect(resposta).toContain('você usa Amplimed');
-    expect(resposta).toContain('vincular seu WhatsApp');
-    expect(resposta).toContain('https://noto.exemplo.com');
-    expect(resposta).toContain('sem enviar senhas');
+  it('usa a escolha Amplimed para orientar o cadastro seguro antes da conexão', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('orientar_conexao_agenda', { agenda: 'amplimed', profissional: null }, { callId: 'c1' })],
+      [assistantMessage('Perfeito, usa Amplimed! Antes precisamos vincular o WhatsApp à conta pelo painel seguro.')]
+    ]);
+    const resposta = await responderAgente({
+      texto: 'Uso Amplimed', contexto: ['Qual agenda você usa?'], profissionais: [], semConta: true
+    }, { modeloTeste: modelo, consultarStatus: vi.fn() });
+    expect(resposta).toContain('vincular');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Amplimed');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Vincular este WhatsApp');
+    modelo.assertComplete();
   });
 
-  it('não inventa Alice quando não há profissionais, mas conduz ao próximo passo', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Consulte a agenda da Alice', profissionais: [] },
-      { completar: vi.fn().mockResolvedValue(JSON.stringify({ agenda: null })), consultarStatus: vi.fn() }
-    );
-    expect(resposta).toContain('qual agenda');
-    expect(resposta).not.toContain('agenda da Alice está');
+  it('consulta somente a profissional resolvida na conta e retorna evidência da conexão', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('consultar_status_agendas', { profissional: 'Alice' }, { callId: 'c1' })],
+      [assistantMessage('A conexão TribeMD da Alice está ativa; não consultei consultas nem notas.')]
+    ]);
+    const consultarStatus = vi.fn().mockResolvedValue(conectada);
+    const resposta = await responderAgente({ texto: 'Como está a agenda da Alice?', profissionais }, {
+      modeloTeste: modelo, consultarStatus
+    });
+    expect(resposta).toContain('TribeMD');
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('alice-id');
+    const retorno = JSON.stringify(modelo.lastCall?.request.input);
+    expect(retorno).toContain('TribeMD');
+    expect(retorno).toContain('conectada');
+    expect(retorno).not.toContain('bruno-id');
+    modelo.assertComplete();
   });
 
-  it('não envia credenciais recebidas ao modelo', async () => {
-    const completar = vi.fn();
-    const resposta = await responderAgente(
-      { texto: 'Minha senha: chaveMuitoSecreta123', profissionais: [] },
-      { completar, consultarStatus: vi.fn() }
-    );
-    expect(resposta).toContain('não envie senhas');
-    expect(completar).not.toHaveBeenCalled();
+  it('nome ambíguo nunca escolhe profissional para executar consulta', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('consultar_status_agendas', { profissional: 'Alice' }, { callId: 'c1' })],
+      [assistantMessage('Há duas profissionais chamadas Alice. Qual é o nome completo?')]
+    ]);
+    const consultarStatus = vi.fn();
+    const resposta = await responderAgente({
+      texto: 'Verifique a Alice',
+      profissionais: [{ id: '1', nome: 'Alice Souza' }, { id: '2', nome: 'Alice Lima' }]
+    }, { modeloTeste: modelo, consultarStatus });
+    expect(resposta).toContain('nome completo');
+    expect(consultarStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Nome ambíguo');
+    modelo.assertComplete();
   });
 
-  it('apresenta o Noto e pergunta qual agenda usa quando não há conexão', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Oi, como funciona?', profissionais: [profissionais[0]!] },
-      {
-        completar: vi.fn().mockResolvedValueOnce(JSON.stringify({ acao: 'orientar', profissional: null }))
-          .mockRejectedValueOnce(new Error('IA indisponível')),
-        consultarStatus: vi.fn().mockResolvedValue(desconectada)
-      }
-    );
-    expect(resposta).toContain('Eu sou o Noto');
-    expect(resposta).toContain('TribeMD, Amplimed ou outra agenda');
-  });
-
-  it('reconhece escolha de agenda, sem pedir senha nem disparar emissão', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Uso Amplimed', profissionais: [profissionais[0]!], painelUrl: 'https://noto.exemplo.com/' },
-      {
-        completar: vi.fn().mockResolvedValue(JSON.stringify({ acao: 'conectar_agenda', agenda: 'amplimed', profissional: null })),
-        consultarStatus: vi.fn().mockResolvedValue(desconectada)
-      }
-    );
-    expect(resposta).toContain('Amplimed');
-    expect(resposta).toContain('Cofre');
-    expect(resposta).toContain('https://noto.exemplo.com');
-    expect(resposta).toContain('não envie senha aqui');
-  });
-
-  it('não pede reconexão quando a agenda escolhida já está ativa', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Eu uso TribeMD', profissionais: [profissionais[0]!] },
-      {
-        completar: vi.fn().mockResolvedValue(JSON.stringify({ acao: 'conectar_agenda', agenda: 'tribemd', profissional: null })),
-        consultarStatus: vi.fn().mockResolvedValue(conectada)
-      }
-    );
+  it('já conectada: recebe evidência real e não chama reconexão', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: 'Alice' }, { callId: 'c1' })],
+      [assistantMessage('A agenda TribeMD da Alice já está conectada. Não precisa conectar outra vez.')]
+    ]);
+    const consultarStatus = vi.fn().mockResolvedValue(conectada);
+    const resposta = await responderAgente({ texto: 'Uso TribeMD, preciso conectar a Alice?', profissionais }, {
+      modeloTeste: modelo, consultarStatus
+    });
     expect(resposta).toContain('já está conectada');
-    expect(resposta).toContain('Não precisa configurar novamente');
-  });
-
-  it('não adivinha a identidade quando há profissionais homônimos', async () => {
-    const consultarStatus = vi.fn().mockResolvedValue(conectada);
-    const resposta = await responderAgente(
-      { texto: 'Veja a agenda da Alice', profissionais: [
-        { id: 'a1', nome: 'Alice Souza' }, { id: 'a2', nome: 'Alice Lima' }
-      ] },
-      {
-        completar: vi.fn().mockResolvedValue(JSON.stringify({ acao: 'consultar_agendas', profissional: 'Alice' })),
-        consultarStatus
-      }
-    );
-    expect(resposta).toContain('mais de um profissional');
-  });
-
-  it('faz uma pergunta por vez para escolher profissional antes de conectar', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Uso Amplimed', profissionais },
-      {
-        completar: vi.fn().mockResolvedValue(JSON.stringify({ acao: 'conectar_agenda', agenda: 'amplimed', profissional: null })),
-        consultarStatus: vi.fn().mockResolvedValue(desconectada)
-      }
-    );
-    expect(resposta).toContain('Para qual profissional');
-    expect(resposta).toContain('Alice');
-    expect(resposta).toContain('Bruno');
-  });
-
-  it('consulta apenas conexões e não afirma que verificou notas fiscais', async () => {
-    const completar = vi.fn(async (_mensagens: Array<{ role: 'system' | 'user'; content: string }>, _json?: boolean): Promise<string> =>
-      JSON.stringify({ acao: 'consultar_agendas', profissional: 'Alice' }));
-    const consultarStatus = vi.fn().mockResolvedValue(conectada);
-    const resposta = await responderAgente(
-      { texto: 'Noto, como está a agenda da Alice?', profissionais },
-      { completar, consultarStatus }
-    );
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Já conectada');
     expect(consultarStatus).toHaveBeenCalledWith('alice-id');
-    expect(completar.mock.calls[0]?.[1]).toBe(true);
-    expect(resposta).toContain('TribeMD conectada');
-    expect(resposta).toContain('não a existência de consultas ou notas pendentes');
+    modelo.assertComplete();
   });
 
-  it('não executa ações fiscais fora do catálogo e responde de forma orientativa', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Emite as notas de ontem', profissionais: [profissionais[0]!] },
-      {
-        completar: vi.fn().mockResolvedValueOnce(JSON.stringify({ acao: 'orientar', profissional: null }))
-          .mockRejectedValueOnce(new Error('indisponível')),
-        consultarStatus: vi.fn().mockResolvedValue(desconectada)
-      }
-    );
-    expect(resposta).toContain('Eu sou o Noto');
-    expect(resposta).toContain('TribeMD, Amplimed ou outra agenda');
+  it('bloqueia credenciais antes de chamar qualquer modelo', async () => {
+    const modelo = new ScriptedModel([]);
+    const resposta = await responderAgente({ texto: 'senha: AbCd2026@!', profissionais }, {
+      modeloTeste: modelo, consultarStatus: vi.fn()
+    });
+    expect(resposta).toContain('não envie senhas');
+    expect(modelo.calls).toHaveLength(0);
   });
 
-  it('não inventa conexão quando não consegue consultar a fonte', async () => {
-    const resposta = await responderAgente(
-      { texto: 'Oi', profissionais: [profissionais[0]!] },
-      {
-        completar: vi.fn().mockResolvedValueOnce(JSON.stringify({ acao: 'orientar', profissional: null }))
-          .mockRejectedValueOnce(new Error('indisponível')),
-        consultarStatus: vi.fn().mockRejectedValue(new Error('cofre indisponível'))
-      }
-    );
-    expect(resposta).toContain('Não consegui conferir todas as conexões');
+  it('falha de IA produz fallback sem afirmar nota ou conexão', async () => {
+    const modelo = new ScriptedModel([]);
+    const resposta = await responderAgente({ texto: 'Veja a agenda', profissionais }, {
+      modeloTeste: modelo, consultarStatus: vi.fn().mockResolvedValue(vazia)
+    });
+    expect(resposta).toContain('Não consegui concluir');
+    expect(resposta).toContain('Não alterei');
+    expect(resposta).not.toContain('está conectada');
+  });
+
+  it('sem chave da OpenAI responde indisponibilidade segura e não faz consultas', async () => {
+    const consultarStatus = vi.fn();
+    const resposta = await responderAgente({ texto: 'Oi', profissionais }, { consultarStatus });
+    expect(resposta).toContain('temporariamente indisponível');
+    expect(consultarStatus).not.toHaveBeenCalled();
   });
 });
