@@ -135,7 +135,7 @@ it('pareamento usa APP_PUBLIC_ORIGIN explicita, nunca COFRE_ORIGEM antiga',async
   const chamada=rede.mock.calls.find(([url]: any[]) => String(url).includes('/webhook/set/'));
   expect(chamada).toBeDefined();
   const payload=JSON.parse(String(chamada![1]?.body));
-  expect(payload.webhook.url).toBe('https://homologacao.example.test/webhook/evolution');
+  expect(payload.webhook.url).toBe('https://homologacao.example.test/webhook/evolution/pareamento');
 });
 it('piloto restrito bloqueia criacao de nota fiscal nas tres rotas',async()=> {
   config.notoPilotoRestrito=true;
