@@ -47,6 +47,14 @@ Configuração e limites: [cofre TribeMD](docs/implementation/cofre-tribemd.md).
 
 ## Noto Assistente — Entrega A (OpenAI Agents SDK; piloto)
 
+O piloto com **conta real e banco PostgreSQL estritamente read-only** agora deve usar
+`npm run start:piloto-agente` em um serviço isolado, nunca `npm start` apontado
+para o banco real. A opção `NOTO_WORKER_EMBUTIDO_ATIVO=false` desliga o
+worker, mas não transforma o servidor completo em somente leitura.
+Leia a auditoria de rotas, testes, flags e sequência de validação em
+[Guia do piloto com conta real](docs/noto-agent-piloto-conta-real.md).
+
+
 Esta entrega substitui o antigo classificador de JSON por **um único agente real** executado com
 `@openai/agents@0.21.0` e **Zod 4**. O runtime gerencia o loop modelo →
 ferramenta → resultado → decisão, com limite de seis turnos por mensagem e prazo de
