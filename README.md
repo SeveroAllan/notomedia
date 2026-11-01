@@ -45,32 +45,52 @@ Os cards TribeMD e Amplimed e a seção **Cofre** substituem Google Planilhas no
 Configuração e limites: [cofre TribeMD](docs/implementation/cofre-tribemd.md).
 
 
-## Noto Agent — Entrega A (experimental)
+## Noto Assistente — Entrega A (OpenAI Agents SDK; piloto)
 
-O novo agente de leitura entra pelo webhook `POST /webhook/evolution`, **somente**
-para a instância `EVOLUTION_ASSISTANT_INSTANCE_NAME`, com evento
-`messages.upsert` e cabeçalho `x-webhook-secret`. O Noto Oficial continua
-reservado para OTP, e as instâncias dos consultórios não acionam o agente.
+Esta entrega substitui o antigo classificador de JSON por **um único agente real** executado com
+`@openai/agents@0.21.0` e **Zod 4**. O runtime gerencia o loop modelo →
+ferramenta → resultado → decisão, com limite de seis turnos por mensagem e prazo de
+20 segundos. Cada ferramenta usa schema validado pelo SDK; o backend resolve
+conta e profissional e nunca aceita IDs escolhidos pelo modelo.
 
-A funcionalidade está **desligada por padrão**. Para um teste autorizado em
-ambiente isolado, configure `NOTO_AGENT_ATIVO=true`,
-`NOTO_AGENT_ENVIO_ATIVO=true`, `EVOLUTION_ASSISTANT_WEBHOOK_SECRET`
-com valor próprio e `ENVIO_REAL_ALLOWLIST` com os números de teste.
-Nunca use o segredo/API key do Noto Oficial como segredo do assistente.
+O webhook é `POST /webhook/evolution`, somente para
+`EVOLUTION_ASSISTANT_INSTANCE_NAME`, evento `messages.upsert`, com cabeçalho
+`x-webhook-secret` igual a `EVOLUTION_ASSISTANT_WEBHOOK_SECRET`.
+O número remetente precisa constar em `ENVIO_REAL_ALLOWLIST`; instâncias
+alheias e números que apontam para múltiplas contas são ignorados. O Noto
+Oficial continua isolado para OTP.
 
-O agente resolve a conta pelo telefone cadastrado do remetente; números que
-apontem para mais de uma conta não são atendidos. Sua única ferramenta lê o
-estado das conexões TribeMD e Amplimed **por profissional autorizado**. Além disso,
-o agente se apresenta e orienta o início: sem cadastro, se apresenta e pergunta qual agenda utiliza; ao receber a escolha,
-orienta o cadastro seguro no painel; sem profissional, não presume dados;
-sem conexão, pergunta qual agenda usa; quando a
-agenda já está conectada, não solicita uma nova conexão. Ao escolher TribeMD ou
-Amplimed, orienta a usar a seção Cofre, sem solicitar senha pelo WhatsApp.
-**O envio automático de links de conexão não foi habilitado neste piloto.**
-Não lê pacientes, não verifica notas pendentes e não emite ou cancela NFS-e.
-Uma resposta de estado não significa que as consultas foram conciliadas.
+**Para teste isolado autorizado**, use `NOTO_AGENT_ATIVO=true`,
+`NOTO_AGENT_ENVIO_ATIVO=true` e `OPENAI_API_KEY` válida; o modelo é
+`OPENAI_TEXTO_MODEL`, com fallback para `gpt-4o-mini`. Esses dois flags estão
+desligados por padrão. O SDK usa a API Responses da OpenAI; a antiga chave
+NVIDIA não aciona o novo runtime. O fallback sem OpenAI não consulta dados
+privados e não afirma que a conexão está ativa.
 
-A prevenção de repetição de mensagens e o contexto das últimas perguntas nesta entrega são **apenas em memória,
-para uma réplica**. Esse contexto é perdido em reinicializações, não substitui a memória contínua e não armazena mensagens do usuário. Não habilitar para usuários gerais até implementar a
-persistência de conversas/objetivos e a deduplicação durável da Entrega B.
-Nenhum deploy ou migração foi executado por esta alteração.
+As três ferramentas **somente de leitura** são:
+- `consultar_contexto_conta`: identifica se existe cadastro e mostra apenas
+  os profissionais da conta autorizada.
+- `consultar_status_agendas`: verifica conexões TribeMD e Amplimed já existentes
+  pelo cofre; sem atendimentos, pacientes, notas ou valores.
+- `orientar_conexao_agenda`: reconhece a escolha de agenda e confere a próxima
+  dependência (conta, profissional, conexão ou reconexão) antes de orientar o
+  uso do **Cofre** no painel existente.
+
+O Noto pode se apresentar sem cadastro e perguntar qual agenda o usuário utiliza,
+interpretar respostas curtas, identificar a profissional correta e evitar pedidos de
+reconexão quando já existe uma agenda conectada. Ele **não cria cadastros
+pelo WhatsApp e não envia automaticamente links ou credenciais** nesta entrega.
+Senha/token recebido é bloqueado antes do modelo. Nenhuma ferramenta de emissão,
+cancelamento ou alteração fiscal foi disponibilizada.
+
+`NOTO_AGENT_TRACES_ATIVOS=false` por padrão; quando explicitamente ativado,
+o Agents SDK gera traces com `traceIncludeSensitiveData=false`, sem exportar
+conteúdo das mensagens nem resultados completos das ferramentas. A memória
+curta e a deduplicação de eventos são apenas em RAM, limitadas a uma réplica
+de teste; a Entrega B deve implementar persistência, isolamento e idempotência
+distribuída antes de habilitar para usuários gerais.
+
+**Validação:** `npm ci`, `npm run typecheck` e `npm test` no GitHub
+Actions. Testes usam o `ScriptedModel` do próprio SDK para verificar o
+loop de ferramentas, autorizações, nomes ambíguos e onboarding sem modelo remoto.
+Não houve teste ponta a ponta em WhatsApp real, deploy, migração nem merge.
