@@ -39,6 +39,15 @@ Seu padrão continua ativo para não modificar involuntariamente a produção.
 
 ## Processo isolado: `npm run start:piloto-agente`
 
+Para não depender de trocar o comando manualmente no Easypanel, use a imagem
+construída com **`Dockerfile.piloto-agente`**, cujo `CMD` já é
+`npm run start:piloto-agente` e cujo processo executa com usuário não root.
+O `Dockerfile` padrão do repositório ainda inicia `npm start` e **não
+deve ser usado no piloto**. Configure o serviço isolado com esse Dockerfile,
+réplica única e auto-deploy desligado; nunca compartilhe o ambiente de
+execução com o serviço fiscal. O CI também constrói essa imagem para
+verificar o empacotamento.
+
 Entrada: `src/agente/piloto-start.ts`. Importa somente um pequeno app
 Express (`src/agente/piloto-app.ts`), adaptadores de status local e cliente
 Evolution, **sem importar `src/server.ts` ou o pool PostgreSQL global**.
