@@ -40,6 +40,7 @@ export interface AppConfig {
   notoAgentTracesAtivos?: boolean;
   notoAgentDiagnosticoAtivo?: boolean;
   notoAgentWebhookSecret?: string;
+  workerEmbutidoAtivo?: boolean;
   retomadaRecusaSefinAtiva?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
@@ -89,6 +90,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     notoAgentTracesAtivos: env['NOTO_AGENT_TRACES_ATIVOS'] === 'true',
     notoAgentDiagnosticoAtivo: env['NOTO_AGENT_DIAGNOSTICO_ATIVO'] === 'true',
     notoAgentWebhookSecret: env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() || '',
+    workerEmbutidoAtivo: env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false',
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
