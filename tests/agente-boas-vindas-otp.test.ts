@@ -56,7 +56,7 @@ describe('piloto: conta real via OTP e mensagem restrita ao número autorizado',
     let codigo = '';
     let registro: OtpRegistro | null = null;
     const repositorio = {
-      salvar: async (r: any) => { registro = { ...r, id: 'otp-1', tentativas: 0, verificadoEm: null }; return registro; },
+      salvar: async (r: any) => { const salvo: OtpRegistro = { ...r, id: 'otp-1', tentativas: 0, verificadoEm: null }; registro = salvo; return salvo; },
       buscarUltimoPorTelefone: async () => registro,
       incrementarTentativas: vi.fn(), marcarVerificado: vi.fn()
     };
