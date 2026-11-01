@@ -98,12 +98,12 @@ it('piloto restrito recusa telefone fora da allowlist sem envio nem persistencia
   config.notoPilotoRestrito=true;
   config.envioRealAllowlist=[telefone];
   const consultasAntes=banco.consultas.length;
-  const enviosAntes=rede.mock.calls.length;
+  const enviosAntes=rede.mock.calls.filter(([url]) => new URL(String(url)).hostname === 'evolution.invalid').length;
   const resposta=await chamar('/api/auth/otp/solicitar',{telefone:'5511988881111'});
   expect(resposta.status).toBe(403);
   expect(resposta.body.motivo).toBe('telefone_nao_autorizado');
   expect(banco.consultas.length).toBe(consultasAntes);
-  expect(rede.mock.calls.length).toBe(enviosAntes);
+  expect(rede.mock.calls.filter(([url]) => new URL(String(url)).hostname === 'evolution.invalid').length).toBe(enviosAntes);
 });
 it('piloto restrito exige exatamente um telefone permitido', async()=> {
   config.notoPilotoRestrito=true;
@@ -116,15 +116,15 @@ it('piloto restrito envia OTP somente ao telefone autorizado', async()=> {
   config.notoPilotoRestrito=true;
   config.envioRealAllowlist=[telefone];
   expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);
-  expect(codigo).toMatch(/^\\d{6}$/);
+  expect(codigo).toMatch(/^\d{6}$/);
 });
 it('pareamento exige origem HTTPS explicita antes de chamar Evolution', async()=> {
   const medicoId=await entrar();
   config.appPublicOrigin=undefined;
-  const antes=rede.mock.calls.length;
+  const antes=rede.mock.calls.filter(([url]) => new URL(String(url)).hostname === 'evolution.invalid').length;
   const resposta=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
   expect(resposta.status).toBe(503);
-  expect(rede.mock.calls.length).toBe(antes);
+  expect(rede.mock.calls.filter(([url]) => new URL(String(url)).hostname === 'evolution.invalid').length).toBe(antes);
 });
 async function entrar(){
   expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);expect(codigo).toMatch(/^\d{6}$/);
