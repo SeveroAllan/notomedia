@@ -150,7 +150,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!cert || cert.id !== certificadoId) return undefined;
       return extrairChavesCertificado(cert.pfxBuffer, cert.senhaCertificado).documentoTitular;
     }, hubCpfClient ? cpf => hubCpfClient.consultar(cpf) : undefined, pesquisaCrmConfigurada, 'openserp');
-  if (process.env.NODE_ENV !== 'test') {
+  if (process.env.NODE_ENV !== 'test' && config.notoPilotoRestrito !== true) {
     const timer = setInterval(() => {
       // Enriquecimento automático via OpenSerp sem envio de perguntas no WhatsApp.
       void cadastroCertificado.recuperar().catch(() => console.warn('[Cadastro automático]', {codigo:'RECUPERACAO_FALHOU',acao:'verificar migrate:cadastro'}));
@@ -165,6 +165,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Healthcheck para o Easypanel
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // Readiness: distingue o processo HTTP ativo do banco/schema realmente acessível.
+  app.get('/ready', async (_req: Request, res: Response) => {
+    try {
+      await pool.query('select 1 from whatsapp_instancias limit 0');
+      res.json({ status: 'ready' });
+    } catch {
+      res.status(503).json({ status: 'unavailable' });
+    }
   });
 
   app.use('/api/conta/cadastro', criarRouterCadastroPainel({
