@@ -10,6 +10,7 @@ import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { criarRouterWebhookAgente } from './agente/webhook.js';
+import { criarRouterWebhookPareamento } from './whatsapp/webhook-pareamento.js';
 import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
 import { enviarBoasVindasOtpTeste } from './agente/boas-vindas-otp.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
@@ -113,6 +114,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
     config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
   );
+  // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
+  app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
+    pool, segredo: config.evolutionWebhookSecret
+  }));
   app.use('/webhook/evolution', criarRouterWebhookAgente({
     pool,
     ativo: Boolean(config.notoAgentAtivo),
