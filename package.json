@@ -9,6 +9,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "start": "node --import tsx src/server.ts",
+    "start:homologacao": "node --import tsx src/homologacao-start.ts",
     "migrate:preparacao": "node scripts/migrar-preparacao-fiscal.mjs",
     "migrate:perfil": "node scripts/migrar-dados-profissionais.mjs",
     "consultar:registro": "node --import tsx scripts/consultar-registro-profissional.mjs",
