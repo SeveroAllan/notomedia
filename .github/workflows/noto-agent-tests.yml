@@ -13,6 +13,7 @@ on:
       - 'tests/agente*.test.ts'
       - 'package.json'
       - 'package-lock.json'
+      - 'Dockerfile.piloto-agente'
       - '.github/workflows/noto-agent-tests.yml'
   push:
     branches: [feat/noto-agent-entrega-a]
@@ -36,3 +37,5 @@ jobs:
         run: npm run typecheck
       - name: Executar suíte completa
         run: npm test
+      - name: Validar imagem Docker isolada
+        run: docker build --file Dockerfile.piloto-agente --tag noto-agent-piloto-ci .
