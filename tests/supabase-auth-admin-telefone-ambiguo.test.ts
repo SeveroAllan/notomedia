@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SupabaseAuthAdminService } from '../src/io/supabase/supabase-auth-admin-service.js';
 
 function serviceWithRows(rows: Array<Record<string, unknown>>) {
-  const query = vi.fn(async () => ({ rows }));
+  const query = vi.fn(async (_sql: string, _params?: unknown[]) => ({ rows }));
   const pool = { query } as any;
   const service = new SupabaseAuthAdminService('http://127.0.0.1:54321', 'test-service-role-key', pool);
   return { service, query };
