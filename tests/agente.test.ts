@@ -54,7 +54,7 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
     expect(resposta).toContain('TribeMD');
     expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('alice-id');
     const retorno = JSON.stringify(modelo.lastCall?.request.input);
-    expect(retorno).toContain('TribeMD');
+    expect(retorno).toContain('tribemd');
     expect(retorno).toContain('conectada');
     expect(retorno).not.toContain('bruno-id');
     modelo.assertComplete();
