@@ -39,7 +39,7 @@ describe('piloto: conta real via OTP e mensagem restrita ao número autorizado',
     const base = { ativo: true, telefoneVerificado: numero, ehNovoUsuario: false,
       authUserId: 'auth-1', allowlist: ['11999990000'], enviar };
     expect(await enviarBoasVindasOtpTeste(base)).toBe(true);
-    expect(enviar).toHaveBeenCalledExactlyOnceWith(numero, expect.stringContaining('Sou o Noto'));
+    expect(enviar).toHaveBeenCalledExactlyOnceWith(numero, expect.stringContaining('sou o Noto'));
     for (const op of [
       { ...base, telefoneVerificado: '5521999990000' },
       { ...base, ativo: false },
