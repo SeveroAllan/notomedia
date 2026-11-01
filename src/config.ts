@@ -50,6 +50,7 @@ export interface AppConfig {
   envioMedicoRealAtivo?: boolean;
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
+  notoPilotoRestrito?: boolean;
   meuDanfeApiKey?: string;
   hubDesenvolvedorToken?: string;
 }
