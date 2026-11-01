@@ -41,6 +41,8 @@ export interface AppConfig {
   notoAgentDiagnosticoAtivo?: boolean;
   notoAgentWebhookSecret?: string;
   workerEmbutidoAtivo?: boolean;
+  notoAgentLoginContaExistenteApenas?: boolean;
+  notoAgentBoasVindasOtpTesteAtivas?: boolean;
   retomadaRecusaSefinAtiva?: boolean;
   preparacaoFiscalAtiva?: boolean;
   comunicacaoMedicoAtiva?: boolean;
@@ -55,6 +57,11 @@ export interface AppConfig {
 export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (env['PREPARACAO_FISCAL_ATIVA'] === 'true' && env['AGENTE_FISCAL_ATIVO'] !== 'true') {
     throw new Error('PREPARACAO_FISCAL_ATIVA requer AGENTE_FISCAL_ATIVO para tratar pendências sem retentativas cegas.');
+  }
+  if (env['NOTO_AGENT_BOAS_VINDAS_OTP_TESTE_ATIVAS'] === 'true' &&
+      (env['NOTO_AGENT_LOGIN_CONTA_EXISTENTE_APENAS'] !== 'true' ||
+       env['NOTO_AGENT_ATIVO'] !== 'true' || env['NOTO_AGENT_ENVIO_ATIVO'] !== 'true')) {
+    throw new Error('Boas-vindas do piloto exigem conta preexistente e flags explícitas do agente.');
   }
   return {
     porta: Number.parseInt(env['PORT'] || '3000', 10),
@@ -91,6 +98,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     notoAgentDiagnosticoAtivo: env['NOTO_AGENT_DIAGNOSTICO_ATIVO'] === 'true',
     notoAgentWebhookSecret: env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() || '',
     workerEmbutidoAtivo: env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false',
+    notoAgentLoginContaExistenteApenas: env['NOTO_AGENT_LOGIN_CONTA_EXISTENTE_APENAS'] === 'true',
+    notoAgentBoasVindasOtpTesteAtivas: env['NOTO_AGENT_BOAS_VINDAS_OTP_TESTE_ATIVAS'] === 'true',
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
