@@ -67,6 +67,14 @@ desligados por padrão. O SDK usa a API Responses da OpenAI; a antiga chave
 NVIDIA não aciona o novo runtime. O fallback sem OpenAI não consulta dados
 privados e não afirma que a conexão está ativa.
 
+A leitura de estado do Cofre foi separada dos links públicos. O módulo
+`src/cofre/status-interno.ts` consulta o status local, sem link, URL pública,
+login externo ou requisição HTTP de entrada. A ausência de `COFRE_ORIGEM`
+desabilita a geração dos links, **não** a leitura interna. Uma fonte
+indisponível recebe estado explícito `indisponivel`; jamais é convertida em
+"desconectada". A interface HTTP do Cofre continua exigindo autenticação,
+origem e autorização próprias.
+
 As três ferramentas **somente de leitura** são:
 - `consultar_contexto_conta`: identifica se existe cadastro e mostra apenas
   os profissionais da conta autorizada.
@@ -83,9 +91,33 @@ pelo WhatsApp e não envia automaticamente links ou credenciais** nesta entrega.
 Senha/token recebido é bloqueado antes do modelo. Nenhuma ferramenta de emissão,
 cancelamento ou alteração fiscal foi disponibilizada.
 
+### Diagnóstico seguro do piloto (sem migração)
+
+`NOTO_AGENT_DIAGNOSTICO_ATIVO=false` por padrão. Para um teste isolado e
+autorizado, habilite a flag e consulte os logs do serviço Noto (acesso restrito).
+Cada execução aceita gera uma linha JSON identificada por
+`[Noto Agent diagnóstico]`:
+- `mensagemRef`: HMAC truncado sobre instância, ID da mensagem e telefone,
+  com o segredo do webhook; não registra os identificadores originais.
+- `respostaRef`: HMAC do texto efetivamente encaminhado à Evolution. Permite
+  conferir a resposta exata com o mesmo segredo, sem guardar a resposta.
+- `agente.ferramentas[]`: **nome fixo**, **código fixo** e duração em ms de
+  cada ferramenta realmente executada, na ordem.
+- `agente.codigo`, `agente.duracaoMs`, `conta`, `envio` e
+  `agente.uso.{requisicoes,tokensEntrada,tokensSaida,tokensTotal}`.
+  Quando não há telemetria de consumo, os valores são `null`, não estimativas.
+
+**Nunca** entram nos logs: mensagem, resposta, nome ou ID do profissional,
+telefone, parâmetros/resultado completos da ferramenta, senha, token de
+autenticação ou exceção original. A comparação com a conversa do WhatsApp
+deve usar o horário do log e a referência HMAC; a captura do WhatsApp continua
+com o operador, não armazenada pela ferramenta. Configure retenção curta,
+permissões de acesso aos logs e evite encaminhá-los para serviços públicos.
+
 `NOTO_AGENT_TRACES_ATIVOS=false` por padrão; quando explicitamente ativado,
-o Agents SDK gera traces com `traceIncludeSensitiveData=false`, sem exportar
-conteúdo das mensagens nem resultados completos das ferramentas. A memória
+o Agents SDK gera traces adicionais com `traceIncludeSensitiveData=false`.
+Esses traces complementam os códigos locais: é necessário revisar o
+destino, o acesso e a política de retenção antes de ativá-los. A memória
 curta e a deduplicação de eventos são apenas em RAM, limitadas a uma réplica
 de teste; a Entrega B deve implementar persistência, isolamento e idempotência
 distribuída antes de habilitar para usuários gerais.
@@ -93,4 +125,4 @@ distribuída antes de habilitar para usuários gerais.
 **Validação:** `npm ci`, `npm run typecheck` e `npm test` no GitHub
 Actions. Testes usam o `ScriptedModel` do próprio SDK para verificar o
 loop de ferramentas, autorizações, nomes ambíguos e onboarding sem modelo remoto.
-Não houve teste ponta a ponta em WhatsApp real, deploy, migração nem merge.
+A execução real inicial via WhatsApp revelou repetição de onboarding e diagnóstico de Cofre insuficiente; estas correções exigem **novo teste integrado**, mesmo com o CI verde. Nenhum deploy, migração ou merge foi executado por esta alteração.
