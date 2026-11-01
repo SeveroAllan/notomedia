@@ -65,6 +65,41 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
        env['NOTO_AGENT_ATIVO'] !== 'true' || env['NOTO_AGENT_ENVIO_ATIVO'] !== 'true')) {
     throw new Error('Boas-vindas do piloto exigem conta preexistente e flags explícitas do agente.');
   }
+  if (env['NOTO_PILOTO_RESTRITO'] === 'true') {
+    const permitir = (env['ENVIO_REAL_ALLOWLIST'] ?? '').split(/[,;\\s]+/).filter(Boolean);
+    if (permitir.length !== 1 || !/^(?:55)?\\d{10,11}$/.test(permitir[0]!.replace(/\\D/g, ''))) {
+      throw new Error('HOMOLOGACAO_EXIGE_EXATAMENTE_UM_TELEFONE');
+    }
+    const origem = env['APP_PUBLIC_ORIGIN']?.trim() ?? '';
+    if (!/^https:\\/\\/[^/]+$/i.test(origem)) {
+      throw new Error('HOMOLOGACAO_EXIGE_APP_PUBLIC_ORIGIN_HTTPS');
+    }
+    if (env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false' ||
+        env['AGENTE_FISCAL_ATIVO'] === 'true' ||
+        env['PREPARACAO_FISCAL_ATIVA'] === 'true' ||
+        env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true' ||
+        env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true') {
+      throw new Error('HOMOLOGACAO_EXIGE_PROCESSAMENTO_FISCAL_DESLIGADO');
+    }
+    if (env['NOTO_AGENT_ATIVO'] !== 'true' || env['NOTO_AGENT_ENVIO_ATIVO'] !== 'true' ||
+        !env['OPENAI_API_KEY']?.trim()) {
+      throw new Error('HOMOLOGACAO_EXIGE_ASSISTENTE_EXPLICITAMENTE_ATIVO');
+    }
+    const instanciaOtp = env['EVOLUTION_OFFICIAL_INSTANCE_NAME']?.trim();
+    const instanciaAgente = env['EVOLUTION_ASSISTANT_INSTANCE_NAME']?.trim();
+    if (!instanciaOtp || !instanciaAgente || instanciaOtp === instanciaAgente ||
+        instanciaOtp === 'notomed_oficial' || instanciaAgente === 'notomed_assistente' ||
+        !env['EVOLUTION_API_URL']?.trim() || !env['EVOLUTION_GLOBAL_API_KEY']?.trim() ||
+        !env['EVOLUTION_ASSISTANT_URL']?.trim() ||
+        !(env['EVOLUTION_ASSISTANT_GLOBAL_API_KEY'] || env['EVOLUTION_ASSISTANT_API_KEY'])?.trim()) {
+      throw new Error('HOMOLOGACAO_EXIGE_EVOLUTION_ISOLADA');
+    }
+    if (!env['EVOLUTION_WEBHOOK_SECRET']?.trim() ||
+        !env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() ||
+        env['EVOLUTION_WEBHOOK_SECRET'] === env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']) {
+      throw new Error('HOMOLOGACAO_EXIGE_SEGREDOS_WEBHOOK_DISTINTOS');
+    }
+  }
   return {
     porta: Number.parseInt(env['PORT'] || '3000', 10),
     host: env['HOST'] || '0.0.0.0',
