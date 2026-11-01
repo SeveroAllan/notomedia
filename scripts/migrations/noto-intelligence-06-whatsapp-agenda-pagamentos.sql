@@ -1,9 +1,10 @@
 -- Noto Intelligence: missing baseline WhatsApp, scheduling and payment contracts.
 -- Code-only migration: do not apply without integration testing.
 BEGIN;
+ALTER TABLE public.medicos ADD CONSTRAINT medicos_id_conta_unique UNIQUE(id,conta_id);
 CREATE TABLE public.whatsapp_instancias (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
- medico_id uuid REFERENCES public.medicos(id) ON DELETE CASCADE,
+ medico_id uuid,
  conta_id uuid NOT NULL REFERENCES public.contas(id) ON DELETE CASCADE,
  oficial boolean NOT NULL DEFAULT false,
  nome_instancia text NOT NULL UNIQUE,
@@ -12,14 +13,16 @@ CREATE TABLE public.whatsapp_instancias (
  webhook_configurado boolean NOT NULL DEFAULT false,
  conectado_em timestamptz,
  criado_em timestamptz NOT NULL DEFAULT now(),
- UNIQUE(id,conta_id)
+ UNIQUE(id,conta_id),
+ FOREIGN KEY(medico_id,conta_id) REFERENCES public.medicos(id,conta_id)
 );
 CREATE INDEX whatsapp_instancias_conta_idx ON public.whatsapp_instancias(conta_id);
 CREATE INDEX whatsapp_instancias_medico_idx ON public.whatsapp_instancias(medico_id);
 CREATE TABLE public.whatsapp_conversas (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
- instancia_id uuid NOT NULL REFERENCES public.whatsapp_instancias(id) ON DELETE CASCADE,
- medico_id uuid NOT NULL REFERENCES public.medicos(id) ON DELETE CASCADE,
+ instancia_id uuid NOT NULL,
+ conta_id uuid NOT NULL,
+ medico_id uuid NOT NULL,
  contato_telefone text NOT NULL,
  contato_nome text,
  paciente_id uuid,
@@ -27,6 +30,8 @@ CREATE TABLE public.whatsapp_conversas (
  ultima_mensagem_em timestamptz,
  criado_em timestamptz NOT NULL DEFAULT now(),
  UNIQUE(instancia_id,contato_telefone),
+ FOREIGN KEY(instancia_id,conta_id) REFERENCES public.whatsapp_instancias(id,conta_id) ON DELETE CASCADE,
+ FOREIGN KEY(medico_id,conta_id) REFERENCES public.medicos(id,conta_id),
  FOREIGN KEY(paciente_id,medico_id) REFERENCES public.pacientes(id,medico_id)
 );
 CREATE INDEX whatsapp_conversas_medico_idx ON public.whatsapp_conversas(medico_id);
