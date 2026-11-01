@@ -31,3 +31,16 @@ Os dados do tomador são acessados apenas no momento da emissão e não devem ap
 
 ## Observação
 O projeto novo já tem tabelas `pacientes` e `agendamentos` criadas pela migração 03. Não inserir dados nelas. Remover estruturas legadas apenas depois de comprovada ausência de dependências.
+
+
+## Decisão conversacional contextual — múltiplas consultas no mesmo dia
+Quando o agente detectar **duas consultas distintas do mesmo paciente no mesmo dia**, não deve pressupor se a emissão será agrupada ou separada. Deve perguntar ao operador autorizado, em linguagem natural:
+1. Deseja emitir **uma nota para cada consulta** ou **uma nota agrupando as consultas**?
+2. Depois da resposta, deseja usar a escolha **somente neste caso** ou **sempre que ocorrer situação equivalente**?
+
+- **Somente neste caso:** decisão efêmera vinculada à operação atual, sem preferência durável.
+- **Sempre:** persistir regra de preferência **sem dados do paciente**, com `conta_id`, contexto, decisão, versão, `autorizado_por`, data/hora e opção de revogação. Se houver escopo médico específico, incluir `medico_id`.
+- Aplicar a preferência apenas em cenário semanticamente equivalente; caso exista diferença relevante, conflito de regras, médico não identificado ou impedimento fiscal, perguntar novamente.
+- A autorização para agrupar **não substitui** confirmação fiscal, idempotência por consulta e verificação de que cada atendimento ainda não foi faturado.
+- Preferências podem ser alteradas pelo operador autorizado; registrar trilha de auditoria sem dados clínicos ou do tomador.
+- A interação deve continuar no WhatsApp, sem criar tela de configuração.
