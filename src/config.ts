@@ -108,6 +108,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',
     envioRealAllowlist: (env['ENVIO_REAL_ALLOWLIST'] || '').split(/[,;\s]+/).filter(Boolean),
+    notoPilotoRestrito: env['NOTO_PILOTO_RESTRITO'] === 'true',
     meuDanfeApiKey: env['MEU_DANFE_API_KEY'],
     hubDesenvolvedorToken: env['HUB_DESENVOLVEDOR_TOKEN'],
   };
