@@ -123,6 +123,12 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados 
   expect((await chamar(`/api/onboarding/status?medicoId=${medicoId}`,undefined,'invalido')).status).toBe(401);
   // O usuário autenticado conecta o canal antes de enviar certificado ou revisar CRM.
   expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao},'token-invalido')).status).toBe(401);
+  const outroUsuario = supabase.auth.getUser;
+  supabase.auth.getUser = vi.fn(async(t: string) => t === 'token-outra-conta'
+    ? { data: { user: { id: '00000000-0000-4000-8000-000000000099' } }, error: null }
+    : outroUsuario(t));
+  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao},'token-outra-conta')).status).toBe(403);
+  expect(rede.mock.calls.some(([url]: any[]) => String(url).includes('/instance/create'))).toBe(false);
   const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
   expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
   conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
