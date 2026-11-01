@@ -4,6 +4,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { responderAgente, type StatusFontes } from './agente.js';
+import type { Model } from '@openai/agents';
 
 const eventoSchema = z.object({
   instance: z.string(),
@@ -39,6 +40,7 @@ export function criarRouterWebhookAgente(deps: {
   apiKey?: string;
   modeloNome?: string;
   tracesAtivos?: boolean;
+  modeloTeste?: Model;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
   painelUrl?: string;
@@ -100,7 +102,7 @@ export function criarRouterWebhookAgente(deps: {
         profissionais: medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
           id: m.id, nome: String(m.nome_completo ?? '')
         }))
-      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, consultarStatus: deps.consultarStatus }) : await responderAgente({
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus }) : await responderAgente({
         texto, profissionais: [], painelUrl: deps.painelUrl, semConta: true, contexto: contextoPorConta.get(chaveContexto) ?? []
       }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, consultarStatus: deps.consultarStatus });
 
