@@ -17,8 +17,8 @@ export const parametrosEmissaoSchema = z.object({
   opcaoSimplesNacional: z.enum(['nao_optante', 'mei', 'me_epp']),
   regimeApuracaoSn: z.enum(['regime_1', 'regime_2', 'regime_3']).optional(),
   regimeEspecialTributacao: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6), z.literal(9)]),
-  tribISSQN: z.literal(1, { errorMap: () => ({ message: 'Esta situação de ISSQN exige suporte fiscal adicional; não será substituída por operação tributável.' }) }),
-  tpRetISSQN: z.union([z.literal(1), z.literal(2)], { errorMap: () => ({ message: 'Retenção exige suporte a Não Retido (1) ou Retido pelo Tomador (2).' }) }),
+  tribISSQN: z.literal(1, { error: 'Esta situação de ISSQN exige suporte fiscal adicional; não será substituída por operação tributável.' }),
+  tpRetISSQN: z.union([z.literal(1), z.literal(2)], { error: 'Retenção exige suporte a Não Retido (1) ou Retido pelo Tomador (2).' }),
   cstPisCofins: z.enum(['00', '01', '02', '04', '06', '07', '08', '09']).optional(),
   aliquotaIss: z.number().finite().min(0).max(9.99).multipleOf(0.01).optional(),
   totalTributos: z.discriminatedUnion('tipo', [
