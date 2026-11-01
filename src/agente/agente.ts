@@ -148,6 +148,20 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         return { pronto: false, proximaEtapa: 'Perguntar a qual profissional pertence a agenda: ' + resolucao.encontrados.map(p => p.nome).join(', '), agendaEscolhida: plataforma };
       }
       const p = resolucao.encontrados[0]!;
+      // O modelo não pode transformar um nome encontrado na conta em uma escolha
+      // do usuário. Exigir menção explícita ou confirmação da última pergunta.
+      const palavrasUsuario = normalizarNomeMedico(entrada.texto).split(' ');
+      const tokensNome = normalizarNomeMedico(p.nome).split(' ')
+        .filter(t => t.length >= 3 && !['dra', 'dr', 'medico', 'medica'].includes(t));
+      const mencionado = tokensNome.some(t => palavrasUsuario.includes(t));
+      const ultimaResposta = (entrada.contexto ?? []).at(-1) ?? '';
+      const confirmouUltimaPergunta = /^(sim|isso|correto|confirmo|pode ser)[.! ]*$/i.test(entrada.texto.trim()) &&
+        ultimaResposta.includes('?') && tokensNome.some(t => normalizarNomeMedico(ultimaResposta).split(' ').includes(t));
+      if (!mencionado && !confirmouUltimaPergunta) {
+        log('DEPENDENCIA_PROFISSIONAL');
+        return { pronto: false, agendaEscolhida: plataforma, proximaEtapa:
+          'O profissional ainda não foi escolhido explicitamente. Pergunte para qual profissional a agenda será configurada; não presuma pelo cadastro.' };
+      }
       try {
         const s = await deps.consultarStatus(p.id);
         const estado = s[agenda];
