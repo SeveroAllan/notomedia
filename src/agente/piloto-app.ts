@@ -30,7 +30,7 @@ export function criarAppPilotoLeitura(deps: {
     next();
   });
   app.get('/health', (_req, res) => res.json({ status: 'ok', modo: 'agente_piloto_leitura' }));
-  app.post('/webhook/evolution', express.json({ limit: '16kb' }),
+  app.use('/webhook/evolution', express.json({ limit: '16kb' }),
     criarRouterWebhookAgente({
       pool: deps.pool,
       ativo: true, envioAtivo: true,
