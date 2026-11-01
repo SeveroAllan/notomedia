@@ -176,7 +176,7 @@ export async function conectarInstanciaWhatsappMedico(
     }
   }
 
-  // 5. Configura o webhook na Evolution para receber os comandos /agendado e /emissao
+  // 5. Configura webhook exclusivo de conexão; mensagens de pacientes não acionam IA
   let webhookConfigurado = false;
   try {
     const resWebhook = await fetch(`${baseUrl}/webhook/set/${nomeInstancia}`, {
@@ -189,7 +189,7 @@ export async function conectarInstanciaWhatsappMedico(
       body: JSON.stringify({
         webhook: {
           enabled: true,
-          url: `${appWebhookUrl.replace(/\/+$/, '')}/webhook/evolution`,
+          url: `${appWebhookUrl.replace(/\/+$/, '')}/webhook/evolution/pareamento`,
           headers: {
             'apikey': evolutionApiKey,
             'x-webhook-secret': webhookSecret || evolutionApiKey
