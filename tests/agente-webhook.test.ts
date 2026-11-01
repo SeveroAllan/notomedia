@@ -144,4 +144,32 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     expect(enviar).toHaveBeenCalledTimes(2);
     modeloTeste.assertComplete();
   });
+  it('diagnóstico por mensagem registra ferramentas e tokens sem guardar texto, telefone ou ID bruto', async () => {
+    const registrarDiagnostico = vi.fn();
+    const { app, enviar } = preparar({ diagnosticoAtivo: true, registrarDiagnostico });
+    await comServidor(app, async postar => expect((await postar(evento)).status).toBe(200));
+    expect(enviar).toHaveBeenCalledOnce();
+    expect(registrarDiagnostico).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      tipo: 'noto_agent_execucao', versao: 1, conta: 'CADASTRADA', envio: 'ENVIADO',
+      agente: expect.objectContaining({
+        codigo: 'RESPOSTA',
+        ferramentas: [expect.objectContaining({ nome: 'consultar_status_agendas', codigo: 'STATUS_CONECTADO' })],
+        uso: expect.objectContaining({ tokensTotal: expect.any(Number) })
+      }),
+      mensagemRef: expect.stringMatching(/^[a-f0-9]{24}$/),
+      respostaRef: expect.stringMatching(/^[a-f0-9]{24}$/)
+    }));
+    const registro = JSON.stringify(registrarDiagnostico.mock.calls);
+    for (const privado of ['5551999998888', 'mensagem-1', 'Noto, verifica a agenda da Alice', 'Alice Souza', 'alice-id']) {
+      expect(registro).not.toContain(privado);
+    }
+  });
+
+  it('diagnóstico desativado não gera registros', async () => {
+    const registrarDiagnostico = vi.fn();
+    const { app } = preparar({ diagnosticoAtivo: false, registrarDiagnostico });
+    await comServidor(app, async postar => expect((await postar(evento)).status).toBe(200));
+    expect(registrarDiagnostico).not.toHaveBeenCalled();
+  });
+
 });
