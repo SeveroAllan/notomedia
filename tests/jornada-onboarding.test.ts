@@ -40,7 +40,7 @@ const objetos=new Map<string,Buffer>();
 const requisitarLocal=globalThis.fetch;
 beforeEach(async()=>{
   vi.clearAllMocks();objetos.clear();banco=new BancoJornada();codigo='';conectado=false;respostas=[];
-  config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
+  config.appPublicOrigin='https://homologacao.example.test';config.notoPilotoRestrito=false;config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
   fronteiras.query.mockImplementation((s,p)=>banco.query(s,p));fronteiras.connect.mockImplementation(()=>banco.connect());
   supabase={auth:{getUser:vi.fn(async(t:string)=>({data:{user:t===token?{id:authId}:null},error:t===token?null:{message:'Token invalido'}})),admin:{
     createUser:vi.fn(async()=>({data:{user:{id:authId}},error:null})),
@@ -94,6 +94,38 @@ async function chamar(caminho:string,body?:unknown,autorizacao=token){
   const resposta=await r.json() as any;respostas.push({caminho,body:resposta});
   return {status:r.status,body:resposta};
 }
+it('piloto restrito recusa telefone fora da allowlist sem envio nem persistencia de OTP', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[telefone];
+  const consultasAntes=banco.consultas.length;
+  const enviosAntes=rede.mock.calls.length;
+  const resposta=await chamar('/api/auth/otp/solicitar',{telefone:'5511988881111'});
+  expect(resposta.status).toBe(403);
+  expect(resposta.body.motivo).toBe('telefone_nao_autorizado');
+  expect(banco.consultas.length).toBe(consultasAntes);
+  expect(rede.mock.calls.length).toBe(enviosAntes);
+});
+it('piloto restrito exige exatamente um telefone permitido', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(403);
+  config.envioRealAllowlist=[telefone,'5511988881111'];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(403);
+});
+it('piloto restrito envia OTP somente ao telefone autorizado', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[telefone];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);
+  expect(codigo).toMatch(/^\\d{6}$/);
+});
+it('pareamento exige origem HTTPS explicita antes de chamar Evolution', async()=> {
+  const medicoId=await entrar();
+  config.appPublicOrigin=undefined;
+  const antes=rede.mock.calls.length;
+  const resposta=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
+  expect(resposta.status).toBe(503);
+  expect(rede.mock.calls.length).toBe(antes);
+});
 async function entrar(){
   expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);expect(codigo).toMatch(/^\d{6}$/);
   const login=await chamar('/api/auth/otp/verificar',{telefone,codigo});expect(login.status).toBe(200);expect(login.body.sessao.tokenAcesso).toBe(token);
