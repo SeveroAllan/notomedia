@@ -210,14 +210,14 @@ export async function conectarInstanciaWhatsappMedico(
     // Falha silenciosa no setWebhook
   }
 
-  // 6. Salva ou atualiza a instância em whatsapp_instancias (coluna status com enum status_conexao_whatsapp)
+  // 6. Salva ou atualiza a instância em whatsapp_instancias (coluna status com CHECK de valores permitidos)
   const statusDb = status === 'open' ? 'conectado' : 'pendente';
   const conectadoEm = status === 'open' ? new Date() : null;
   const sql = `
     insert into whatsapp_instancias (
       medico_id, conta_id, nome_instancia, oficial, status, conectado_em, webhook_configurado
     ) values (
-      $1, (select conta_id from medicos where id = $1), $2, false, $3::status_conexao_whatsapp, $4, $5
+      $1, (select conta_id from medicos where id = $1), $2, false, $3, $4, $5
     )
     on conflict (nome_instancia) do update set
       status = excluded.status,
