@@ -104,7 +104,7 @@ export function criarRouterWebhookAgente(deps: {
         }))
       }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus }) : await responderAgente({
         texto, profissionais: [], painelUrl: deps.painelUrl, semConta: true, contexto: contextoPorConta.get(chaveContexto) ?? []
-      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, consultarStatus: deps.consultarStatus });
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus });
 
       const enviado = await deps.enviar(telefone, resposta);
       if (!enviado) { res.sendStatus(503); return; }
