@@ -187,9 +187,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       return resolverMedicoId(pool, token).catch(() => null);
     }
   });
-  app.use('/api/v1/nfse', routerNfse);
-  app.use('/v2/nfse', routerNfse);
-  app.use('/v2/nfsen', routerNfse);
+  // O piloto restrito permite leitura fiscal legada, mas não aceita criar solicitações.
+  // Mesmo com um token válido, nenhuma rota POST de NFS-e deve enfileirar emissão.
+  const bloquearEmissaoPiloto = (req: Request, res: Response, next: () => void) => {
+    if (config.notoPilotoRestrito === true && req.method !== 'GET' && req.method !== 'HEAD') {
+      res.status(503).json({ ok: false, codigo: 'EMISSAO_DESLIGADA_NA_HOMOLOGACAO' });
+      return;
+    }
+    next();
+  };
+  app.use('/api/v1/nfse', bloquearEmissaoPiloto, routerNfse);
+  app.use('/v2/nfse', bloquearEmissaoPiloto, routerNfse);
+  app.use('/v2/nfsen', bloquearEmissaoPiloto, routerNfse);
 
   // UI Web de Entrada e Assets Estáticos
   app.use('/assets', express.static(join(__dirname, 'assets'), OPCOES_ARQUIVOS_ESTATICOS));
@@ -630,7 +639,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       );
       if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
       // Conectar WhatsApp antes do onboarding fiscal; dados profissionais serão solicitados na conversa.
-      const appUrl = config.appPublicOrigin;
+      const appUrl = config.pareamentoWebhookOrigin;
       if (!appUrl || !/^https:\/\/[^/]+$/i.test(appUrl)) {
         return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
       }
