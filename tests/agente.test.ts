@@ -116,4 +116,56 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
     expect(resposta).toContain('temporariamente indisponível');
     expect(consultarStatus).not.toHaveBeenCalled();
   });
+  it('registra códigos de ferramentas e uso de tokens sem retornar dados privados no diagnóstico', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('consultar_status_agendas', { profissional: 'Alice' }, { callId: 'trace-1' })],
+      [assistantMessage('A TribeMD está conectada para a profissional consultada.')]
+    ]);
+    const aoDiagnostico = vi.fn();
+    const resposta = await responderAgente({ texto: 'Verifique minha agenda Alice', profissionais }, {
+      modeloTeste: modelo, consultarStatus: vi.fn().mockResolvedValue(conectada), aoDiagnostico
+    });
+    expect(resposta).toContain('conectada');
+    expect(aoDiagnostico).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      codigo: 'RESPOSTA',
+      ferramentas: [expect.objectContaining({ nome: 'consultar_status_agendas', codigo: 'STATUS_CONECTADO' })],
+      uso: expect.objectContaining({ tokensEntrada: expect.any(Number), tokensSaida: expect.any(Number), tokensTotal: expect.any(Number) })
+    }));
+    expect(JSON.stringify(aoDiagnostico.mock.calls)).not.toContain('Alice Silva');
+    modelo.assertComplete();
+  });
+
+  it('explicita falha do estado interno sem culpar o usuário ou presumir desconexão', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: 'Alice' }, { callId: 'trace-2' })],
+      [assistantMessage('Não consegui verificar o Cofre agora. Podemos tentar de novo mais tarde, sem refazer sua configuração.')]
+    ]);
+    const aoDiagnostico = vi.fn();
+    const resposta = await responderAgente({ texto: 'Tenho TribeMD para Alice', profissionais }, {
+      modeloTeste: modelo, consultarStatus: vi.fn().mockResolvedValue({
+        tribemd: { salvo: false, conectada: false, indisponivel: true },
+        amplimed: { salvo: false, conectada: false }
+      }), aoDiagnostico
+    });
+    expect(resposta).toContain('Não consegui verificar');
+    expect(aoDiagnostico.mock.calls[0]?.[0]?.ferramentas[0]?.codigo).toBe('STATUS_INDISPONIVEL');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Não foi possível consultar');
+    modelo.assertComplete();
+  });
+
+  it('escolha de agenda não presume que o único profissional cadastrado é o desejado', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: null }, { callId: 'trace-3' })],
+      [assistantMessage('Perfeito, você usa TribeMD. Para qual profissional deseja configurar a agenda?')]
+    ]);
+    const consultarStatus = vi.fn();
+    const resposta = await responderAgente({
+      texto: 'Eu uso tribemd', profissionais: [profissionais[0]!]
+    }, { modeloTeste: modelo, consultarStatus });
+    expect(resposta).toContain('Para qual profissional');
+    expect(consultarStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Não presumir');
+    modelo.assertComplete();
+  });
+
 });
