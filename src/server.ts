@@ -672,6 +672,11 @@ import { iniciarWorkerEmbutido } from './worker/iniciar-worker-embutido.js';
 
 // Inicia servidor quando executado diretamente
 if (process.env['NODE_ENV'] !== 'test') {
+  // Banco real do piloto NUNCA pode ser aberto pelo servidor completo, que
+  // mantém rotas mutáveis e o recuperador automático de cadastro profissional.
+  if (process.env['NOTO_AGENT_PILOTO_DATABASE_URL']) {
+    throw new Error('PILOTO_EXIGE_ENTRYPOINT_EXCLUSIVO_START_PILOTO_AGENTE');
+  }
   const app = criarAppExpress();
   const servidor = app.listen(config.porta, config.host, () => {
     console.log(`[Notomed Whats] Servidor rodando em http://${config.host}:${config.porta}`);
