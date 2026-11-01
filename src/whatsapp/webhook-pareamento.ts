@@ -28,7 +28,7 @@ export function criarRouterWebhookPareamento(deps: {
     }
 
     // Eventos de mensagens/contatos são reconhecidos, mas não processados.
-    if (String(req.body?.event ?? '').toLowerCase() !== 'connection.update') {
+    if (String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.') !== 'connection.update') {
       res.sendStatus(204);
       return;
     }
