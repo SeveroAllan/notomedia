@@ -121,6 +121,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     apiKey: config.openaiApiKey,
     modeloNome: config.openaiTextoModel,
     tracesAtivos: config.notoAgentTracesAtivos,
+    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     enviar: async (telefone, texto) => {
       const resultado = await transporteAgente.enviarTexto({
