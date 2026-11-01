@@ -117,19 +117,25 @@ async function aprovar(){
   expect(r.status).toBe(200);expect(r.body.revisao).toMatchObject({aprovado:true,nome,crm:'54321/SC',rqe:'9876'});
 }
 
-it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, WhatsApp %s, painel fiscal com flag padrão',async modoConexao=>{
+it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados fiscais; emissão permanece bloqueada',async modoConexao=>{
   const medicoId=await entrar();
   const statusInicial=await chamar(`/api/onboarding/status?medicoId=${medicoId}`);expect(statusInicial.status).toBe(200);expect(statusInicial.body.status.liberadoParaEmitir).toBe(false);
   expect((await chamar(`/api/onboarding/status?medicoId=${medicoId}`,undefined,'invalido')).status).toBe(401);
+  // O usuário autenticado conecta o canal antes de enviar certificado ou revisar CRM.
+  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao},'token-invalido')).status).toBe(401);
+  const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
+  expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
+  conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
+  const antesFiscal=(await chamar(`/api/onboarding/status?medicoId=${medicoId}`)).body.status;
+  expect(antesFiscal.passos).toMatchObject({passoProfissionalAprovado:false,passo2FiscalConfirmado:false,passo4WhatsappConectado:true});
+  expect(antesFiscal.liberadoParaEmitir).toBe(false);
+  expect(banco.certificados).toHaveLength(0);
+  expect(banco.perfil).toBeNull();
   const certificado=await upload(medicoId);expect(certificado.status).toBe(200);expect(certificado.body.importacaoFiscal).toMatchObject({ok:true,fonte:'adn',nsu:2});
   expect(certificado.body.importacaoFiscal.parametros.dadosReformaTributaria.pendencias).toEqual([]);
   expect(certificado.body.adocaoFiscal).toMatchObject({ok:false});
   expect([...objetos.entries()].filter(([p])=>p.startsWith('xmls_referencia/')).map(([,v])=>v.toString())).toEqual([xmlRecente]);
-  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao})).status).toBe(409);
   await pesquisarProfissional();await aprovar();
-  const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
-  expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
-  conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
   const painel=await chamar(`/api/onboarding/status?medicoId=${medicoId}`);expect(painel.body.status.passos).toMatchObject({passoProfissionalAprovado:true,passo4WhatsappConectado:true,passo2FiscalConfirmado:false});
   const referenciaHash=painel.body.status.perfilFiscal.referenciaFiscal.hash;
   const confirmar=await chamar('/api/onboarding/confirmar-fiscal',{medicoId,usarReferencia:true,referenciaHash});expect(confirmar.status).toBe(200);
