@@ -20,6 +20,9 @@ import { processarItemFila } from './processar-item-fila.js';
 import { type NotificadorAlertas } from './notificar-erro-medico.js';
 
 export function iniciarWorkerEmbutido(pool: pg.Pool, config: AppConfig) {
+  // Bloqueio antes de construir repositórios, clientes externos ou iniciar timers.
+  // O worker não executa SELECT FOR UPDATE, UPDATE, envio ou qualquer I/O no modo desligado.
+  if (config.workerEmbutidoAtivo === false) return { parar: async () => {} };
   const workerId = `embedded-${process.pid}-${randomUUID().slice(0, 6)}`;
   const filaRepo = new PostgresFilaRepositorio(pool, config.agenteFiscalAtivo, config.emissaoComprovanteHomologacaoAtiva);
   const meuDanfeClient = config.meuDanfeApiKey ? new MeuDanfeClient(config.meuDanfeApiKey) : undefined;
