@@ -28,11 +28,16 @@ export function validarConfiguracaoPiloto(env: NodeJS.ProcessEnv) {
   if (env['NOTO_AGENT_ATIVO'] !== 'true' || env['NOTO_AGENT_ENVIO_ATIVO'] !== 'true') {
     throw new Error('PILOTO_EXIGE_FLAGS_EXPLICITAS');
   }
-  if (!env['OPENAI_API_KEY']?.trim() || !config.evolutionAssistantUrl || !config.evolutionAssistantApiKey ||
-    !env['EVOLUTION_ASSISTANT_URL']?.trim() ||\n    !env['EVOLUTION_ASSISTANT_INSTANCE_NAME']?.trim() ||\n    !(env['EVOLUTION_ASSISTANT_GLOBAL_API_KEY'] || env['EVOLUTION_ASSISTANT_API_KEY'])?.trim() ||\n    !env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() ||
-    config.evolutionAssistantInstanceName === config.evolutionOfficialInstanceName ||
+  const apiKeyAssistente = (env['EVOLUTION_ASSISTANT_GLOBAL_API_KEY'] ||
+    env['EVOLUTION_ASSISTANT_API_KEY'])?.trim();
+  if (!env['OPENAI_API_KEY']?.trim() ||
+    !env['EVOLUTION_ASSISTANT_URL']?.trim() ||
+    !env['EVOLUTION_ASSISTANT_INSTANCE_NAME']?.trim() ||
+    !apiKeyAssistente ||
+    !env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() ||
+    env['EVOLUTION_ASSISTANT_INSTANCE_NAME'] === (env['EVOLUTION_OFFICIAL_INSTANCE_NAME'] || 'notomed_oficial') ||
     env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] === env['EVOLUTION_WEBHOOK_SECRET'] ||
-    env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] === config.evolutionAssistantApiKey) {
+    env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] === apiKeyAssistente) {
     throw new Error('PILOTO_INTEGRACOES_NAO_ISOLADAS');
   }
   return { databaseUrl, telefone };
