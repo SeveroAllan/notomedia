@@ -221,6 +221,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone é obrigatório' });
       }
 
+      if (process.env['NOTO_PILOTO_RESTRITO'] === 'true') {
+        const permitidos = config.envioRealAllowlist ?? [];
+        const variantes = gerarVariantesTelefoneBrasileiro(String(telefone));
+        if (permitidos.length !== 1 || !variantes.some(v =>
+          gerarVariantesTelefoneBrasileiro(permitidos[0]!).includes(v))) {
+          return res.status(403).json({ ok: false, motivo: 'telefone_nao_autorizado' });
+        }
+      }
+
       const resultado = await solicitarOtp(telefone, {
         repositorio: otpRepo,
         enviador: evolutionClient,
@@ -621,9 +630,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       );
       if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
       // Conectar WhatsApp antes do onboarding fiscal; dados profissionais serão solicitados na conversa.
-      const appUrl = config.host === '0.0.0.0'
-        ? 'https://notomed-web.6t32my.easypanel.host'
-        : `http://${config.host}:${config.porta}`;
+      const appUrl = config.appPublicOrigin;
+      if (!appUrl || !/^https:\/\/[^/]+$/i.test(appUrl)) {
+        return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
+      }
 
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
