@@ -29,7 +29,7 @@ export function validarConfiguracaoPiloto(env: NodeJS.ProcessEnv) {
     throw new Error('PILOTO_EXIGE_FLAGS_EXPLICITAS');
   }
   if (!env['OPENAI_API_KEY']?.trim() || !config.evolutionAssistantUrl || !config.evolutionAssistantApiKey ||
-    !env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() ||
+    !env['EVOLUTION_ASSISTANT_URL']?.trim() ||\n    !env['EVOLUTION_ASSISTANT_INSTANCE_NAME']?.trim() ||\n    !(env['EVOLUTION_ASSISTANT_GLOBAL_API_KEY'] || env['EVOLUTION_ASSISTANT_API_KEY'])?.trim() ||\n    !env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() ||
     config.evolutionAssistantInstanceName === config.evolutionOfficialInstanceName ||
     env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] === env['EVOLUTION_WEBHOOK_SECRET'] ||
     env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET'] === config.evolutionAssistantApiKey) {
@@ -83,7 +83,7 @@ export async function iniciarServidorPiloto(env: NodeJS.ProcessEnv = process.env
     const servidor = app.listen(config.porta, config.host, () =>
       console.info('[Noto piloto] HTTP somente webhook/health; worker fiscal ausente; role read-only validado.'));
     const encerrar = () => {
-      servidor.close(() => { void cofreTribemd?.encerrar().finally(() => pool.end()); });
+      servidor.close(() => { void (async () => {\n        await cofreTribemd?.encerrar().catch(() => {});\n        await pool.end();\n      })(); });
       servidor.closeIdleConnections();
     };
     process.once('SIGINT', encerrar);
