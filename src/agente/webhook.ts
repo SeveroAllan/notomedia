@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { responderAgente, type StatusFontes } from './agente.js';
 import type { Model } from '@openai/agents';
+import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
 
 const eventoSchema = z.object({
   instance: z.string(),
@@ -41,6 +42,8 @@ export function criarRouterWebhookAgente(deps: {
   modeloNome?: string;
   tracesAtivos?: boolean;
   modeloTeste?: Model;
+  diagnosticoAtivo?: boolean;
+  registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
   painelUrl?: string;
@@ -95,6 +98,8 @@ export function criarRouterWebhookAgente(deps: {
       ) : { rows: [] };
 
       const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
+      let diagnostico: DiagnosticoAgente | undefined;
+      const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const resposta = contaId ? await responderAgente({
         texto,
         painelUrl: deps.painelUrl,
@@ -102,11 +107,27 @@ export function criarRouterWebhookAgente(deps: {
         profissionais: medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
           id: m.id, nome: String(m.nome_completo ?? '')
         }))
-      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus }) : await responderAgente({
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico }) : await responderAgente({
         texto, profissionais: [], painelUrl: deps.painelUrl, semConta: true, contexto: contextoPorConta.get(chaveContexto) ?? []
-      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus });
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico });
 
       const enviado = await deps.enviar(telefone, resposta);
+      if (deps.diagnosticoAtivo && diagnostico) {
+        const registro: DiagnosticoMensagem = {
+          tipo: 'noto_agent_execucao', versao: 1,
+          mensagemRef: referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]),
+          respostaRef: referenciaDiagnostica(deps.segredo, 'resposta', [resposta]),
+          conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO',
+          envio: enviado ? 'ENVIADO' : 'FALHOU',
+          agente: diagnostico
+        };
+        // Acesso ao logger somente pelo código do servidor; os campos são tipos fechados,
+        // sem nomes, telefones, conteúdo, argumentos, erros do provedor ou credenciais.
+        try {
+          if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
+          else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
+        } catch { /* Observabilidade não deve bloquear o atendimento. */ }
+      }
       if (!enviado) { res.sendStatus(503); return; }
       contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
       if (contextoPorConta.size > 300) {
