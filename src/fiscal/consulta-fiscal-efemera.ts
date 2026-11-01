@@ -43,7 +43,8 @@ export function resolverAgrupamento(
   preferencia?: PreferenciaAgrupamento,
   mesmoTomadorConfirmado = false,
 ): { tipo: 'perguntar'; motivo: string } | { tipo: 'aplicar'; decisao: EscolhaAgrupamento } {
-  if (consultas.length < 2) return { tipo: 'aplicar', decisao: 'separar' };\n  if (!mesmoTomadorConfirmado) return { tipo: 'perguntar', motivo: 'tomador_nao_confirmado' };
+  if (consultas.length < 2) return { tipo: 'aplicar', decisao: 'separar' };
+  if (!mesmoTomadorConfirmado) return { tipo: 'perguntar', motivo: 'tomador_nao_confirmado' };
   if (consultas.some(c => !c.profissionalConfirmado)) {
     return { tipo: 'perguntar', motivo: 'profissional_nao_confirmado' };
   }
