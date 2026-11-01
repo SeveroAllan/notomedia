@@ -11,6 +11,7 @@ import { CofreAmplimed } from './amplimed-cofre.js';
 import { pedirCodigo2faPorArquivo } from './codigo-2fa-arquivo.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
 import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
+import { consultarStatusAgendasInterno } from './status-interno.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
@@ -44,11 +45,15 @@ export function criarCofreContas(deps: {
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
     let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, links: LinksCofre | undefined;
+    // URL pública é requisito apenas dos links/páginas do Cofre. Status local
+    // não deve depender de DNS, proxy, TLS ou exposição do app à internet.
     try {
         const u = new URL(env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '');
         if (u.pathname !== '/' || u.search || u.hash || u.username || u.password || u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))
             throw Error();
         origem = u.origin;
+    } catch { /* Ausência de origem desabilita links; leitura interna continua disponível. */ }
+    try {
         const base = env.COFRE_DIRETORIO || env.TRIBEMD_TESTE_DIRETORIO;
         if (!base)
             throw Error();
@@ -61,7 +66,7 @@ export function criarCofreContas(deps: {
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
             verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
             pedirCodigo2fa: dir2fa ? id => pedirCodigo2faPorArquivo(dir2fa, id) : undefined });
-        if (deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
+        if (origem && deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
     app.use(async (req, res, next) => {
@@ -158,16 +163,12 @@ export function criarCofreContas(deps: {
         const ref=await referencia(entrada.medicoId,'tribemd');
         return cofre.fonteAgenda.consultar({...entrada,medicoId:ref,referenciaCofre:ref});
     } }, encerrar: async () => { await cofre?.encerrar(); },
-        statusAgendas: async (medicoId: string) => {
-            if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
-            const refTribe=await referencia(medicoId,'tribemd');
-            const refAmplimed=await referencia(medicoId,'amplimed');
-            const status = await cofre.status(refTribe);
-            const tribe = { salvo: status.salvo, conectada: status.salvo && status.ativo && conectadoPorEstado[status.estado], consentimentoEm: await cofre.consentimentoEm(refTribe) };
-            const a = cofreAmplimed ? await cofreAmplimed.status(refAmplimed) : null;
-            const amplimed = { salvo: !!a?.salvo, conectada: !!a?.salvo && !!a?.ativo && a?.estado === 'conectado', consentimentoEm: a?.consentimentoEm ?? null };
-            return { tribemd: tribe, amplimed };
-        },
+        statusAgendas: (medicoId: string) => consultarStatusAgendasInterno({
+            medicoId,
+            cofreTribemd: cofre,
+            cofreAmplimed,
+            resolver: (id, agenda) => resolverReferenciaAgendaConta(deps.pool, id, agenda)
+        }),
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
             const refTribe=await referencia(medicoId,'tribemd');
