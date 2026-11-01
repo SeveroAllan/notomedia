@@ -14,7 +14,8 @@
     "consultar:registro": "node --import tsx scripts/consultar-registro-profissional.mjs",
     "migrate:cadastro": "node scripts/migrar-cadastro-certificado.mjs",
     "retry:nota": "node scripts/reprocessar-nota.mjs",
-    "test": "tsc --noEmit -p tsconfig.test.json && vitest run"
+    "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
+    "start:piloto-agente": "node --import tsx src/agente/piloto-start.ts"
   },
   "keywords": [
     "nfse",
@@ -36,6 +37,7 @@
   },
   "dependencies": {
     "@nfewizard/types": "^1.0.11",
+    "@openai/agents": "0.21.0",
     "@supabase/supabase-js": "^2.117.2",
     "compression": "^1.8.2",
     "dotenv": "^18.0.4",
@@ -50,7 +52,7 @@
     "tsx": "^4.23.15",
     "typescript": "^5.7.0",
     "xml-crypto": "^6.3.2",
-    "zod": "^3.24.0"
+    "zod": "^4.3.5"
   },
   "overrides": {
     "vite": "6.4.4"

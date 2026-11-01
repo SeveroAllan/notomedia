@@ -1,0 +1,41 @@
+name: Noto Agent - validação do PR
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/agente/**'
+      - 'src/server.ts'
+      - 'src/config.ts'
+      - 'src/worker/iniciar-worker-embutido.ts'
+      - 'src/auth/autenticar-com-otp.ts'
+      - 'src/cofre/status-interno.ts'
+      - 'src/fiscal/preparacao/parametros-emissao.ts'
+      - 'tests/agente*.test.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile.piloto-agente'
+      - '.github/workflows/noto-agent-tests.yml'
+  push:
+    branches: [feat/noto-agent-entrega-a]
+permissions:
+  contents: read
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependências reproduzíveis
+        run: npm ci
+      - name: Verificar tipos
+        run: npm run typecheck
+      - name: Executar suíte completa
+        run: npm test
+      - name: Validar imagem Docker isolada
+        run: docker build --file Dockerfile.piloto-agente --tag noto-agent-piloto-ci .

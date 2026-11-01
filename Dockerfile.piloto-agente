@@ -1,0 +1,14 @@
+# Serviço independente do Noto Assistente: NÃO executa src/server.ts,
+# worker fiscal, cadastro automático, Supabase Admin ou rotas mutáveis.
+FROM node:22-alpine
+WORKDIR /app
+RUN apk add --no-cache ca-certificates
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY tsconfig.json ./
+COPY src ./src
+ENV PORT=3000
+ENV NODE_ENV=production
+USER node
+EXPOSE 3000
+CMD ["npm", "run", "start:piloto-agente"]

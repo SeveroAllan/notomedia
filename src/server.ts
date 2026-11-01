@@ -9,6 +9,10 @@ import { criarRouterStatusWhatsapp } from './whatsapp/status-router.js';
 import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
+import { criarRouterWebhookAgente } from './agente/webhook.js';
+import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
+import { enviarBoasVindasOtpTeste } from './agente/boas-vindas-otp.js';
+import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -103,6 +107,33 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
+  // A instância de emissão/pacientes não é encaminhada para o agente.
+  const transporteAgente = new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+    config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+  );
+  app.use('/webhook/evolution', criarRouterWebhookAgente({
+    pool,
+    ativo: Boolean(config.notoAgentAtivo),
+    envioAtivo: Boolean(config.notoAgentEnvioAtivo),
+    segredo: config.notoAgentWebhookSecret ?? '',
+    instancia: config.evolutionAssistantInstanceName,
+    allowlist: config.envioRealAllowlist ?? [],
+    painelUrl: config.appPublicOrigin,
+    apiKey: config.openaiApiKey,
+    modeloNome: config.openaiTextoModel,
+    tracesAtivos: config.notoAgentTracesAtivos,
+    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    enviar: async (telefone, texto) => {
+      const resultado = await transporteAgente.enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+      });
+      return resultado.sucesso;
+    }
+  }));
+
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
     ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
@@ -215,16 +246,40 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone e código são obrigatórios' });
       }
 
+      // Só o telefone explicitamente autorizado usa o login piloto
+      // "conta existente apenas"; demais usuários mantêm o login normal.
+      const allowlistTeste = config.envioRealAllowlist ?? [];
+      const testeAutorizado = allowlistTeste.length === 1 &&
+        gerarVariantesTelefoneBrasileiro(String(telefone ?? '')).some(
+          v => gerarVariantesTelefoneBrasileiro(allowlistTeste[0]!).includes(v));
       const resultado = await autenticarComOtp(telefone, codigo, {
         otpRepositorio: otpRepo,
         authAdminService,
-        pepper: config.appPepper
+        pepper: config.appPepper,
+        localizarContaExistente: config.notoAgentLoginContaExistenteApenas && testeAutorizado
+          ? numero => localizarContaExistentePorTelefone(pool, numero)
+          : undefined
       });
 
       if (!resultado.ok) {
         return res.status(401).json(resultado);
       }
 
+      // Mensagem opcional somente após OTP verificado, conta preexistente e
+      // allowlist unitária. Não envia nada por grupos, pacientes ou terceiros.
+      if (config.notoAgentBoasVindasOtpTesteAtivas &&
+          config.evolutionAssistantInstanceName !== config.evolutionOfficialInstanceName) {
+        await enviarBoasVindasOtpTeste({
+          ativo: true, telefoneVerificado: telefone,
+          ehNovoUsuario: resultado.sessao.usuario.ehNovoUsuario,
+          authUserId: resultado.sessao.usuario.authUserId,
+          allowlist: allowlistTeste,
+          enviar: async (destinatario, texto) => (await transporteAgente.enviarTexto({
+            instanciaNome: config.evolutionAssistantInstanceName,
+            contatoTelefone: destinatario, texto
+          })).sucesso
+        });
+      }
       return res.json(resultado);
     } catch (err: any) {
       console.error('Erro na verificação de OTP:', err);
@@ -617,6 +672,11 @@ import { iniciarWorkerEmbutido } from './worker/iniciar-worker-embutido.js';
 
 // Inicia servidor quando executado diretamente
 if (process.env['NODE_ENV'] !== 'test') {
+  // Banco real do piloto NUNCA pode ser aberto pelo servidor completo, que
+  // mantém rotas mutáveis e o recuperador automático de cadastro profissional.
+  if (process.env['NOTO_AGENT_PILOTO_DATABASE_URL']) {
+    throw new Error('PILOTO_EXIGE_ENTRYPOINT_EXCLUSIVO_START_PILOTO_AGENTE');
+  }
   const app = criarAppExpress();
   const servidor = app.listen(config.porta, config.host, () => {
     console.log(`[Notomed Whats] Servidor rodando em http://${config.host}:${config.porta}`);
@@ -627,8 +687,12 @@ if (process.env['NODE_ENV'] !== 'test') {
   });
 
   // Inicia worker da fila em segundo plano no mesmo container
-  const worker = iniciarWorkerEmbutido(pool, config);
-  console.log('[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
+  const worker = config.workerEmbutidoAtivo === false
+    ? { parar: async () => {} }
+    : iniciarWorkerEmbutido(pool, config);
+  console.log(config.workerEmbutidoAtivo === false
+    ? '[Notomed Whats] Worker embutido desativado por configuração.'
+    : '[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
 
   registrarSinaisDeProcesso(process, criarEncerramentoGracioso({
     fecharServidor: async () => {

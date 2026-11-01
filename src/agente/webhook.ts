@@ -1,0 +1,144 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { Router } from 'express';
+import type pg from 'pg';
+import { z } from 'zod';
+import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
+import { responderAgente, type StatusFontes } from './agente.js';
+import type { Model } from '@openai/agents';
+import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
+
+const eventoSchema = z.object({
+  instance: z.string(),
+  event: z.string().optional(),
+  data: z.object({
+    key: z.object({
+      id: z.string().min(1),
+      remoteJid: z.string(),
+      fromMe: z.boolean()
+    }).passthrough(),
+    message: z.object({
+      conversation: z.string().optional(),
+      extendedTextMessage: z.object({ text: z.string().optional() }).passthrough().optional()
+    }).passthrough().optional()
+  }).passthrough()
+}).passthrough();
+
+function segredoIgual(recebido: string | undefined, esperado: string): boolean {
+  if (!recebido || !esperado) return false;
+  const a = createHash('sha256').update(recebido).digest();
+  const b = createHash('sha256').update(esperado).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** Endpoint exclusivo da instância do assistente; demais instâncias não acionam IA. */
+export function criarRouterWebhookAgente(deps: {
+  pool: pg.Pool;
+  ativo: boolean;
+  envioAtivo: boolean;
+  segredo: string;
+  instancia: string;
+  allowlist: string[];
+  apiKey?: string;
+  modeloNome?: string;
+  tracesAtivos?: boolean;
+  modeloTeste?: Model;
+  diagnosticoAtivo?: boolean;
+  registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  consultarStatus: (medicoId: string) => Promise<StatusFontes>;
+  enviar: (telefone: string, texto: string) => Promise<boolean>;
+  painelUrl?: string;
+}) {
+  const router = Router();
+  // Deduplicação provisória em uma única réplica; persistência distribuída é parte da entrega B.
+  const mensagensVistas = new Set<string>();
+  // Apenas as últimas respostas do Noto, para continuidade de perguntas no piloto.
+  // Sem mensagens do operador, senhas ou histórico durável; a Entrega B substitui por memória persistida.
+  const contextoPorConta = new Map<string, string[]>();
+
+  router.post('/', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!deps.ativo || !deps.envioAtivo) { res.sendStatus(204); return; }
+    if (!segredoIgual(req.header('x-webhook-secret'), deps.segredo)) {
+      res.sendStatus(401); return;
+    }
+    const parsed = eventoSchema.safeParse(req.body);
+    if (!parsed.success) { res.sendStatus(204); return; }
+    const evento = parsed.data;
+    if (evento.instance !== deps.instancia || evento.event?.toLowerCase() !== 'messages.upsert' || evento.data.key.fromMe) {
+      res.sendStatus(204); return;
+    }
+    const jid = /^(\d{10,13})@s\.whatsapp\.net$/.exec(evento.data.key.remoteJid);
+    const telefone = jid?.[1];
+    const texto = evento.data.message?.conversation || evento.data.message?.extendedTextMessage?.text || '';
+    if (!telefone || !texto.trim() || texto.length > 1500) { res.sendStatus(204); return; }
+    const variantes = gerarVariantesTelefoneBrasileiro(telefone);
+    if (!deps.allowlist.some(t => gerarVariantesTelefoneBrasileiro(t).some(v => variantes.includes(v)))) {
+      res.sendStatus(204); return;
+    }
+
+    const chave = createHash('sha256').update(JSON.stringify([evento.instance, evento.data.key.id, telefone])).digest('hex');
+    if (mensagensVistas.has(chave)) { res.sendStatus(200); return; }
+    // Reserva antes do primeiro await; duas entregas concorrentes não processam a mesma mensagem.
+    mensagensVistas.add(chave);
+    if (mensagensVistas.size > 2500) {
+      const primeiro = mensagensVistas.values().next().value;
+      if (primeiro) mensagensVistas.delete(primeiro);
+    }
+    try {
+      const conta = await deps.pool.query(
+        "select distinct conta_id from usuarios where ativo = true and auth_user_id is not null and conta_id is not null\n         and regexp_replace(telefone, '[^0-9]', '', 'g') = any($1::text[]) limit 2",
+        [variantes]
+      );
+      // Uma mesma identidade em duas contas exige esclarecimento fora deste webhook.
+      if (conta.rows.length > 1) { res.sendStatus(204); return; }
+      const contaId: string | null = conta.rows[0]?.conta_id ?? null;
+      const medicos = contaId ? await deps.pool.query(
+        'select id, nome_completo from medicos where conta_id = $1 order by nome_completo, id limit 21',
+        [contaId]
+      ) : { rows: [] };
+
+      const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
+      let diagnostico: DiagnosticoAgente | undefined;
+      const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
+      const resposta = contaId ? await responderAgente({
+        texto,
+        painelUrl: deps.painelUrl,
+        contexto: contextoPorConta.get(chaveContexto) ?? [],
+        profissionais: medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
+          id: m.id, nome: String(m.nome_completo ?? '')
+        }))
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico }) : await responderAgente({
+        texto, profissionais: [], painelUrl: deps.painelUrl, semConta: true, contexto: contextoPorConta.get(chaveContexto) ?? []
+      }, { apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos, modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico });
+
+      const enviado = await deps.enviar(telefone, resposta);
+      if (deps.diagnosticoAtivo && diagnostico) {
+        const registro: DiagnosticoMensagem = {
+          tipo: 'noto_agent_execucao', versao: 1,
+          mensagemRef: referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]),
+          respostaRef: referenciaDiagnostica(deps.segredo, 'resposta', [resposta]),
+          conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO',
+          envio: enviado ? 'ENVIADO' : 'FALHOU',
+          agente: diagnostico
+        };
+        // Acesso ao logger somente pelo código do servidor; os campos são tipos fechados,
+        // sem nomes, telefones, conteúdo, argumentos, erros do provedor ou credenciais.
+        try {
+          if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
+          else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
+        } catch { /* Observabilidade não deve bloquear o atendimento. */ }
+      }
+      if (!enviado) { res.sendStatus(503); return; }
+      contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
+      if (contextoPorConta.size > 300) {
+        const primeiro = contextoPorConta.keys().next().value;
+        if (primeiro) contextoPorConta.delete(primeiro);
+      }
+      res.sendStatus(200);
+    } catch {
+      // Nunca registrar texto, telefones, nomes de pacientes ou resposta do provedor.
+      res.sendStatus(503);
+    }
+  });
+  return router;
+}

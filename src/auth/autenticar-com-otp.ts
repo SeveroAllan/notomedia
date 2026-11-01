@@ -6,11 +6,13 @@
 
 import { verificarOtp } from '../otp/verificar-otp.js';
 import type { OtpRepositorio } from '../otp/otp-repositorio.js';
-import type { AuthAdminService, SessaoUsuarioResult } from './auth-admin-service.js';
+import type { AuthAdminService, SessaoUsuarioResult, UsuarioAutenticadoInfo } from './auth-admin-service.js';
 
 export interface AutenticarComOtpDeps {
   otpRepositorio: OtpRepositorio;
   authAdminService: AuthAdminService;
+  /** Piloto: consulta uma identidade preexistente após OTP; nunca cadastra. */
+  localizarContaExistente?: (telefone: string) => Promise<UsuarioAutenticadoInfo | null>;
   pepper: string;
   agora?: () => Date;
 }
@@ -35,10 +37,11 @@ export async function autenticarComOtp(
   }
 
   const telefoneLimpo = verificacao.telefone;
-  let usuario = await deps.authAdminService.buscarPorTelefone(telefoneLimpo);
-  if (!usuario) {
-    usuario = await deps.authAdminService.cadastrarNovoMedico({ telefone: telefoneLimpo });
-  }
+  let usuario = deps.localizarContaExistente
+    ? await deps.localizarContaExistente(telefoneLimpo)
+    : await deps.authAdminService.buscarPorTelefone(telefoneLimpo);
+  if (!usuario && deps.localizarContaExistente) return { ok: false, motivo: 'conta_existente_nao_encontrada' };
+  if (!usuario) usuario = await deps.authAdminService.cadastrarNovoMedico({ telefone: telefoneLimpo });
 
   const sessaoSupabase = await deps.authAdminService.gerarSessaoParaUsuario(usuario.authUserId);
 
