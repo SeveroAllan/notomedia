@@ -66,12 +66,12 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     throw new Error('Boas-vindas do piloto exigem conta preexistente e flags explícitas do agente.');
   }
   if (env['NOTO_PILOTO_RESTRITO'] === 'true') {
-    const permitir = (env['ENVIO_REAL_ALLOWLIST'] ?? '').split(/[,;\\s]+/).filter(Boolean);
-    if (permitir.length !== 1 || !/^(?:55)?\\d{10,11}$/.test(permitir[0]!.replace(/\\D/g, ''))) {
+    const permitir = (env['ENVIO_REAL_ALLOWLIST'] ?? '').split(/[,;\s]+/).filter(Boolean);
+    if (permitir.length !== 1 || !/^(?:55)?\d{10,11}$/.test(permitir[0]!.replace(/\D/g, ''))) {
       throw new Error('HOMOLOGACAO_EXIGE_EXATAMENTE_UM_TELEFONE');
     }
     const origem = env['APP_PUBLIC_ORIGIN']?.trim() ?? '';
-    if (!/^https:\\/\\/[^/]+$/i.test(origem)) {
+    if (!/^https:\/\/[^/]+$/i.test(origem)) {
       throw new Error('HOMOLOGACAO_EXIGE_APP_PUBLIC_ORIGIN_HTTPS');
     }
     if (env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false' ||
