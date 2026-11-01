@@ -131,6 +131,8 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados 
   expect(rede.mock.calls.some(([url]: any[]) => String(url).includes('/instance/create'))).toBe(false);
   const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
   expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
+  expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-invalido')).status).toBe(401);
+  expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-outra-conta')).status).toBe(403);
   conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
   const antesFiscal=(await chamar(`/api/onboarding/status?medicoId=${medicoId}`)).body.status;
   expect(antesFiscal.passos).toMatchObject({passoProfissionalAprovado:false,passo2FiscalConfirmado:false,passo4WhatsappConectado:true});
