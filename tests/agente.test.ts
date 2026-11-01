@@ -168,4 +168,21 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
     modelo.assertComplete();
   });
 
+  it('não aceita nome de médico escolhido apenas pelo modelo sem menção na conversa', async () => {
+    const modelo = new ScriptedModel([
+      [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: 'Alice' }, { callId: 'sem-escolha' })],
+      [assistantMessage('Perfeito, você usa TribeMD. Para qual profissional deseja configurar?')]
+    ]);
+    const consultarStatus = vi.fn();
+    const aoDiagnostico = vi.fn();
+    const resposta = await responderAgente({
+      texto: 'Eu uso tribemd', profissionais: [profissionais[0]!]
+    }, { modeloTeste: modelo, consultarStatus, aoDiagnostico });
+    expect(resposta).toContain('Para qual profissional');
+    expect(consultarStatus).not.toHaveBeenCalled();
+    expect(aoDiagnostico.mock.calls[0]?.[0]?.ferramentas[0]?.codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('não foi escolhido explicitamente');
+    modelo.assertComplete();
+  });
+
 });
