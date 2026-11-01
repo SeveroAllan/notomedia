@@ -88,7 +88,10 @@ export async function iniciarServidorPiloto(env: NodeJS.ProcessEnv = process.env
     const servidor = app.listen(config.porta, config.host, () =>
       console.info('[Noto piloto] HTTP somente webhook/health; worker fiscal ausente; role read-only validado.'));
     const encerrar = () => {
-      servidor.close(() => { void (async () => {\n        await cofreTribemd?.encerrar().catch(() => {});\n        await pool.end();\n      })(); });
+      servidor.close(() => { void (async () => {
+        await cofreTribemd?.encerrar().catch(() => {});
+        await pool.end();
+      })(); });
       servidor.closeIdleConnections();
     };
     process.once('SIGINT', encerrar);
