@@ -40,7 +40,7 @@ const objetos=new Map<string,Buffer>();
 const requisitarLocal=globalThis.fetch;
 beforeEach(async()=>{
   vi.clearAllMocks();objetos.clear();banco=new BancoJornada();codigo='';conectado=false;respostas=[];
-  config.appPublicOrigin='https://homologacao.example.test';config.notoPilotoRestrito=false;config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
+  config.appPublicOrigin='https://homologacao.example.test';config.pareamentoWebhookOrigin='https://homologacao.example.test';config.notoPilotoRestrito=false;config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
   fronteiras.query.mockImplementation((s,p)=>banco.query(s,p));fronteiras.connect.mockImplementation(()=>banco.connect());
   supabase={auth:{getUser:vi.fn(async(t:string)=>({data:{user:t===token?{id:authId}:null},error:t===token?null:{message:'Token invalido'}})),admin:{
     createUser:vi.fn(async()=>({data:{user:{id:authId}},error:null})),
@@ -120,11 +120,31 @@ it('piloto restrito envia OTP somente ao telefone autorizado', async()=> {
 });
 it('pareamento exige origem HTTPS explicita antes de chamar Evolution', async()=> {
   const medicoId=await entrar();
-  config.appPublicOrigin=undefined;
+  config.pareamentoWebhookOrigin=undefined;
   const antes=rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length;
   const resposta=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
   expect(resposta.status).toBe(503);
   expect(rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length).toBe(antes);
+});
+it('pareamento usa APP_PUBLIC_ORIGIN explicita, nunca COFRE_ORIGEM antiga',async()=> {
+  const medicoId=await entrar();
+  config.appPublicOrigin='https://endereco-antigo.invalid';
+  config.pareamentoWebhookOrigin='https://homologacao.example.test';
+  const resultado=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
+  expect(resultado.status).toBe(200);
+  const chamada=rede.mock.calls.find(([url]: any[]) => String(url).includes('/webhook/set/'));
+  expect(chamada).toBeDefined();
+  const payload=JSON.parse(String(chamada![1]?.body));
+  expect(payload.webhook.url).toBe('https://homologacao.example.test/webhook/evolution');
+});
+it('piloto restrito bloqueia criacao de nota fiscal nas tres rotas',async()=> {
+  config.notoPilotoRestrito=true;
+  for(const rota of ['/api/v1/nfse','/v2/nfse','/v2/nfsen']) {
+    const retorno=await chamar(rota,{ref:'bloqueada'});
+    expect(retorno.status).toBe(503);
+    expect(retorno.body.codigo).toBe('EMISSAO_DESLIGADA_NA_HOMOLOGACAO');
+  }
+  expect(banco.consultas.some(q=>/insert into (solicitacoes_nota|notas_fiscais)/i.test(q))).toBe(false);
 });
 async function entrar(){
   expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);expect(codigo).toMatch(/^\d{6}$/);
