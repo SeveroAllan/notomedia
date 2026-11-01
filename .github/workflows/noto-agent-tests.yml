@@ -6,6 +6,7 @@ on:
       - 'src/agente/**'
       - 'src/server.ts'
       - 'src/config.ts'
+      - 'src/fiscal/preparacao/parametros-emissao.ts'
       - 'tests/agente*.test.ts'
       - 'package.json'
       - 'package-lock.json'
@@ -13,7 +14,7 @@ on:
   push:
     branches: [feat/noto-agent-entrega-a]
 permissions:
-  contents: write
+  contents: read
 jobs:
   testes:
     runs-on: ubuntu-latest
@@ -26,21 +27,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Resolver dependências e lockfile da Entrega A
-        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-      - name: Instalar dependências
+      - name: Instalar dependências reproduzíveis
         run: npm ci
       - name: Verificar tipos
         run: npm run typecheck
-      - name: Executar testes
+      - name: Executar suíte completa
         run: npm test
-      - name: Persistir lockfile validado na branch de trabalho
-        if: github.event_name == 'push' && github.ref == 'refs/heads/feat/noto-agent-entrega-a'
-        run: |
-          if ! git diff --quiet -- package-lock.json; then
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add package-lock.json
-            git commit -m 'chore(agent): lock validated SDK dependencies'
-            git push origin HEAD:feat/noto-agent-entrega-a
-          fi
