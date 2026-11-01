@@ -611,10 +611,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const revisaoProfissional = await cadastroCertificado.repo.revisaoPainel(medicoId);
-      if (!revisaoProfissional.aprovado) return res.status(409).json({ ok: false,
-        codigo: 'DADOS_PROFISSIONAIS_PENDENTES', detalhe: 'Revise e aprove seus dados profissionais antes de conectar o WhatsApp.' });
-
+      // Conectar WhatsApp antes do onboarding fiscal; dados profissionais serão solicitados na conversa.
       const appUrl = config.host === '0.0.0.0'
         ? 'https://notomed-web.6t32my.easypanel.host'
         : `http://${config.host}:${config.porta}`;
