@@ -655,8 +655,12 @@ if (process.env['NODE_ENV'] !== 'test') {
   });
 
   // Inicia worker da fila em segundo plano no mesmo container
-  const worker = iniciarWorkerEmbutido(pool, config);
-  console.log('[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
+  const worker = config.workerEmbutidoAtivo === false
+    ? { parar: async () => {} }
+    : iniciarWorkerEmbutido(pool, config);
+  console.log(config.workerEmbutidoAtivo === false
+    ? '[Notomed Whats] Worker embutido desativado por configuração.'
+    : '[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
 
   registrarSinaisDeProcesso(process, criarEncerramentoGracioso({
     fecharServidor: async () => {
