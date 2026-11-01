@@ -221,7 +221,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone é obrigatório' });
       }
 
-      if (process.env['NOTO_PILOTO_RESTRITO'] === 'true') {
+      if (config.notoPilotoRestrito === true) {
         const permitidos = config.envioRealAllowlist ?? [];
         const variantes = gerarVariantesTelefoneBrasileiro(String(telefone));
         if (permitidos.length !== 1 || !variantes.some(v =>
