@@ -86,7 +86,7 @@ export function criarRouterWebhookAgente(deps: {
     }
     try {
       const conta = await deps.pool.query(
-        "select distinct conta_id from usuarios where ativo = true and regexp_replace(telefone, '[^0-9]', '', 'g') = any($1::text[]) limit 2",
+        "select distinct conta_id from usuarios where ativo = true and auth_user_id is not null and conta_id is not null\n         and regexp_replace(telefone, '[^0-9]', '', 'g') = any($1::text[]) limit 2",
         [variantes]
       );
       // Uma mesma identidade em duas contas exige esclarecimento fora deste webhook.
