@@ -10,6 +10,9 @@ import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { criarRouterWebhookAgente } from './agente/webhook.js';
+import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
+import { enviarBoasVindasOtpTeste } from './agente/boas-vindas-otp.js';
+import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -243,16 +246,40 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone e código são obrigatórios' });
       }
 
+      // Só o telefone explicitamente autorizado usa o login piloto
+      // "conta existente apenas"; demais usuários mantêm o login normal.
+      const allowlistTeste = config.envioRealAllowlist ?? [];
+      const testeAutorizado = allowlistTeste.length === 1 &&
+        gerarVariantesTelefoneBrasileiro(String(telefone ?? '')).some(
+          v => gerarVariantesTelefoneBrasileiro(allowlistTeste[0]!).includes(v));
       const resultado = await autenticarComOtp(telefone, codigo, {
         otpRepositorio: otpRepo,
         authAdminService,
-        pepper: config.appPepper
+        pepper: config.appPepper,
+        localizarContaExistente: config.notoAgentLoginContaExistenteApenas && testeAutorizado
+          ? numero => localizarContaExistentePorTelefone(pool, numero)
+          : undefined
       });
 
       if (!resultado.ok) {
         return res.status(401).json(resultado);
       }
 
+      // Mensagem opcional somente após OTP verificado, conta preexistente e
+      // allowlist unitária. Não envia nada por grupos, pacientes ou terceiros.
+      if (config.notoAgentBoasVindasOtpTesteAtivas &&
+          config.evolutionAssistantInstanceName !== config.evolutionOfficialInstanceName) {
+        await enviarBoasVindasOtpTeste({
+          ativo: true, telefoneVerificado: telefone,
+          ehNovoUsuario: resultado.sessao.usuario.ehNovoUsuario,
+          authUserId: resultado.sessao.usuario.authUserId,
+          allowlist: allowlistTeste,
+          enviar: async (destinatario, texto) => (await transporteAgente.enviarTexto({
+            instanciaNome: config.evolutionAssistantInstanceName,
+            contatoTelefone: destinatario, texto
+          })).sucesso
+        });
+      }
       return res.json(resultado);
     } catch (err: any) {
       console.error('Erro na verificação de OTP:', err);
