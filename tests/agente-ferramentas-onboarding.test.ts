@@ -394,3 +394,63 @@ describe('negações não são autorizações de escrita',()=>{
     }
   );
 });
+
+describe('configuração local não é instabilidade atribuída à TribeMD', () => {
+  const naoConfigurada = {tribemd:{salvo:false,conectada:false,indisponivel:true,
+    motivo:'INTEGRACAO_NAO_CONFIGURADA' as const},amplimed:{salvo:false,conectada:false,
+    indisponivel:true,motivo:'INTEGRACAO_NAO_CONFIGURADA' as const}};
+
+  it('orientar conexão devolve dependência LOCAL, não invoca TribeMD e corrige resposta enganosa',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('orientar_conexao_agenda',{agenda:'tribemd',profissional:'Alice'},{callId:'conectar-local'})],
+      [assistantMessage('A TribeMD falhou. Tente mais tarde.')]
+    ]);
+    const consultarStatus=vi.fn().mockResolvedValue(naoConfigurada);
+    const diagnostico=vi.fn();
+    const resposta=await responderAgente({
+      texto:'Quero conectar a TribeMD da Alice',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus,aoDiagnostico:diagnostico});
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('m1');
+    expect(diagnostico.mock.calls[0][0].ferramentas).toContainEqual(
+      expect.objectContaining({nome:'orientar_conexao_agenda',codigo:'INTEGRACAO_NAO_CONFIGURADA'})
+    );
+    expect(resposta).toContain('pendência local');
+    expect(resposta).toContain('página segura');
+    expect(resposta).not.toMatch(/tribemd falhou|tente mais tarde|tente novamente/i);
+    modelo.assertComplete();
+  });
+
+  it('consultar estado distingue não configurado de falha operacional sem oferecer retentativa',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('consultar_status_agendas',{profissional:'Alice'},{callId:'status-local'})],
+      [assistantMessage('A integração ainda não está configurada neste ambiente. Vou orientar a página segura quando estiver habilitada.')]
+    ]);
+    const diagnostico=vi.fn();
+    const resposta=await responderAgente({texto:'A Tribe da Alice já está configurada?',profissionais},
+      {modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(naoConfigurada),
+        aoDiagnostico:diagnostico});
+    expect(diagnostico.mock.calls[0][0].ferramentas[0]).toMatchObject({
+      nome:'consultar_status_agendas',codigo:'INTEGRACAO_NAO_CONFIGURADA'
+    });
+    expect(resposta).toContain('não está configurada');
+    modelo.assertComplete();
+  });
+
+  it('erro real com cofre existente continua identificado como falha de consulta',async()=>{
+    const falhaReal={...naoConfigurada,tribemd:{salvo:false,conectada:false,indisponivel:true,
+      motivo:'FALHA_CONSULTA_INTEGRACAO' as const}};
+    const modelo=new ScriptedModel([
+      [functionCall('orientar_conexao_agenda',{agenda:'tribemd',profissional:'Alice'},{callId:'falha-real'})],
+      [assistantMessage('Não consegui verificar a conexão agora.')]
+    ]);
+    const diagnostico=vi.fn();
+    await responderAgente({
+      texto:'Verifica a TribeMD da Alice',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(falhaReal),
+      aoDiagnostico:diagnostico});
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('STATUS_INDISPONIVEL');
+    modelo.assertComplete();
+  });
+});
