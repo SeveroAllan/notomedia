@@ -118,7 +118,8 @@ describe('boas-vindas so apos pareamento real e uma unica tentativa por conta', 
 
   it('mensagem nao presume emissao, agenda nem ultima nota e respeita baloes curtos', () => {
     const mensagem = mensagemBoasVindasPareamento(null);
-    expect(mensagem).toContain('Desde quando você não emite notas?');
+    expect(mensagem).not.toContain('Desde quando você não emite notas?');
+    expect(mensagem.split('?').length - 1).toBe(1);
     expect(mensagem).toContain('Qual agenda você usa');
     expect(mensagem).toContain('emissão ainda depende');
     expect(mensagem).not.toMatch(/emiti sua nota|nota foi emitida|sua agenda (está|já está) conectada|última nota/i);
