@@ -57,6 +57,7 @@ import { carregarCertificadoMedico } from './io/fiscal/carregar-certificado-medi
 import { PostgresDadosProfissionaisService } from './io/postgres/postgres-dados-profissionais-service.js';
 import { configurarDesempenhoHttp, OPCOES_ARQUIVOS_ESTATICOS } from './http/configurar-desempenho-http.js';
 import { tratarErrosHttp } from './http/tratar-erros-http.js';
+import { criarGuardaMedicoDaConta, medicoAutorizado } from './http/autorizar-medico-sessao.js';
 import { codigoSeguroFalhaReady } from './http/diagnostico-ready.js';
 import { criarEncerramentoGracioso } from './processo/encerrar-gracioso.js';
 import { registrarSinaisDeProcesso } from './processo/registrar-sinais-de-processo.js';
@@ -454,6 +455,21 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   });
 
+  // O mesmo token Supabase emitido no OTP é validado antes de QUALQUER
+  // operação nessas rotas. A consulta de vínculo nunca cria registros.
+  const rotasProtegidas = [
+    '/api/onboarding/confirmar-fiscal', '/api/onboarding/certificado',
+    '/api/onboarding/nome', '/api/conta/perfil', '/api/conta/preferencias',
+    '/api/onboarding/buscar-referencia', '/api/onboarding/xml'
+  ];
+  app.use(rotasProtegidas, criarGuardaMedicoDaConta({
+    pool,
+    autenticar: async token => {
+      const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
+      return error ? null : data.user?.id ?? null;
+    }
+  }));
+
   // --- ROTAS DO ONBOARDING MÉDICO (5 PASSOS) ---
 
   // Passo 0: Status Geral do Onboarding
@@ -497,24 +513,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Passo 1: Nome do Médico / Usuário
   app.post('/api/onboarding/nome', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, nome } = req.body || {};
+      const { nome } = req.body || {};
+      const { medicoId, usuarioId, medicoUsuarioId } = medicoAutorizado(res);
       if (!nome || typeof nome !== 'string' || nome.trim().length < 2) {
         return res.status(400).json({ ok: false, detalhe: 'Nome completo é obrigatório' });
       }
       const nomeLimpo = nome.trim();
-      if (usuarioId) {
+      await pool.query('update medicos set nome_completo = $2, atualizado_em = now() where id = $1', [medicoId, nomeLimpo]);
+      // A atualização de identidade da conta só alcança o próprio usuário.
+      if (medicoUsuarioId === usuarioId) {
         await pool.query('update usuarios set nome = $2, atualizado_em = now() where id = $1', [usuarioId, nomeLimpo]);
       }
-      let medicoIdFinal = medicoIdRaw;
-      if (medicoIdRaw || usuarioId) {
-        try {
-          medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
-          await pool.query('update medicos set nome_completo = $2, atualizado_em = now() where id = $1', [medicoIdFinal, nomeLimpo]);
-        } catch {
-          // Mantém medicoIdRaw se não conseguir resolver
-        }
-      }
-      return res.json({ ok: true, nome: nomeLimpo, medicoId: medicoIdFinal });
+      return res.json({ ok: true, nome: nomeLimpo, medicoId });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao salvar nome' });
     }
@@ -523,11 +533,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Atualizar Perfil do Médico (Nome, CRM, RQE) na aba Conta
   app.post('/api/conta/perfil', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, nome, crm, rqe, email } = req.body || {};
-      const medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
-
-      const perfil = await salvarPerfilProfissional(pool, { medicoId: medicoIdFinal, usuarioId, nome, crm, rqe, email });
-      await dadosProfissionais.retomar(medicoIdFinal);
+      const { nome, crm, rqe, email } = req.body || {};
+      const { medicoId, usuarioId, medicoUsuarioId } = medicoAutorizado(res);
+      const proprioUsuario = medicoUsuarioId === usuarioId;
+      if (!proprioUsuario && email !== undefined) {
+        return res.status(403).json({ ok: false, detalhe: 'E-mail de outro usuário não pode ser alterado' });
+      }
+      const perfil = await salvarPerfilProfissional(pool, {
+        medicoId, nome, crm, rqe, email, atualizarUsuarioVinculado: proprioUsuario,
+        ...(proprioUsuario ? { usuarioId } : {})
+      });
+      await dadosProfissionais.retomar(medicoId);
       return res.json({ ok: true, ...perfil });
     } catch (err: any) {
       if (err instanceof ZodError) return res.status(400).json({ ok: false, detalhe: err.issues[0]?.message });
@@ -540,10 +556,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Atualizar Preferências do Médico (ex: solicitar CPF direto para o paciente ou médico)
   app.post('/api/conta/preferencias', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, solicitarCpfDiretoPaciente } = req.body || {};
-      const medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
+      const { solicitarCpfDiretoPaciente } = req.body || {};
+      const { medicoId } = medicoAutorizado(res);
       const resultado = await salvarPreferenciasMedico(pool, {
-        medicoId: medicoIdFinal,
+        medicoId,
         solicitarCpfDiretoPaciente: Boolean(solicitarCpfDiretoPaciente)
       });
       return res.json({ ok: true, ...resultado });
@@ -556,7 +572,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.post('/api/onboarding/buscar-referencia', async (req: Request, res: Response) => {
     try {
       if (!req.body?.medicoId) return res.status(400).json({ ok: false, detalhe: 'Médico não informado.' });
-      const medicoId = await resolverMedicoId(pool, req.body.medicoId);
+      const { medicoId } = medicoAutorizado(res);
       const certificado = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
       if (!certificado) throw new Error('Cadastre seu certificado A1 para localizar a nota.');
       const titular = extrairChavesCertificado(certificado.pfxBuffer, certificado.senhaCertificado);
@@ -586,7 +602,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw || !xmlString) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId e xmlString são obrigatórios' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       const certificado = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
       if (!certificado) throw new Error('Cadastre o certificado A1 antes de importar a nota de referência.');
       const documentoTitularEsperado = extrairChavesCertificado(certificado.pfxBuffer, certificado.senhaCertificado).documentoTitular;
@@ -627,7 +643,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       await confirmarParametrosFiscais(pool, usarReferencia === true ? { medicoId, referenciaHash, usarReferencia: true } : {
         medicoId,
         razaoSocial,
@@ -666,7 +682,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw || !arquivoBase64 || !senha) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId, arquivo e senha são obrigatórios' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       const arquivoBuffer = Buffer.from(arquivoBase64, 'base64');
 
       let documentoTitular: string | undefined;

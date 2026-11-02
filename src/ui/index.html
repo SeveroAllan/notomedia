@@ -2213,7 +2213,7 @@
       try {
         const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
         const res = await fetch('/api/onboarding/confirmar-fiscal', { method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify({ medicoId, referenciaHash: referenciaFiscalAtual.hash, usarReferencia: true }) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.detalhe || 'Não foi possível confirmar os parâmetros. Tente novamente.');
@@ -2248,7 +2248,7 @@
         if (serieDpsValor !== undefined) payload.serieDps = serieDpsValor;
         if (proximoNumeroDpsValor !== undefined) payload.proximoNumeroDps = proximoNumeroDpsValor;
         if (aliquotaIssValor !== undefined) payload.aliquotaIss = aliquotaIssValor;
-        const res = await fetch('/api/onboarding/confirmar-fiscal', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch('/api/onboarding/confirmar-fiscal', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify(payload) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.detalhe || 'Não foi possível salvar. Confira os parâmetros e tente novamente.');
@@ -2273,7 +2273,7 @@
       try {
         const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
         const res = await fetch('/api/onboarding/buscar-referencia', { method: 'POST',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ medicoId }) });
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }, body: JSON.stringify({ medicoId }) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.detalhe || 'Não conseguimos buscar sua nota agora. Tente novamente mais tarde.');
         exibirPreviewFiscal(data);
@@ -2288,7 +2288,7 @@
       btn.disabled = true;
       try {
         const medicoId = sessaoAtual.usuario.medicoId || sessaoAtual.usuario.usuarioId;
-        const res = await fetch('/api/onboarding/xml', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch('/api/onboarding/xml', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify({ medicoId, xmlString: await arquivo.text() }) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.detalhe || 'Não foi possível importar o XML. Tente novamente.');
@@ -2927,7 +2927,7 @@
             payload[campo] = novoValor;
             const res = await fetch('/api/conta/perfil', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
               body: JSON.stringify(payload)
             });
             const data = await res.json();

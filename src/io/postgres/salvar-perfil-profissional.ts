@@ -29,7 +29,10 @@ export async function salvarPerfilProfissional(pool: pg.Pool, entrada: unknown) 
         dados.rqe !== undefined, dados.rqe ?? null]);
     if (rows.length !== 1) throw new ErroPerfilProfissional('Não foi possível salvar os dados profissionais.');
     let emailSalvo: string | undefined;
-    if (dados.nome !== undefined || dados.email !== undefined) {
+    if (dados.atualizarUsuarioVinculado === false && dados.email !== undefined) {
+      throw new ErroPerfilProfissional('E-mail de outro usuário não pode ser alterado.');
+    }
+    if ((dados.nome !== undefined || dados.email !== undefined) && dados.atualizarUsuarioVinculado !== false) {
       const usuario = await client.query(`update usuarios set nome = coalesce($2, nome), email = coalesce($3, email), atualizado_em = now()
         where id = $1 returning id, email`, [medico.usuario_id, dados.nome ?? null, dados.email ?? null]);
       if (usuario.rows.length !== 1) throw new ErroPerfilProfissional('Não foi possível salvar os dados da conta.');
