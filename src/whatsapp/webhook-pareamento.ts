@@ -18,6 +18,9 @@ function segredoConfere(recebido: string | undefined, esperado: string): boolean
 export function criarRouterWebhookPareamento(deps: {
   pool: Pick<pg.Pool, 'query'>;
   segredo: string;
+  /** Consulta o estado REAL na Evolution, não confia no evento isoladamente. */
+  confirmarConexao?: (instancia: string) => Promise<boolean>;
+  aoConectar?: (instancia: string) => Promise<void>;
 }) {
   const router = Router();
   router.post('/', async (req, res) => {
@@ -39,14 +42,23 @@ export function criarRouterWebhookPareamento(deps: {
       return;
     }
     try {
-      // Atualiza apenas instâncias previamente persistidas nesta base de homologação.
-      await deps.pool.query(
+      // Um evento "open" sozinho NÃO prova que a instância está conectada.
+      // Sem verificação ativa da Evolution, não marca conexão nem envia saudação.
+      if (estado === 'open' && (!deps.confirmarConexao || !await deps.confirmarConexao(instancia))) {
+        res.sendStatus(204);
+        return;
+      }
+      const atualizacao = await deps.pool.query(
         `update whatsapp_instancias
          set status = $2,
              conectado_em = case when $2 = 'conectado' then coalesce(conectado_em, now()) else conectado_em end
          where nome_instancia = $1`,
         [instancia, estado === 'open' ? 'conectado' : 'desconectado']
       );
+      if (estado === 'open' && atualizacao.rowCount && deps.aoConectar) {
+        // Idempotência persistente é responsabilidade do serviço de boas-vindas.
+        await deps.aoConectar(instancia);
+      }
       res.sendStatus(204);
     } catch {
       // Permite nova entrega após falha transitória; nunca registra dados de conversas.
