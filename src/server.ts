@@ -205,6 +205,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const r = await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
       return { enviado: Boolean(r.ok && r.motivo === 'enviado'), ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {}) };
     },
+    salvarDadosProfissionais: async (medicoId, dados) => {
+      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CADASTRO_CONVERSACIONAL_DESLIGADO' };
+      try {
+        const resultado = await salvarPerfilProfissional(pool, {
+          medicoId, ...dados
+        });
+        return { ok: true, nome: resultado.nome, crm: resultado.crm, rqe: resultado.rqe };
+      } catch {
+        return { ok: false, motivo: 'DADOS_PROFISSIONAIS_NAO_GRAVADOS' };
+      }
+    },
     consultarProntidao: async medicoId => {
       const status = await consultarStatusOnboarding(pool, medicoId, false);
       return {
