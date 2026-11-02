@@ -4,6 +4,7 @@ import pg from 'pg';
 import { expect, it } from 'vitest';
 import { consultarStatusOnboarding } from '../src/onboarding/io/consultar-status-onboarding.js';
 import { codigoSeguroFalhaReady } from '../src/http/diagnostico-ready.js';
+import { enviarBoasVindasAposPareamento } from '../src/agente/boas-vindas-pareamento.js';
 
 const sql = readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261101-homologacao-onboarding-schema-reconcile.sql',
@@ -115,5 +116,75 @@ testarBanco('migração reconcilia estado mínimo do Supabase novo, sem inferir 
     await expect(client.query(sql)).rejects.toThrow(/ONBOARDING_COLUNA_INCOMPATIVEL/);
   } finally {
     await client.end();
+  }
+});
+
+const sqlBoasVindas = readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261102-boas-vindas-pareamento-idempotente.sql',
+  import.meta.url
+)), 'utf8');
+
+testarBanco('boas-vindas: aplica migration duas vezes e disputa atomicamente no PostgreSQL sem privilegios publicos', async () => {
+  const url = process.env['NOTO_SCHEMA_TEST_DATABASE_URL']!;
+  const pool = new pg.Pool({ connectionString: url, max: 4 });
+  try {
+    await pool.query(`
+      CREATE TABLE public.contas (id uuid PRIMARY KEY);
+      ALTER TABLE public.usuarios ADD COLUMN conta_id uuid REFERENCES public.contas(id);
+      ALTER TABLE public.usuarios ADD COLUMN auth_user_id uuid;
+      ALTER TABLE public.medicos ADD COLUMN conta_id uuid REFERENCES public.contas(id);
+      ALTER TABLE public.whatsapp_instancias ADD COLUMN conta_id uuid REFERENCES public.contas(id);
+      INSERT INTO public.contas(id) VALUES ('00000000-0000-4000-8000-000000000001');
+      UPDATE public.usuarios SET conta_id = '00000000-0000-4000-8000-000000000001',
+        auth_user_id='00000000-0000-4000-8000-000000000020'
+        WHERE id='00000000-0000-4000-8000-000000000010';
+      UPDATE public.medicos SET conta_id='00000000-0000-4000-8000-000000000001'
+        WHERE id='00000000-0000-4000-8000-000000000011';
+      INSERT INTO public.whatsapp_instancias (
+        id, medico_id, conta_id, nome_instancia, oficial, status, conectado_em
+      ) VALUES (
+        '00000000-0000-4000-8000-000000000030',
+        '00000000-0000-4000-8000-000000000011',
+        '00000000-0000-4000-8000-000000000001',
+        'medico_000000000000', false, 'conectado', now()
+      );
+    `);
+    await pool.query(sqlBoasVindas);
+    await pool.query(sqlBoasVindas);
+
+    const concessoes = await pool.query(`
+      SELECT has_table_privilege('anon','public.noto_boas_vindas_pareamento','SELECT') AS anon_le,
+        has_table_privilege('authenticated','public.noto_boas_vindas_pareamento','SELECT') AS autenticado_le,
+        has_table_privilege('service_role','public.noto_boas_vindas_pareamento','SELECT') AS backend_le,
+        has_table_privilege('service_role','public.noto_boas_vindas_pareamento','INSERT') AS backend_grava,
+        (SELECT relrowsecurity FROM pg_class
+          WHERE oid='public.noto_boas_vindas_pareamento'::regclass) AS rls
+    `);
+    expect(concessoes.rows[0]).toMatchObject({
+      anon_le: false, autenticado_le: false,
+      backend_le: true, backend_grava: true, rls: true
+    });
+
+    const enviar = async (_telefone: string, _texto: string) => {
+      enviados++;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return true;
+    };
+    let enviados = 0;
+    const deps = {
+      pool, ativo: true, nomeInstancia: 'medico_000000000000',
+      allowlist: ['5511999990000'], enviar
+    };
+    const resultados = await Promise.all(Array.from({ length: 10 },
+      () => enviarBoasVindasAposPareamento(deps)));
+    expect(resultados.filter(Boolean)).toHaveLength(1);
+    expect(enviados).toBe(1);
+    expect(await enviarBoasVindasAposPareamento(deps)).toBe(false);
+    const estado = await pool.query('select estado, enviado_em is not null as confirmado from noto_boas_vindas_pareamento');
+    expect(estado.rows).toEqual([{ estado: 'enviada', confirmado: true }]);
+    const fiscal = await pool.query('select count(*)::integer as total from medico_perfil_fiscal');
+    expect(fiscal.rows[0].total).toBe(0);
+  } finally {
+    await pool.end();
   }
 });
