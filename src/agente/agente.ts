@@ -204,7 +204,7 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
   const normalizada = resposta.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const oracoes = normalizada.split(/[.!?;\n]+|\b(?:mas|porem|contudo|entretanto|todavia|so que)\b/).filter(Boolean);
   const incerta = (prefixo: string) =>
-    /\b(?:nao sei se|nao posso (?:confirmar|afirmar) se|nao consegui verificar se|nao tenho como confirmar se|nao tenho evidencia de que)\s*$/.test(prefixo);
+    /\b(?:nao sei se|nao posso (?:confirmar|afirmar) se|nao consegui verificar se|nao tenho como confirmar se|nao tenho evidencia de que)(?:\s+(?:a|o|uma|um|minha|sua))?\s*$/.test(prefixo);
   const negada = (prefixo: string) =>
     /\b(?:nao|nunca|jamais)\s*$/.test(prefixo) || incerta(prefixo);
   const estadosIndisponiveis = eventos.some(e =>
