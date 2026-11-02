@@ -48,6 +48,45 @@ export class EvolutionApiClient
     } catch { return { sucesso: false, erro: 'EVOLUTION_LEITURA_INDISPONIVEL' }; }
   }
 
+
+  /** Indicador visual, nunca confirmação de ação. Falha de presença não impede atendimento. */
+  async enviarPresenca(instanciaNome: string, telefone: string, presenca: 'composing' | 'paused'): Promise<boolean> {
+    if (!this.destinoDoAssistenteValido(instanciaNome, telefone)) return false;
+    try {
+      const resposta = await fetch(
+        this.baseUrl.replace(/\/$/, '') + '/chat/sendPresence/' + encodeURIComponent(instanciaNome), {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+          headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+          body: JSON.stringify({ number: telefone.replace(/\D/g, ''), presence: presenca, delay: presenca === 'composing' ? 1800 : 0 })
+        });
+      await resposta.body?.cancel().catch(() => {});
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  /** Reage somente ao ID real da mensagem recebida. */
+  async reagirMensagem(instanciaNome: string, chave: { id: string; remoteJid: string; fromMe: boolean }, emoji: string): Promise<boolean> {
+    if (!chave || chave.fromMe || !/^[A-Za-z0-9_-]{5,150}$/.test(chave.id) ||
+        !/^\d{10,13}@s\.whatsapp\.net$/.test(chave.remoteJid) ||
+        !this.destinoDoAssistenteValido(instanciaNome, chave.remoteJid.split('@')[0] ?? '') ||
+        !['👍', '❤️', '🔎', '👀', '✅'].includes(emoji)) return false;
+    try {
+      const resposta = await fetch(
+        this.baseUrl.replace(/\/$/, '') + '/message/sendReaction/' + encodeURIComponent(instanciaNome), {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+          headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+          body: JSON.stringify({ key: { id: chave.id, remoteJid: chave.remoteJid, fromMe: false }, reaction: emoji })
+        });
+      await resposta.body?.cancel().catch(() => {});
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  private destinoDoAssistenteValido(instancia: string, telefone: string): boolean {
+    return !!instancia && instancia !== (this.instanciaSomenteOtp || this.instanciaOficialNome) &&
+      /^\d{10,13}$/.test(telefone.replace(/\D/g, ''));
+  }
+
   async obterBase64MensagemMidia(
     instancia: string,
     mensagemId: string
