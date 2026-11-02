@@ -113,6 +113,16 @@ export function criarRouterWebhookAgente(deps: {
     let contaId: string | null = null;
     let digitando = false;
     let intervalo: ReturnType<typeof setInterval> | undefined;
+    let presencaPendente: Promise<void> = Promise.resolve();
+    // Serializa renovação e parada: um composing atrasado não pode chegar
+    // depois do paused. Na falha do provedor, o atendimento segue.
+    const renovarPresenca = (): Promise<void> => {
+      presencaPendente = presencaPendente.then(async () => {
+        if (!digitando || !deps.presenca) return;
+        try { await deps.presenca(telefone, 'composing'); } catch { /* Efeito opcional. */ }
+      });
+      return presencaPendente;
+    };
     let enviado = false;
     try {
       const conta = await deps.pool.query(
@@ -174,8 +184,8 @@ export function criarRouterWebhookAgente(deps: {
       }
       if (deps.presenca) {
         digitando = true;
-        await deps.presenca(telefone, 'composing').catch(() => false);
-        intervalo = setInterval(() => { void deps.presenca?.(telefone, 'composing').catch(() => false); }, 3000);
+        await renovarPresenca();
+        intervalo = setInterval(() => { void renovarPresenca(); }, 1500);
       }
 
       let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
@@ -204,7 +214,7 @@ export function criarRouterWebhookAgente(deps: {
       const baloes = separarBaloes(resposta);
       enviado = baloes.length > 0;
       for (const balao of baloes) {
-        if (deps.presenca) await deps.presenca(telefone, 'composing').catch(() => false);
+        if (deps.presenca) await renovarPresenca();
         const ok = await deps.enviar(telefone, balao);
         if (!ok) { enviado = false; break; }
         if (reservada && contaId) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
@@ -260,7 +270,11 @@ export function criarRouterWebhookAgente(deps: {
       res.sendStatus(503);
     } finally {
       if (intervalo) clearInterval(intervalo);
-      if (digitando) await deps.presenca?.(telefone, 'paused').catch(() => false);
+      if (digitando) {
+        digitando = false;
+        await presencaPendente.catch(() => {});
+        await deps.presenca?.(telefone, 'paused').catch(() => false);
+      }
     }
   });
   return router;

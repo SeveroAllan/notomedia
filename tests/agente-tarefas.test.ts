@@ -61,7 +61,7 @@ describe('conclusão verificável e referência original', () => {
   it('expira pendências, descarta campos inesperados e evita dois pedidos indistinguíveis', () => {
     const primeiro = tarefa('verificar_agenda');
     const recente = tarefa('verificar_agenda', { mensagemId: 'BAE569F0E38F858E' });
-    expect(registrarPedido([primeiro], recente, inicio)).toEqual([recente]);
+    expect(registrarPedido([primeiro], recente, inicio)).toEqual([primeiro]);
     expect(validarTarefas([{...primeiro, texto: 'NAO_GUARDAR', credencial: 'SENHA'}], inicio))
       .toEqual([primeiro]);
     expect(validarTarefas([primeiro], inicio + PRAZO_TAREFA_MS)).toEqual([]);
@@ -69,6 +69,30 @@ describe('conclusão verificável e referência original', () => {
     expect(selecionarConclusao([
       primeiro, tarefa('verificar_agenda', { mensagemId: 'BAE569F0E38F858E', profissionalId: undefined })
     ], [{ tipo: 'verificar_agenda', profissionalId: 'alice-id' }],
+      'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
+  });
+
+  it('mantém o balão original ao repetir pedido e ao especificar médico e agenda depois', () => {
+    const geral = tarefa('enviar_link_agenda', { profissionalId: undefined, agenda: undefined });
+    const repetido = tarefa('enviar_link_agenda', { mensagemId:'BAE569F0E38F858E',
+      profissionalId: undefined, agenda: undefined });
+    expect(registrarPedido([geral], repetido, inicio)).toEqual([geral]);
+    const maisClaro = {...repetido, profissionalId:'alice-id', agenda:'amplimed' as const };
+    expect(registrarPedido([geral], maisClaro, inicio)).toEqual([
+      {...geral, profissionalId:'alice-id', agenda:'amplimed'}
+    ]);
+    const diferente = {...repetido, profissionalId:'bruno-id'};
+    expect(registrarPedido([tarefa('enviar_link_agenda')], diferente, inicio)).toHaveLength(2);
+  });
+
+  it('conclui tarefa sem agenda declarada apenas com uma fonte inequivocamente comprovada', () => {
+    const pedido = [tarefa('enviar_link_agenda', { agenda: undefined })];
+    const prova = {tipo:'enviar_link_agenda' as const, profissionalId:'alice-id', agenda:'amplimed' as const};
+    expect(selecionarConclusao(pedido, [prova], 'noto_assistente', referencia, 'alice-id', inicio))
+      ?.toEqual(pedido[0]);
+    expect(selecionarConclusao(pedido, [prova, {...prova,agenda:'tribemd'}],
+      'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
+    expect(selecionarConclusao(pedido, [{...prova,profissionalId:'bruno-id'}],
       'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
   });
 

@@ -560,7 +560,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       { role: 'user', content: JSON.stringify({
         mensagem: entrada.texto.slice(0, 1500),
         contextoAnterior: (entrada.contexto ?? []).slice(-3).map(s => s.slice(0, 500)),
-        estadoConversacionalVerificado: entrada.estadoConversa ?? {}
+        // IDs de mensagens e referências de tarefas ficam no orquestrador,
+        // nunca no contexto enviado ao modelo externo.
+        estadoConversacionalVerificado: Object.fromEntries(
+          Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) => campo !== 'tarefasPendentes')
+        )
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';

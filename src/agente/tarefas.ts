@@ -96,11 +96,34 @@ export function validarTarefas(valor: unknown, agora = Date.now()): TarefaPenden
 export function registrarPedido(
   anteriores: readonly TarefaPendente[], pedido: TarefaPendente, agora = Date.now()
 ): TarefaPendente[] {
-  const ativos = validarTarefas(anteriores, agora).filter(t =>
-    !(t.remetenteRef === pedido.remetenteRef && t.tipo === pedido.tipo &&
-      t.profissionalId === pedido.profissionalId && t.agenda === pedido.agenda) &&
-    !(t.instancia === pedido.instancia && t.mensagemId === pedido.mensagemId));
-  return validarTarefas([...ativos, pedido], agora);
+  const ativos = validarTarefas(anteriores, agora);
+  const mesmoFluxo = (t: TarefaPendente) =>
+    t.remetenteRef === pedido.remetenteRef && t.instancia === pedido.instancia && t.tipo === pedido.tipo;
+  // Repetir o mesmo pedido não muda o balão original a ser marcado com ✅.
+  if (ativos.some(t => mesmoFluxo(t) && t.profissionalId === pedido.profissionalId &&
+      t.agenda === pedido.agenda)) return ativos;
+  // "Qual médico?" seguido de "Alice, na Amplimed" especifica o pedido inicial.
+  // Só refinamos se há UMA única pendência deste tipo, sem alvo conflitante.
+  const fluxo = ativos.filter(mesmoFluxo);
+  if (fluxo.length === 1) {
+    const anterior = fluxo[0]!;
+    const compativel =
+      (!anterior.profissionalId || anterior.profissionalId === pedido.profissionalId) &&
+      (!anterior.agenda || anterior.agenda === pedido.agenda);
+    const informouAlvo = (!anterior.profissionalId && !!pedido.profissionalId) ||
+      (!anterior.agenda && !!pedido.agenda);
+    if (compativel && informouAlvo) {
+      return validarTarefas(ativos.map(t => t === anterior ? {
+        ...anterior,
+        profissionalId: anterior.profissionalId ?? pedido.profissionalId,
+        agenda: anterior.agenda ?? pedido.agenda
+      } : t), agora);
+    }
+  }
+  return validarTarefas([
+    ...ativos.filter(t => !(t.instancia === pedido.instancia && t.mensagemId === pedido.mensagemId)),
+    pedido
+  ], agora);
 }
 
 /** Sem alvo explícito, exige profissional confirmado em turno posterior.
@@ -110,11 +133,18 @@ export function selecionarConclusao(
   pendentes: readonly TarefaPendente[], comprovantes: readonly ComprovanteTarefa[],
   instancia: string, remetenteRef: string, profissionalConfirmadoId?: string, agora = Date.now()
 ): TarefaPendente | null {
-  const candidatas = validarTarefas(pendentes, agora).filter(t =>
-    t.instancia === instancia && t.remetenteRef === remetenteRef &&
-    comprovantes.some(p => p.tipo === t.tipo &&
-      p.profissionalId === (t.profissionalId ?? profissionalConfirmadoId) &&
-      (t.agenda ? p.agenda === t.agenda : p.agenda === undefined)));
+  const candidatas = validarTarefas(pendentes, agora).filter(t => {
+    if (t.instancia !== instancia || t.remetenteRef !== remetenteRef) return false;
+    const id = t.profissionalId ?? profissionalConfirmadoId;
+    if (!id) return false;
+    const provas = comprovantes.filter(p => p.tipo === t.tipo && p.profissionalId === id &&
+      (!t.agenda || p.agenda === t.agenda));
+    if (t.agenda) return provas.length > 0;
+    // Pedido sem plataforma: aceita uma única fonte comprovada, ou a
+    // verificação geral explícita. Nunca escolhe entre duas agendas distintas.
+    return provas.some(p => p.agenda === undefined) ||
+      (provas.length > 0 && new Set(provas.map(p => p.agenda)).size === 1);
+  });
   return candidatas.length === 1 ? candidatas[0]! : null;
 }
 

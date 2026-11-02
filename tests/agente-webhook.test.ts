@@ -5,6 +5,7 @@ import type pg from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { ScriptedModel, assistantMessage, functionCall } from '@openai/agents/testing';
 import { criarRouterWebhookAgente } from '../src/agente/webhook.js';
+import { responderAgente } from '../src/agente/agente.js';
 
 const evento = {
   instance: 'notomed_assistente',
@@ -293,6 +294,39 @@ describe('retry seguro no modo durável',()=>{
   });
 });
 
+
+describe('comportamento visível e privacidade de tarefas', () => {
+  it('falhas de visto, reação e presença não impedem resposta nem a parada da digitação', async () => {
+    const marcarLida=vi.fn().mockRejectedValue(new Error('indisponível'));
+    const reagir=vi.fn().mockRejectedValue(new Error('indisponível'));
+    const presenca=vi.fn().mockRejectedValue(new Error('indisponível'));
+    const modeloTeste=new ScriptedModel([[assistantMessage('Vou ajudar com isso.')]]); 
+    const {app,enviar}=preparar({modeloTeste,marcarLida,reagir,presenca});
+    await comServidor(app,async postar => {
+      expect((await postar(evento)).status).toBe(200);
+    });
+    expect(enviar).toHaveBeenCalled();
+    expect(presenca.mock.calls.at(-1)?.[1]).toBe('paused');
+    modeloTeste.assertComplete();
+  });
+
+  it('não envia IDs originais de tarefas ao modelo', async () => {
+    const modeloTeste=new ScriptedModel([[assistantMessage('Vou continuar a verificação.')]]); 
+    const idPrivado='BAE569F0E38F858D';
+    const resposta=await responderAgente({
+      texto:'Sim, pode continuar.',
+      profissionais:[{id:'alice-id',nome:'Alice Souza'}],
+      estadoConversa:{ agendaEscolhida:'amplimed', tarefasPendentes:[{
+        tipo:'verificar_agenda', instancia:'notomed_assistente', mensagemId:idPrivado,
+        remetenteRef:'a'.repeat(24), criadaEm:Date.now(), profissionalId:'alice-id'
+      }] }
+    },{modeloTeste,consultarStatus:vi.fn()});
+    expect(resposta).toContain('Vou continuar');
+    expect(JSON.stringify(modeloTeste.calls[0]?.request.input)).not.toContain(idPrivado);
+    expect(JSON.stringify(modeloTeste.calls[0]?.request.input)).not.toContain('a'.repeat(24));
+    modeloTeste.assertComplete();
+  });
+});
 
 describe('tarefas entre mensagens: ✅ sempre no balão original', () => {
   it('retoma a verificação no turno seguinte e reage ao pedido inicial após a ferramenta comprovar', async () => {
