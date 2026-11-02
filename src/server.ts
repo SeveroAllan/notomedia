@@ -54,6 +54,7 @@ import { carregarCertificadoMedico } from './io/fiscal/carregar-certificado-medi
 import { PostgresDadosProfissionaisService } from './io/postgres/postgres-dados-profissionais-service.js';
 import { configurarDesempenhoHttp, OPCOES_ARQUIVOS_ESTATICOS } from './http/configurar-desempenho-http.js';
 import { tratarErrosHttp } from './http/tratar-erros-http.js';
+import { codigoSeguroFalhaReady } from './http/diagnostico-ready.js';
 import { criarEncerramentoGracioso } from './processo/encerrar-gracioso.js';
 import { registrarSinaisDeProcesso } from './processo/registrar-sinais-de-processo.js';
 
@@ -167,14 +168,30 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
-  // Readiness: distingue o processo HTTP ativo do banco/schema realmente acessível.
+  // Readiness inclui as colunas usadas pelo onboarding: um banco conectado
+  // mas com schema incompleto nao pode receber novos cadastros.
+  let ultimoAvisoReady = 0;
   app.get('/ready', async (_req: Request, res: Response) => {
     try {
-      await pool.query('select 1 from whatsapp_instancias limit 0');
+      await pool.query(`select m.solicitar_cpf_direto_paciente,
+          pf.proximo_numero_dps, pf.serie_dps, pf.opcao_simples_nacional,
+          pf.extraido_automaticamente, pf.dados_reforma_tributaria,
+          msf.aliquota_iss, msf.parametros_emissao,
+          t.medico_id, w.nome_instancia
+        from medicos m
+        left join medico_perfil_fiscal pf on pf.medico_id=m.id
+        left join medico_servicos_fiscais msf on msf.medico_id=m.id
+        left join cadastro_certificado_trabalhos t on t.medico_id=m.id
+        left join whatsapp_instancias w on w.medico_id=m.id
+        limit 0`);
       res.json({ status: 'ready' });
     } catch (erro) {
-      const e = erro as NodeJS.ErrnoException & Error;
-      console.error('[ready] banco indisponivel:', e?.code ?? '', (e?.message ?? String(erro)).replace(/:[^:@/]+@/g, ':***@'));
+      // Nunca registrar a mensagem do driver (pode conter URL/credenciais).
+      // Limita o volume para healthchecks frequentes.
+      if (Date.now() - ultimoAvisoReady > 60_000) {
+        ultimoAvisoReady = Date.now();
+        console.warn('[ready] schema_ou_banco_indisponivel', { codigo: codigoSeguroFalhaReady(erro) });
+      }
       res.status(503).json({ status: 'unavailable' });
     }
   });
