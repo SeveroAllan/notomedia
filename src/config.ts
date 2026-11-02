@@ -60,10 +60,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
   if (env['PREPARACAO_FISCAL_ATIVA'] === 'true' && env['AGENTE_FISCAL_ATIVO'] !== 'true') {
     throw new Error('PREPARACAO_FISCAL_ATIVA requer AGENTE_FISCAL_ATIVO para tratar pendências sem retentativas cegas.');
   }
-  if (env['NOTO_AGENT_BOAS_VINDAS_OTP_TESTE_ATIVAS'] === 'true' &&
-      (env['NOTO_AGENT_LOGIN_CONTA_EXISTENTE_APENAS'] !== 'true' ||
-       env['NOTO_AGENT_ATIVO'] !== 'true' || env['NOTO_AGENT_ENVIO_ATIVO'] !== 'true')) {
-    throw new Error('Boas-vindas do piloto exigem conta preexistente e flags explícitas do agente.');
+  if (env['NOTO_AGENT_BOAS_VINDAS_OTP_TESTE_ATIVAS'] === 'true') {
+    throw new Error('BOAS_VINDAS_OTP_DESATIVADAS: a saudacao ocorre apenas apos pareamento confirmado.');
   }
   if (env['NOTO_PILOTO_RESTRITO'] === 'true') {
     const permitir = (env['ENVIO_REAL_ALLOWLIST'] ?? '').split(/[,;\s]+/).filter(Boolean);
