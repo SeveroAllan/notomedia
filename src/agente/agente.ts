@@ -195,25 +195,50 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
 }
 
 /**
- * Ultima linha de defesa contra afirmar execucao/estado que as ferramentas
- * somente de leitura nao comprovaram. O arquivo agent.md decide estilo e dialogo;
- * estas travas sao verificacoes deterministicas.
+ * Verifica afirmações concretas de ações/estados, não palavras isoladas.
+ * O agent.md guia comunicação/decisão; permissões e capacidades são limites em código.
+ * Cada oração é avaliada por conta própria: um "não" em outra oração NÃO
+ * autoriza uma afirmação indevida (inclusive após "mas", ponto ou vírgula).
  */
 export function respostaCompativelComFerramentas(resposta: string, eventos: readonly EventoFerramenta[]): boolean {
   const normalizada = resposta.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  // Este processo jamais emite, cancela, envia documentos ou verifica ultima nota.
-  if (/\b(?:emiti|emitimos|cancelei|cancelamos|enviei|enviamos)\s+(?:a |uma |o |um )?(?:nota|documento|comprovante)\b/.test(normalizada) ||
-      /\b(?:nota|documento|comprovante)\s+(?:ja\s+)?(?:foi|esta)\s+(?:emitid[ao]|cancelad[ao]|enviad[ao])\b/.test(normalizada)) {
-    return false;
-  }
-  // Sem evidencia da ferramenta, nunca transformar indisponibilidade em certeza.
-  const agenda = /\b(?:agenda|tribemd|amplimed)\b[^.!?\n]{0,90}\b(?:desconectad[ao]|conectad[ao])\b/.test(normalizada);
-  const falhou = eventos.some(e => ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL'].includes(e.codigo));
-  const naoConectado = eventos.some(e => e.codigo === 'STATUS_NAO_CONECTADO' || e.codigo === 'CONEXAO_PENDENTE');
-  const evidenciaPositiva = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
-  if (agenda && ((falhou && !/nao consegui verificar|nao foi possivel verificar|estado desconhecido/.test(normalizada)) ||
-      (naoConectado && !evidenciaPositiva && /\b(?:ja\s+)?(?:esta|estao|ficou|continua)\s+conectad/.test(normalizada)))) {
-    return false;
+  const oracoes = normalizada.split(/[.!?;\n]+|\b(?:mas|porem|contudo|entretanto|todavia|so que)\b/).filter(Boolean);
+  const incerta = (prefixo: string) =>
+    /\b(?:nao sei se|nao posso (?:confirmar|afirmar) se|nao consegui verificar se|nao tenho como confirmar se|nao tenho evidencia de que)\s*$/.test(prefixo);
+  const negada = (prefixo: string) =>
+    /\b(?:nao|nunca|jamais)\s*$/.test(prefixo) || incerta(prefixo);
+  const estadosIndisponiveis = eventos.some(e =>
+    ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL'].includes(e.codigo));
+  const evidenciaConectada = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
+  const evidenciaDesconectada = eventos.some(e => e.codigo === 'STATUS_NAO_CONECTADO');
+
+  for (const oracao of oracoes) {
+    // O modelo não tem ferramentas de emissão, cancelamento ou envio fiscal.
+    // Negações como "não emiti" e "a nota não foi emitida" não afirmam execução.
+    const acao = /\b(?:emiti|emitimos|cancelei|cancelamos|enviei|enviamos)\s+(?:(?:a|uma|o|um|as|os)\s+)?(?:notas?|documentos?|comprovantes?)\b/g;
+    for (const match of oracao.matchAll(acao)) {
+      const antes = oracao.slice(0, match.index).trimEnd();
+      if (!negada(antes)) return false;
+    }
+
+    // Formas passivas: "o documento foi enviado" vs. "não foi enviado".
+    const passivo = /\b(?:notas?|documentos?|comprovantes?)\s+(?:(?:ja|ainda|nao|nunca|jamais)\s+)*(?:foi|foram|esta|estao)\s+(?:(?:nao|nunca|jamais)\s+)?(?:emitid[ao]s?|cancelad[ao]s?|enviad[ao]s?)\b/g;
+    for (const match of oracao.matchAll(passivo)) {
+      const antes = oracao.slice(0, match.index).trimEnd();
+      if (!/\b(?:nao|nunca|jamais)\b/.test(match[0]) && !incerta(antes)) return false;
+    }
+
+    // Conexão é um estado verificável; uma negativa continua sendo afirmação
+    // sobre o estado ("a agenda não está conectada"), salvo dúvida explícita.
+    const estado = /\b(?:agenda|tribemd|amplimed)\b[^.!?;\n]{0,100}?\b(?:desconectad[ao]s?|conectad[ao]s?|ativ[ao]s?)\b/g;
+    for (const match of oracao.matchAll(estado)) {
+      const antes = oracao.slice(0, match.index).trimEnd();
+      if (incerta(antes) || /\b(?:pode|podem|talvez|possivelmente)\b/.test(match[0])) continue;
+      if (estadosIndisponiveis) return false;
+      const desconectada = /\bdesconectad[ao]s?\b/.test(match[0]) ||
+        /\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,40}\b(?:conectad[ao]s?|ativ[ao]s?)\b/.test(match[0]);
+      if (desconectada ? !evidenciaDesconectada || evidenciaConectada : !evidenciaConectada) return false;
+    }
   }
   return true;
 }
