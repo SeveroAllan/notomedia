@@ -348,3 +348,49 @@ describe('dados profissionais via conversa, com autorização exata',()=>{
     modelo.assertComplete();
   });
 });
+
+
+describe('negações não são autorizações de escrita',()=>{
+  it('não adiciona médico quando a pessoa diz que não confirma',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+      },{callId:'negou-cadastro'})],
+      [assistantMessage('Entendi, não vou adicionar Bruno. Podemos continuar sem alterar sua conta.')]
+    ]);
+    const confirmarProfissionais=vi.fn();
+    const diagnostico=vi.fn();
+    const resposta=await responderAgente({
+      texto:'Não confirmo adicionar Bruno Costa à conta.',
+      profissionais:[{id:'m1',nome:'Dra. Alice Silva'}],
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue({
+      tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
+    }),descobrirProfissionais:vi.fn().mockResolvedValue({ok:true,nomes:['Bruno Costa']}),
+      confirmarProfissionais,aoDiagnostico:diagnostico});
+    expect(confirmarProfissionais).not.toHaveBeenCalled();
+    expect(resposta).toContain('não vou adicionar');
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    modelo.assertComplete();
+  });
+
+  it.each(['Não confirmo CRM: 12345/RS','Não quero que salve CRM: 12345/RS'])(
+    'não grava cadastro quando a pessoa nega: %s',async texto=>{
+      const modelo=new ScriptedModel([
+        [functionCall('confirmar_dados_profissionais',{
+          profissional:'Alice',crm:'12345/RS'
+        },{callId:'negou-crm'})],
+        [assistantMessage('Entendi, não vou alterar seu CRM.')]
+      ]);
+      const salvarDadosProfissionais=vi.fn();
+      const diagnostico=vi.fn();
+      await responderAgente({
+        texto,profissionais:[{id:'m1',nome:'Dra. Alice Silva'}],
+        estadoConversa:{profissionalConfirmadoId:'m1'}
+      },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+      expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+      expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
+      modelo.assertComplete();
+    }
+  );
+});
