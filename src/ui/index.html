@@ -2018,9 +2018,9 @@
       renderizarParametrosFiscais(parametros);
     }
     const catalogoNovosParametros = {
-      aliquotaIss: { nome: 'Alíquota de ISS (%)', tipo: 'number', step: '0.01', placeholder: 'Ex: 2.00', min: 0, max: 9.99, padrao: 2.00 },
-      serieDps: { nome: 'Série da DPS', tipo: 'text', placeholder: 'Ex: 1', padrao: '1' },
-      proximoNumeroDps: { nome: 'Próximo número da DPS', tipo: 'number', placeholder: 'Ex: 1', min: 1, padrao: 1 },
+      aliquotaIss: { nome: 'Alíquota de ISS (%)', tipo: 'number', step: '0.01', placeholder: 'Ex: 2.00', min: 0, max: 9.99 },
+      serieDps: { nome: 'Série da DPS', tipo: 'text', placeholder: 'Ex: 1' },
+      proximoNumeroDps: { nome: 'Próximo número da DPS', tipo: 'number', placeholder: 'Ex: 1', min: 1 },
       regimeEspecialTributacao: { nome: 'Regime especial de tributação', tipo: 'select', opcoes: [
         { valor: '0', texto: '0 - Nenhum / Operação normal' },
         { valor: '1', texto: '1 - Microempresa municipal' },
@@ -2029,7 +2029,7 @@
         { valor: '4', texto: '4 - Cooperativa' },
         { valor: '5', texto: '5 - Microempresário individual' },
         { valor: '6', texto: '6 - Microempresa e EPP' }
-      ], padrao: '0' },
+      ] },
       cstPisCofins: { nome: 'CST de PIS/COFINS', tipo: 'select', opcoes: [
         { valor: '00', texto: '00 - Tributável alíquota básica' },
         { valor: '01', texto: '01 - Operação tributável alíquota básica' },
@@ -2039,15 +2039,15 @@
         { valor: '07', texto: '07 - Isenta' },
         { valor: '08', texto: '08 - Sem incidência' },
         { valor: '09', texto: '09 - Com suspensão' }
-      ], padrao: '08' },
+      ] },
       regimeApuracaoSn: { nome: 'Regime de apuração do Simples', tipo: 'select', opcoes: [
         { valor: 'regime_1', texto: 'Regime 1 - Competência' },
         { valor: 'regime_2', texto: 'Regime 2 - Caixa' }
-      ], padrao: 'regime_1' },
+      ] },
       vigenciaFim: { nome: 'Vigência final', tipo: 'date', padrao: '' },
-      percentualTotTribSN: { nome: 'Tributos do Simples (%)', tipo: 'number', step: '0.01', min: 0, max: 100, placeholder: 'Ex: 6.00', padrao: 6.00 },
-      'pisCofinsCalculo.aliquotaPis': { nome: 'Alíquota de PIS (%)', tipo: 'number', step: '0.01', min: 0, max: 99.99, placeholder: 'Ex: 0.65', padrao: 0.65 },
-      'pisCofinsCalculo.aliquotaCofins': { nome: 'Alíquota de COFINS (%)', tipo: 'number', step: '0.01', min: 0, max: 99.99, placeholder: 'Ex: 3.00', padrao: 3.00 }
+      percentualTotTribSN: { nome: 'Tributos do Simples (%)', tipo: 'number', step: '0.01', min: 0, max: 100, placeholder: 'Ex: 6.00' },
+      'pisCofinsCalculo.aliquotaPis': { nome: 'Alíquota de PIS (%)', tipo: 'number', step: '0.01', min: 0, max: 99.99, placeholder: 'Ex: 0.65' },
+      'pisCofinsCalculo.aliquotaCofins': { nome: 'Alíquota de COFINS (%)', tipo: 'number', step: '0.01', min: 0, max: 99.99, placeholder: 'Ex: 3.00' }
     };
     function atualizarOpcoesNovoParametro() {
       const select = document.getElementById('selectNovoParametroFiscal');
@@ -2078,6 +2078,14 @@
       if (config.tipo === 'select') {
         inputEl = document.createElement('select');
         inputEl.setAttribute('aria-label', config.nome);
+        if (valorInicial == null && config.padrao == null) {
+          const vazio = document.createElement('option');
+          vazio.value = '';
+          vazio.textContent = 'Selecione uma opção...';
+          vazio.selected = true;
+          vazio.disabled = true;
+          inputEl.append(vazio);
+        }
         for (const op of config.opcoes) {
           const opt = document.createElement('option');
           opt.value = op.valor;
@@ -2085,7 +2093,7 @@
           if (op.valor === String(valorInicial ?? config.padrao)) opt.selected = true;
           inputEl.append(opt);
         }
-        inputEl.value = String(valorInicial ?? config.padrao);
+        inputEl.value = String(valorInicial ?? config.padrao ?? '');
       } else {
         inputEl = document.createElement('input');
         inputEl.type = config.tipo;
@@ -2094,7 +2102,7 @@
         if (config.max !== undefined) inputEl.max = String(config.max);
         if (config.placeholder) inputEl.placeholder = config.placeholder;
         inputEl.setAttribute('aria-label', config.nome);
-        inputEl.value = valorInicial !== undefined ? String(valorInicial) : (config.padrao !== '' ? String(config.padrao) : '');
+        inputEl.value = valorInicial != null ? String(valorInicial) : (config.padrao == null ? '' : String(config.padrao));
       }
       inputEl.required = true;
       const remover = document.createElement('button');
