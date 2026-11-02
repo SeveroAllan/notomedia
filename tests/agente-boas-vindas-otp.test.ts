@@ -34,21 +34,13 @@ describe('piloto: conta real via OTP e mensagem restrita ao número autorizado',
     }
   });
 
-  it('envia boas-vindas uma única vez ao destinatário do OTP validado, não a terceiros', async () => {
+  it('nao dispara boas-vindas no OTP, mesmo com flag legada e numero autorizado', async () => {
     const enviar = vi.fn().mockResolvedValue(true);
-    const base = { ativo: true, telefoneVerificado: numero, ehNovoUsuario: false,
-      authUserId: 'auth-1', allowlist: ['11999990000'], enviar };
-    expect(await enviarBoasVindasOtpTeste(base)).toBe(true);
-    expect(enviar).toHaveBeenCalledExactlyOnceWith(numero, expect.stringContaining('sou o Noto'));
-    for (const op of [
-      { ...base, telefoneVerificado: '5521999990000' },
-      { ...base, ativo: false },
-      { ...base, ehNovoUsuario: true },
-      { ...base, authUserId: undefined },
-      { ...base, allowlist: ['11999990000', '21999990000'] },
-      { ...base, allowlist: [] }
-    ]) expect(await enviarBoasVindasOtpTeste(op)).toBe(false);
-    expect(enviar).toHaveBeenCalledTimes(1);
+    expect(await enviarBoasVindasOtpTeste({
+      ativo: true, telefoneVerificado: numero, ehNovoUsuario: false,
+      authUserId: 'auth-1', allowlist: [numero], enviar
+    })).toBe(false);
+    expect(enviar).not.toHaveBeenCalled();
   });
 
   it('login OTP validado em modo piloto não chama o cadastro automático se não existe conta', async () => {
@@ -86,6 +78,6 @@ describe('piloto: conta real via OTP e mensagem restrita ao número autorizado',
       notoAgentLoginContaExistenteApenas: false
     });
     expect(() => carregarConfig({ NOTO_AGENT_BOAS_VINDAS_OTP_TESTE_ATIVAS: 'true' }))
-      .toThrow('Boas-vindas do piloto exigem');
+      .toThrow('BOAS_VINDAS_OTP_DESATIVADAS');
   });
 });
