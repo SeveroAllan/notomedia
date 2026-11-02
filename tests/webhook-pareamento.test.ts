@@ -44,3 +44,36 @@ it('webhook de pareamento valida segredo, ignora mensagens e atualiza somente es
     await new Promise<void>((resolve, reject) => servidor.close(err => err ? reject(err) : resolve()));
   }
 });
+
+it('evento OPEN sem confirmacao da Evolution nao marca conectado nem chama boas-vindas', async () => {
+  const query = vi.fn().mockResolvedValue({ rowCount: 0 });
+  const aoConectar = vi.fn();
+  const confirmarConexao = vi.fn().mockResolvedValue(false);
+  const app = express();
+  app.use(express.json());
+  app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
+    pool: { query } as unknown as pg.Pool, segredo: 'segredo-homologacao',
+    confirmarConexao, aoConectar
+  }));
+  const servidor = await new Promise<Server>(resolve => {
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  });
+  try {
+    const base = `http://127.0.0.1:${(servidor.address() as {port:number}).port}`;
+    const postar = async (event: string, state: string) => fetch(base + '/webhook/evolution/pareamento', {
+      method: 'POST', headers: {
+        'Content-Type': 'application/json', 'x-webhook-secret': 'segredo-homologacao'
+      }, body: JSON.stringify({ instance: 'medico_teste', event, data: { state } })
+    });
+    expect((await postar('CONNECTION_UPDATE', 'open')).status).toBe(204);
+    expect(confirmarConexao).toHaveBeenCalledExactlyOnceWith('medico_teste');
+    expect(query).not.toHaveBeenCalled();
+    expect(aoConectar).not.toHaveBeenCalled();
+    confirmarConexao.mockResolvedValue(true);
+    expect((await postar('CONNECTION_UPDATE', 'open')).status).toBe(204);
+    // Ainda nao ha confirmação de linha afetada no banco, por isso nenhum envio.
+    expect(aoConectar).not.toHaveBeenCalled();
+  } finally {
+    await new Promise<void>(resolve => servidor.close(() => resolve()));
+  }
+});
