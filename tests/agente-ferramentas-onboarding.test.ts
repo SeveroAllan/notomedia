@@ -297,7 +297,7 @@ describe('dados profissionais via conversa, com autorização exata',()=>{
     },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
     expect(salvarDadosProfissionais).toHaveBeenCalledExactlyOnceWith('m1',{crm:'12345/RS'});
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DADOS_PROFISSIONAIS_SALVOS');
-    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('"emissaoAutorizada":false');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toMatch(/emissaoAutorizada[^a-zA-Z]*false/);
     expect(resposta).toContain('pendentes');
     modelo.assertComplete();
   });
