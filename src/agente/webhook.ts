@@ -4,8 +4,13 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { responderAgente, type StatusFontes } from './agente.js';
-import type { AgendaEscolhida } from './estado-conversa.js';
-import { separarBaloes, reacaoContextual, solicitouVerificacao } from './baloes.js';
+import type { AgendaEscolhida, EstadoConversa } from './estado-conversa.js';
+import {
+  alvoExplicito, cancelouTarefas, classificarPedidoTarefa, finalizarPedido,
+  registrarPedido, selecionarConclusao, validarTarefas,
+  type ComprovanteTarefa, type TarefaPendente
+} from './tarefas.js';
+import { separarBaloes, reacaoContextual } from './baloes.js';
 import {
   lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
   finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa
@@ -67,6 +72,8 @@ export function criarRouterWebhookAgente(deps: {
   // O servidor principal usa a reserva durável abaixo para sobreviver a réplicas.
   const mensagensVistas = new Set<string>();
   const contextoPorConta = new Map<string, string[]>();
+  // Somente no piloto read-only; no modo durável o banco é a autoridade.
+  const tarefasEmMemoria = new Map<string, TarefaPendente[]>();
 
   router.post('/', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -123,7 +130,7 @@ export function criarRouterWebhookAgente(deps: {
       const profissionais = medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
         id: m.id, nome: String(m.nome_completo ?? '')
       }));
-      const estado = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
+      const estado: EstadoConversa = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
       if (deps.persistirConversa && contaId) {
         if (!await reservarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id)) {
           res.sendStatus(200); return;
@@ -131,6 +138,32 @@ export function criarRouterWebhookAgente(deps: {
         reservada = true;
       }
       const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
+      // Guarda somente referência e tipo fechado, nunca o conteúdo da solicitação.
+      const remetenteRef = referenciaDiagnostica(deps.segredo, 'mensagem', ['remetente', telefone]);
+      const anteriores = deps.persistirConversa && contaId ?
+        estado.tarefasPendentes ?? [] : tarefasEmMemoria.get(chaveContexto) ?? [];
+      const pedidoTipo = classificarPedidoTarefa(texto);
+      const tribemdMencionada = /\btribemd\b/i.test(texto);
+      const amplimedMencionada = /\bamplimed\b/i.test(texto);
+      const agenda = tribemdMencionada !== amplimedMencionada ?
+        (tribemdMencionada ? 'tribemd' : 'amplimed') : undefined;
+      const profissionalId = alvoExplicito(texto, profissionais);
+      let tarefasPendentes = cancelouTarefas(texto)
+        ? validarTarefas(anteriores).filter(t => t.remetenteRef !== remetenteRef)
+        : pedidoTipo
+          ? registrarPedido(anteriores, {
+              tipo: pedidoTipo, instancia: evento.instance,
+              mensagemId: evento.data.key.id, remetenteRef, criadaEm: Date.now(),
+              ...(profissionalId ? { profissionalId } : {}),
+              ...(agenda ? { agenda } : {})
+            })
+          : validarTarefas(anteriores);
+      // O pedido deve sobreviver ao processamento e a uma falha posterior de envio.
+      if (deps.persistirConversa && contaId && (pedidoTipo || cancelouTarefas(texto))) {
+        await salvarEstadoConversa(deps.pool, contaId, { ...estado, tarefasPendentes });
+      } else if (!deps.persistirConversa) {
+        tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
+      }
       const marcar = async () => {
         try { await deps.marcarLida?.(evento.data.key); } catch { /* Sem impacto sobre resposta. */ }
       };
@@ -147,6 +180,7 @@ export function criarRouterWebhookAgente(deps: {
 
       let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
       let diagnostico: DiagnosticoAgente | undefined;
+      const comprovantes: ComprovanteTarefa[] = [];
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const resposta = await responderAgente({
         texto, profissionais, semConta: !contaId, estadoConversa: estado,
@@ -155,6 +189,7 @@ export function criarRouterWebhookAgente(deps: {
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
         modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
+        aoComprovante: comprovante => comprovantes.push(comprovante),
         ...(deps.descobrirProfissionais ? { descobrirProfissionais: async (medicoId: string, agenda: AgendaEscolhida) => {
           const r = await deps.descobrirProfissionais!(medicoId, agenda);
           if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.slice(0,20) };
@@ -176,21 +211,31 @@ export function criarRouterWebhookAgente(deps: {
       }
 
       if (enviado) {
+        const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
+        const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
+        // Somente comprovante real da ferramenta confirma uma ação,
+        // nunca a resposta livre da IA ou um status ainda indisponível.
+        const concluida = diagnostico?.codigo === 'RESPOSTA' ? selecionarConclusao(
+          tarefasPendentes, comprovantes, evento.instance, remetenteRef,
+          novo.profissionalConfirmadoId
+        ) : null;
+        if (concluida) {
+          try {
+            const chaveOriginal = { id: concluida.mensagemId, remoteJid: evento.data.key.remoteJid, fromMe: false };
+            if (await deps.reagir?.(chaveOriginal, '✅')) {
+              tarefasPendentes = finalizarPedido(tarefasPendentes, concluida);
+            }
+          } catch { /* Falha de reação não apaga a pendência nem impede o atendimento. */ }
+        }
         if (reservada && contaId) {
-          const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
-          const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
-          await salvarEstadoConversa(deps.pool, contaId, novo);
+          await salvarEstadoConversa(deps.pool, contaId, { ...novo, tarefasPendentes });
         } else {
+          tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
           contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
           if (contextoPorConta.size > 300) {
             const primeiro = contextoPorConta.keys().next().value;
-            if (primeiro) contextoPorConta.delete(primeiro);
+            if (primeiro) { contextoPorConta.delete(primeiro); tarefasEmMemoria.delete(primeiro); }
           }
-        }
-        const realizouVerificacao = diagnostico?.ferramentas.some(f =>
-          ['STATUS_CONECTADO','STATUS_NAO_CONECTADO','CONEXAO_EXISTENTE','CONEXAO_PENDENTE'].includes(f.codigo));
-        if (solicitouVerificacao(texto) && realizouVerificacao) {
-          try { await deps.reagir?.(evento.data.key, '✅'); } catch { /* Não transforma falha em tarefa concluída. */ }
         }
       }
       if (deps.diagnosticoAtivo && diagnostico) {

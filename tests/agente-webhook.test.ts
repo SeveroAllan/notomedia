@@ -292,3 +292,71 @@ describe('retry seguro no modo durável',()=>{
     modeloTeste.assertComplete();
   });
 });
+
+
+describe('tarefas entre mensagens: ✅ sempre no balão original', () => {
+  it('retoma a verificação no turno seguinte e reage ao pedido inicial após a ferramenta comprovar', async () => {
+    const modeloTeste = new ScriptedModel([
+      [assistantMessage('Vou conferir assim que você confirmar o profissional.')],
+      [functionCall('consultar_status_agendas', { profissional: 'Alice' }, { callId: 'retomada' })],
+      [assistantMessage('Conferi. A agenda está conectada.')]
+    ]);
+    const reagir = vi.fn().mockResolvedValue(true);
+    const enviar = vi.fn().mockResolvedValue(true);
+    const {app,consultarStatus} = preparar({ modeloTeste, reagir, enviar });
+    const pedido = { ...evento, data: { ...evento.data,
+      message: {conversation: 'Consegue verificar a agenda da Alice?'} } };
+    const continuacao = { ...evento, data: { ...evento.data,
+      key: {...evento.data.key, id: 'mensagem-2'},
+      message: {conversation:'Sim, pode continuar.'} } };
+    await comServidor(app,async postar => {
+      expect((await postar(pedido)).status).toBe(200);
+      expect((await postar(continuacao)).status).toBe(200);
+      expect((await postar(continuacao)).status).toBe(200);
+    });
+    expect(reagir.mock.calls.map(c => c[1])).toEqual(['🔎','👍','✅']);
+    expect(reagir.mock.calls.at(-1)?.[0]).toEqual(evento.data.key);
+    expect(consultarStatus).toHaveBeenCalledOnce();
+    modeloTeste.assertComplete();
+  });
+
+  it('não conclui solicitação de envio de link só porque verificou a agenda', async () => {
+    const modeloTeste = new ScriptedModel([
+      [assistantMessage('Preciso confirmar a agenda antes de enviar o link.')],
+      [functionCall('consultar_status_agendas', { profissional: 'Alice' }, { callId: 'consulta' })],
+      [assistantMessage('A agenda não está conectada.')]
+    ]);
+    const reagir = vi.fn().mockResolvedValue(true);
+    const {app} = preparar({ modeloTeste, reagir });
+    const pedido = {...evento,data:{...evento.data,message:{conversation:'Pode enviar o link da agenda da Alice?'}}};
+    const outra = {...evento,data:{...evento.data,key:{...evento.data.key,id:'mensagem-2'},
+      message:{conversation:'Sim, pode verificar.'}}};
+    await comServidor(app,async postar=>{
+      expect((await postar(pedido)).status).toBe(200);
+      expect((await postar(outra)).status).toBe(200);
+    });
+    expect(reagir.mock.calls.some(c => c[1]==='✅')).toBe(false);
+    modeloTeste.assertComplete();
+  });
+
+  it('não põe ✅ numa agenda indisponível nem numa mera resposta sem ferramenta', async () => {
+    const modeloTeste = new ScriptedModel([
+      [assistantMessage('Vou verificar a conexão.')],
+      [functionCall('consultar_status_agendas', {profissional:'Alice'},{callId:'falhou'})],
+      [assistantMessage('Não consegui verificar a agenda agora.')]
+    ]);
+    const reagir = vi.fn().mockResolvedValue(true);
+    const consultarStatus = vi.fn().mockResolvedValue({
+      tribemd:{salvo:true,conectada:false,indisponivel:true},
+      amplimed:{salvo:false,conectada:false,indisponivel:true}
+    });
+    const {app} = preparar({ modeloTeste, reagir, consultarStatus });
+    await comServidor(app,async postar=>{
+      expect((await postar({...evento,data:{...evento.data,message:{conversation:'Consegue verificar a agenda da Alice?'}}})).status).toBe(200);
+      expect((await postar({...evento,data:{...evento.data,key:{...evento.data.key,id:'mensagem-2'},
+        message:{conversation:'Sim, continue.'}}})).status).toBe(200);
+    });
+    expect(reagir.mock.calls.some(c=>c[1]==='✅')).toBe(false);
+    modeloTeste.assertComplete();
+  });
+});

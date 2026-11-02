@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
+import { validarTarefas, type TarefaPendente } from './tarefas.js';
 
 export type AgendaEscolhida = 'tribemd' | 'amplimed';
 export type PerguntaPendente = 'agenda' | 'profissional' | 'confirmar_profissional' | 'periodo' | null;
@@ -10,6 +11,7 @@ export interface EstadoConversa {
   profissionalPerguntadoId?: string;
   nomeProfissionalPerguntado?: string;
   descoberta?: { agenda: AgendaEscolhida; nomes: string[] };
+  tarefasPendentes?: TarefaPendente[];
 }
 type Banco = Pick<pg.Pool, 'query'>;
 
@@ -24,6 +26,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
       { perguntaPendente: e.perguntaPendente as PerguntaPendente } : {}),
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
+    ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
     ...(e.descoberta && ['tribemd','amplimed'].includes(e.descoberta.agenda) && Array.isArray(e.descoberta.nomes) ? {
       descoberta: { agenda: e.descoberta.agenda as AgendaEscolhida, nomes: e.descoberta.nomes.filter((n: unknown) => typeof n === 'string' && n.length <= 150).slice(0,20) as string[] }
     } : {})
@@ -118,6 +121,7 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
   if (estado.descoberta && ['tribemd','amplimed'].includes(estado.descoberta.agenda)) permitido.descoberta = {
     agenda: estado.descoberta.agenda, nomes: estado.descoberta.nomes.filter(n => n && n.length <= 150).slice(0,20)
   };
+  if (estado.tarefasPendentes) permitido.tarefasPendentes = validarTarefas(estado.tarefasPendentes);
   await pool.query(
     'insert into noto_agent_conversas(conta_id,estado) values($1,$2::jsonb) on conflict(conta_id) do update set estado=excluded.estado,atualizado_em=now()',
     [contaId, JSON.stringify(permitido)]

@@ -5,6 +5,7 @@ import { contemCredencialAgenda } from '../cofre/links.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
 import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
+import type { ComprovanteTarefa } from './tarefas.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean }
@@ -32,6 +33,8 @@ export interface DependenciasAgente {
   tracesAtivos?: boolean;
   aoDiagnostico?: (registro: DiagnosticoAgente) => void;
   registrarFerramenta?: (evento: EventoFerramenta) => void;
+  /** Evidência de ferramenta real, privada ao turno; nunca exposta no diagnóstico. */
+  aoComprovante?: (comprovante: ComprovanteTarefa) => void;
 }
 
 function painelSeguro(origem?: string): string {
@@ -105,6 +108,14 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const resultados = await Promise.all(resolucao.encontrados.map(async p => {
         try {
           const s = await deps.consultarStatus(p.id);
+          if (!s.tribemd.indisponivel) {
+            deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id, agenda: 'tribemd' });
+            if (s.tribemd.conectada) deps.aoComprovante?.({ tipo: 'conectar_agenda', profissionalId: p.id, agenda: 'tribemd' });
+          }
+          if (!s.amplimed.indisponivel) {
+            deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id, agenda: 'amplimed' });
+            if (s.amplimed.conectada) deps.aoComprovante?.({ tipo: 'conectar_agenda', profissionalId: p.id, agenda: 'amplimed' });
+          }
           const descrever = (e: EstadoFonte) => e.indisponivel ? 'consulta indisponível' :
             e.conectada ? 'conectada' : e.salvo ? 'acesso salvo, conexão não confirmada' : 'não conectada';
           return {
@@ -185,6 +196,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         if (estado.conectada) {
           log('CONEXAO_EXISTENTE');
+          deps.aoComprovante?.({ tipo: 'conectar_agenda', profissionalId: p.id, agenda });
+          deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id, agenda });
           return { pronto: true, profissional: p.nome, agendaEscolhida: plataforma, orientacao: 'Já conectada. Não reconectar.' };
         }
         log('CONEXAO_PENDENTE');
@@ -223,6 +236,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         const resultado=await deps.descobrirProfissionais!(id,agenda);
         registrar('descobrir_profissionais_agenda',resultado.ok?'PROFISSIONAIS_ENCONTRADOS':'STATUS_INDISPONIVEL',inicio);
+        if (resultado.ok) deps.aoComprovante?.({ tipo: 'descobrir_profissionais', profissionalId: id, agenda });
         return resultado.ok ? {ok:true,nomes:(resultado.nomes??[]).slice(0,20), aviso:'Nomes vistos na fonte, ainda não vinculados à conta.'}
           : {ok:false,motivo:resultado.motivo??'LEITURA_INDISPONIVEL'};
       } catch {
@@ -281,6 +295,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         const resultado=await deps.confirmarProfissionais!(medico.id,comprovados.map(c=>c[0]!));
         registrar('confirmar_profissionais_descobertos',resultado.ok?'PROFISSIONAIS_CONFIRMADOS':'PROFISSIONAL_AMBIGUO',inicio);
+        if (resultado.ok) deps.aoComprovante?.({ tipo: 'vincular_profissionais', profissionalId: medico.id, agenda });
         return resultado.ok ? {ok:true,nomes:resultado.nomes??[],fiscalConfirmado:false,certificadosHerdados:false}
           : {ok:false,motivo:resultado.motivo??'FALHA_CONFIRMAR'};
       }catch {
@@ -317,6 +332,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         const enviado=await deps.solicitarLinkAgenda!(id,agenda);
         registrar('solicitar_link_seguro_agenda',enviado.enviado?'LINK_ENVIADO':'FERRAMENTA_INDISPONIVEL',inicio);
+        if (enviado.enviado) deps.aoComprovante?.({ tipo: 'enviar_link_agenda', profissionalId: id, agenda });
         return enviado.enviado?{enviado:true,observacao:'Link enviado por mensagem separada; não repeti-lo.'}:{enviado:false,motivo:enviado.motivo??'ENVIO_INDISPONIVEL'};
       } catch {
         registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
@@ -338,6 +354,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       try {
         const prontidao=await deps.consultarProntidao!(r.encontrados[0]!.id);
         registrar('consultar_prontidao_onboarding','PRONTIDAO_VERIFICADA',inicio);
+        deps.aoComprovante?.({ tipo: 'verificar_prontidao', profissionalId: r.encontrados[0]!.id });
         return {ok:true,...prontidao,observacao:'Nenhuma emissão foi realizada e nenhuma preferência fiscal foi alterada.'};
       }catch{
         registrar('consultar_prontidao_onboarding','FERRAMENTA_INDISPONIVEL',inicio);
@@ -388,6 +405,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           ...(crm?{crm}:{}),...(rqe?{rqe}:{})
         });
         registrar('confirmar_dados_profissionais',r.ok?'DADOS_PROFISSIONAIS_SALVOS':'FERRAMENTA_INDISPONIVEL',inicio);
+        if (r.ok) deps.aoComprovante?.({ tipo: 'salvar_dados_profissionais', profissionalId: medico.id });
         return r.ok?{ok:true,nome:r.nome,crm:r.crm,rqe:r.rqe,
           dadosFiscaisConfirmados:false,emissaoAutorizada:false}: {ok:false,motivo:r.motivo??'NAO_SALVO'};
       }catch{
@@ -414,6 +432,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         const status=await deps.consultarProntidao!(medico.id);
         if(status.certificadoValido) {
           registrar('orientar_certificado_seguro','CERTIFICADO_EXISTENTE',inicio);
+          deps.aoComprovante?.({ tipo: 'verificar_certificado', profissionalId: medico.id });
           return {ok:true,certificadoValido:true,orientacao:'Certificado válido; não pedir novo envio.'};
         }
         const origem=new URL(entrada.painelUrl!);
@@ -421,6 +440,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           throw new Error('ORIGEM_NAO_CONFIAVEL');
         const url=linkCertificadoMedico(origem.origin,medico.id);
         registrar('orientar_certificado_seguro','CERTIFICADO_PENDENTE',inicio);
+        deps.aoComprovante?.({ tipo: 'verificar_certificado', profissionalId: medico.id });
         return {ok:true,certificadoValido:false,orientacao:'Abrir página autenticada, nunca enviar senha ou A1 pela conversa.',url};
       }catch {
         registrar('orientar_certificado_seguro','FERRAMENTA_INDISPONIVEL',inicio);
