@@ -1,7 +1,7 @@
 import express from 'express';
 import type pg from 'pg';
 import type { Model } from '@openai/agents';
-import { criarRouterWebhookAgente } from './webhook.js';
+import { criarRouterWebhookAgente, type ChaveMensagemRecebida } from './webhook.js';
 import type { StatusFontes } from './agente.js';
 import type { DiagnosticoMensagem } from './diagnostico.js';
 
@@ -22,6 +22,9 @@ export function criarAppPilotoLeitura(deps: {
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
+  marcarLida?: (chave: ChaveMensagemRecebida) => Promise<boolean>;
+  reagir?: (chave: ChaveMensagemRecebida, emoji: '👍' | '❤️' | '🔎' | '👀' | '✅') => Promise<boolean>;
+  presenca?: (telefone: string, estado: 'composing' | 'paused') => Promise<boolean>;
 }) {
   const app = express();
   app.disable('x-powered-by');
@@ -39,7 +42,8 @@ export function criarAppPilotoLeitura(deps: {
       modeloTeste: deps.modeloTeste,
       tracesAtivos: deps.tracesAtivos, diagnosticoAtivo: deps.diagnosticoAtivo,
       registrarDiagnostico: deps.registrarDiagnostico,
-      consultarStatus: deps.consultarStatus, enviar: deps.enviar
+      consultarStatus: deps.consultarStatus, enviar: deps.enviar,
+      marcarLida: deps.marcarLida, reagir: deps.reagir, presenca: deps.presenca
     }));
   // Falha fechada: nada do servidor principal é importado ou exposto aqui.
   app.use((_req, res) => res.status(404).json({ ok: false, codigo: 'PILOTO_ROTA_NAO_DISPONIVEL' }));
