@@ -105,3 +105,45 @@ describe('Evolution: leitura, reação e presença autorizadas', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+
+describe('decisões de retomada: a última conversa não pode autorizar por menção incidental',()=>{
+  const prof=[{id:'m1',nome:'Dra. Alice Silva'}, {id:'m2',nome:'Dr. Bruno Lima'}];
+  it('pergunta sobre uma agenda não muda agenda escolhida nem seleciona médico',()=>{
+    const anterior={agendaEscolhida:'tribemd' as const,profissionalConfirmadoId:'m2'};
+    const novo=evoluirEstadoConversa(anterior,'A Amplimed da Alice está funcionando?','Vou verificar.',prof);
+    expect(novo.agendaEscolhida).toBe('tribemd');
+    expect(novo.profissionalConfirmadoId).toBe('m2');
+  });
+  it('correção declarativa troca a agenda, sem apagar outros fatos confirmados',()=>{
+    const anterior={agendaEscolhida:'amplimed' as const,profissionalConfirmadoId:'m2'};
+    const novo=evoluirEstadoConversa(anterior,'Não, é TribeMD','Certo, verificarei.',prof);
+    expect(novo.agendaEscolhida).toBe('tribemd');
+    expect(novo.profissionalConfirmadoId).toBe('m2');
+  });
+  it('pergunta explícita sobre adicionar médico confirmado na fonte gera alvo único',()=>{
+    const anterior={agendaEscolhida:'amplimed' as const,
+      descoberta:{agenda:'amplimed' as const,nomes:['Alice Silva','Bruno Lima']}};
+    const novo=evoluirEstadoConversa(anterior,
+      'Quem é Bruno Lima?',
+      'Encontrei Bruno na agenda. Você confirma adicionar Bruno Lima à conta?',prof);
+    expect(novo.perguntaPendente).toBe('confirmar_profissional');
+    expect(novo.nomeProfissionalPerguntado).toBe('Bruno Lima');
+    expect(novo.profissionalConfirmadoId).toBeUndefined();
+  });
+  it('não cria consentimento pendente para nome que não foi encontrado na fonte',()=>{
+    const anterior={descoberta:{agenda:'tribemd' as const,nomes:['Alice Silva']}};
+    const novo=evoluirEstadoConversa(anterior,'Quem é Bruno?',
+      'Você confirma adicionar Bruno Lima à conta?',prof);
+    expect(novo.perguntaPendente).not.toBe('confirmar_profissional');
+    expect(novo.nomeProfissionalPerguntado).toBeUndefined();
+  });
+  it('não descarta avisos fiscais quando há mais de doze balões',()=>{
+    const texto=[...Array.from({length:20},(_,i)=>'Mensagem '+(i+1)+'.'),
+      'Não há autorização para emitir automaticamente.'].join(' ');
+    const baloes=separarBaloes(texto);
+    expect(baloes.length).toBeLessThanOrEqual(12);
+    expect(baloes.join(' ')).toContain('Não há autorização para emitir automaticamente.');
+    expect(baloes.join(' ')).toContain('Mensagem 1.');
+  });
+});
