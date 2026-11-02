@@ -77,6 +77,17 @@ export async function iniciarServidorPiloto(env: NodeJS.ProcessEnv = process.env
         medicoId, cofreTribemd, cofreAmplimed,
         resolver: (id, agenda) => resolverReferenciaAgendaConta(pool, id, agenda)
       }),
+      marcarLida: async chave => {
+        if (chave.remoteJid.split('@')[0] !== telefone) return false;
+        return (await evolution.marcarLida({
+          instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone,
+          mensagemId: chave.id, chaveMensagem: chave
+        })).sucesso;
+      },
+      reagir: (chave, emoji) => chave.remoteJid.split('@')[0] === telefone
+        ? evolution.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji) : Promise.resolve(false),
+      presenca: (destinatario, estado) => destinatario === telefone
+        ? evolution.enviarPresenca(config.evolutionAssistantInstanceName, destinatario, estado) : Promise.resolve(false),
       enviar: async (destinatario, texto) => {
         if (destinatario !== telefone) return false;
         const r = await evolution.enviarTexto({
