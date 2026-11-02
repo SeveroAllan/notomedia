@@ -1,6 +1,5 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import express from 'express';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { criarAppExpress } from '../src/server.js';
 import { SupabaseAuthAdminService } from '../src/io/supabase/supabase-auth-admin-service.js';
