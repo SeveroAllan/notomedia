@@ -365,7 +365,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       const texto=entrada.texto.trim();
       const autorizou=/\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar|pode registrar|pode atualizar)\b/i.test(texto);
-      const escape=(valor:string) => valor.replace(/[.*+?^$()|[\]{}\\]/g,'\\  if (deps.consultarProntidao && entrada.painelUrl) extras.push(tool({');
+      const especiais=new Set(['.','*','+','?','^','$','{','}','(',')','|','[',']','\\']);
+      const escape=(valor:string) => [...valor].map(ch=>especiais.has(ch)?'\\'+ch:ch).join('');
       const informado=(rotulo:string,valor:string) =>
         new RegExp('\\b'+rotulo+'\\b\\s*(?:(?:n(?:umero|º|o)?)\\s*)?(?::|=|e|eh)?\\s*'+escape(valor)+'(?=$|[\\s,;.!?])','i').test(texto);
       const campos=[
