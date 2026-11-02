@@ -95,6 +95,24 @@ describe('Evolution: leitura, reação e presença autorizadas', () => {
     expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({number:'5511999990000',presence:'composing'});
     expect(JSON.parse(fetchMock.mock.calls[3][1].body)).toMatchObject({number:'5511999990000',presence:'paused'});
   });
+  it('admite formato alternativo da Evolution apenas quando o payload inicial é rejeitado',async()=>{
+    const fetchMock=vi.fn()
+      .mockResolvedValueOnce(new Response('{}',{status:400}))
+      .mockResolvedValueOnce(new Response('{}',{status:200}));
+    vi.stubGlobal('fetch',fetchMock);
+    const client=new EvolutionApiClient('https://evolution.invalid','api-ficticia','otp','otp');
+    expect(await client.reagirMensagem('assistente',chave,'❤️')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({key:chave,reaction:'❤️'});
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({reactionKey:chave,reactionMessage:'❤️'});
+  });
+  it('não repete reação quando a Evolution retorna falha de autenticação',async()=>{
+    const fetchMock=vi.fn().mockResolvedValue(new Response('{}',{status:401}));
+    vi.stubGlobal('fetch',fetchMock);
+    const client=new EvolutionApiClient('https://evolution.invalid','api-ficticia','otp','otp');
+    expect(await client.reagirMensagem('assistente',chave,'👍')).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it('nunca reage a outra instância, mensagem própria ou ID suspeito', async () => {
     const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);
     const client=new EvolutionApiClient('https://evolution.invalid','api-ficticia','otp','otp');
