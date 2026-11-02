@@ -258,3 +258,37 @@ describe('mensagens naturais e efeitos seguros no webhook', () => {
     expect(presenca).not.toHaveBeenCalled();
   });
 });
+
+
+describe('retry seguro no modo durável',()=>{
+  it('falha de consulta antes da reserva permite replay; depois da reserva o mesmo evento não reenvia',async()=>{
+    let indisponivel=true;
+    const reservados=new Set<string>();
+    const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
+      if(sql.includes('distinct conta_id')){
+        if(indisponivel){indisponivel=false;throw Error('BANCO_INDISPONIVEL');}
+        return {rows:[{conta_id:'conta-a'}]};
+      }
+      if(sql.includes('from medicos'))return {rows:[{id:'alice-id',nome_completo:'Alice Souza'}]};
+      if(sql.startsWith('select estado from noto_agent_conversas'))return {rows:[{estado:{}}]};
+      if(sql.startsWith('insert into noto_agent_mensagens')){
+        const chave=JSON.stringify(params);
+        if(reservados.has(chave))return {rows:[]};
+        reservados.add(chave);return {rows:[{mensagem_id:params[2]}]};
+      }
+      if(sql.startsWith('update noto_agent_mensagens')||sql.startsWith('insert into noto_agent_conversas'))return {rows:[],rowCount:1};
+      throw Error('QUERY_NAO_PREVISTA');
+    });
+    const enviar=vi.fn().mockResolvedValue(true);
+    const modeloTeste=new ScriptedModel([[assistantMessage('Consegui receber sua mensagem.')]]); 
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,enviar,persistirConversa:true});
+    await comServidor(app,async postar=>{
+      expect((await postar(evento)).status).toBe(503);
+      expect((await postar(evento)).status).toBe(200);
+      expect((await postar(evento)).status).toBe(200);
+    });
+    expect(enviar).toHaveBeenCalledOnce();
+    expect(reservados.size).toBe(1);
+    modeloTeste.assertComplete();
+  });
+});
