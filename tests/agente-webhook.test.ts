@@ -141,7 +141,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     });
     expect(modeloTeste.calls).toHaveLength(2);
     expect(JSON.stringify(modeloTeste.calls[1]?.request.input)).toContain('Você utiliza TribeMD');
-    expect(enviar).toHaveBeenCalledTimes(2);
+    expect(enviar.mock.calls.map(c => c[1])).toEqual(['Você utiliza TribeMD, Amplimed ou outra?', 'Perfeito, Amplimed.', 'Vamos identificar o profissional antes de conectar.']);
     modeloTeste.assertComplete();
   });
   it('diagnóstico por mensagem registra ferramentas e tokens sem guardar texto, telefone ou ID bruto', async () => {
