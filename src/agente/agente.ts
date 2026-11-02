@@ -179,7 +179,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         if (estado.indisponivel) {
           log('STATUS_INDISPONIVEL');
           return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
-            proximaEtapa: 'Não consegui verificar a conexão agora. Não afirmar desconexão; oferecer nova consulta.' };
+            proximaEtapa: 'Não foi possível consultar o estado interno do Cofre agora. Não afirmar que a agenda está desconectada nem pedir ao usuário para descobrir o estado técnico. Ofereça tentar verificar novamente mais tarde.' };
         }
         if (estado.conectada) {
           log('CONEXAO_EXISTENTE');
@@ -187,7 +187,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         log('CONEXAO_PENDENTE');
         return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma,
-          proximaEtapa: (estado.salvo ? 'Há acesso salvo, mas a conexão não foi confirmada. Conferir/reconectar' : 'É preciso conectar a agenda') + ' pela página segura ' + painel + '. Não pedir senha pelo WhatsApp.' };
+          proximaEtapa: (estado.salvo ? 'Conferir/reconectar acesso salvo, conexão não confirmada' : 'Conectar agenda') + ' na página segura ' + painel + '. Não pedir senha pelo WhatsApp.' };
       } catch {
         log('STATUS_INDISPONIVEL');
         return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
