@@ -6,10 +6,13 @@ import { criarRouterWebhookPareamento } from '../src/whatsapp/webhook-pareamento
 
 it('webhook de pareamento valida segredo, ignora mensagens e atualiza somente estado da instancia', async () => {
   const query = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+  const confirmarConexao = vi.fn().mockResolvedValue(true);
+  const aoConectar = vi.fn().mockResolvedValue(undefined);
   const app = express();
   app.use(express.json());
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
-    pool: { query } as unknown as pg.Pool, segredo: 'segredo-homologacao'
+    pool: { query } as unknown as pg.Pool, segredo: 'segredo-homologacao',
+    confirmarConexao, aoConectar
   }));
   const servidor = await new Promise<Server>(resolve => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -32,8 +35,11 @@ it('webhook de pareamento valida segredo, ignora mensagens e atualiza somente es
 
     expect((await enviar({ instance: 'medico_teste', event: 'connection.update', data: { state: 'open' } })).status).toBe(204);
     expect(query).toHaveBeenCalledWith(expect.stringContaining('update whatsapp_instancias'), ['medico_teste', 'conectado']);
+    expect(confirmarConexao).toHaveBeenCalledExactlyOnceWith('medico_teste');
+    expect(aoConectar).toHaveBeenCalledExactlyOnceWith('medico_teste');
     expect((await enviar({ instance: 'medico_teste', event: 'connection.update', data: { state: 'close' } })).status).toBe(204);
     expect(query).toHaveBeenCalledWith(expect.any(String), ['medico_teste', 'desconectado']);
+    expect(aoConectar).toHaveBeenCalledTimes(1);
   } finally {
     await new Promise<void>((resolve, reject) => servidor.close(err => err ? reject(err) : resolve()));
   }
