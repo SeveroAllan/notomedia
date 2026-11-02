@@ -16,6 +16,7 @@ import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { separarBaloes } from './agente/baloes.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
+import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -188,6 +189,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       return r.tipo === 'consultas'
         ? { ok: true, nomes: profissionaisIdentificados(r.consultas).slice(0, 20) }
         : { ok: false, motivo: r.codigo };
+    },
+    confirmarProfissionais: async (medicoBaseId, nomes) => {
+      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CONFIRMACAO_DESLIGADA' };
+      const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
+      return resultado.ok ? { ok: true, nomes: resultado.medicos.map(m => m.nomeCompleto) }
+        : { ok: false, motivo: resultado.motivo };
     },
     solicitarLinkAgenda: async (medicoId, agenda, telefone) => {
       // A criação exige operador autenticado pela mesma conta, destino autorizado
