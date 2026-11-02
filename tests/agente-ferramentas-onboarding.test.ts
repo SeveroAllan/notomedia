@@ -137,3 +137,92 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     modelo.assertComplete();
   });
 });
+
+
+describe('confirmação de médicos descobertos depende de consentimento e evidência atual', () => {
+  const profissionais=[{id:'m1',nome:'Dra. Alice Silva'}];
+  const conectado={tribemd:{salvo:true,conectada:true},amplimed:{salvo:true,conectada:true}};
+  const descoberta=vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva','Bruno Costa']});
+
+  it('mencionar nomes numa pergunta não autoriza cadastro', async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+      },{callId:'sem-confirmacao'})],
+      [assistantMessage('Encontrei Bruno na agenda. Você confirma adicioná-lo à conta?')]
+    ]);
+    const confirmar=vi.fn();
+    const diag=vi.fn();
+    const resposta=await responderAgente({
+      texto:'O Bruno Costa também está na agenda da Alice?',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(conectado),
+      descobrirProfissionais:descoberta,confirmarProfissionais:confirmar,aoDiagnostico:diag});
+    expect(confirmar).not.toHaveBeenCalled();
+    expect(resposta).toContain('confirma');
+    expect(diag.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    modelo.assertComplete();
+  });
+
+  it('confirma a ação quando o usuário identifica nome e autoriza incluir, sem herdar fiscal', async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+      },{callId:'confirma-doctor'})],
+      [assistantMessage('Bruno foi adicionado à conta. Isso não configura certificado nem autoriza emissão.')]
+    ]);
+    const confirmar=vi.fn().mockResolvedValue({ok:true,nomes:['Bruno Costa']});
+    const diag=vi.fn();
+    const resposta=await responderAgente({
+      texto:'Confirmo adicionar Bruno Costa à conta.',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(conectado),
+      descobrirProfissionais:vi.fn().mockResolvedValue({ok:true,nomes:['Bruno Costa']}),
+      confirmarProfissionais:confirmar,aoDiagnostico:diag});
+    expect(confirmar).toHaveBeenCalledExactlyOnceWith('m1',['Bruno Costa']);
+    expect(diag.mock.calls[0][0].ferramentas[0].codigo).toBe('PROFISSIONAIS_CONFIRMADOS');
+    expect(resposta).toContain('não autoriza emissão');
+    modelo.assertComplete();
+  });
+
+  it('não cadastra nome que não aparece na fonte agora, mesmo com autorização', async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+      },{callId:'fora-fonte'})],
+      [assistantMessage('Não consegui confirmar Bruno na agenda. Vou verificar a fonte novamente.')]
+    ]);
+    const confirmar=vi.fn();
+    const diag=vi.fn();
+    await responderAgente({
+      texto:'Confirmo adicionar Bruno Costa à conta.',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(conectado),
+      descobrirProfissionais:vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva']}),
+      confirmarProfissionais:confirmar,aoDiagnostico:diag});
+    expect(confirmar).not.toHaveBeenCalled();
+    expect(diag.mock.calls[0][0].ferramentas[0].codigo).toBe('PROFISSIONAL_AMBIGUO');
+    modelo.assertComplete();
+  });
+
+  it('sim isolado não cadastra lista múltipla, apenas nome único explicitamente pendente', async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+      },{callId:'sim-multiplos'})],
+      [assistantMessage('Qual nome da lista você confirma?')]
+    ]);
+    const confirmar=vi.fn();
+    const diag=vi.fn();
+    await responderAgente({
+      texto:'sim',profissionais,
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1',
+        perguntaPendente:'profissional',descoberta:{agenda:'tribemd',nomes:['Alice Silva','Bruno Costa']}}
+    },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(conectado),
+      descobrirProfissionais:vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva','Bruno Costa']}),
+      confirmarProfissionais:confirmar,aoDiagnostico:diag});
+    expect(confirmar).not.toHaveBeenCalled();
+    expect(diag.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    modelo.assertComplete();
+  });
+});
