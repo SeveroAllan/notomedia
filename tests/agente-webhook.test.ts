@@ -347,7 +347,7 @@ describe('tarefas entre mensagens: ✅ sempre no balão original', () => {
     ]);
     const reagir = vi.fn().mockResolvedValue(true);
     const consultarStatus = vi.fn().mockResolvedValue({
-      tribemd:{salvo:true,conectada:false,indisponivel:true},
+      tribemd:{salvo:true,conectada:false},
       amplimed:{salvo:false,conectada:false,indisponivel:true}
     });
     const {app} = preparar({ modeloTeste, reagir, consultarStatus });

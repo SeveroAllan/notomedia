@@ -108,6 +108,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const resultados = await Promise.all(resolucao.encontrados.map(async p => {
         try {
           const s = await deps.consultarStatus(p.id);
+          // Verificar "a agenda" em geral exige resultado de ambas as fontes.
+          if (!s.tribemd.indisponivel && !s.amplimed.indisponivel) {
+            deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id });
+          }
           if (!s.tribemd.indisponivel) {
             deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id, agenda: 'tribemd' });
             if (s.tribemd.conectada) deps.aoComprovante?.({ tipo: 'conectar_agenda', profissionalId: p.id, agenda: 'tribemd' });

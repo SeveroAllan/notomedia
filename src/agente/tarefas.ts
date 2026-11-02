@@ -52,7 +52,7 @@ export function classificarPedidoTarefa(texto: string): TipoTarefa | null {
       !/\b(?:verific|confer|checa|consult)\w*/.test(t)) return 'conectar_agenda';
   if (/\b(?:profissionais|medicos|medicas|quem atende|quem atendeu)\b/.test(t) &&
       /\b(?:agenda|tribemd|amplimed)\b/.test(t) &&
-      /\b(?:list|descubr|identific|encontr|procur|busc|consult|verific|quais|quem)\w*/.test(t)) return 'descobrir_profissionais';
+      /\b(?:list|descobr|identific|encontr|procur|busc|consult|verific|quais|quem)\w*/.test(t)) return 'descobrir_profissionais';
   if (/\bcertificado\b/.test(t) && /\b(?:verific|confer|consult|checa)\w*/.test(t)) return 'verificar_certificado';
   if (/\b(?:prontidao|liberado|apto|preparado)\b/.test(t) &&
       /\b(?:verific|confer|consult|checa)\w*/.test(t)) return 'verificar_prontidao';
@@ -114,7 +114,7 @@ export function selecionarConclusao(
     t.instancia === instancia && t.remetenteRef === remetenteRef &&
     comprovantes.some(p => p.tipo === t.tipo &&
       p.profissionalId === (t.profissionalId ?? profissionalConfirmadoId) &&
-      (!t.agenda || p.agenda === t.agenda)));
+      (t.agenda ? p.agenda === t.agenda : p.agenda === undefined)));
   return candidatas.length === 1 ? candidatas[0]! : null;
 }
 

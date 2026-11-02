@@ -48,11 +48,12 @@ describe('conclusão verificável e referência original', () => {
 
   it('não completa pedido sem alvo conhecido nem cruza conta, instância ou pessoa', () => {
     const pedido = tarefa('verificar_agenda', { profissionalId: undefined });
-    const evidencia = [{ tipo: 'verificar_agenda' as const, profissionalId: 'alice-id', agenda: 'tribemd' as const }];
+    const evidencia = [{ tipo: 'verificar_agenda' as const, profissionalId: 'alice-id' }];
     expect(selecionarConclusao([pedido], evidencia, 'noto_assistente', referencia, undefined, inicio)).toBeNull();
     expect(selecionarConclusao([pedido], evidencia, 'noto_assistente', 'b'.repeat(24), 'alice-id', inicio)).toBeNull();
     expect(selecionarConclusao([pedido], evidencia, 'outra_instancia', referencia, 'alice-id', inicio)).toBeNull();
     expect(selecionarConclusao([pedido], evidencia, 'noto_assistente', referencia, 'bruno-id', inicio)).toBeNull();
+    expect(selecionarConclusao([pedido], [{...evidencia[0]!, agenda:'tribemd' as const}], 'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
     expect(selecionarConclusao([pedido], evidencia, 'noto_assistente', referencia, 'alice-id', inicio)?.mensagemId)
       .toBe(pedido.mensagemId);
   });
