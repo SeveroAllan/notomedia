@@ -1,13 +1,13 @@
 import { createHmac } from 'node:crypto';
 
-export type FerramentaNoto = 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda';
+export type FerramentaNoto = 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_prontidao_onboarding';
 export type CodigoFerramenta =
   | 'CONTA_AUTORIZADA' | 'CONTA_NAO_ENCONTRADA'
   | 'STATUS_CONECTADO' | 'STATUS_NAO_CONECTADO' | 'STATUS_PARCIAL'
   | 'STATUS_INDISPONIVEL' | 'PROFISSIONAL_AMBIGUO'
   | 'PROFISSIONAL_NAO_ENCONTRADO' | 'DEPENDENCIA_CONTA'
   | 'DEPENDENCIA_PROFISSIONAL' | 'CONEXAO_EXISTENTE'
-  | 'CONEXAO_PENDENTE' | 'FERRAMENTA_INDISPONIVEL';
+  | 'CONEXAO_PENDENTE' | 'FERRAMENTA_INDISPONIVEL' | 'PROFISSIONAIS_ENCONTRADOS' | 'LINK_ENVIADO' | 'PRONTIDAO_VERIFICADA';
 export type CodigoExecucao = 'RESPOSTA' | 'CREDENCIAL_BLOQUEADA'
   | 'SEM_MODELO' | 'LIMITE_PROFISSIONAIS' | 'FALLBACK_MODELO' | 'SEM_RESPOSTA' | 'ENTRADA_VAZIA' | 'RESPOSTA_BLOQUEADA';
 
