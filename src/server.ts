@@ -12,7 +12,7 @@ import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { criarRouterWebhookAgente } from './agente/webhook.js';
 import { criarRouterWebhookPareamento } from './whatsapp/webhook-pareamento.js';
 import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
-import { enviarBoasVindasOtpTeste } from './agente/boas-vindas-otp.js';
+import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -115,9 +115,33 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
     config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
   );
+  const boasVindasInstancia = async (nomeInstancia: string) => {
+    // O piloto não pode reutilizar o canal de pacientes nem alcançar outros números.
+    if (config.notoPilotoRestrito !== true || !config.notoAgentAtivo || !config.notoAgentEnvioAtivo ||
+        config.envioRealAllowlist?.length !== 1 ||
+        config.evolutionAssistantInstanceName === config.evolutionOfficialInstanceName) return;
+    await enviarBoasVindasAposPareamento({
+      pool, ativo: true, nomeInstancia, allowlist: config.envioRealAllowlist,
+      enviar: async (telefone, texto) => (await transporteAgente.enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+      })).sucesso
+    });
+  };
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
-    pool, segredo: config.evolutionWebhookSecret
+    pool, segredo: config.evolutionWebhookSecret,
+    confirmarConexao: async instancia => {
+      try {
+        const resultado = await fetch(
+          `${config.evolutionApiUrl.replace(/\\/+$/, '')}/instance/connectionState/${encodeURIComponent(instancia)}`,
+          { headers: { apikey: config.evolutionGlobalApiKey }, signal: AbortSignal.timeout(5000), redirect: 'error' }
+        );
+        if (!resultado.ok) return false;
+        const corpo = await resultado.json();
+        return corpo?.instance?.state === 'open';
+      } catch { return false; }
+    },
+    aoConectar: boasVindasInstancia
   }));
   app.use('/webhook/evolution', criarRouterWebhookAgente({
     pool,
@@ -161,7 +185,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const adnNfseClient = new AdnNfseClient();
 
-  const aoConectarWhatsapp = (_medicoId: string) => {};
+  const aoConectarWhatsapp = async (medicoId: string) => {
+    const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+    await boasVindasInstancia(nomeInstancia);
+  };
 
   // Healthcheck para o Easypanel
   app.get('/health', (_req: Request, res: Response) => {
@@ -184,6 +211,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         left join cadastro_certificado_trabalhos t on t.medico_id=m.id
         left join whatsapp_instancias w on w.medico_id=m.id
         limit 0`);
+      if (config.notoPilotoRestrito === true) {
+        // Bloqueia lançamento do piloto sem a reserva durável contra duplicidade.
+        await pool.query('select conta_id from noto_boas_vindas_pareamento limit 0');
+      }
       res.json({ status: 'ready' });
     } catch (erro) {
       // Nunca registrar a mensagem do driver (pode conter URL/credenciais).
@@ -317,21 +348,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(401).json(resultado);
       }
 
-      // Mensagem opcional somente após OTP verificado, conta preexistente e
-      // allowlist unitária. Não envia nada por grupos, pacientes ou terceiros.
-      if (config.notoAgentBoasVindasOtpTesteAtivas &&
-          config.evolutionAssistantInstanceName !== config.evolutionOfficialInstanceName) {
-        await enviarBoasVindasOtpTeste({
-          ativo: true, telefoneVerificado: telefone,
-          ehNovoUsuario: resultado.sessao.usuario.ehNovoUsuario,
-          authUserId: resultado.sessao.usuario.authUserId,
-          allowlist: allowlistTeste,
-          enviar: async (destinatario, texto) => (await transporteAgente.enviarTexto({
-            instanciaNome: config.evolutionAssistantInstanceName,
-            contatoTelefone: destinatario, texto
-          })).sucesso
-        });
-      }
+      // Nenhuma boas-vindas no OTP. O envio só ocorre após OPEN real na Evolution.
       return res.json(resultado);
     } catch (err: any) {
       console.error('Erro na verificação de OTP:', err);
@@ -380,7 +397,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       res.setHeader('Cache-Control', 'no-store');
       let status = await consultarStatusOnboarding(pool, medicoId, config.preparacaoFiscalAtiva);
       // Reconcile an outdated local record before asking an already linked user to pair again.
-      if (status.passos.passo3CertificadoValido && !status.passos.passo4WhatsappConectado) {
+      if (status.passos.passo4WhatsappVinculado && !status.passos.passo4WhatsappConectado) {
         const conexao = await consultarStatusInstanciaWhatsapp(pool, {
           medicoId,
           evolutionUrl: config.evolutionApiUrl,
