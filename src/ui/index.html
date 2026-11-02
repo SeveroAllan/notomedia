@@ -2532,7 +2532,9 @@
       const btn = document.getElementById('btnWhatsappPainel');
       const status = document.getElementById('whatsappPainelStatus');
       try {
-        const res = await fetch('/api/whatsapp/status', {
+        const medicoId = medicoIdSelecionado();
+        if (!medicoId) throw Error('Médico não identificado');
+        const res = await fetch('/api/whatsapp/status?medicoId=' + encodeURIComponent(medicoId), {
           headers: { Authorization: 'Bearer ' + sessao.tokenAcesso },
           cache: 'no-store', signal: AbortSignal.timeout(10000)
         });

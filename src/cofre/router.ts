@@ -12,6 +12,7 @@ import { pedirCodigo2faPorArquivo } from './codigo-2fa-arquivo.js';
 import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js';
 import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
 import { consultarStatusAgendasInterno } from './status-interno.js';
+import { validarCofreHomologacao } from './configuracao-homologacao.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
@@ -42,19 +43,21 @@ export function criarCofreContas(deps: {
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
 }) {
     const env = deps.env ?? process.env, app = express();
+    const homologacao = env['NOTO_PILOTO_RESTRITO'] === 'true';
+    const cofreAutorizado = !homologacao || validarCofreHomologacao(env);
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
     let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, links: LinksCofre | undefined;
     // URL pública é requisito apenas dos links/páginas do Cofre. Status local
     // não deve depender de DNS, proxy, TLS ou exposição do app à internet.
     try {
-        const u = new URL(env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '');
+        const u = new URL(cofreAutorizado ? (homologacao ? (env.COFRE_ORIGEM ?? '') : env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '') : '');
         if (u.pathname !== '/' || u.search || u.hash || u.username || u.password || u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))
             throw Error();
         origem = u.origin;
     } catch { /* Ausência de origem desabilita links; leitura interna continua disponível. */ }
     try {
-        const base = env.COFRE_DIRETORIO || env.TRIBEMD_TESTE_DIRETORIO;
+        const base = cofreAutorizado ? (homologacao ? env.COFRE_DIRETORIO : env.COFRE_DIRETORIO || env.TRIBEMD_TESTE_DIRETORIO) : undefined;
         if (!base)
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
@@ -155,7 +158,7 @@ export function criarCofreContas(deps: {
     app.use((_erro: unknown, req: Request, res: Response, _next: unknown) => { apagar(req); res.status(400).json({ ok: false, codigo: 'ENTRADA_INVALIDA' }); });
     const referencia = (medicoId:string,agenda:'tribemd'|'amplimed') =>
         resolverReferenciaAgendaConta(deps.pool,medicoId,agenda).catch(()=>medicoId);
-    return { app, links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
+    return { app, links, configuracaoOk: !!cofre && !!origem && !!links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
         return cofre.detalheAoVivo(await referencia(medicoId,'tribemd'), atendimentoId);
     }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
@@ -165,8 +168,8 @@ export function criarCofreContas(deps: {
     } }, encerrar: async () => { await cofre?.encerrar(); },
         statusAgendas: (medicoId: string) => consultarStatusAgendasInterno({
             medicoId,
-            cofreTribemd: cofre,
-            cofreAmplimed,
+            cofreTribemd: homologacao && (!origem || !links) ? undefined : cofre,
+            cofreAmplimed: homologacao && (!origem || !links) ? undefined : cofreAmplimed,
             resolver: (id, agenda) => resolverReferenciaAgendaConta(deps.pool, id, agenda)
         }),
         statusAgenda: async (medicoId: string) => {

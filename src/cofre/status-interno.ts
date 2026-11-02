@@ -10,10 +10,11 @@ export interface EstadoFonteInterna {
   conectada: boolean;
   consentimentoEm: string | null;
   indisponivel?: boolean;
+  motivo?: 'INTEGRACAO_NAO_CONFIGURADA' | 'FALHA_CONSULTA_INTEGRACAO';
 }
 
-const indisponivel = (): EstadoFonteInterna => ({
-  salvo: false, conectada: false, consentimentoEm: null, indisponivel: true
+const indisponivel = (motivo: NonNullable<EstadoFonteInterna['motivo']>): EstadoFonteInterna => ({
+  salvo: false, conectada: false, consentimentoEm: null, indisponivel: true, motivo
 });
 
 export async function consultarStatusAgendasInterno(deps: {
@@ -24,7 +25,7 @@ export async function consultarStatusAgendasInterno(deps: {
 }): Promise<{ tribemd: EstadoFonteInterna; amplimed: EstadoFonteInterna }> {
   const [tribemd, amplimed] = await Promise.all([
     (async (): Promise<EstadoFonteInterna> => {
-      if (!deps.cofreTribemd) return indisponivel();
+      if (!deps.cofreTribemd) return indisponivel('INTEGRACAO_NAO_CONFIGURADA');
       try {
         const referencia = await deps.resolver(deps.medicoId, 'tribemd');
         const s = await deps.cofreTribemd.status(referencia);
@@ -34,10 +35,10 @@ export async function consultarStatusAgendasInterno(deps: {
           conectada: s.salvo && s.ativo && s.estado === 'conectado',
           consentimentoEm
         };
-      } catch { return indisponivel(); }
+      } catch { return indisponivel('FALHA_CONSULTA_INTEGRACAO'); }
     })(),
     (async (): Promise<EstadoFonteInterna> => {
-      if (!deps.cofreAmplimed) return indisponivel();
+      if (!deps.cofreAmplimed) return indisponivel('INTEGRACAO_NAO_CONFIGURADA');
       try {
         const referencia = await deps.resolver(deps.medicoId, 'amplimed');
         const s = await deps.cofreAmplimed.status(referencia);
@@ -46,7 +47,7 @@ export async function consultarStatusAgendasInterno(deps: {
           conectada: s.salvo && s.ativo && s.estado === 'conectado',
           consentimentoEm: s.consentimentoEm
         };
-      } catch { return indisponivel(); }
+      } catch { return indisponivel('FALHA_CONSULTA_INTEGRACAO'); }
     })()
   ]);
   return { tribemd, amplimed };

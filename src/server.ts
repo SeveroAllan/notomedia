@@ -46,7 +46,6 @@ import { salvarCertificadoMedico } from './onboarding/fluxos/salvar-certificado-
 import { conectarInstanciaWhatsappMedico } from './onboarding/io/conectar-instancia-whatsapp-medico.js';
 import { consultarStatusInstanciaWhatsapp } from './onboarding/io/consultar-status-instancia-whatsapp.js';
 import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onboarding.js';
-import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
 import { ZodError } from 'zod';
@@ -202,7 +201,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       // e a instância fiscal de pacientes permanece desligada.
       const seguro = config.envioRealAllowlist?.length === 1 &&
         gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
-      if (!seguro || !cofres.links) return { enviado: false, motivo: 'ENVIO_INDISPONIVEL' };
+      if (!seguro || !cofres.links) return { enviado: false, motivo:
+        !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL' };
       const r = await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
       return { enviado: Boolean(r.ok && r.motivo === 'enviado'), ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {}) };
     },
@@ -325,11 +325,23 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const routerNfse = criarRouterNfse({
     repositorio: emissaoApiRepo,
     autenticar: async token => {
-      const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (!error && data.user?.id) {
-        return resolverMedicoId(pool, data.user.id).catch(() => null);
+      // NFS-e: somente sessão Supabase Auth verificada. Nunca interpretar token
+      // como medicos.id/usuarios.id nem usar resolvedor com INSERT implícito.
+      try {
+        const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
+        if (error || !data.user?.id) return null;
+        const { rows } = await pool.query(`
+          select m.id from usuarios u
+          join medicos m on m.usuario_id = u.id and m.conta_id = u.conta_id
+          where u.auth_user_id = $1 and u.ativo = true
+          limit 2
+        `, [data.user.id]);
+        // A API legada recebe um token, não uma seleção explícita de médico:
+        // recusar vínculo ambíguo em vez de usar o primeiro arbitrariamente.
+        return rows.length === 1 ? String(rows[0]!.id) : null;
+      } catch {
+        return null;
       }
-      return resolverMedicoId(pool, token).catch(() => null);
     }
   });
   // O piloto restrito permite leitura fiscal legada, mas não aceita criar solicitações.
@@ -460,7 +472,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const rotasProtegidas = [
     '/api/onboarding/confirmar-fiscal', '/api/onboarding/certificado',
     '/api/onboarding/nome', '/api/conta/perfil', '/api/conta/preferencias',
-    '/api/onboarding/buscar-referencia', '/api/onboarding/xml'
+    '/api/onboarding/buscar-referencia', '/api/onboarding/xml',
+    '/api/onboarding/status', '/api/onboarding/whatsapp/iniciar',
+    '/api/onboarding/whatsapp/status'
   ];
   app.use(rotasProtegidas, criarGuardaMedicoDaConta({
     pool,
@@ -475,21 +489,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Passo 0: Status Geral do Onboarding
   app.get('/api/onboarding/status', async (req: Request, res: Response) => {
     try {
-      const medicoIdRaw = String(req.query['medicoId'] || '');
-      if (!medicoIdRaw) {
-        return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
-      }
-      const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
-      if (!token) return res.status(401).json({ ok: false, detalhe: 'Autenticação necessária' });
-      const { data: identidade, error: erroAuth } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (erroAuth || !identidade.user) return res.status(401).json({ ok: false, detalhe: 'Sessão inválida' });
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const vinculo = await pool.query(
-        'select m.id from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1 and u.auth_user_id = $2 and u.ativo = true',
-        [medicoId, identidade.user.id]
-      );
-      if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
-      res.setHeader('Cache-Control', 'no-store');
+      // Guard já verificou sessão + vínculo sem SELECT sensível nem criação.
+      const { medicoId } = medicoAutorizado(res);
       let status = await consultarStatusOnboarding(pool, medicoId, config.preparacaoFiscalAtiva);
       // Reconcile an outdated local record before asking an already linked user to pair again.
       if (status.passos.passo4WhatsappVinculado && !status.passos.passo4WhatsappConectado) {
@@ -774,16 +775,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
-      if (!token) return res.status(401).json({ ok: false, detalhe: 'Autenticação necessária' });
-      const { data: identidade, error: erroAuth } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (erroAuth || !identidade.user) return res.status(401).json({ ok: false, detalhe: 'Sessão inválida' });
-      const vinculo = await pool.query(
-        'select m.id from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1 and u.auth_user_id = $2 and u.ativo = true',
-        [medicoId, identidade.user.id]
-      );
-      if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
+      const { medicoId } = medicoAutorizado(res);
       // Conectar WhatsApp antes do onboarding fiscal; dados profissionais serão solicitados na conversa.
       const appUrl = config.pareamentoWebhookOrigin;
       if (!appUrl || !/^https:\/\/[^/]+$/i.test(appUrl)) {
@@ -820,16 +812,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
-      if (!token) return res.status(401).json({ ok: false, detalhe: 'Autenticação necessária' });
-      const { data: identidade, error: erroAuth } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (erroAuth || !identidade.user) return res.status(401).json({ ok: false, detalhe: 'Sessão inválida' });
-      const vinculo = await pool.query(
-        'select m.id from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1 and u.auth_user_id = $2 and u.ativo = true',
-        [medicoId, identidade.user.id]
-      );
-      if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
+      const { medicoId } = medicoAutorizado(res);
       const resultado = await consultarStatusInstanciaWhatsapp(pool, {
         medicoId,
         evolutionUrl: config.evolutionApiUrl,

@@ -28,7 +28,11 @@ export function criarGuardaMedicoDaConta(deps: {
     if (!authUserId) { res.status(401).json({ ok: false, detalhe: 'Sessão inválida' }); return; }
 
     const body = req.body as Record<string, unknown> | undefined;
-    const alvo = body?.['medicoId'] ?? body?.['usuarioId'];
+    // Consultas GET usam query, POSTs usam body. Nunca criar/corrigir cadastro
+    // para determinar o alvo; a vinculação precisa existir ANTES da operação.
+    const alvo = req.method === 'GET'
+      ? req.query['medicoId']
+      : (body?.['medicoId'] ?? body?.['usuarioId']);
     if (typeof alvo !== 'string' || !alvo.trim() || alvo.length > 150) {
       res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' }); return;
     }
