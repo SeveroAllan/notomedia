@@ -142,7 +142,7 @@ describe('Noto piloto — isolamento da fila e do banco operacional', () => {
       });
       expect(resp.status).toBe(200);
       expect(query).toHaveBeenCalledTimes(2);
-      expect(enviar).toHaveBeenCalledExactlyOnceWith('5511999990000', 'Olá! Qual agenda você utiliza?');
+      expect(enviar.mock.calls).toEqual([['5511999990000', 'Olá!'], ['5511999990000', 'Qual agenda você utiliza?']]);
       model.assertComplete();
     } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
   });
