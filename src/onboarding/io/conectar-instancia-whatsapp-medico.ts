@@ -15,7 +15,7 @@ export type IniciarConexaoWhatsappInput = {
   evolutionApiKey: string;
   appWebhookUrl: string;
   webhookSecret: string;
-  aoConectar?: (medicoId: string) => void;
+  aoConectar?: (medicoId: string) => Promise<void> | void;
 };
 
 export type ResultadoConexaoWhatsapp = {
@@ -234,7 +234,7 @@ export async function conectarInstanciaWhatsappMedico(
     return falhar(diagnostico || { etapa: 'instance/connect', codigo: 'CODIGO_NAO_GERADO' });
   }
 
-  if (status === 'open') input.aoConectar?.(medicoId);
+  if (status === 'open') await input.aoConectar?.(medicoId);
 
   return {
     ok: true,
