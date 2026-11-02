@@ -6,6 +6,7 @@ RUN apk add --no-cache ca-certificates
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY tsconfig.json ./
+COPY agent.md ./agent.md
 COPY src ./src
 ENV PORT=3000
 ENV NODE_ENV=production
