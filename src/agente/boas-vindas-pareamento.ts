@@ -30,10 +30,9 @@ export function mensagemBoasVindasPareamento(nome: string | null): string {
   const primeiro = primeiroNomeConfiavel(nome);
   return [
     primeiro ? `Olá, ${primeiro}! Sou o Noto.` : 'Olá! Sou o Noto.',
-    'Posso ajudar a organizar suas notas fiscais.',
-    'Confirmei a conexão do seu WhatsApp.',
+    'Vou te ajudar a organizar as notas do consultório.',
+    'Seu WhatsApp está conectado ao Noto.',
     'A emissão ainda depende das informações e autorizações necessárias.',
-    'Desde quando você não emite notas?',
     'Qual agenda você usa: TribeMD, Amplimed ou outra?'
   ].join('\n');
 }
