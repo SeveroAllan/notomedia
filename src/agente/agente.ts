@@ -4,6 +4,7 @@ import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
+import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean }
@@ -15,9 +16,13 @@ export interface EntradaAgente {
   semConta?: boolean;
   painelUrl?: string;
   contexto?: readonly string[];
+  estadoConversa?: EstadoConversa;
 }
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
+  descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
+  consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   apiKey?: string;
   modeloNome?: string;
   /** Modelo determinístico para os testes do próprio loop do SDK. */
@@ -68,7 +73,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         contaCadastrada: !entrada.semConta,
         profissionais: entrada.semConta ? [] : profissionais.map(p => p.nome),
         painel: painelSeguro(entrada.painelUrl),
-        etapasPossiveis: ['identificar conta', 'identificar profissional', 'escolher agenda', 'conectar no Cofre seguro'],
+        etapasPossiveis: ['identificar conta', 'identificar profissional', 'escolher agenda', 'conexão em página segura'],
+        escolhasJaResolvidas: entrada.estadoConversa ?? {},
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
     }
@@ -135,6 +141,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         log('DEPENDENCIA_PROFISSIONAL');
         return { pronto: false, proximaEtapa: 'Identificar e cadastrar o profissional ' + painel, agendaEscolhida: plataforma };
       }
+      if (profissional === null && entrada.estadoConversa?.profissionalConfirmadoId) {
+        profissional = profissionais.find(p => p.id === entrada.estadoConversa?.profissionalConfirmadoId)?.nome ?? null;
+      }
       if (profissional === null) {
         log('DEPENDENCIA_PROFISSIONAL');
         return { pronto: false, agendaEscolhida: plataforma, proximaEtapa: 'Perguntar para qual profissional deseja configurar a agenda: ' + profissionais.map(p => p.nome).join(', ') + '. Não presumir que pertence ao único cadastro.' };
@@ -158,7 +167,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const ultimaResposta = (entrada.contexto ?? []).at(-1) ?? '';
       const confirmouUltimaPergunta = /^(sim|isso|correto|confirmo|pode ser)[.! ]*$/i.test(entrada.texto.trim()) &&
         ultimaResposta.includes('?') && tokensNome.some(t => normalizarNomeMedico(ultimaResposta).split(/[^a-z0-9]+/i).includes(t));
-      if (!mencionado && !confirmouUltimaPergunta) {
+      const jaConfirmado = entrada.estadoConversa?.profissionalConfirmadoId === p.id;
+      if (!mencionado && !confirmouUltimaPergunta && !jaConfirmado) {
         log('DEPENDENCIA_PROFISSIONAL');
         return { pronto: false, agendaEscolhida: plataforma, proximaEtapa:
           'O profissional ainda não foi escolhido explicitamente. Pergunte para qual profissional a agenda será configurada; não presuma pelo cadastro.' };
@@ -169,7 +179,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         if (estado.indisponivel) {
           log('STATUS_INDISPONIVEL');
           return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
-            proximaEtapa: 'Não foi possível consultar o estado interno do Cofre agora. Não afirmar que a agenda está desconectada nem pedir ao usuário para descobrir o estado técnico. Ofereça tentar verificar novamente mais tarde.' };
+            proximaEtapa: 'Não consegui verificar a conexão agora. Não afirmar desconexão; oferecer nova consulta.' };
         }
         if (estado.conectada) {
           log('CONEXAO_EXISTENTE');
@@ -177,7 +187,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         log('CONEXAO_PENDENTE');
         return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma,
-          proximaEtapa: (estado.salvo ? 'Conferir/reconectar acesso salvo' : 'Conectar agenda') + ' na seção Cofre ' + painel + '. Inserir credenciais somente na página segura. Não pedir senha pelo WhatsApp.' };
+          proximaEtapa: (estado.salvo ? 'Há acesso salvo, mas a conexão não foi confirmada. Conferir/reconectar' : 'É preciso conectar a agenda') + ' pela página segura ' + painel + '. Não pedir senha pelo WhatsApp.' };
       } catch {
         log('STATUS_INDISPONIVEL');
         return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
@@ -186,11 +196,101 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   });
 
+  const extras: ReturnType<typeof tool>[] = [];
+  if (deps.descobrirProfissionais) extras.push(tool({
+    name: 'descobrir_profissionais_agenda',
+    description: 'Somente se a conexão da agenda estiver confirmada, lê nomes dos profissionais identificados. Não revela pacientes e não presume correspondência com cadastro.',
+    parameters: z.object({ agenda: z.enum(['tribemd','amplimed']), profissional: z.string() }),
+    async execute({agenda, profissional}) {
+      const inicio=Date.now();
+      const r=identificar(profissional, profissionais);
+      if (r.erro || r.encontrados.length!==1) {
+        registrar('descobrir_profissionais_agenda','PROFISSIONAL_NAO_ENCONTRADO',inicio);
+        return {ok:false,motivo:'PROFISSIONAL_NAO_RESOLVIDO'};
+      }
+      const id=r.encontrados[0]!.id;
+      try {
+        const status=(await deps.consultarStatus(id))[agenda];
+        if (status.indisponivel) {
+          registrar('descobrir_profissionais_agenda','STATUS_INDISPONIVEL',inicio);
+          return {ok:false,motivo:'CONEXAO_INDISPONIVEL'};
+        }
+        if (!status.conectada) {
+          registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
+          return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA'};
+        }
+        const resultado=await deps.descobrirProfissionais!(id,agenda);
+        registrar('descobrir_profissionais_agenda',resultado.ok?'PROFISSIONAIS_ENCONTRADOS':'STATUS_INDISPONIVEL',inicio);
+        return resultado.ok ? {ok:true,nomes:(resultado.nomes??[]).slice(0,20), aviso:'Nomes vistos na fonte, ainda não vinculados à conta.'}
+          : {ok:false,motivo:resultado.motivo??'LEITURA_INDISPONIVEL'};
+      } catch {
+        registrar('descobrir_profissionais_agenda','STATUS_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'LEITURA_INDISPONIVEL'};
+      }
+    }
+  }));
+  if (deps.solicitarLinkAgenda) extras.push(tool({
+    name: 'solicitar_link_seguro_agenda',
+    description: 'Após escolha explícita de agenda e profissional autorizado, envia link de uso único ao próprio operador verificado. Não recebe senhas na conversa.',
+    parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string() }),
+    async execute({agenda,profissional}) {
+      const inicio=Date.now();
+      const r=identificar(profissional,profissionais);
+      const id=r.encontrados[0]?.id;
+      const escolhido=entrada.estadoConversa?.profissionalConfirmadoId===id ||
+        normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional));
+      const agendaEscolhida=entrada.estadoConversa?.agendaEscolhida===agenda ||
+        normalizarNomeMedico(entrada.texto).includes(agenda);
+      if (!id || r.encontrados.length!==1 || !escolhido || !agendaEscolhida) {
+        registrar('solicitar_link_seguro_agenda','DEPENDENCIA_PROFISSIONAL',inicio);
+        return {enviado:false,motivo:'ESCOLHA_DE_AGENDA_E_PROFISSIONAL_NECESSARIA'};
+      }
+      try {
+        const estado=(await deps.consultarStatus(id))[agenda];
+        if (estado.indisponivel) {
+          registrar('solicitar_link_seguro_agenda','STATUS_INDISPONIVEL',inicio);
+          return {enviado:false,motivo:'NAO_CONSEGUI_VERIFICAR'};
+        }
+        if (estado.conectada) {
+          registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);
+          return {enviado:false,motivo:'JA_CONECTADA'};
+        }
+        const enviado=await deps.solicitarLinkAgenda!(id,agenda);
+        registrar('solicitar_link_seguro_agenda',enviado.enviado?'LINK_ENVIADO':'FERRAMENTA_INDISPONIVEL',inicio);
+        return enviado.enviado?{enviado:true,observacao:'Link enviado por mensagem separada; não repeti-lo.'}:{enviado:false,motivo:enviado.motivo??'ENVIO_INDISPONIVEL'};
+      } catch {
+        registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
+        return {enviado:false,motivo:'ENVIO_INDISPONIVEL'};
+      }
+    }
+  }));
+  if (deps.consultarProntidao) extras.push(tool({
+    name:'consultar_prontidao_onboarding',
+    description:'Consulta apenas flags do cadastro, certificado e fiscal sem emitir, modificar ou revelar dados fiscais.',
+    parameters:z.object({profissional:z.string()}),
+    async execute({profissional}){
+      const inicio=Date.now();
+      const r=identificar(profissional,profissionais);
+      if(r.encontrados.length!==1){
+        registrar('consultar_prontidao_onboarding','PROFISSIONAL_NAO_ENCONTRADO',inicio);
+        return {ok:false,motivo:'PROFISSIONAL_NAO_RESOLVIDO'};
+      }
+      try {
+        const prontidao=await deps.consultarProntidao!(r.encontrados[0]!.id);
+        registrar('consultar_prontidao_onboarding','PRONTIDAO_VERIFICADA',inicio);
+        return {ok:true,...prontidao,observacao:'Nenhuma emissão foi realizada e nenhuma preferência fiscal foi alterada.'};
+      }catch{
+        registrar('consultar_prontidao_onboarding','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'PRONTIDAO_INDISPONIVEL'};
+      }
+    }
+  }));
+
   return new Agent({
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
-    tools: [consultarConta, consultarAgendas, orientarConexao]
+    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras]
   });
 }
 
@@ -277,7 +377,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const resultado = await runner.run(agent, [
       { role: 'user', content: JSON.stringify({
         mensagem: entrada.texto.slice(0, 1500),
-        contextoAnterior: (entrada.contexto ?? []).slice(-3).map(s => s.slice(0, 500))
+        contextoAnterior: (entrada.contexto ?? []).slice(-3).map(s => s.slice(0, 500)),
+        estadoConversacionalVerificado: entrada.estadoConversa ?? {}
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
