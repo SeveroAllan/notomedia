@@ -108,24 +108,23 @@ export function criarRouterWebhookAgente(deps: {
       );
       if (conta.rows.length > 1) { res.sendStatus(204); return; }
       contaId = conta.rows[0]?.conta_id ?? null;
-      // O piloto não pode transformar uma falha de cadastro em "não existe".
-      if (!contaId) { res.sendStatus(204); return; }
-
-      const medicos = await deps.pool.query(
+      // Somente SELECT sem resultado é evidência de conta ausente.
+      // Uma falha de consulta cai no catch e jamais é tratada como ausência.
+      const medicos = contaId ? await deps.pool.query(
         'select id,nome_completo from medicos where conta_id=$1 order by nome_completo,id limit 21',
         [contaId]
-      );
+      ) : { rows: [] };
       const profissionais = medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
         id: m.id, nome: String(m.nome_completo ?? '')
       }));
-      const estado = deps.persistirConversa ? await lerEstadoConversa(deps.pool, contaId) : {};
-      if (deps.persistirConversa) {
+      const estado = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
+      if (deps.persistirConversa && contaId) {
         if (!await reservarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id)) {
           res.sendStatus(200); return;
         }
         reservada = true;
       }
-      const chaveContexto = JSON.stringify([contaId, telefone]);
+      const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
       const marcar = async () => {
         try { await deps.marcarLida?.(evento.data.key); } catch { /* Sem impacto sobre resposta. */ }
       };
@@ -143,7 +142,7 @@ export function criarRouterWebhookAgente(deps: {
       let diagnostico: DiagnosticoAgente | undefined;
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const resposta = await responderAgente({
-        texto, profissionais, estadoConversa: estado,
+        texto, profissionais, semConta: !contaId, estadoConversa: estado,
         painelUrl: deps.painelUrl,
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
@@ -160,11 +159,11 @@ export function criarRouterWebhookAgente(deps: {
         if (deps.presenca) await deps.presenca(telefone, 'composing').catch(() => false);
         const ok = await deps.enviar(telefone, balao);
         if (!ok) { enviado = false; break; }
-        if (reservada) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
+        if (reservada && contaId) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
       }
 
       if (enviado) {
-        if (reservada) {
+        if (reservada && contaId) {
           const novo = evoluirEstadoConversa(estado, texto, resposta, profissionais);
           await salvarEstadoConversa(deps.pool, contaId, novo);
         } else {
@@ -185,14 +184,14 @@ export function criarRouterWebhookAgente(deps: {
           tipo: 'noto_agent_execucao', versao: 1,
           mensagemRef: referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]),
           respostaRef: referenciaDiagnostica(deps.segredo, 'resposta', [resposta]),
-          conta: 'CADASTRADA', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
+          conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
         };
         try {
           if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
           else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
         } catch { /* Observabilidade não bloqueia atendimento. */ }
       }
-      if (reservada) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+      if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
       res.sendStatus(enviado ? 200 : 503);
     } catch {
       // Incerto: nenhum replay automático de balões possivelmente enviados.
