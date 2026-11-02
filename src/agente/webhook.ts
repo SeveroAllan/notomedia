@@ -51,6 +51,7 @@ export function criarRouterWebhookAgente(deps: {
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ enviado: boolean; motivo?: string }>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
@@ -139,6 +140,7 @@ export function criarRouterWebhookAgente(deps: {
         intervalo = setInterval(() => { void deps.presenca?.(telefone, 'composing').catch(() => false); }, 3000);
       }
 
+      let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
       let diagnostico: DiagnosticoAgente | undefined;
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const resposta = await responderAgente({
@@ -148,7 +150,12 @@ export function criarRouterWebhookAgente(deps: {
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
         modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
-        ...(deps.descobrirProfissionais ? { descobrirProfissionais: deps.descobrirProfissionais } : {}),
+        ...(deps.descobrirProfissionais ? { descobrirProfissionais: async (medicoId: string, agenda: AgendaEscolhida) => {
+          const r = await deps.descobrirProfissionais!(medicoId, agenda);
+          if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.slice(0,20) };
+          return r;
+        } } : {}),
+        ...(deps.confirmarProfissionais ? { confirmarProfissionais: deps.confirmarProfissionais } : {}),
         ...(deps.solicitarLinkAgenda ? { solicitarLinkAgenda: (medicoId: string, agenda: AgendaEscolhida) => deps.solicitarLinkAgenda!(medicoId, agenda, telefone) } : {}),
         ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {})
       });
@@ -165,6 +172,7 @@ export function criarRouterWebhookAgente(deps: {
       if (enviado) {
         if (reservada && contaId) {
           const novo = evoluirEstadoConversa(estado, texto, resposta, profissionais);
+          if (descobertaVerificada) novo.descoberta = descobertaVerificada;
           await salvarEstadoConversa(deps.pool, contaId, novo);
         } else {
           contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
