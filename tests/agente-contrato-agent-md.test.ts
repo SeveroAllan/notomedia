@@ -93,7 +93,7 @@ describe('agent.md como contrato operacional de instrucoes', () => {
     const status = vi.fn();
     const resposta = await responderAgente({ texto: 'Qual ISS devo usar? Emite já?', profissionais },
       { modeloTeste: modelo, consultarStatus: status });
-    expect(resposta).toContain('não tenho uma alíquota');
+    expect(resposta).toContain('Não tenho uma alíquota');
     expect(resposta).not.toMatch(/\b\d+(?:[.,]\d+)?\s*%/);
     expect(status).not.toHaveBeenCalled();
     expect(JSON.stringify(modelo.lastCall?.request.input)).not.toContain('aliquotaIss');
