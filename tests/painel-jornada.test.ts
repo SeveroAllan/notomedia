@@ -144,13 +144,13 @@ describe('jornada fiscal no painel', () => {
     expect(p.el('fallbackXmlFiscal').classList.contains('hidden')).toBe(false);
   });
 
-  it('mantém a primeira revisão profissional quando o backend ainda exige aprovação', async () => {
+  it('não exige aprovação profissional web após conectar WhatsApp', async () => {
     const p = painel();
     p.el('inputSenhaCert').value = 'senha-ficticia';
     p.status(false);
     p.respostas.set('/api/onboarding/certificado', { data: { ok: true, importacaoFiscal: importacao } });
     await p.clicar('btnSalvarCertificado');
-    expect(p.passos).toEqual(['profissional']);
+    expect(p.passos).toEqual([5]);
     expect(p.el('fallbackXmlFiscal').classList.contains('hidden')).toBe(true);
   });
 });
