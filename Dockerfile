@@ -13,6 +13,7 @@ RUN npm ci
 
 # Copia código-fonte e configurações
 COPY tsconfig.json ./
+COPY agent.md ./agent.md
 COPY src ./src
 COPY scripts ./scripts
 
