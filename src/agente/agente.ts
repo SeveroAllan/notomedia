@@ -265,10 +265,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         const dito=normalizarNomeMedico(entrada.texto);
         const confirmacao=/^(sim|isso|correto|confirmo|exatamente|pode ser)[.! ]*$/i.test(entrada.texto.trim());
         const umaDescobertaConfirmada=confirmacao && nomes.length===1 &&
-          entrada.estadoConversa?.perguntaPendente==='profissional' &&
+          entrada.estadoConversa?.perguntaPendente==='confirmar_profissional' &&
           entrada.estadoConversa.descoberta?.agenda===agenda &&
-          entrada.estadoConversa.descoberta.nomes.length===1 &&
-          normalizarNomeMedico(entrada.estadoConversa.descoberta.nomes[0]!)===normalizarNomeMedico(nomes[0]!);
+          normalizarNomeMedico(entrada.estadoConversa.nomeProfissionalPerguntado??'')===normalizarNomeMedico(nomes[0]!) &&
+          entrada.estadoConversa.descoberta.nomes.some(n=>normalizarNomeMedico(n)===normalizarNomeMedico(nomes[0]!));
         // Menção de um nome ("quem é Bruno?") NÃO é consentimento para
         // cadastrar/vincular. A autorização precisa se referir à ação.
         const intencaoExplicita = /\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular|sao meus medicos|sao os profissionais)\b/.test(dito);
