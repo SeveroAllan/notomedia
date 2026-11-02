@@ -79,7 +79,7 @@ describe('agent.md como contrato operacional de instrucoes', () => {
     expect(status).toHaveBeenCalledExactlyOnceWith('prof-a');
     expect(resposta).toContain('Ainda precisa conectar');
     const chamada = JSON.stringify(modelo.lastCall?.request.input);
-    expect(chamada).toContain('CONEXAO_PENDENTE');
+    expect(chamada).toContain('Conectar agenda');
     expect(chamada).toContain('Amplimed');
     expect(diagnostico.mock.calls[0]?.[0]?.ferramentas[0]?.codigo).toBe('CONEXAO_PENDENTE');
     modelo.assertComplete();
