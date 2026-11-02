@@ -240,7 +240,7 @@ describe('mensagens naturais e efeitos seguros no webhook', () => {
     });
     expect(enviar.mock.calls.map(c=>c[1])).toEqual(['Vou conferir.','Ainda não consegui confirmar a conexão.']);
     expect(reagir.mock.calls.some(c=>c[1]==='✅')).toBe(false);
-    expect(query.mock.calls.some(c=>String(c[0]).includes('update noto_agent_mensagens')&&c[1][3]==='incerta')).toBe(true);
+    expect(query.mock.calls.some(c=>String(c[0]).includes('update noto_agent_mensagens')&&c[1]?.[3]==='incerta')).toBe(true);
     expect(presenca.mock.calls.at(-1)).toEqual(['5551999998888','paused']);
     modeloTeste.assertComplete();
   });
