@@ -59,7 +59,11 @@ export function evoluirEstadoConversa(
   const nome = normalizarNomeMedico(entrada);
   const fonteTribe = /\btribemd\b/i.test(nome);
   const fonteAmpli = /\bamplimed\b/i.test(nome);
-  if (fonteTribe !== fonteAmpli) atual.agendaEscolhida = fonteTribe ? 'tribemd' : 'amplimed';
+  const escolhaCurta = /^(?:tribemd|amplimed)[.! ]*$/.test(nome);
+  const declaracao = !entrada.includes('?') && /^(?:(?:nao,?\s*)?(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|minha agenda e|a agenda e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar)\b)/.test(nome);
+  if (fonteTribe !== fonteAmpli && (escolhaCurta || declaracao)) {
+    atual.agendaEscolhida = fonteTribe ? 'tribemd' : 'amplimed';
+  }
 
   const confirmacao = /^(sim|isso|correto|confirmo|exatamente|pode ser)[.! ]*$/i.test(entrada.trim());
   const identificados = profissionais.filter(p =>
