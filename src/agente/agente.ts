@@ -24,6 +24,7 @@ export interface DependenciasAgente {
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
+  salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   apiKey?: string;
   modeloNome?: string;
   /** Modelo determinístico para os testes do próprio loop do SDK. */
@@ -340,6 +341,53 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }catch{
         registrar('consultar_prontidao_onboarding','FERRAMENTA_INDISPONIVEL',inicio);
         return {ok:false,motivo:'PRONTIDAO_INDISPONIVEL'};
+      }
+    }
+  }));
+
+  if (deps.salvarDadosProfissionais) extras.push(tool({
+    name:'confirmar_dados_profissionais',
+    description:'Registra nome completo, CRM ou RQE informados e explicitamente confirmados pelo operador na própria mensagem. Nunca altera dados fiscais, assinatura, certificado ou autorizações.',
+    parameters:z.object({
+      profissional:z.string(),
+      nomeCompleto:z.string().min(2).max(200).optional(),
+      crm:z.string().min(1).max(60).optional(),
+      rqe:z.string().min(1).max(60).optional()
+    }),
+    async execute({profissional,nomeCompleto,crm,rqe}) {
+      const inicio=Date.now();
+      const resolucao=identificar(profissional,profissionais);
+      const medico=resolucao.encontrados[0];
+      if(!medico || resolucao.encontrados.length!==1 ||
+          entrada.estadoConversa?.profissionalConfirmadoId!==medico.id) {
+        registrar('confirmar_dados_profissionais','DEPENDENCIA_PROFISSIONAL',inicio);
+        return {ok:false,motivo:'PROFISSIONAL_NAO_CONFIRMADO'};
+      }
+      const texto=entrada.texto.trim();
+      const autorizou=/\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar|pode registrar|pode atualizar)\b/i.test(texto);
+      const escape=(valor:string) => valor.replace(/[.*+?^$()|[\]{}\\]/g,'\\  if (deps.consultarProntidao && entrada.painelUrl) extras.push(tool({');
+      const informado=(rotulo:string,valor:string) =>
+        new RegExp('\\b'+rotulo+'\\b\\s*(?:(?:n(?:umero|º|o)?)\\s*)?(?::|=|e|eh)?\\s*'+escape(valor)+'(?=$|[\\s,;.!?])','i').test(texto);
+      const campos=[
+        ...(nomeCompleto?[{rotulo:'(?:nome completo|me chamo)',valor:nomeCompleto}]:[]),
+        ...(crm?[{rotulo:'crm',valor:crm}]:[]),
+        ...(rqe?[{rotulo:'rqe',valor:rqe}]:[])
+      ];
+      if(!autorizou || !campos.length || !campos.every(c=>informado(c.rotulo,c.valor))) {
+        registrar('confirmar_dados_profissionais','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:'VALORES_E_CONFIRMACAO_EXPLICITOS_NECESSARIOS'};
+      }
+      try{
+        const r=await deps.salvarDadosProfissionais!(medico.id,{
+          ...(nomeCompleto?{nome:nomeCompleto}:{}),
+          ...(crm?{crm}:{}),...(rqe?{rqe}:{})
+        });
+        registrar('confirmar_dados_profissionais',r.ok?'DADOS_PROFISSIONAIS_SALVOS':'FERRAMENTA_INDISPONIVEL',inicio);
+        return r.ok?{ok:true,nome:r.nome,crm:r.crm,rqe:r.rqe,
+          dadosFiscaisConfirmados:false,emissaoAutorizada:false}: {ok:false,motivo:r.motivo??'NAO_SALVO'};
+      }catch{
+        registrar('confirmar_dados_profissionais','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'DADOS_PROFISSIONAIS_NAO_VERIFICADOS'};
       }
     }
   }));
