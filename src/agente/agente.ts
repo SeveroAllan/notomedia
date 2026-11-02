@@ -8,7 +8,8 @@ import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
-export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean }
+export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
+  motivo?: 'INTEGRACAO_NAO_CONFIGURADA' | 'FALHA_CONSULTA_INTEGRACAO' }
 export interface StatusFontes { tribemd: EstadoFonte; amplimed: EstadoFonte }
 
 export interface EntradaAgente {
@@ -120,7 +121,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
             deps.aoComprovante?.({ tipo: 'verificar_agenda', profissionalId: p.id, agenda: 'amplimed' });
             if (s.amplimed.conectada) deps.aoComprovante?.({ tipo: 'conectar_agenda', profissionalId: p.id, agenda: 'amplimed' });
           }
-          const descrever = (e: EstadoFonte) => e.indisponivel ? 'consulta indisponível' :
+          const descrever = (e: EstadoFonte) =>
+            e.motivo === 'INTEGRACAO_NAO_CONFIGURADA' ? 'integração não configurada neste ambiente' :
+            e.indisponivel ? 'consulta indisponível' :
             e.conectada ? 'conectada' : e.salvo ? 'acesso salvo, conexão não confirmada' : 'não conectada';
           return {
             profissional: p.nome,
@@ -130,14 +133,19 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         } catch { return { profissional: p.nome, erro: 'consulta indisponível; não presumir ausência de conexão' }; }
       }));
       const quantosIndisponiveis = resultados.reduce((n, r) => n +
-        ('erro' in r ? 2 : Number(r.tribemd === 'consulta indisponível') + Number(r.amplimed === 'consulta indisponível')), 0);
+        ('erro' in r ? 2 : Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.tribemd)) + Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.amplimed))), 0);
       const codigo = quantosIndisponiveis === resultados.length * 2 ? 'STATUS_INDISPONIVEL' :
         quantosIndisponiveis ? 'STATUS_PARCIAL' :
         resultados.some(r => 'tribemd' in r && (r.tribemd === 'conectada' || r.amplimed === 'conectada')) ?
           'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
-      registrarStatus(codigo);
-      return { ok: true, codigo, estados: resultados,
-        observacao: 'Estado das conexões somente; nenhuma consulta ou nota foi verificada. Se uma fonte estiver indisponível, não peça à pessoa para confirmar o estado técnico; explique a falha e ofereça nova tentativa mais tarde.' };
+      const faltaConfig = resultados.some(r => 'tribemd' in r &&
+        (r.tribemd === 'integração não configurada neste ambiente' ||
+          r.amplimed === 'integração não configurada neste ambiente'));
+      registrarStatus(faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo);
+      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: resultados,
+        observacao: faltaConfig
+          ? 'A integração não está configurada neste ambiente. Não é falha da TribeMD ou Amplimed e repetir a consulta não resolve. É necessária configuração local antes do link seguro. Senhas só na página segura.'
+          : 'Estado das conexões somente; nenhuma consulta ou nota foi verificada. Falha de consulta não comprova desconexão.' };
     }
   });
 
@@ -194,6 +202,12 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         const s = await deps.consultarStatus(p.id);
         const estado = s[agenda];
         if (estado.indisponivel) {
+          if (estado.motivo === 'INTEGRACAO_NAO_CONFIGURADA') {
+            log('INTEGRACAO_NAO_CONFIGURADA');
+            return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma,
+              codigo: 'INTEGRACAO_NAO_CONFIGURADA',
+              proximaEtapa: 'Esta integração ainda não está configurada na homologação do Noto. Não é falha da plataforma. Não ofereça tentar mais tarde: a configuração local precisa ser concluída antes. Senhas somente na página segura.' };
+          }
           log('STATUS_INDISPONIVEL');
           return { pronto: false, profissional: p.nome, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
             proximaEtapa: 'Não foi possível consultar o estado interno do Cofre agora. Não afirmar que a agenda está desconectada nem pedir ao usuário para descobrir o estado técnico. Ofereça tentar verificar novamente mais tarde.' };
@@ -231,8 +245,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       try {
         const status=(await deps.consultarStatus(id))[agenda];
         if (status.indisponivel) {
-          registrar('descobrir_profissionais_agenda','STATUS_INDISPONIVEL',inicio);
-          return {ok:false,motivo:'CONEXAO_INDISPONIVEL'};
+          registrar('descobrir_profissionais_agenda',
+            status.motivo === 'INTEGRACAO_NAO_CONFIGURADA' ? 'INTEGRACAO_NAO_CONFIGURADA' : 'STATUS_INDISPONIVEL',inicio);
+          return {ok:false,motivo:status.motivo === 'INTEGRACAO_NAO_CONFIGURADA'
+            ? 'INTEGRACAO_NAO_CONFIGURADA' : 'CONEXAO_INDISPONIVEL'};
         }
         if (!status.conectada) {
           registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
@@ -474,8 +490,11 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
     /\b(?:nao sei se|nao posso (?:confirmar|afirmar) se|nao consegui verificar se|nao tenho como confirmar se|nao tenho evidencia de que)(?:\s+(?:a|o|uma|um|minha|sua))?\s*$/.test(prefixo);
   const negada = (prefixo: string) =>
     /\b(?:nao|nunca|jamais)\s*$/.test(prefixo) || incerta(prefixo);
+  const naoConfigurada = eventos.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA');
+  // Não converter falta de infraestrutura em culpa da plataforma ou retentativa.
+  if (naoConfigurada && /(?:tentar (?:de novo|novamente|mais tarde)|tente novamente|instabilidade|falha (?:da|na|do) (?:tribemd|tribe|amplimed)|(?:tribemd|tribe|amplimed) (?:falhou|esta fora|indisponivel))/.test(normalizada)) return false;
   const estadosIndisponiveis = eventos.some(e =>
-    ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL'].includes(e.codigo));
+    ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL', 'INTEGRACAO_NAO_CONFIGURADA'].includes(e.codigo));
   const evidenciaConectada = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
   const evidenciaDesconectada = eventos.some(e => e.codigo === 'STATUS_NAO_CONECTADO');
 
@@ -574,7 +593,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     };
     if (resposta && !respostaCompativelComFerramentas(resposta, ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA', uso);
-      return 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
+      return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
+         ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
+         : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
