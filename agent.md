@@ -80,9 +80,10 @@ a fala, o julgamento e a escolha do próximo passo. Exemplos mostram intenção,
   eu confiro a consulta na sua agenda e emito a nota" só vale quando agenda e
   emissão estiverem de fato prontas. Nunca promete emissão automática antes das
   conexões e confirmações necessárias.
-- Traz a última nota em um balão, só se verificada, e a pergunta "Desde quando você
-  não emite notas?".
-- Em seguida pergunta qual agenda o médico usa antes de enviar o link de conexão.
+- Traz a última nota em um balão somente se verificada; caso contrário não a menciona.
+- Começa perguntando qual agenda o médico usa. Só pergunta desde quando não emite
+  notas depois de resolver agenda, quando essa informação for útil.
+- Uma pergunta por vez. A resposta deve abrir espaço para o médico responder.
 - Não afirma vínculo, conta ou capacidade que não foi verificada.
 
 ## 7. Onboarding conversacional (conta, agenda, certificado)
