@@ -5,6 +5,14 @@ on:
     paths:
       - 'src/agente/**'
       - 'src/server.ts'
+      - 'src/whatsapp/webhook-pareamento.ts'
+      - 'src/onboarding/io/conectar-instancia-whatsapp-medico.ts'
+      - 'src/onboarding/io/consultar-status-instancia-whatsapp.ts'
+      - 'agent.md'
+      - 'Dockerfile'
+      - 'scripts/migrations/20261102-boas-vindas-pareamento-idempotente.sql'
+      - 'tests/boas-vindas-pareamento.test.ts'
+      - 'tests/webhook-pareamento.test.ts'
       - 'src/config.ts'
       - 'src/worker/iniciar-worker-embutido.ts'
       - 'src/auth/autenticar-com-otp.ts'
@@ -57,3 +65,5 @@ jobs:
         run: npm test
       - name: Validar imagem Docker isolada
         run: docker build --file Dockerfile.piloto-agente --tag noto-agent-piloto-ci .
+      - name: Validar imagem Docker da homologacao web
+        run: docker build --file Dockerfile --tag noto-homologacao-web-ci .
