@@ -140,8 +140,12 @@ export function selecionarConclusao(
     const provas = comprovantes.filter(p => p.tipo === t.tipo && p.profissionalId === id &&
       (!t.agenda || p.agenda === t.agenda));
     if (t.agenda) return provas.length > 0;
-    // Pedido sem plataforma: aceita uma única fonte comprovada, ou a
-    // verificação geral explícita. Nunca escolhe entre duas agendas distintas.
+    // Verificação de agenda sem plataforma exige resposta de TODAS as
+    // fontes. Uma fonte indisponível não vira "concluído" só porque a
+    // outra respondeu.
+    if (t.tipo === 'verificar_agenda') return provas.some(p => p.agenda === undefined);
+    // Para ações efetivamente realizadas, aceita a única fonte comprovada.
+    // Nunca escolhe entre duas agendas distintas.
     return provas.some(p => p.agenda === undefined) ||
       (provas.length > 0 && new Set(provas.map(p => p.agenda)).size === 1);
   });

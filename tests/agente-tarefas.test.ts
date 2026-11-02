@@ -94,6 +94,11 @@ describe('conclusão verificável e referência original', () => {
       'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
     expect(selecionarConclusao(pedido, [{...prova,profissionalId:'bruno-id'}],
       'noto_assistente', referencia, 'alice-id', inicio)).toBeNull();
+    const geral=[tarefa('verificar_agenda',{agenda:undefined})];
+    expect(selecionarConclusao(geral,[{tipo:'verificar_agenda',profissionalId:'alice-id',agenda:'tribemd'}],
+      'noto_assistente',referencia,'alice-id',inicio)).toBeNull();
+    expect(selecionarConclusao(geral,[{tipo:'verificar_agenda',profissionalId:'alice-id'}],
+      'noto_assistente',referencia,'alice-id',inicio)).toEqual(geral[0]);
   });
 
   it('só associa nome explicitamente inequívoco', () => {
