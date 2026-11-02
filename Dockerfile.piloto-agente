@@ -7,6 +7,7 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY tsconfig.json ./
 COPY agent.md ./agent.md
+COPY onboarding-noto.md ./onboarding-noto.md
 COPY src ./src
 ENV PORT=3000
 ENV NODE_ENV=production
