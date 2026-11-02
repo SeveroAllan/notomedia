@@ -90,12 +90,16 @@ export function criarRouterWebhookAgente(deps: {
       res.sendStatus(204); return;
     }
 
-    const chave = createHash('sha256').update(JSON.stringify([evento.instance, evento.data.key.id, telefone])).digest('hex');
-    if (mensagensVistas.has(chave)) { res.sendStatus(200); return; }
-    mensagensVistas.add(chave);
-    if (mensagensVistas.size > 2500) {
-      const primeiro = mensagensVistas.values().next().value;
-      if (primeiro) mensagensVistas.delete(primeiro);
+    // Banco é a autoridade do modo durável. Não marcar localmente antes do
+    // SELECT/reserva: uma falha transitória ainda precisa permitir replay.
+    if (!deps.persistirConversa) {
+      const chave = createHash('sha256').update(JSON.stringify([evento.instance, evento.data.key.id, telefone])).digest('hex');
+      if (mensagensVistas.has(chave)) { res.sendStatus(200); return; }
+      mensagensVistas.add(chave);
+      if (mensagensVistas.size > 2500) {
+        const primeiro = mensagensVistas.values().next().value;
+        if (primeiro) mensagensVistas.delete(primeiro);
+      }
     }
 
     let reservada = false;
