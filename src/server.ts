@@ -83,7 +83,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     pool
   );
   const cofres = criarCofreContas({
-    pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
+    pool, enviarCofre: async (id, texto, contatoTelefone) => {
+      if (!config.notoPilotoRestrito) return comunicacaoHomologacao.cofre(id, texto);
+      const permitidos = config.envioRealAllowlist ?? [];
+      const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone ?? '');
+      if (!contatoTelefone || permitidos.length !== 1 ||
+          !gerarVariantesTelefoneBrasileiro(permitidos[0]!).some(v => variantes.includes(v))) return 'erro';
+      const resultado = await new EvolutionApiClient(
+        config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+        config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+      ).enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone, texto
+      });
+      return resultado.sucesso ? 'enviado' : 'erro';
+    },
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
       return error ? null : data.user?.id ?? null;
