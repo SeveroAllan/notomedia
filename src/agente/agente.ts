@@ -269,7 +269,11 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           entrada.estadoConversa.descoberta?.agenda===agenda &&
           entrada.estadoConversa.descoberta.nomes.length===1 &&
           normalizarNomeMedico(entrada.estadoConversa.descoberta.nomes[0]!)===normalizarNomeMedico(nomes[0]!);
-        if(!umaDescobertaConfirmada && !nomes.every(n=>dito.includes(normalizarNomeMedico(n)))) {
+        // Menção de um nome ("quem é Bruno?") NÃO é consentimento para
+        // cadastrar/vincular. A autorização precisa se referir à ação.
+        const intencaoExplicita = /\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular|sao meus medicos|sao os profissionais)\b/.test(dito);
+        const confirmouNomes = nomes.every(n=>dito.includes(normalizarNomeMedico(n)));
+        if(!umaDescobertaConfirmada && !(intencaoExplicita && confirmouNomes)) {
           registrar('confirmar_profissionais_descobertos','DEPENDENCIA_PROFISSIONAL',inicio);
           return {ok:false,motivo:'CONFIRMACAO_EXPLICITA_NECESSARIA'};
         }
