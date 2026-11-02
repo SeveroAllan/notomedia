@@ -173,3 +173,88 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
   });
 
 });
+
+
+describe('mensagens naturais e efeitos seguros no webhook', () => {
+  function bancoComReserva() {
+    const registros=new Set<string>();
+    const query=vi.fn(async (sql:string, parametros:unknown[]=[]) => {
+      if (sql.includes('distinct conta_id')) return {rows:[{conta_id:'conta-a'}]};
+      if (sql.includes('from medicos')) return {rows:[{id:'alice-id',nome_completo:'Alice Souza'}]};
+      if (sql.startsWith('select estado from noto_agent_conversas')) return {rows:[{estado:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'alice-id'}}]};
+      if (sql.startsWith('insert into noto_agent_mensagens')) {
+        const chave=JSON.stringify(parametros);
+        if(registros.has(chave))return {rows:[]};
+        registros.add(chave);return {rows:[{mensagem_id:parametros[2]}]};
+      }
+      if (sql.startsWith('update noto_agent_mensagens')||sql.startsWith('insert into noto_agent_conversas')) return {rows:[],rowCount:1};
+      throw Error('SQL_NAO_PERMITIDO_NO_TESTE');
+    });
+    return {query};
+  }
+
+  it('marca lida, reage por intenção, digita, envia balões em ordem e conclui verificação com ✅', async () => {
+    const {query}=bancoComReserva();
+    const enviar=vi.fn().mockResolvedValue(true);
+    const marcarLida=vi.fn().mockResolvedValue(true);
+    const reagir=vi.fn().mockResolvedValue(true);
+    const presenca=vi.fn().mockResolvedValue(true);
+    const modeloTeste=new ScriptedModel([
+      [functionCall('consultar_status_agendas',{profissional:'Alice'},{callId:'verificar'})],
+      [assistantMessage('Conferi sua agenda. A TribeMD está conectada. Podemos continuar.')]
+    ]);
+    const consultarStatus=vi.fn().mockResolvedValue({
+      tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
+    });
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,consultarStatus,
+      enviar,marcarLida,reagir,presenca,persistirConversa:true});
+    const eventoVerificar={...evento,data:{...evento.data,message:{conversation:'Consegue verificar a agenda da Alice?'}}};
+    await comServidor(app,async postar=>{
+      expect((await postar(eventoVerificar)).status).toBe(200);
+      expect((await postar(eventoVerificar)).status).toBe(200);
+    });
+    expect(marcarLida).toHaveBeenCalledExactlyOnceWith(evento.data.key);
+    expect(reagir.mock.calls.map(c=>c[1])).toEqual(['🔎','✅']);
+    expect(presenca.mock.calls[0]).toEqual(['5551999998888','composing']);
+    expect(presenca.mock.calls.at(-1)).toEqual(['5551999998888','paused']);
+    expect(enviar.mock.calls.map(c=>c[1])).toEqual([
+      'Conferi sua agenda.','A TribeMD está conectada.','Podemos continuar.'
+    ]);
+    expect(query.mock.calls.some(c=>String(c[0]).includes('insert into noto_agent_mensagens'))).toBe(true);
+    expect(query.mock.calls.some(c=>String(c[0]).includes('insert into noto_agent_conversas'))).toBe(true);
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('alice-id');
+    modeloTeste.assertComplete();
+  });
+
+  it('parada parcial preserva reserva; webhook repetido não duplica balões nem marca tarefa como concluída', async () => {
+    const {query}=bancoComReserva();
+    const enviar=vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const reagir=vi.fn().mockResolvedValue(true);
+    const presenca=vi.fn().mockResolvedValue(true);
+    const modeloTeste=new ScriptedModel([[assistantMessage('Vou conferir. Ainda não consegui confirmar a conexão.')]]);
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,enviar,reagir,presenca,
+      persistirConversa:true});
+    await comServidor(app,async postar=>{
+      expect((await postar(evento)).status).toBe(503);
+      expect((await postar(evento)).status).toBe(200);
+    });
+    expect(enviar.mock.calls.map(c=>c[1])).toEqual(['Vou conferir.','Ainda não consegui confirmar a conexão.']);
+    expect(reagir.mock.calls.some(c=>c[1]==='✅')).toBe(false);
+    expect(query.mock.calls.some(c=>String(c[0]).includes('update noto_agent_mensagens')&&c[1][3]==='incerta')).toBe(true);
+    expect(presenca.mock.calls.at(-1)).toEqual(['5551999998888','paused']);
+    modeloTeste.assertComplete();
+  });
+
+  it('não envia visto, reação ou presença antes da autorização do número e do segredo', async () => {
+    const marcarLida=vi.fn(),reagir=vi.fn(),presenca=vi.fn();
+    const {app,query}=preparar({marcarLida,reagir,presenca});
+    await comServidor(app,async postar=>{
+      expect((await postar(evento,'segredo-errado')).status).toBe(401);
+      expect((await postar({...evento,data:{...evento.data,key:{...evento.data.key,remoteJid:'5511888777666@s.whatsapp.net'}}})).status).toBe(204);
+    });
+    expect(query).not.toHaveBeenCalled();
+    expect(marcarLida).not.toHaveBeenCalled();
+    expect(reagir).not.toHaveBeenCalled();
+    expect(presenca).not.toHaveBeenCalled();
+  });
+});
