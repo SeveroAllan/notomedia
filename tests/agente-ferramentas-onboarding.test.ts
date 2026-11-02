@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ScriptedModel, assistantMessage, functionCall } from '@openai/agents/testing';
-import { responderAgente } from '../src/agente/agente.js';
+import { responderAgente, respostaCompativelComFerramentas } from '../src/agente/agente.js';
 
 const profissionais=[{id:'m1',nome:'Dra. Alice Silva'}];
 const conectado={tribemd:{salvo:true,conectada:true},amplimed:{salvo:true,conectada:true}};
@@ -453,4 +453,20 @@ describe('configuração local não é instabilidade atribuída à TribeMD', () 
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('STATUS_INDISPONIVEL');
     modelo.assertComplete();
   });
+});
+
+it('sem configuração local, resposta simples "tente mais tarde" também é recusada', () => {
+  const evento = {nome:'orientar_conexao_agenda' as const,
+    codigo:'INTEGRACAO_NAO_CONFIGURADA' as const,duracaoMs:1};
+  for(const fala of [
+    'Tente mais tarde.',
+    'A TribeMD está instável agora.',
+    'Podemos tentar novamente depois.',
+    'A TribeMD falhou, tente de novo.'
+  ]) {
+    expect(respostaCompativelComFerramentas(fala,[evento])).toBe(false);
+  }
+  expect(respostaCompativelComFerramentas(
+    'A integração ainda não está configurada neste ambiente. A senha é informada somente na página segura.',
+    [evento])).toBe(true);
 });

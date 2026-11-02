@@ -492,7 +492,7 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
     /\b(?:nao|nunca|jamais)\s*$/.test(prefixo) || incerta(prefixo);
   const naoConfigurada = eventos.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA');
   // Não converter falta de infraestrutura em culpa da plataforma ou retentativa.
-  if (naoConfigurada && /(?:tentar (?:de novo|novamente|mais tarde)|tente novamente|instabilidade|falha (?:da|na|do) (?:tribemd|tribe|amplimed)|(?:tribemd|tribe|amplimed) (?:falhou|esta fora|indisponivel))/.test(normalizada)) return false;
+  if (naoConfigurada && /(?:tentar (?:de novo|novamente|mais tarde|depois)|tente (?:de novo|novamente|mais tarde|depois)|instabilidade|instavel|fora do ar|falha (?:da|na|do) (?:tribemd|tribe|amplimed)|(?:tribemd|tribe|amplimed) (?:falhou|esta fora|indisponivel))/.test(normalizada)) return false;
   const estadosIndisponiveis = eventos.some(e =>
     ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL', 'INTEGRACAO_NAO_CONFIGURADA'].includes(e.codigo));
   const evidenciaConectada = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
