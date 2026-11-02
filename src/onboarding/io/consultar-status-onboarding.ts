@@ -39,9 +39,9 @@ export type StatusOnboardingMedico = {
     inscricaoMunicipal: string | null;
     uf: string | null;
     codMunicipioIbge: string | null;
-    serieDps: string;
-    proximoNumeroDps: number;
-    opcaoSimplesNacional?: 'nao_optante' | 'mei' | 'me_epp';
+    serieDps: string | null;
+    proximoNumeroDps: number | null;
+    opcaoSimplesNacional?: 'nao_optante' | 'mei' | 'me_epp' | null;
     extraidoAutomaticamente: boolean;
     confirmadoPeloMedico: boolean;
     especialidade: string | null;
@@ -148,13 +148,13 @@ export async function consultarStatusOnboarding(
       inscricaoMunicipal: r.inscricao_municipal,
       uf: r.uf,
       codMunicipioIbge: r.cod_municipio_ibge,
-      serieDps: r.serie_dps || '00001',
-      proximoNumeroDps: r.proximo_numero_dps || 1,
-      opcaoSimplesNacional: r.opcao_simples_nacional || 'me_epp',
+      serieDps: r.serie_dps ?? null,
+      proximoNumeroDps: r.proximo_numero_dps == null ? null : Number(r.proximo_numero_dps),
+      opcaoSimplesNacional: r.opcao_simples_nacional ?? null,
       extraidoAutomaticamente: r.extraido_automaticamente,
       confirmadoPeloMedico: r.confirmado_pelo_medico,
       especialidade: r.especialidade,
-      aliquotaIss: r.aliquota_iss ? Number(r.aliquota_iss) : null
+      aliquotaIss: r.aliquota_iss == null ? null : Number(r.aliquota_iss)
     } : null
   };
 }
