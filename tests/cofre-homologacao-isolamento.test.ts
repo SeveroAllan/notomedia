@@ -22,7 +22,7 @@ const configurada = (pasta: string, chaveCofre: string): NodeJS.ProcessEnv => ({
   APP_PUBLIC_ORIGIN: origem, COFRE_ORIGEM: origem,
   COFRE_DIRETORIO: pasta, COFRE_CHAVE: chaveCofre
 });
-const semBanco = { query: vi.fn().mockRejectedValue(new Error('sem banco neste teste')) } as unknown as pg.Pool;
+const semBanco = { query: vi.fn().mockResolvedValue({ rows: [], rowCount: 0 }) } as unknown as pg.Pool;
 const perfilTeste = {
   email: 'conta@example.invalid', senha: 'senha-nunca-no-log',
   cofre: {
