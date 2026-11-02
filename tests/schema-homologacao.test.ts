@@ -5,6 +5,7 @@ import { expect, it } from 'vitest';
 import { consultarStatusOnboarding } from '../src/onboarding/io/consultar-status-onboarding.js';
 import { codigoSeguroFalhaReady } from '../src/http/diagnostico-ready.js';
 import { enviarBoasVindasAposPareamento } from '../src/agente/boas-vindas-pareamento.js';
+import { reservarMensagemConversa, registrarBalaoConversa, finalizarMensagemConversa, salvarEstadoConversa, lerEstadoConversa } from '../src/agente/estado-conversa.js';
 
 const sql = readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261101-homologacao-onboarding-schema-reconcile.sql',
@@ -183,6 +184,37 @@ testarBanco('boas-vindas: aplica migration duas vezes e disputa atomicamente no 
     const estado = await pool.query('select estado, enviado_em is not null as confirmado from noto_boas_vindas_pareamento');
     expect(estado.rows).toEqual([{ estado: 'enviada', confirmado: true }]);
     const fiscal = await pool.query('select count(*)::integer as total from medico_perfil_fiscal');
+    expect(fiscal.rows[0].total).toBe(0);
+  } finally {
+    await pool.end();
+  }
+});
+
+
+const sqlConversa = readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261104-noto-conversa-minima.sql', import.meta.url
+)), 'utf8');
+
+testarBanco('conversa: migra duas vezes, restringe grants e deduplica balões entre réplicas', async () => {
+  const pool = new pg.Pool({connectionString:process.env['NOTO_SCHEMA_TEST_DATABASE_URL'],max:8});
+  try {
+    await pool.query(sqlConversa);
+    await pool.query(sqlConversa);
+    const acesso=await pool.query(
+      "select has_table_privilege('anon','noto_agent_conversas','SELECT') as cliente, has_table_privilege('authenticated','noto_agent_mensagens','INSERT') as grava_cliente, has_table_privilege('service_role','noto_agent_mensagens','INSERT') as grava_backend, (select relrowsecurity from pg_class where oid='noto_agent_conversas'::regclass) as rls"
+    );
+    expect(acesso.rows[0]).toEqual({cliente:false,grava_cliente:false,grava_backend:true,rls:true});
+    const contaId='00000000-0000-4000-8000-000000000001';
+    const resultados=await Promise.all(Array.from({length:20},()=>reservarMensagemConversa(pool,contaId,'assistente','BAE569F0E38F858D')));
+    expect(resultados.filter(Boolean)).toHaveLength(1);
+    await salvarEstadoConversa(pool,contaId,{agendaEscolhida:'amplimed',perguntaPendente:'profissional'});
+    expect(await lerEstadoConversa(pool,contaId)).toEqual({agendaEscolhida:'amplimed',perguntaPendente:'profissional'});
+    await registrarBalaoConversa(pool,contaId,'assistente','BAE569F0E38F858D');
+    await finalizarMensagemConversa(pool,contaId,'assistente','BAE569F0E38F858D',false);
+    const r=await pool.query('select estado,baloes_confirmados from noto_agent_mensagens');
+    expect(r.rows).toEqual([{estado:'incerta',baloes_confirmados:1}]);
+    expect(await reservarMensagemConversa(pool,contaId,'assistente','BAE569F0E38F858D')).toBe(false);
+    const fiscal=await pool.query('select count(*)::integer as total from medico_perfil_fiscal');
     expect(fiscal.rows[0].total).toBe(0);
   } finally {
     await pool.end();
