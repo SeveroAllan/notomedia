@@ -273,8 +273,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         // Menção de um nome ("quem é Bruno?") NÃO é consentimento para
         // cadastrar/vincular. A autorização precisa se referir à ação.
         const intencaoExplicita = /\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular|sao meus medicos|sao os profissionais)\b/.test(dito);
+        const negouCadastro = /\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,70}\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular)\b/.test(dito);
         const confirmouNomes = nomes.every(n=>dito.includes(normalizarNomeMedico(n)));
-        if(!umaDescobertaConfirmada && !(intencaoExplicita && confirmouNomes)) {
+        if(negouCadastro || (!umaDescobertaConfirmada && !(intencaoExplicita && confirmouNomes))) {
           registrar('confirmar_profissionais_descobertos','DEPENDENCIA_PROFISSIONAL',inicio);
           return {ok:false,motivo:'CONFIRMACAO_EXPLICITA_NECESSARIA'};
         }
@@ -365,6 +366,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       const texto=entrada.texto.trim();
       const autorizou=/\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar|pode registrar|pode atualizar)\b/i.test(texto);
+      const negouAlteracao=/\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,70}\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar)\b/i.test(
+        texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      );
       const especiais=new Set(['.','*','+','?','^','$','{','}','(',')','|','[',']','\\']);
       const escape=(valor:string) => [...valor].map(ch=>especiais.has(ch)?'\\'+ch:ch).join('');
       const informado=(rotulo:string,valor:string) =>
@@ -374,7 +378,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         ...(crm?[{rotulo:'crm',valor:crm}]:[]),
         ...(rqe?[{rotulo:'rqe',valor:rqe}]:[])
       ];
-      if(!autorizou || !campos.length || !campos.every(c=>informado(c.rotulo,c.valor))) {
+      if(!autorizou || negouAlteracao || !campos.length || !campos.every(c=>informado(c.rotulo,c.valor))) {
         registrar('confirmar_dados_profissionais','DEPENDENCIA_CONFIRMACAO',inicio);
         return {ok:false,motivo:'VALORES_E_CONFIRMACAO_EXPLICITOS_NECESSARIOS'};
       }
