@@ -14,6 +14,7 @@ RUN npm ci
 # Copia código-fonte e configurações
 COPY tsconfig.json ./
 COPY agent.md ./agent.md
+COPY onboarding-noto.md ./onboarding-noto.md
 COPY src ./src
 COPY scripts ./scripts
 
