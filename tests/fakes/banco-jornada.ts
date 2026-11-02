@@ -41,6 +41,13 @@ export class BancoJornada {
     if (s.startsWith('insert into usuarios')) { this.usuario={id:randomUUID(),auth_user_id:p[0],conta_id:p[1],papel:'medico',nome:p[2],email:p[3],telefone:p[4],ativo:true};return ret([this.usuario]); }
     if (s.startsWith('insert into medicos')) { this.medico={id:randomUUID(),usuario_id:p[0],conta_id:p[1],nome_completo:p[2],crm:null,rqe:null,especialidade:null};return ret([this.medico]); }
     if (s.startsWith('select id from medicos where id')) return ret(this.medico?.id===p[0]?[{id:this.medico.id}]:[]);
+    // Mesmo contrato de sessão da API HTTP: médico da conta do usuário ativo.
+    if (s.startsWith('select m.id as medico_id, m.usuario_id as medico_usuario_id, u.id as usuario_id from usuarios u join medicos m on m.conta_id = u.conta_id')) {
+      const autorizado=this.usuario?.ativo && this.usuario?.auth_user_id===p[0] &&
+        this.usuario.conta_id===this.medico?.conta_id &&
+        (this.medico.id===p[1] || (this.usuario.id===p[1] && this.medico.usuario_id===this.usuario.id));
+      return ret(autorizado?[{medico_id:this.medico.id,medico_usuario_id:this.medico.usuario_id,usuario_id:this.usuario.id}]:[]);
+    }
     if (s.startsWith('select m.id from medicos m join usuarios')) { const vinculado=p.length===2?this.medico?.id===p[0]&&this.usuario?.auth_user_id===p[1]:this.usuario?.auth_user_id===p[0];return ret(vinculado?[{id:this.medico.id}]:[]); }
     if (s.startsWith('update usuarios set nome')) {this.usuario.nome=p[1];return ret();}
     if (s.startsWith('update medicos set nome_completo=$2')) { Object.assign(this.medico,{nome_completo:p[1],crm:p[2],rqe:p[3]});return ret(); }
