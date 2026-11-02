@@ -71,13 +71,21 @@ export class EvolutionApiClient
         !this.destinoDoAssistenteValido(instanciaNome, chave.remoteJid.split('@')[0] ?? '') ||
         !['👍', '❤️', '🔎', '👀', '✅'].includes(emoji)) return false;
     try {
-      const resposta = await fetch(
-        this.baseUrl.replace(/\/$/, '') + '/message/sendReaction/' + encodeURIComponent(instanciaNome), {
-          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
-          headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
-          body: JSON.stringify({ key: { id: chave.id, remoteJid: chave.remoteJid, fromMe: false }, reaction: emoji })
-        });
+      const url = this.baseUrl.replace(/\/$/, '') + '/message/sendReaction/' + encodeURIComponent(instanciaNome);
+      const key = { id: chave.id, remoteJid: chave.remoteJid, fromMe: false };
+      const postar = (corpo: object) => fetch(url, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify(corpo)
+      });
+      let resposta = await postar({ key, reaction: emoji });
+      const formatoAlternativo = resposta.status === 400 || resposta.status === 422;
       await resposta.body?.cancel().catch(() => {});
+      if (formatoAlternativo) {
+        // Duas variantes publicadas da Evolution; só tenta outra se a primeira foi rejeitada.
+        resposta = await postar({ reactionKey: key, reactionMessage: emoji });
+        await resposta.body?.cancel().catch(() => {});
+      }
       return resposta.ok;
     } catch { return false; }
   }
