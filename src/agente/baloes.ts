@@ -30,8 +30,12 @@ export function separarBaloes(texto: string): string[] {
     }
     if (atual) baloes.push(atual);
   }
-  // Links sempre sozinhos e por último, sem abrir mão de conteúdo anterior.
-  return [...baloes, ...links].slice(0, 12);
+  // Nunca descartar uma cláusula de segurança, pendência ou autorização.
+  // Limita a quantidade de mensagens, consolidando a cauda sem perder conteúdo.
+  const espacos = Math.max(1, 12 - links.length);
+  const textoFinal = baloes.length <= espacos ? baloes :
+    [...baloes.slice(0, espacos - 1), baloes.slice(espacos - 1).join(' ')];
+  return [...textoFinal, ...links];
 }
 
 export function reacaoContextual(texto: string): '❤️' | '👍' | '🔎' | '👀' | null {
