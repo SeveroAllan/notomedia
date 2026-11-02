@@ -65,7 +65,11 @@ export function evoluirEstadoConversa(
   const identificados = profissionais.filter(p =>
     normalizarNomeMedico(p.nome).split(' ').filter(t => t.length >= 4)
       .some(t => nome.split(' ').includes(t)));
-  if (identificados.length === 1) atual.profissionalConfirmadoId = identificados[0]!.id;
+  // Mencionar Alice numa pergunta não equivale a escolher a identidade.
+  // Somente atribuição declarativa ou resposta à confirmação pendente atualiza foco.
+  const atribuiu = !/[?]/.test(entrada) && !/\b(?:nao sei|talvez|quem|qual)\b/.test(nome) &&
+    /\b(?:sou|e|para|da|do|pertence|confirmo)\b/.test(nome);
+  if (identificados.length === 1 && atribuiu) atual.profissionalConfirmadoId = identificados[0]!.id;
   else if (confirmacao && anterior.perguntaPendente === 'profissional' && anterior.profissionalPerguntadoId &&
       profissionais.some(p => p.id === anterior.profissionalPerguntadoId)) {
     atual.profissionalConfirmadoId = anterior.profissionalPerguntadoId;
