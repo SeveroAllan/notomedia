@@ -88,7 +88,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     const instanciaOtp = env['EVOLUTION_OFFICIAL_INSTANCE_NAME']?.trim();
     const instanciaAgente = env['EVOLUTION_ASSISTANT_INSTANCE_NAME']?.trim();
     if (!instanciaOtp || !instanciaAgente || instanciaOtp === instanciaAgente ||
-        instanciaOtp === 'notomed_oficial' || instanciaAgente === 'notomed_assistente' ||
+        instanciaAgente === 'notomed_assistente' ||
         !env['EVOLUTION_API_URL']?.trim() || !env['EVOLUTION_GLOBAL_API_KEY']?.trim() ||
         !env['EVOLUTION_ASSISTANT_URL']?.trim() ||
         !(env['EVOLUTION_ASSISTANT_GLOBAL_API_KEY'] || env['EVOLUTION_ASSISTANT_API_KEY'])?.trim()) {

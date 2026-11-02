@@ -32,6 +32,19 @@ describe('configuracao fail-closed da homologacao', () => {
     expect(config.envioRealAllowlist).toEqual(['5511999990000']);
   });
 
+  it('permite a instancia oficial existente como remetente OTP somente-saida', () => {
+    const config = carregarConfig({ ...homologacao, EVOLUTION_OFFICIAL_INSTANCE_NAME: 'notomed_oficial' });
+    expect(config.evolutionOfficialInstanceName).toBe('notomed_oficial');
+    expect(config.evolutionAssistantInstanceName).toBe('homologacao_agente');
+  });
+
+  it('ainda rejeita assistente igual ao remetente OTP', () => {
+    expect(() => carregarConfig({ ...homologacao,
+      EVOLUTION_OFFICIAL_INSTANCE_NAME: 'notomed_oficial',
+      EVOLUTION_ASSISTANT_INSTANCE_NAME: 'notomed_oficial'
+    })).toThrow('HOMOLOGACAO_EXIGE_EVOLUTION_ISOLADA');
+  });
+
   it.each([
     [{ ENVIO_REAL_ALLOWLIST: '' }, 'HOMOLOGACAO_EXIGE_EXATAMENTE_UM_TELEFONE'],
     [{ ENVIO_REAL_ALLOWLIST: '5511999990000,5511988881111' }, 'HOMOLOGACAO_EXIGE_EXATAMENTE_UM_TELEFONE'],
@@ -41,7 +54,7 @@ describe('configuracao fail-closed da homologacao', () => {
     [{ AGENTE_FISCAL_ATIVO: 'true' }, 'HOMOLOGACAO_EXIGE_PROCESSAMENTO_FISCAL_DESLIGADO'],
     [{ NOTO_AGENT_ENVIO_ATIVO: 'false' }, 'HOMOLOGACAO_EXIGE_ASSISTENTE_EXPLICITAMENTE_ATIVO'],
     [{ EVOLUTION_ASSISTANT_INSTANCE_NAME: 'homologacao_otp' }, 'HOMOLOGACAO_EXIGE_EVOLUTION_ISOLADA'],
-    [{ EVOLUTION_OFFICIAL_INSTANCE_NAME: 'notomed_oficial' }, 'HOMOLOGACAO_EXIGE_EVOLUTION_ISOLADA'],
+    [{ EVOLUTION_ASSISTANT_INSTANCE_NAME: 'notomed_assistente' }, 'HOMOLOGACAO_EXIGE_EVOLUTION_ISOLADA'],
     [{ EVOLUTION_ASSISTANT_WEBHOOK_SECRET: 'segredo-otp-ficticio' }, 'HOMOLOGACAO_EXIGE_SEGREDOS_WEBHOOK_DISTINTOS']
   ] as const)('rejeita configuracao insegura: %j', (sobrescrever, codigo) => {
     expect(() => carregarConfig({ ...homologacao, ...sobrescrever })).toThrow(codigo);
