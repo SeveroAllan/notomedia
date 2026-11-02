@@ -1153,7 +1153,7 @@
       </form>
     </main>
 
-    <!-- PAINEL / ONBOARDING SEQUENCIAL (APÓS LOGIN) -->
+    <!-- PAINEL / ACESSO: OTP → conectar WhatsApp → painel. Fiscal via conversa posteriormente. -->
     <section class="onboarding-card hidden" id="cardOnboarding">
       <!-- TABS DE NAVEGAÇÃO SEGMENTADAS (RADIUM 100%) -->
       <div class="tabs-wrapper hidden" id="tabsNavigation">
@@ -1205,17 +1205,17 @@
         </button>
       </div>
 
-      <!-- REVISÃO PROFISSIONAL: após A1 e antes do WhatsApp -->
+      <!-- Revisão profissional legada: não bloqueia nem antecede o pareamento inicial. -->
       <div id="stepProfissionalView" class="step-view hidden">
         <div id="revisaoProfissionalOnboarding" style="width:100%;"></div>
       </div>
 
-      <!-- ETAPA 4: WHATSAPP DO CONSULTÓRIO -->
+      <!-- PRIMEIRA ETAPA APÓS O OTP: CONECTAR WHATSAPP -->
       <div id="step4View" class="step-view hidden">
         <div class="access-header">
           <h2 class="access-title">Conectar WhatsApp</h2>
           <p class="access-subtitle">
-            Conecte o número do seu consultório para ativar o disparo automático de notas.
+            Conecte seu WhatsApp para conversar com o Noto. Certificado e dados profissionais serão tratados depois, por conversa. A conexão não autoriza emissão de notas.
           </p>
         </div>
 
@@ -1253,7 +1253,7 @@
       <!-- ETAPA 5: LIBERADO / PAINEL FINAL -->
       <div id="step5View" class="step-view hidden">
         <div id="avisoConexaoWhatsappPainel" hidden>
-          <p>Confira a conexão do WhatsApp para retomar a emissão e a entrega das notas.</p>
+          <p>Confira a conexão para continuar conversando com o Noto.</p>
           <button type="button" class="btn-link" id="btnReconectarWhatsappPainel">Reconectar WhatsApp</button>
         </div>
         <div class="painel-layout">
@@ -1933,17 +1933,17 @@
 
     function renderizarPassos(status) {
       const p = status.passos;
-      whatsappJaVinculado = p.passo4WhatsappVinculado ?? p.passo4WhatsappConectado;
+      whatsappJaVinculado = Boolean(p.passo4WhatsappVinculado || p.passo4WhatsappConectado);
       document.getElementById('avisoConexaoWhatsappPainel').hidden = !whatsappJaVinculado || p.passo4WhatsappConectado;
       document.getElementById('btnVoltarPainelWhatsapp').hidden = !whatsappJaVinculado;
       document.getElementById('resumoNomeMedico').textContent = p.passo1Nome ? status.nomeUsuario : 'Preencha na Conta';
       document.getElementById('statusFiscalPainel').textContent = p.passo2FiscalConfirmado ? 'CONFIRMADO' : 'PENDENTE';
       document.getElementById('mensagemPainel').textContent = status.liberadoParaEmitir
         ? 'Você já pode emitir notas fiscais pelo WhatsApp.'
-        : 'Seu WhatsApp está conectado. Confira as pendências fiscais na opção Conta para liberar a emissão.';
-      if (!p.passo3CertificadoValido) mostrarPasso(3);
-      else if (!p.passoProfissionalAprovado) mostrarPasso('profissional');
-      else if (!whatsappJaVinculado) mostrarPasso(4);
+        : 'Seu WhatsApp está conectado. O Noto poderá orientar a configuração profissional e fiscal pela conversa. A emissão permanece bloqueada até as confirmações necessárias.';
+      // Primeira jornada: OTP → pareamento → painel. Nunca exige A1/CRM para conectar.
+      // Uma vinculação já feita não volta ao certificado após recarregar ou reconectar.
+      if (!whatsappJaVinculado) mostrarPasso(4);
       else mostrarPasso(5);
     }
 
@@ -2392,7 +2392,9 @@
 
     async function verificarStatusWhatsapp(medicoId) {
       try {
-        const res = await fetch(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`);
+        const res = await fetch(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`, {
+          headers: { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }
+        });
         const data = await res.json();
         if (data.ok && data.conectado) {
           pararPollingConexao();
@@ -2452,7 +2454,7 @@
       try {
         const res = await fetch('/api/onboarding/whatsapp/iniciar', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
           body: JSON.stringify({ medicoId, modoConexao: modoConexaoWhatsapp })
         });
         const data = await res.json();
@@ -2540,7 +2542,7 @@
         btn.textContent = data.conectado ? 'Conectado' : 'Conectar';
         btn.disabled = data.conectado;
         btn.classList.toggle('is-connected', data.conectado);
-        status.textContent = data.conectado ? 'Seu WhatsApp está conectado.' : 'WhatsApp desconectado. Conecte para retomar a emissão pela conversa.';
+        status.textContent = data.conectado ? 'Seu WhatsApp está conectado.' : 'WhatsApp desconectado. Reconecte para continuar conversando com o Noto.';
         document.getElementById('avisoConexaoWhatsappPainel').hidden = !whatsappJaVinculado || data.conectado;
       } catch {
         if (geracao !== geracaoStatusWhatsapp || sessao !== sessaoAtual || !painelDisponivel) return;
