@@ -51,7 +51,7 @@ export function criarCofreContas(deps: {
     // URL pública é requisito apenas dos links/páginas do Cofre. Status local
     // não deve depender de DNS, proxy, TLS ou exposição do app à internet.
     try {
-        const u = new URL(cofreAutorizado ? (homologacao ? env.COFRE_ORIGEM : env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '') : '');
+        const u = new URL(cofreAutorizado ? (homologacao ? (env.COFRE_ORIGEM ?? '') : env.COFRE_ORIGEM || env.TRIBEMD_TESTE_ORIGEM || '') : '');
         if (u.pathname !== '/' || u.search || u.hash || u.username || u.password || u.protocol !== 'https:' && !(u.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(u.hostname)))
             throw Error();
         origem = u.origin;
