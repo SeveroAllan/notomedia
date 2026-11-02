@@ -257,13 +257,14 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
     const u = resultado.state.usage;
-    registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', {
+    const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
-    });
+    };
     if (resposta && !respostaCompativelComFerramentas(resposta, ferramentas)) {
-      registrar('RESPOSTA_BLOQUEADA');
+      registrar('RESPOSTA_BLOQUEADA', uso);
       return 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
     }
+    registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch {
     registrar('FALLBACK_MODELO');
