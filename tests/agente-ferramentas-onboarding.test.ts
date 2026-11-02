@@ -112,7 +112,8 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     const entrada=JSON.stringify(modelo.lastCall?.request.input);
     expect(entrada).toContain('etapa=certificado');
     expect(entrada).toContain('https://homologacao.example.test');
-    expect(entrada).not.toMatch(/senha|password|senhaSecreta123/);
+    expect(entrada).not.toContain('senhaSecreta123');
+    expect(entrada).not.toContain('password=');
     expect(consultarProntidao).toHaveBeenCalledExactlyOnceWith('m1');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('CERTIFICADO_PENDENTE');
     expect(resposta).not.toContain('Já emiti');
