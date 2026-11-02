@@ -151,13 +151,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const p = resolucao.encontrados[0]!;
       // O modelo não pode transformar um nome encontrado na conta em uma escolha
       // do usuário. Exigir menção explícita ou confirmação da última pergunta.
-      const palavrasUsuario = normalizarNomeMedico(entrada.texto).split(' ');
-      const tokensNome = normalizarNomeMedico(p.nome).split(' ')
+      const palavrasUsuario = normalizarNomeMedico(entrada.texto).split(/[^a-z0-9]+/i);
+      const tokensNome = normalizarNomeMedico(p.nome).split(/[^a-z0-9]+/i)
         .filter(t => t.length >= 3 && !['dra', 'dr', 'medico', 'medica'].includes(t));
       const mencionado = tokensNome.some(t => palavrasUsuario.includes(t));
       const ultimaResposta = (entrada.contexto ?? []).at(-1) ?? '';
       const confirmouUltimaPergunta = /^(sim|isso|correto|confirmo|pode ser)[.! ]*$/i.test(entrada.texto.trim()) &&
-        ultimaResposta.includes('?') && tokensNome.some(t => normalizarNomeMedico(ultimaResposta).split(' ').includes(t));
+        ultimaResposta.includes('?') && tokensNome.some(t => normalizarNomeMedico(ultimaResposta).split(/[^a-z0-9]+/i).includes(t));
       if (!mencionado && !confirmouUltimaPergunta) {
         log('DEPENDENCIA_PROFISSIONAL');
         return { pronto: false, agendaEscolhida: plataforma, proximaEtapa:
