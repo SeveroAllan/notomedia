@@ -21,6 +21,7 @@ export interface EntradaAgente {
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   apiKey?: string;
@@ -226,6 +227,59 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       } catch {
         registrar('descobrir_profissionais_agenda','STATUS_INDISPONIVEL',inicio);
         return {ok:false,motivo:'LEITURA_INDISPONIVEL'};
+      }
+    }
+  }));
+  if (deps.confirmarProfissionais && deps.descobrirProfissionais) extras.push(tool({
+    name:'confirmar_profissionais_descobertos',
+    description:'Somente com nomes verificados na fonte e confirmação explícita da pessoa, vincula profissionais à mesma conta. Não presume que o profissional da agenda já é o cadastrado e não herda dados fiscais ou certificado.',
+    parameters:z.object({
+      agenda:z.enum(['tribemd','amplimed']),
+      profissionalBase:z.string(),
+      nomes:z.array(z.string().trim().min(2).max(150)).min(1).max(10)
+    }),
+    async execute({agenda,profissionalBase,nomes}) {
+      const inicio=Date.now();
+      const base=identificar(profissionalBase,profissionais);
+      if(base.encontrados.length!==1) {
+        registrar('confirmar_profissionais_descobertos','PROFISSIONAL_NAO_ENCONTRADO',inicio);
+        return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
+      }
+      const medico=base.encontrados[0]!;
+      try {
+        const estado=(await deps.consultarStatus(medico.id))[agenda];
+        if(estado.indisponivel || !estado.conectada) {
+          registrar('confirmar_profissionais_descobertos',estado.indisponivel?'STATUS_INDISPONIVEL':'CONEXAO_PENDENTE',inicio);
+          return {ok:false,motivo:estado.indisponivel?'CONSULTA_INDISPONIVEL':'AGENDA_SEM_CONEXAO'};
+        }
+        const atual=await deps.descobrirProfissionais!(medico.id,agenda);
+        if(!atual.ok || !atual.nomes?.length) {
+          registrar('confirmar_profissionais_descobertos','STATUS_INDISPONIVEL',inicio);
+          return {ok:false,motivo:'IDENTIDADES_NAO_VERIFICADAS'};
+        }
+        const comprovados=nomes.map(n=>atual.nomes!.filter(c=>normalizarNomeMedico(c)===normalizarNomeMedico(n)));
+        if(comprovados.some(c=>c.length!==1)) {
+          registrar('confirmar_profissionais_descobertos','PROFISSIONAL_AMBIGUO',inicio);
+          return {ok:false,motivo:'NOME_NAO_CONFERIDO_NA_FONTE'};
+        }
+        const dito=normalizarNomeMedico(entrada.texto);
+        const confirmacao=/^(sim|isso|correto|confirmo|exatamente|pode ser)[.! ]*$/i.test(entrada.texto.trim());
+        const umaDescobertaConfirmada=confirmacao && nomes.length===1 &&
+          entrada.estadoConversa?.perguntaPendente==='profissional' &&
+          entrada.estadoConversa.descoberta?.agenda===agenda &&
+          entrada.estadoConversa.descoberta.nomes.length===1 &&
+          normalizarNomeMedico(entrada.estadoConversa.descoberta.nomes[0]!)===normalizarNomeMedico(nomes[0]!);
+        if(!umaDescobertaConfirmada && !nomes.every(n=>dito.includes(normalizarNomeMedico(n)))) {
+          registrar('confirmar_profissionais_descobertos','DEPENDENCIA_PROFISSIONAL',inicio);
+          return {ok:false,motivo:'CONFIRMACAO_EXPLICITA_NECESSARIA'};
+        }
+        const resultado=await deps.confirmarProfissionais!(medico.id,comprovados.map(c=>c[0]!));
+        registrar('confirmar_profissionais_descobertos',resultado.ok?'PROFISSIONAIS_CONFIRMADOS':'PROFISSIONAL_AMBIGUO',inicio);
+        return resultado.ok ? {ok:true,nomes:resultado.nomes??[],fiscalConfirmado:false,certificadosHerdados:false}
+          : {ok:false,motivo:resultado.motivo??'FALHA_CONFIRMAR'};
+      }catch {
+        registrar('confirmar_profissionais_descobertos','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'CONFIRMACAO_INDISPONIVEL'};
       }
     }
   }));
