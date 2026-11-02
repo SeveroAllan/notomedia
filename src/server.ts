@@ -172,7 +172,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     try {
       await pool.query('select 1 from whatsapp_instancias limit 0');
       res.json({ status: 'ready' });
-    } catch {
+    } catch (erro) {
+      const e = erro as NodeJS.ErrnoException & Error;
+      console.error('[ready] banco indisponivel:', e?.code ?? '', (e?.message ?? String(erro)).replace(/:[^:@/]+@/g, ':***@'));
       res.status(503).json({ status: 'unavailable' });
     }
   });
