@@ -2,12 +2,13 @@ import type pg from 'pg';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 
 export type AgendaEscolhida = 'tribemd' | 'amplimed';
-export type PerguntaPendente = 'agenda' | 'profissional' | 'periodo' | null;
+export type PerguntaPendente = 'agenda' | 'profissional' | 'confirmar_profissional' | 'periodo' | null;
 export interface EstadoConversa {
   agendaEscolhida?: AgendaEscolhida;
   profissionalConfirmadoId?: string;
   perguntaPendente?: PerguntaPendente;
   profissionalPerguntadoId?: string;
+  nomeProfissionalPerguntado?: string;
   descoberta?: { agenda: AgendaEscolhida; nomes: string[] };
 }
 type Banco = Pick<pg.Pool, 'query'>;
@@ -19,9 +20,10 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
   return {
     ...(['tribemd','amplimed'].includes(e.agendaEscolhida) ? { agendaEscolhida: e.agendaEscolhida as AgendaEscolhida } : {}),
     ...(typeof e.profissionalConfirmadoId === 'string' ? { profissionalConfirmadoId: e.profissionalConfirmadoId } : {}),
-    ...(['agenda','profissional','periodo',null].includes(e.perguntaPendente) ?
+    ...(['agenda','profissional','confirmar_profissional','periodo',null].includes(e.perguntaPendente) ?
       { perguntaPendente: e.perguntaPendente as PerguntaPendente } : {}),
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
+    ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(e.descoberta && ['tribemd','amplimed'].includes(e.descoberta.agenda) && Array.isArray(e.descoberta.nomes) ? {
       descoberta: { agenda: e.descoberta.agenda as AgendaEscolhida, nomes: e.descoberta.nomes.filter((n: unknown) => typeof n === 'string' && n.length <= 150).slice(0,20) as string[] }
     } : {})
@@ -82,7 +84,15 @@ export function evoluirEstadoConversa(
   // A última pergunta passa a ser uma categoria fechada; nunca persistimos o balão.
   const perguntas = resposta.split(/[.!?\n]+/).filter(Boolean);
   const ultima = perguntas.at(-1)?.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase() ?? '';
-  if (/\bagenda\b/.test(ultima) && /(qual|usa|utiliza|tribemd|amplimed)/.test(ultima)) {
+  const confirmacaoDeCadastro = /\b(?:confirma|confirmar|autoriza|autorizar)\b/.test(ultima) &&
+    /\b(?:adicionar|incluir|cadastrar|vincular)\b/.test(ultima);
+  const nomesComprovados = anterior.descoberta?.nomes.filter(n =>
+    ultima.includes(normalizarNomeMedico(n))) ?? [];
+  if (confirmacaoDeCadastro && nomesComprovados.length === 1) {
+    atual.perguntaPendente = 'confirmar_profissional';
+    atual.nomeProfissionalPerguntado = nomesComprovados[0]!;
+    delete atual.profissionalPerguntadoId;
+  } else if (/\bagenda\b/.test(ultima) && /(qual|usa|utiliza|tribemd|amplimed)/.test(ultima)) {
     atual.perguntaPendente = 'agenda';
   } else if (/qual profissional|qual medico|de qual medico|qual dos profissionais|de quem e a agenda/.test(ultima)) {
     atual.perguntaPendente = 'profissional';
@@ -93,6 +103,7 @@ export function evoluirEstadoConversa(
   } else {
     atual.perguntaPendente = null;
     delete atual.profissionalPerguntadoId;
+    delete atual.nomeProfissionalPerguntado;
   }
   return atual;
 }
@@ -103,6 +114,7 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
   if (estado.profissionalConfirmadoId) permitido.profissionalConfirmadoId = estado.profissionalConfirmadoId;
   if (estado.perguntaPendente !== undefined) permitido.perguntaPendente = estado.perguntaPendente;
   if (estado.profissionalPerguntadoId) permitido.profissionalPerguntadoId = estado.profissionalPerguntadoId;
+  if (estado.nomeProfissionalPerguntado && estado.nomeProfissionalPerguntado.length <= 150) permitido.nomeProfissionalPerguntado = estado.nomeProfissionalPerguntado;
   if (estado.descoberta && ['tribemd','amplimed'].includes(estado.descoberta.agenda)) permitido.descoberta = {
     agenda: estado.descoberta.agenda, nomes: estado.descoberta.nomes.filter(n => n && n.length <= 150).slice(0,20)
   };
