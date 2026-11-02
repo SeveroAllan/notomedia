@@ -4,6 +4,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { responderAgente, type StatusFontes } from './agente.js';
+import type { AgendaEscolhida } from './estado-conversa.js';
 import { separarBaloes, reacaoContextual, solicitouVerificacao } from './baloes.js';
 import {
   lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
@@ -49,6 +50,9 @@ export function criarRouterWebhookAgente(deps: {
   diagnosticoAtivo?: boolean;
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
+  descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ enviado: boolean; motivo?: string }>;
+  consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
   painelUrl?: string;
   persistirConversa?: boolean;
@@ -144,7 +148,10 @@ export function criarRouterWebhookAgente(deps: {
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
-        modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico
+        modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
+        ...(deps.descobrirProfissionais ? { descobrirProfissionais: deps.descobrirProfissionais } : {}),
+        ...(deps.solicitarLinkAgenda ? { solicitarLinkAgenda: (medicoId: string, agenda: AgendaEscolhida) => deps.solicitarLinkAgenda!(medicoId, agenda, telefone) } : {}),
+        ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {})
       });
 
       const baloes = separarBaloes(resposta);
