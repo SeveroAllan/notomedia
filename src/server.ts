@@ -14,6 +14,8 @@ import { criarRouterWebhookPareamento } from './whatsapp/webhook-pareamento.js';
 import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
 import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
+import { separarBaloes } from './agente/baloes.js';
+import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -122,9 +124,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         config.evolutionAssistantInstanceName === config.evolutionOfficialInstanceName) return;
     await enviarBoasVindasAposPareamento({
       pool, ativo: true, nomeInstancia, allowlist: config.envioRealAllowlist,
-      enviar: async (telefone, texto) => (await transporteAgente.enviarTexto({
-        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
-      })).sucesso
+      enviar: async (telefone, texto) => {
+        for (const balao of separarBaloes(texto)) {
+          if (!await transporteAgente.enviarTexto({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto: balao }).then(r => r.sucesso)) return false;
+        }
+        return true;
+      }
     });
   };
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
@@ -156,6 +161,47 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    descobrirProfissionais: async (medicoId, agenda) => {
+      // Autoridade já verificada no webhook e estado confirmado na ferramenta;
+      // devolver somente nomes, nunca o conteúdo de uma consulta.
+      if (agenda === 'amplimed') {
+        const r = await cofres.listarProfissionaisAmplimed(medicoId);
+        return r.ok
+          ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
+              ? r.profissionais.map(p => p.nome).filter(Boolean).slice(0, 20) : [] }
+          : { ok: false, motivo: r.motivo };
+      }
+      const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
+      return r.tipo === 'consultas'
+        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).slice(0, 20) }
+        : { ok: false, motivo: r.codigo };
+    },
+    solicitarLinkAgenda: async (medicoId, agenda, telefone) => {
+      // A criação exige operador autenticado pela mesma conta, destino autorizado
+      // e a instância fiscal de pacientes permanece desligada.
+      const seguro = config.envioRealAllowlist?.length === 1 &&
+        gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
+      if (!seguro || !cofres.links) return { enviado: false, motivo: 'ENVIO_INDISPONIVEL' };
+      const r = await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
+      return { enviado: Boolean(r.ok && r.motivo === 'enviado'), ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {}) };
+    },
+    consultarProntidao: async medicoId => {
+      const status = await consultarStatusOnboarding(pool, medicoId, false);
+      return {
+        certificadoValido: status.passos.passo3CertificadoValido,
+        dadosProfissionaisCompletos: status.dadosProfissionaisCompletos && status.passos.passoProfissionalAprovado,
+        dadosFiscaisConfirmados: status.passos.passo2FiscalConfirmado,
+        liberadoParaEmitir: false // piloto: emissão sempre desligada, independentemente do cadastro.
+      };
+    },
+    persistirConversa: Boolean(config.notoPilotoRestrito),
+    marcarLida: async chave => (await transporteAgente.marcarLida({
+      instanciaNome: config.evolutionAssistantInstanceName,
+      contatoTelefone: chave.remoteJid.split('@')[0] ?? '',
+      mensagemId: chave.id, chaveMensagem: chave
+    })).sucesso,
+    reagir: (chave, emoji) => transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji),
+    presenca: (telefone, estado) => transporteAgente.enviarPresenca(config.evolutionAssistantInstanceName, telefone, estado),
     enviar: async (telefone, texto) => {
       const resultado = await transporteAgente.enviarTexto({
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
@@ -214,6 +260,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (config.notoPilotoRestrito === true) {
         // Bloqueia lançamento do piloto sem a reserva durável contra duplicidade.
         await pool.query('select conta_id from noto_boas_vindas_pareamento limit 0');
+        await pool.query('select conta_id from noto_agent_conversas limit 0');
+        await pool.query('select conta_id from noto_agent_mensagens limit 0');
       }
       res.json({ status: 'ready' });
     } catch (erro) {
