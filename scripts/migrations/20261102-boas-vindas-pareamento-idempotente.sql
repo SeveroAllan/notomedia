@@ -26,6 +26,15 @@ CREATE TABLE IF NOT EXISTS public.noto_boas_vindas_pareamento (
 ALTER TABLE public.noto_boas_vindas_pareamento ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.noto_boas_vindas_pareamento FROM PUBLIC, anon, authenticated;
 
+-- O backend com service_role usa a reserva; anon/authenticated nunca acessam.
+DO $grants$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    GRANT SELECT, INSERT, UPDATE ON public.noto_boas_vindas_pareamento TO service_role;
+  END IF;
+END
+$grants$;
+
 DO $verify$
 DECLARE coluna record;
 BEGIN
