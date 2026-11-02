@@ -67,10 +67,24 @@ Fluxo padrão do primeiro contato à primeira nota emitida e entregue, quando o 
 
 - Explicar de forma curta quando as próximas emissões acontecem via comprovante.
 
-## Ferramentas de hoje
+## Ferramentas e implementação na branch
 
-- Hoje: consultar_contexto_conta (conta e profissionais), consultar_status_agendas (estado das agendas), orientar_conexao_agenda (conexão segura).
-- Lacunas a implementar (não capacidades atuais): leitura de médicos, cofre, completude fiscal, propostas, preferenciais, emissão e entrega.
+- Sempre disponíveis no agente: consultar_contexto_conta, consultar_status_agendas e orientar_conexao_agenda.
+- Somente se os adaptadores reais estiverem instalados e autorizados no processo:
+  descobrir_profissionais_agenda (nomes da fonte), confirmar_profissionais_descobertos
+  (com aprovação explícita e nova verificação), solicitar_link_seguro_agenda
+  (destino autorizado), consultar_prontidao_onboarding (indicadores de pendências),
+  orientar_certificado_seguro (página autenticada) e confirmar_dados_profissionais
+  (nome/CRM/RQE informados e aprovados).
+- O processo isolado somente leitura não recebe ferramentas que modifiquem
+  cadastros, enviem links ou confirmem profissionais; o servidor principal só
+  as disponibiliza quando seus contratos estão conectados.
+- Continua NÃO implementado no agente: propostas fiscais baseadas em consultas,
+  cadastro/alteração de parâmetros fiscais, preferenciais de emissão e envio,
+  emissão fiscal e entrega de notas ou consulta da última nota. Esses passos do
+  mapa representam o objetivo, nunca uma capacidade presumida.
+- Nenhum clique, confirmação de conversa, pareamento, leitura ou gesto
+  de WhatsApp altera permissão fiscal ou libera emissão.
 
 ## Regras gerais
 
