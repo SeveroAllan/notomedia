@@ -171,8 +171,8 @@ export function criarRouterWebhookAgente(deps: {
 
       if (enviado) {
         if (reservada && contaId) {
-          const novo = evoluirEstadoConversa(estado, texto, resposta, profissionais);
-          if (descobertaVerificada) novo.descoberta = descobertaVerificada;
+          const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
+          const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
           await salvarEstadoConversa(deps.pool, contaId, novo);
         } else {
           contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
