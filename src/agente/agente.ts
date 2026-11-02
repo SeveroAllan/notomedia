@@ -194,6 +194,30 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   });
 }
 
+/**
+ * Ultima linha de defesa contra afirmar execucao/estado que as ferramentas
+ * somente de leitura nao comprovaram. O arquivo agent.md decide estilo e dialogo;
+ * estas travas sao verificacoes deterministicas.
+ */
+export function respostaCompativelComFerramentas(resposta: string, eventos: readonly EventoFerramenta[]): boolean {
+  const normalizada = resposta.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // Este processo jamais emite, cancela, envia documentos ou verifica ultima nota.
+  if (/\b(?:emiti|emitimos|cancelei|cancelamos|enviei|enviamos)\s+(?:a |uma |o |um )?(?:nota|documento|comprovante)\b/.test(normalizada) ||
+      /\b(?:nota|documento|comprovante)\s+(?:ja\s+)?(?:foi|esta)\s+(?:emitid[ao]|cancelad[ao]|enviad[ao])\b/.test(normalizada)) {
+    return false;
+  }
+  // Sem evidencia da ferramenta, nunca transformar indisponibilidade em certeza.
+  const agenda = /\b(?:agenda|tribemd|amplimed)\b[^.!?\n]{0,90}\b(?:desconectad[ao]|conectad[ao])\b/.test(normalizada);
+  const falhou = eventos.some(e => ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL'].includes(e.codigo));
+  const naoConectado = eventos.some(e => e.codigo === 'STATUS_NAO_CONECTADO' || e.codigo === 'CONEXAO_PENDENTE');
+  const evidenciaPositiva = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
+  if (agenda && ((falhou && !/nao consegui verificar|nao foi possivel verificar|estado desconhecido/.test(normalizada)) ||
+      (naoConectado && !evidenciaPositiva && /\b(?:ja\s+)?(?:esta|estao|ficou|continua)\s+conectad/.test(normalizada)))) {
+    return false;
+  }
+  return true;
+}
+
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
@@ -236,6 +260,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     });
+    if (resposta && !respostaCompativelComFerramentas(resposta, ferramentas)) {
+      registrar('RESPOSTA_BLOQUEADA');
+      return 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
+    }
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch {
     registrar('FALLBACK_MODELO');
