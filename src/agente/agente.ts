@@ -1,6 +1,6 @@
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
 import { z } from 'zod';
-import { normalizarNomeMedico } from '../conta/medicos-conta.js';
+import { normalizarNomeMedico, linkCertificadoMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
@@ -282,6 +282,38 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }catch{
         registrar('consultar_prontidao_onboarding','FERRAMENTA_INDISPONIVEL',inicio);
         return {ok:false,motivo:'PRONTIDAO_INDISPONIVEL'};
+      }
+    }
+  }));
+
+  if (deps.consultarProntidao && entrada.painelUrl) extras.push(tool({
+    name: 'orientar_certificado_seguro',
+    description: 'Com profissional explicitamente identificado, verifica se certificado já existe; se faltar, retorna somente a página autenticada para cadastro do A1. Nunca recebe arquivo ou senha pela conversa.',
+    parameters: z.object({ profissional:z.string() }),
+    async execute({profissional}) {
+      const inicio=Date.now();
+      const r=identificar(profissional,profissionais);
+      const medico=r.encontrados[0];
+      if (!medico || r.encontrados.length!==1 ||
+          entrada.estadoConversa?.profissionalConfirmadoId!==medico.id) {
+        registrar('orientar_certificado_seguro','DEPENDENCIA_PROFISSIONAL',inicio);
+        return {ok:false,motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'};
+      }
+      try {
+        const status=await deps.consultarProntidao!(medico.id);
+        if(status.certificadoValido) {
+          registrar('orientar_certificado_seguro','CERTIFICADO_EXISTENTE',inicio);
+          return {ok:true,certificadoValido:true,orientacao:'Certificado válido; não pedir novo envio.'};
+        }
+        const origem=new URL(entrada.painelUrl!);
+        if(origem.protocol!=='https:'||origem.username||origem.password||origem.pathname!=='/'||origem.search||origem.hash)
+          throw new Error('ORIGEM_NAO_CONFIAVEL');
+        const url=linkCertificadoMedico(origem.origin,medico.id);
+        registrar('orientar_certificado_seguro','CERTIFICADO_PENDENTE',inicio);
+        return {ok:true,certificadoValido:false,orientacao:'Abrir página autenticada, nunca enviar senha ou A1 pela conversa.',url};
+      }catch {
+        registrar('orientar_certificado_seguro','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'PAGINA_SEGURA_INDISPONIVEL'};
       }
     }
   }));
