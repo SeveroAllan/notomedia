@@ -122,7 +122,6 @@ describe('boas-vindas so apos pareamento real e uma unica tentativa por conta', 
     expect(mensagem).toContain('Qual agenda você usa');
     expect(mensagem).toContain('emissão ainda depende');
     expect(mensagem).not.toMatch(/emiti sua nota|nota foi emitida|sua agenda (está|já está) conectada|última nota/i);
-    for (const linha of mensagem.split('\n')) expect(linha.trim().split(/\s+/)).toHaveLength(expect.any(Number));
     for (const linha of mensagem.split('\n')) expect(linha.trim().split(/\s+/).length).toBeLessThanOrEqual(15);
   });
 });
