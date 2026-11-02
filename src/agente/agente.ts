@@ -467,6 +467,21 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
       if (!/\b(?:nao|nunca|jamais)\b/.test(match[0]) && !incerta(antes)) return false;
     }
 
+    // Confirmações de ações do onboarding só podem aparecer após a
+    // ferramenta correspondente. Uma negação restrita à mesma oração passa.
+    const verificarAcao = (expressao: RegExp, codigo: CodigoFerramenta): boolean => {
+      for (const match of oracao.matchAll(expressao)) {
+        const antes = oracao.slice(0, match.index).trimEnd();
+        if (!negada(antes) && !eventos.some(e => e.codigo === codigo)) return false;
+      }
+      return true;
+    };
+    if (!verificarAcao(/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b/g, 'LINK_ENVIADO')) return false;
+    if (!verificarAcao(/\b(?:registrei|atualizei|salvei)\s+(?:(?:o|um|os)\s+)?(?:crm|rqe|nome completo|dados profissionais)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
+    if (!verificarAcao(/\b(?:crm|rqe|dados profissionais)\s+(?:(?:ja|esta|foi)\s+)*(?:registrad[oa]s?|atualizad[oa]s?|salv[oa]s?)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
+    if (!verificarAcao(/\b(?:foi adicionad[oa]|foram adicionad[oa]s|cadastrei|adicionei)\b[^.!?;\n]{0,65}\b(?:conta|medic[oa]s?|profissionais)\b/g, 'PROFISSIONAIS_CONFIRMADOS')) return false;
+    if (!verificarAcao(/\bencontrei\b[^.!?;\n]{0,100}\bna agenda\b/g, 'PROFISSIONAIS_ENCONTRADOS')) return false;
+
     // Conexão é um estado verificável; uma negativa continua sendo afirmação
     // sobre o estado ("a agenda não está conectada"), salvo dúvida explícita.
     const estado = /\b(?:agenda|tribemd|amplimed)\b[^.!?;\n]{0,100}?\b(?:desconectad[ao]s?|conectad[ao]s?|ativ[ao]s?)\b/g;
