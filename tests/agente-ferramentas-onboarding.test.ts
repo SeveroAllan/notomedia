@@ -278,3 +278,73 @@ describe('sim é confirmação contextual de um único médico pendente',()=>{
     modelo.assertComplete();
   });
 });
+
+
+describe('dados profissionais via conversa, com autorização exata',()=>{
+  const medicos=[{id:'m1',nome:'Dra. Alice Silva'}];
+  const toolArgs={profissional:'Alice',crm:'12345/RS'};
+
+  it('registra CRM informado e confirmado pelo próprio operador, sem tocar no fiscal',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'confirma-crm'})],
+      [assistantMessage('CRM registrado. Os dados fiscais e a emissão continuam pendentes.')]
+    ]);
+    const salvarDadosProfissionais=vi.fn().mockResolvedValue({ok:true,nome:'Alice Silva',crm:'12345/RS',rqe:null});
+    const diagnostico=vi.fn();
+    const resposta=await responderAgente({
+      texto:'Confirmo CRM: 12345/RS',profissionais:medicos,
+      estadoConversa:{profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+    expect(salvarDadosProfissionais).toHaveBeenCalledExactlyOnceWith('m1',{crm:'12345/RS'});
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DADOS_PROFISSIONAIS_SALVOS');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('"emissaoAutorizada":false');
+    expect(resposta).toContain('pendentes');
+    modelo.assertComplete();
+  });
+
+  it('não altera CRM apenas porque o valor foi mencionado em uma dúvida',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'crm-pergunta'})],
+      [assistantMessage('Quer confirmar esse CRM para seu cadastro?')]
+    ]);
+    const salvarDadosProfissionais=vi.fn();
+    const diagnostico=vi.fn();
+    await responderAgente({
+      texto:'O CRM 12345/RS está certo?',profissionais:medicos,
+      estadoConversa:{profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
+    modelo.assertComplete();
+  });
+
+  it('não grava valor inventado pelo modelo, mesmo que a confirmação seja real',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'crm-inventado'})],
+      [assistantMessage('Você confirma o CRM correto, por favor?')]
+    ]);
+    const salvarDadosProfissionais=vi.fn();
+    const diagnostico=vi.fn();
+    await responderAgente({
+      texto:'Confirmo CRM: 67890/RS',profissionais:medicos,
+      estadoConversa:{profissionalConfirmadoId:'m1'}
+    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
+    modelo.assertComplete();
+  });
+
+  it('não grava sem profissional previamente identificado',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'sem-identidade'})],
+      [assistantMessage('Para qual médico você está confirmando esse CRM?')]
+    ]);
+    const salvarDadosProfissionais=vi.fn();
+    const diagnostico=vi.fn();
+    await responderAgente({texto:'Confirmo CRM: 12345/RS',profissionais:medicos},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    modelo.assertComplete();
+  });
+});
