@@ -181,7 +181,7 @@ describe('confirmação de médicos descobertos depende de consentimento e evid�
       confirmarProfissionais:confirmar,aoDiagnostico:diag});
     expect(confirmar).toHaveBeenCalledExactlyOnceWith('m1',['Bruno Costa']);
     expect(diag.mock.calls[0][0].ferramentas[0].codigo).toBe('PROFISSIONAIS_CONFIRMADOS');
-    expect(resposta).toContain('não autoriza emissão');
+    expect(resposta).toContain('nem autoriza emissão');
     modelo.assertComplete();
   });
 
