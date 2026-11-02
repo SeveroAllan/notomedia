@@ -133,7 +133,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     confirmarConexao: async instancia => {
       try {
         const resultado = await fetch(
-          `${config.evolutionApiUrl.replace(/\\/+$/, '')}/instance/connectionState/${encodeURIComponent(instancia)}`,
+          `${config.evolutionApiUrl.replace(/\/+$/, '')}/instance/connectionState/${encodeURIComponent(instancia)}`,
           { headers: { apikey: config.evolutionGlobalApiKey }, signal: AbortSignal.timeout(5000), redirect: 'error' }
         );
         if (!resultado.ok) return false;
