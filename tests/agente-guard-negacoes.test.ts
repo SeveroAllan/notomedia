@@ -110,3 +110,28 @@ describe('guard determinístico — ações fiscais negadas e afirmações sem p
     modelo.assertComplete();
   });
 });
+
+
+describe('guard exige evidência das novas ações de onboarding sem bloquear negações',()=>{
+  const evento = (codigo: import('../src/agente/diagnostico.js').CodigoFerramenta) =>
+    [{nome:'consultar_contexto_conta' as const,codigo,duracaoMs:1}];
+
+  it.each([
+    ['CRM registrado.', 'DADOS_PROFISSIONAIS_SALVOS'],
+    ['Registrei o CRM.', 'DADOS_PROFISSIONAIS_SALVOS'],
+    ['Enviei o link seguro.', 'LINK_ENVIADO'],
+    ['Bruno foi adicionado à conta.', 'PROFISSIONAIS_CONFIRMADOS'],
+    ['Encontrei Bruno na agenda.', 'PROFISSIONAIS_ENCONTRADOS']
+  ] as const)('bloqueia afirmação %s sem ferramenta, mas permite com prova %s',(frase,codigo)=>{
+    expect(respostaCompativelComFerramentas(frase,[])).toBe(false);
+    expect(respostaCompativelComFerramentas(frase,evento(codigo))).toBe(true);
+  });
+
+  it('negação isolada não bloqueia, mas não libera uma segunda ação inventada',()=>{
+    expect(respostaCompativelComFerramentas('Não registrei o CRM.',[])).toBe(true);
+    expect(respostaCompativelComFerramentas('Não enviei link.',[])).toBe(true);
+    expect(respostaCompativelComFerramentas('Não encontrei Bruno na agenda.',[])).toBe(true);
+    expect(respostaCompativelComFerramentas('Não enviei link, mas registrei o CRM.',[])).toBe(false);
+    expect(respostaCompativelComFerramentas('Não registrei o CRM; enviei o link.',[])).toBe(false);
+  });
+});
