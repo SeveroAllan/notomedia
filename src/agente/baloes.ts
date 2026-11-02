@@ -37,12 +37,12 @@ export function separarBaloes(texto: string): string[] {
 export function reacaoContextual(texto: string): '❤️' | '👍' | '🔎' | '👀' | null {
   const t = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
   if (/\b(obrigad[ao]|valeu|agradec|gratidao)\b/.test(t)) return '❤️';
-  if (/\b(verific|confir|consult|procure|busque|pesquis|descubr|analise|veja|preciso que|pode fazer|consegue|me ajude|quero que|envie|mande)\w*/.test(t)) return '🔎';
+  if (/\b(verific|confir|confer|consult|procure|busque|pesquis|descubr|analise|veja|preciso que|pode fazer|consegue|me ajude|quero que|envie|mande)\w*/.test(t)) return '🔎';
   if (/\?$|^(como|qual|quando|onde|porque|por que|quanto|quem|o que|sera que)\b/.test(t)) return '👀';
   if (/^(sim|isso|certo|correto|pode|confirmo|ok|ta bom|beleza|perfeito|entendi|exato|concordo|👍)\b/.test(t)) return '👍';
   return null;
 }
 
 export function solicitouVerificacao(texto: string): boolean {
-  return /\b(verific|confir|consult|procure|pesquis|veja|chequ)\w*/i.test(texto.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  return /\b(verific|confir|confer|consult|procure|pesquis|veja|chequ)\w*/i.test(texto.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
 }
