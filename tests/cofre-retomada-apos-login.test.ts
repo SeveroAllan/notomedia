@@ -84,6 +84,14 @@ describe('callback de conexão continua descoberta na MESMA sessão sem nova men
     expect(d.nomesComprovados).toEqual([]);
     expect(d.diagnostico.recuperacaoPontual).toBe('FALHOU');
   });
+  it('falha da primeira leitura não dispara a segunda; callback identifica acesso confirmado sem nomes',async()=>{
+    const r=await rodar([new Error('LEITURA_HTTP_ERRO')]);
+    expect(r.ler).toHaveBeenCalledTimes(1);
+    expect(r.criar).toHaveBeenCalledTimes(1);
+    expect(r.aoConcluir).toHaveBeenCalledExactlyOnceWith('conta-a',true);
+    expect(r.cofre.resultado('conta-a')).toBeNull();
+    expect((await r.cofre.status('conta-a')).codigo).toBe('LEITURA_NAO_CONCLUIDA');
+  });
   it('leitura completa não faz segundo acesso nem repete callback',async()=>{
     const r=await rodar([completa()]);
     expect(r.ler).toHaveBeenCalledTimes(1);

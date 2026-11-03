@@ -32,6 +32,22 @@ describe('balões de WhatsApp como mensagens reais', () => {
 });
 
 describe('memória mínima do onboarding', () => {
+  it('preserva fase de descoberta pendente sem incluir nomes ou conteúdo clínico',async()=>{
+    const query=vi.fn().mockResolvedValue({rows:[]});
+    await salvarEstadoConversa({query} as unknown as pg.Pool,'conta-isolada',{
+      agendaEscolhida:'tribemd',faseAgenda:'DESCOBERTA_PENDENTE',
+      causaDescoberta:'DETALHES_PENDENTES'
+    });
+    const estado=JSON.parse(String(query.mock.calls[0]?.[1]?.[1]));
+    expect(estado).toMatchObject({
+      agendaEscolhida:'tribemd',faseAgenda:'DESCOBERTA_PENDENTE',
+      causaDescoberta:'DETALHES_PENDENTES'
+    });
+    expect(JSON.stringify(estado)).not.toMatch(/paciente|cpf|senha|token|nome/i);
+    query.mockResolvedValueOnce({rows:[{estado}]});
+    expect(await lerEstadoConversa({query} as unknown as pg.Pool,'conta-isolada'))
+      .toMatchObject({faseAgenda:'DESCOBERTA_PENDENTE',causaDescoberta:'DETALHES_PENDENTES'});
+  });
   const profissionais = [{id:'m-1',nome:'Dra. Alice Silva'},{id:'m-2',nome:'Bruno Lima'}];
   it('salva escolha e identidade explícitas sem confundir com lista cadastrada', () => {
     const escolhido = evoluirEstadoConversa({}, 'É Amplimed da Alice', 'Certo. Vou verificar a conexão.', profissionais);
