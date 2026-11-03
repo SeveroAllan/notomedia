@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { expect, it } from 'vitest';
+import { confirmarMedicosDaConta } from '../src/conta/medicos-conta.js';
+import { cofreIdDaConta } from '../src/cofre/identidade-conta.js';
 
 const sql=readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261105-cofre-links-por-conta.sql',import.meta.url)), 'utf8');
@@ -28,7 +30,19 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
           IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
         END $$;
         CREATE TABLE public.contas(id uuid PRIMARY KEY);
-        CREATE TABLE public.medicos(id uuid PRIMARY KEY);
+        CREATE TABLE public.medicos(
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          usuario_id uuid,
+          conta_id uuid REFERENCES public.contas(id),
+          nome_completo text,
+          crm text
+        );
+        CREATE TABLE public.medico_certificados (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          medico_id uuid REFERENCES public.medicos(id),
+          status text,
+          valido_ate date
+        );
         CREATE TABLE public.cofre_links (
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           medico_id uuid NOT NULL REFERENCES public.medicos(id) ON DELETE CASCADE,
@@ -47,7 +61,7 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
         );
         INSERT INTO public.contas VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
         INSERT INTO public.contas VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
-        INSERT INTO public.medicos VALUES ('11111111-1111-4111-8111-111111111111');
+        INSERT INTO public.medicos(id,conta_id,nome_completo) VALUES ('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Dr. Legado');
         INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
           VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes');
       `);
@@ -87,7 +101,25 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
       expect(grants.rows[0].total).toBe(0);
       const depois=await banco.query('select count(*)::int as n from public.medicos');
       expect(depois.rows[0].n).toBe(1);
-      // Nenhuma operação administrativa cria/atribui médico na primeira conexão.
+      // A confirmação posterior cria os médicos encontrados SOMENTE na conta nova.
+      const pool=new pg.Pool({connectionString:url.toString()});
+      try {
+        const contaNova='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+        const nomes=['Dra. Alice Silva','Dr. Bruno Costa'];
+        const criados=await confirmarMedicosDaConta(pool,cofreIdDaConta(contaNova),nomes);
+        expect(criados.ok).toBe(true);
+        if(criados.ok)expect(criados.medicos.map(m=>m.nomeCompleto)).toEqual(nomes);
+        await confirmarMedicosDaConta(pool,cofreIdDaConta(contaNova),nomes);
+        const linhas=await banco.query(
+          'select conta_id,nome_completo from medicos order by conta_id,nome_completo');
+        expect(linhas.rows.filter((r:{conta_id:string})=>r.conta_id===contaNova))
+          .toHaveLength(2);
+        expect(linhas.rows.filter((r:{conta_id:string})=>r.conta_id==='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'))
+          .toHaveLength(1);
+        const semConta=await confirmarMedicosDaConta(pool,
+          cofreIdDaConta('cccccccc-cccc-4ccc-8ccc-cccccccccccc'),['Dr. Nome Inexistente']);
+        expect(semConta.ok).toBe(false);
+      } finally { await pool.end(); }
     } finally { await banco.end(); }
   } finally {
     if(criado) await admin.query('DROP DATABASE '+nome+' WITH (FORCE)');
