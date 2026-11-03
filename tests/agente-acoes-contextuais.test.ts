@@ -86,6 +86,25 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
 });
 
 describe('estado de ação controla o relato, não uma lista de frases proibidas',()=>{
+  it('mantém abertura natural enquanto só o código narra o marco',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'resultado-estruturado'})],
+      [assistantMessage('Certo, entendi a agenda que você quer conectar. [[RESULTADO_ACAO]]')]
+    ]);
+    const resposta=await responderAgente({
+      texto:'Quero conectar a TribeMD',profissionais:[],
+      estadoConversa:{agendaEscolhida:'tribemd'}
+    },{
+      modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(vazio),
+      referenciaContaAgenda:ancora(),
+      solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true})
+    });
+    expect(resposta).toContain('Certo, entendi a agenda que você quer conectar.');
+    expect(resposta).toContain('já foi aceito');
+    expect(resposta).toContain('não tenho confirmação de entrega');
+    expect(resposta).not.toContain('[[RESULTADO_ACAO]]');
+    modelo.assertComplete();
+  });
   const variacoes=[
     'Agora vou pedir seu link para você usar quando ele estiver pronto.',
     'Tudo certo, o endereço chegará assim que o sistema concluir.',

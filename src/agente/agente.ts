@@ -764,10 +764,14 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     };
     const relato=acompanhamentoVerificado(entrada,ferramentas);
     if(relato) {
-      // O marco foi produzido por ferramenta real ou estado da conta;
-      // a redação livre do modelo não pode alterá-lo nem antecipá-lo.
+      // A abertura natural é livre, mas o relato da ação provém do
+      // estado comprovado. Saída fora do contrato usa só o relato seguro.
+      const partes=resposta.split('[[RESULTADO_ACAO]]');
+      const introducao=partes.length===2 ? partes[0]!.trim() : '';
+      const narracao=introducao.length>0 && introducao.length<=120
+        ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);
-      return relato;
+      return narracao;
     }
     if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
