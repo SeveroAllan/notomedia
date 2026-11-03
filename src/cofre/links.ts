@@ -35,6 +35,11 @@ export class LinksCofre {
         aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda) => Promise<void>;
         registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
+        /** SÓ a URL sensível: aceita na Evolution, guarda ID sem guardar conteúdo.
+         * A ausência de ACK não permite repetir a URL automaticamente.
+         */
+        enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
+            Promise<'enviado' | 'erro'>;
     }) {}
 
     private cofreDe(agenda: string): CofreAgenda | null {
@@ -113,7 +118,9 @@ export class LinksCofre {
             ];
             let motivo: 'simulado' | 'enviado' | undefined;
             for (const [indice, texto] of baloes.entries()) {
-                const envio = await this.deps.enviar(medicoId, texto, telefoneMedico);
+                const envio = texto === url && this.deps.enviarUrlComRecibo
+                    ? await this.deps.enviarUrlComRecibo({referenciaCofre:medicoId,url,linkId:link.id,telefone:telefoneMedico})
+                    : await this.deps.enviar(medicoId, texto, telefoneMedico);
                 if (envio === 'erro' || motivo && motivo !== envio) return { ok: false, motivo: 'erro' };
                 motivo = envio;
                 if (envio === 'enviado') {
@@ -184,7 +191,9 @@ export class LinksCofre {
             const url = `${this.deps.origem}/c/${token}`;
             const textos = [FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA,url];
             for (const texto of textos) {
-                const envio = await this.deps.enviar(chaveCofre,texto,contatoTelefone);
+                const envio = texto === url && this.deps.enviarUrlComRecibo
+                    ? await this.deps.enviarUrlComRecibo({referenciaCofre:chaveCofre,url,linkId:link!.id,telefone:contatoTelefone})
+                    : await this.deps.enviar(chaveCofre,texto,contatoTelefone);
                 if (envio !== 'enviado') return {ok:false,motivo:envio==='simulado'?'simulado':'erro'};
             }
             await this.auditar(link!.id,'enviado');

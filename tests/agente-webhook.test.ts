@@ -413,9 +413,9 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     });
     const modeloTeste=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'primeiro-link'})],
-      [assistantMessage('Enviei um link seguro para conectar a TribeMD. Informe a senha somente na página.')]
+      [assistantMessage('O serviço aceitou o envio do link seguro, sem confirmação de entrega ainda.')]
     ]);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const {app}=preparar({
       pool:{query} as unknown as pg.Pool,modeloTeste,
       solicitarLinkAgenda,consultarStatus:vi.fn().mockResolvedValue({
@@ -442,9 +442,9 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     });
     const modeloTeste=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'conta-zero-medicos'})],
-      [assistantMessage('Enviei um link seguro. A senha fica somente na página de conexão.')]
+      [assistantMessage('O link seguro foi aceito para envio. A senha fica somente na página de conexão.')]
     ]);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,solicitarLinkAgenda,
       consultarStatus:vi.fn().mockResolvedValue({
         tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}
@@ -491,5 +491,38 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     await comServidor(app,async postar=>expect((await postar(novo)).status).toBe(200));
     expect(query).toHaveBeenCalledTimes(1);
     expect(solicitarLinkAgenda).not.toHaveBeenCalled();
+  });
+});
+
+describe('Evolution MESSAGES_UPDATE: acompanhamento passivo e seguro de links',()=>{
+  const atualizarEstadoLink=vi.fn().mockResolvedValue(true);
+  const recibo={
+    event:'messages.update',instance:'notomed_assistente',
+    data:{keyId:'3EB0ABCDEFGH9',remoteJid:'5551999998888@s.whatsapp.net',
+      fromMe:true,status:'SERVER_ACK'}
+  };
+  it('webhook assinado registra recibo com IA pausada, sem enviar mensagens nem chamar modelo',async()=>{
+    atualizarEstadoLink.mockClear();
+    const {app,query,enviar,modeloTeste}=preparar({
+      ativo:false,envioAtivo:false,atualizarEstadoLink
+    });
+    await comServidor(app,async postar=>{
+      expect((await postar(recibo)).status).toBe(200);
+    });
+    expect(atualizarEstadoLink).toHaveBeenCalledExactlyOnceWith(recibo);
+    expect(query).not.toHaveBeenCalled();
+    expect(enviar).not.toHaveBeenCalled();
+    expect(modeloTeste.calls).toHaveLength(0);
+  });
+  it('nega recibos sem segredo ou de outra instancia, sem side effects',async()=>{
+    atualizarEstadoLink.mockClear();
+    const {app,query,enviar}=preparar({ativo:false,envioAtivo:false,atualizarEstadoLink});
+    await comServidor(app,async postar=>{
+      expect((await postar(recibo,'errado')).status).toBe(401);
+      expect((await postar({...recibo,instance:'notomed_oficial'})).status).toBe(204);
+    });
+    expect(atualizarEstadoLink).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(enviar).not.toHaveBeenCalled();
   });
 });

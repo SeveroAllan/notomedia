@@ -60,7 +60,9 @@ export function criarRouterWebhookAgente(deps: {
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
-  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ enviado: boolean; motivo?: string }>;
+  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
+  consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
+  atualizarEstadoLink?: (evento:unknown) => Promise<boolean>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
   painelUrl?: string;
@@ -79,6 +81,19 @@ export function criarRouterWebhookAgente(deps: {
 
   router.post('/', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
+    // Eventos de recibo autenticados sao passivos: nao disparam IA, nao
+    // enviam mensagem e nao consomem URL, inclusive com IA pausada.
+    const possivelRecibo=typeof req.body?.event==='string' &&
+      req.body.event.toLowerCase().replace('_','.')==='messages.update';
+    if (possivelRecibo) {
+      if (!segredoIgual(req.header('x-webhook-secret'),deps.segredo)) {
+        res.sendStatus(401); return;
+      }
+      if (req.body?.instance!==deps.instancia) { res.sendStatus(204); return; }
+      try { await deps.atualizarEstadoLink?.(req.body); res.sendStatus(200); }
+      catch { res.sendStatus(503); }
+      return;
+    }
     if (!deps.ativo || !deps.envioAtivo) { res.sendStatus(204); return; }
     if (!segredoIgual(req.header('x-webhook-secret'), deps.segredo)) {
       res.sendStatus(401); return;
@@ -224,6 +239,8 @@ export function criarRouterWebhookAgente(deps: {
         ...(deps.confirmarProfissionais ? { confirmarProfissionais: deps.confirmarProfissionais } : {}),
         ...(deps.salvarDadosProfissionais ? { salvarDadosProfissionais: deps.salvarDadosProfissionais } : {}),
         ...(deps.solicitarLinkAgenda ? { solicitarLinkAgenda: (medicoId: string, agenda: AgendaEscolhida) => deps.solicitarLinkAgenda!(medicoId, agenda, telefone) } : {}),
+        ...(deps.consultarEntregaLink ? { consultarEntregaLink: (ref:string,agenda:AgendaEscolhida) =>
+          deps.consultarEntregaLink!(ref,agenda) } : {}),
         ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {})
       });
 
