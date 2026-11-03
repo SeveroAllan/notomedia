@@ -15,7 +15,20 @@ import { consultarStatusAgendasInterno } from './status-interno.js';
 import { validarCofreHomologacao } from './configuracao-homologacao.js';
 import { profissionaisIdentificados } from '../agenda/profissionais-agenda.js';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
+import type { ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
+/** Nomes só se o navegador autenticado tiver carregado um recorte completo.
+ * Sem dados reais ou com leitura incompleta, retorna [] e não usa cadastro Noto.
+ * Nunca retorna pacientes, consultas ou identificadores técnicos.
+ */
+export function nomesDaLeituraAutenticada(resultado: ResultadoLeituraTribemd | null | undefined): string[] {
+    const completo=resultado?.cobertura==='intervalo_carregado_pelo_portal' &&
+        !!resultado.agenda && !resultado.agenda.limitado &&
+        !!resultado.detalhes && !resultado.detalhes.pendentes;
+    return completo ? profissionaisIdentificados(resultado!.consultas)
+        .filter(nomeProfissionalValido).slice(0,20) : [];
+}
+
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
@@ -83,10 +96,7 @@ export function criarCofreContas(deps: {
                 // que acabou de autenticar e ler a agenda, nunca de medicos.
                 const r=evento.conectado && evento.agenda==='tribemd'
                   ? cofre?.resultado(cofreIdDaConta(contaId)) : null;
-                const completo=r?.cobertura==='intervalo_carregado_pelo_portal' &&
-                  !!r.agenda && !r.agenda.limitado && !!r.detalhes && !r.detalhes.pendentes;
-                const nomes= completo ? profissionaisIdentificados(r!.consultas)
-                  .filter(nomeProfissionalValido).slice(0,20) : [];
+                const nomes=nomesDaLeituraAutenticada(r);
                 await deps.aoConcluirConta(contaId,{...evento,nomesDescobertos:nomes});
             }
         });
