@@ -56,7 +56,7 @@ export function diagnosticarDescobertaTribemd(resultado: ResultadoLeituraTribemd
     nomesFiltrados:nomes.length-validos.length,
     detalhesPendentes:resultado?.detalhes?.pendentes??null,
     leituraConfiavelParaDescoberta:completa,
-    recuperacaoPontual:resultado?.recuperacaoPontual??'NAO_NECESSARIA',
+    recuperacaoPontual:'NAO_NECESSARIA',
     causas
   };
   return {diagnostico,nomesComprovados:completa?validos.slice(0,20):[]};
