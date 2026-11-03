@@ -88,8 +88,10 @@ async function destinatarioAutorizado(deps:DependenciasTrabalhos,job:TrabalhoPar
     'select 1 from public.usuarios u',
     'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
     "and regexp_replace(u.telefone,'[^0-9]','','g')=any($2::text[])",
+    'and ($3::uuid is null or exists(select 1 from public.medicos m',
+    'where m.id=$3::uuid and m.conta_id=$1))',
     'limit 1'
-  ].join('\n'),[job.contaId,gerarVariantesTelefoneBrasileiro(job.telefone)]);
+  ].join('\n'),[job.contaId,gerarVariantesTelefoneBrasileiro(job.telefone),job.medicoId]);
   return r.rows.length===1;
 }
 
