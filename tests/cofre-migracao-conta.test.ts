@@ -8,6 +8,10 @@ import { cofreIdDaConta } from '../src/cofre/identidade-conta.js';
 
 const sql=readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261105-cofre-links-por-conta.sql',import.meta.url)), 'utf8');
+const sqlHistorico=readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261020-cofre-links.sql',import.meta.url)), 'utf8');
+const sqlReconciliado=readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261106-cofre-links-reconciliar-homologacao.sql',import.meta.url)), 'utf8');
 const dbUrl=process.env['NOTO_SCHEMA_TEST_DATABASE_URL'];
 const testeBanco=dbUrl ? it : it.skip;
 
@@ -17,6 +21,16 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
   let criado=false;
   await admin.connect();
   try {
+    // Papéis globais protegidos por lock no MESMO banco do schema-test.
+    // O banco temporario de cada caso cria apenas as suas proprias tabelas.
+    await admin.query(`
+      DO $$ BEGIN
+        PERFORM pg_advisory_xact_lock(76022026);
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
+      END $$;
+    `);
     await admin.query('CREATE DATABASE '+nome);
     criado=true;
     const url=new URL(dbUrl!);url.pathname='/'+nome;
@@ -24,11 +38,6 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
     await banco.connect();
     try {
       await banco.query(`
-        DO $$ BEGIN
-          IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
-          IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;
-          IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
-        END $$;
         CREATE TABLE public.contas(id uuid PRIMARY KEY);
         CREATE TABLE public.medicos(
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -43,28 +52,19 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
           status text,
           valido_ate date
         );
-        CREATE TABLE public.cofre_links (
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          medico_id uuid NOT NULL REFERENCES public.medicos(id) ON DELETE CASCADE,
-          agenda text NOT NULL,
-          token_hash text NOT NULL UNIQUE,
-          expira_em timestamptz NOT NULL,
-          usado_em timestamptz,
-          criado_em timestamptz NOT NULL DEFAULT now(),
-          destino_telefone text
-        );
-        CREATE TABLE public.cofre_links_auditoria (
-          link_id uuid NOT NULL REFERENCES public.cofre_links(id) ON DELETE CASCADE,
-          evento text NOT NULL,
-          criado_em timestamptz NOT NULL DEFAULT now(),
-          PRIMARY KEY(link_id,evento)
-        );
         INSERT INTO public.contas VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
         INSERT INTO public.contas VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
         INSERT INTO public.medicos(id,conta_id,nome_completo) VALUES ('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Dr. Legado');
-        INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
-          VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes');
       `);
+      // Executa o SQL historico integral, sem o fixture antes inventado
+      // com destino_telefone e a auditoria sem CHECK.
+      await banco.query(sqlHistorico);
+      await banco.query(`
+        INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
+        VALUES ('11111111-1111-4111-8111-111111111111',
+                'tribemd','legado',now()+interval '15 minutes')
+      `);
+      await banco.query(sqlReconciliado);
       await banco.query(sql);
       await banco.query(sql);
       const antes=await banco.query('select count(*)::int as n from public.medicos');

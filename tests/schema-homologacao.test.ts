@@ -26,9 +26,17 @@ testarBanco('migração reconcilia estado mínimo do Supabase novo, sem inferir 
   try {
     // Banco descartável do CI, nunca banco externo ou Supabase real.
     await client.query(`
-      CREATE ROLE anon;
-      CREATE ROLE authenticated;
-      CREATE ROLE service_role;
+      -- Papeis sao globais no cluster de CI; os testes paralelos nao
+      -- podem disputar CREATE ROLE nem reaplicar grants com fixtures falsas.
+      DO $$ BEGIN
+        PERFORM pg_advisory_xact_lock(76022026);
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
+          CREATE ROLE anon; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
+          CREATE ROLE authenticated; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
+          CREATE ROLE service_role; END IF;
+      END $$;
       CREATE TABLE public.usuarios (
         id uuid PRIMARY KEY, nome text, telefone text, email text, ativo boolean DEFAULT true
       );
