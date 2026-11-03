@@ -697,10 +697,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    const respostaSemAcentos=resposta.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
     const afirmouFuturoDepoisDoAceite = (
       ferramentas.some(e=>e.codigo==='LINK_ACEITO_PARA_ENVIO') ||
       entrada.situacaoUltimoLink!==undefined
-    ) && /(?:ja solicitei|acabei de solicitar|assim que (?:o link|ele) (?:estiver|ficar)|(?:vai|ira|irá) receber (?:o |um )?link|link (?:vai|sera|será) (?:ser|estar|ficar) (?:enviado|disponivel|disponível)|(?:quando|assim que) (?:estiver|ficar) disponivel)/i.test(resposta);
+    ) && /(?:ja solicitei|acabei de solicitar|assim que (?:o link|ele) (?:estiver|ficar)|(?:vai|ira|irá) receber (?:o |um )?link|link (?:vai|sera|será) (?:ser|estar|ficar) (?:enviado|disponivel|disponível)|(?:quando|assim que) (?:estiver|ficar) disponivel)/i.test(respostaSemAcentos);
     const encerramentoPrematuro = (
       ferramentas.some(e=>['LINK_ACEITO_PARA_ENVIO','CONEXAO_EXISTENTE','CONEXAO_PENDENTE'].includes(e.codigo)) ||
       !!entrada.situacaoUltimoLink || !!entrada.estadoConversa?.descoberta
