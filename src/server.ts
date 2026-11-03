@@ -20,6 +20,7 @@ import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } fr
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
+import { registrarAceiteLink, registrarEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -100,6 +101,32 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone, texto
       });
       return resultado.sucesso ? 'enviado' : 'erro';
+    },
+    // Somente o balão contendo a URL; nenhuma mudança de formato, domínio,
+    // linkPreview ou canal nesta PR. HTTP 2xx = aceite, NUNCA entrega.
+    enviarUrlComRecibo: async ({url,linkId,telefone}) => {
+      if (!config.notoPilotoRestrito || config.envioRealAllowlist?.length!==1 ||
+          !gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v=>
+            gerarVariantesTelefoneBrasileiro(telefone).includes(v))) return 'erro';
+      const resultado=await new EvolutionApiClient(config.evolutionAssistantUrl,
+        config.evolutionAssistantApiKey,config.evolutionOfficialInstanceName,
+        config.evolutionOfficialInstanceName).enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,
+          contatoTelefone:telefone,texto:url
+        });
+      if(!resultado.sucesso) return 'erro';
+      try {
+        await registrarAceiteLink(pool,{
+          linkId,instancia:config.evolutionAssistantInstanceName,
+          mensagemId:resultado.mensagemId,telefone,
+          segredo:config.evolutionAssistantWebhookSecret
+        });
+      } catch {
+        // O aceite pode ter acontecido mesmo se persistência falhou:
+        // não repetir o segredo e não afirmar que foi entregue.
+        console.warn('COFRE_RECIBO_NAO_REGISTRADO');
+      }
+      return 'enviado';
     },
     aoConcluirConta: async (contaId, evento) => {
       // Resultado de uma sessão REAL do navegador. Não atribui identidade
@@ -222,6 +249,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    consultarEntregaLink: async (referencia, agenda) => {
+      const contaId=contaDoCofreId(referencia);
+      if (!contaId) {
+        const r=await pool.query('select conta_id from medicos where id=$1',[referencia]);
+        if (!r.rows[0]?.conta_id) return null;
+        return consultarEntregaLink(pool,r.rows[0].conta_id,agenda);
+      }
+      return consultarEntregaLink(pool,contaId,agenda);
+    },
+    atualizarEstadoLink: entrada => registrarEstadoEvolution(pool,entrada,
+      config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret),
     descobrirProfissionais: async (medicoId, agenda) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.
@@ -253,7 +291,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const r = contaDoCofreId(medicoId)
         ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)
         : await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
-      return { enviado: Boolean(r.ok && r.motivo === 'enviado'), ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {}) };
+      return {
+        aceitoParaEnvio: Boolean(r.ok && r.motivo === 'enviado'),
+        ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {})
+      };
     },
     salvarDadosProfissionais: async (medicoId, dados) => {
       if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CADASTRO_CONVERSACIONAL_DESLIGADO' };

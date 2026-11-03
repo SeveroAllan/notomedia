@@ -27,7 +27,10 @@ export interface DependenciasAgente {
   referenciaContaAgenda?: () => Promise<string | null>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
-  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
+  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
+  consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
+    estado:string; comId:boolean; segundosDesdeAceite:number
+  }|null>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   apiKey?: string;
@@ -407,10 +410,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);
           return {enviado:false,motivo:'JA_CONECTADA'};
         }
-        const enviado=await deps.solicitarLinkAgenda!(id,agenda);
-        registrar('solicitar_link_seguro_agenda',enviado.enviado?'LINK_ENVIADO':'FERRAMENTA_INDISPONIVEL',inicio);
-        if (enviado.enviado) deps.aoComprovante?.({ tipo: 'enviar_link_agenda', profissionalId: id, agenda });
-        return enviado.enviado?{enviado:true,observacao:'Link enviado por mensagem separada; não repeti-lo.'}:{enviado:false,motivo:enviado.motivo??'ENVIO_INDISPONIVEL'};
+        const resultado=await deps.solicitarLinkAgenda!(id,agenda);
+        registrar('solicitar_link_seguro_agenda',resultado.aceitoParaEnvio?'LINK_ACEITO_PARA_ENVIO':'FERRAMENTA_INDISPONIVEL',inicio);
+        // Jamais produzir comprovante de tarefa concluída a partir de HTTP 2xx.
+        return resultado.aceitoParaEnvio
+          ? {aceitoParaEnvio:true,entregue:false,
+            observacao:'A Evolution aceitou o pedido de envio. Ainda não há comprovante de entrega. Não afirmar que a pessoa recebeu, não reenviar link ou URL automaticamente.'}
+          : {aceitoParaEnvio:false,entregue:false,motivo:resultado.motivo??'ENVIO_INDISPONIVEL'};
       } catch {
         registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
         return {enviado:false,motivo:'ENVIO_INDISPONIVEL'};
@@ -580,7 +586,11 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
       }
       return true;
     };
-    if (!verificarAcao(/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b/g, 'LINK_ENVIADO')) return false;
+    // Sem DELIVERY_ACK/READ na mesma mensagem, nao afirmar "enviei/recebeu".
+    if (/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b|\b(?:voce|tu)\s+(?:ja\s+)?(?:recebeu|recebeste)\s+(?:(?:o|um)\s+)?link\b/.test(oracao)) {
+      const match=oracao.match(/\b(?:enviei|mandei|enviamos|mandamos|recebeu|recebeste)\b/);
+      if (!negada(oracao.slice(0,match?.index??0).trimEnd())) return false;
+    }
     if (!verificarAcao(/\b(?:registrei|atualizei|salvei)\s+(?:(?:o|um|os)\s+)?(?:crm|rqe|nome completo|dados profissionais)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:crm|rqe|dados profissionais)\s+(?:(?:ja|esta|foi)\s+)*(?:registrad[oa]s?|atualizad[oa]s?|salv[oa]s?)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:foi adicionad[oa]|foram adicionad[oa]s|cadastrei|adicionei)\b[^.!?;\n]{0,65}\b(?:conta|medic[oa]s?|profissionais)\b/g, 'PROFISSIONAIS_CONFIRMADOS')) return false;

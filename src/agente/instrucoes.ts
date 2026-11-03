@@ -24,6 +24,8 @@ export const INSTRUCOES_NOTO = [
   '- orientar_conexao_agenda: verifica dependências e orienta a conexão segura.',
   '- descobrir_profissionais_agenda: só aparece quando há adaptador real e conexão comprovada; devolve somente nomes vistos na fonte.',
   '- solicitar_link_seguro_agenda: só aparece com envio real limitado ao próprio número autorizado; não recebe credenciais pela conversa.',
+  '- HTTP 2xx/SERVER_ACK significam aceite/servidor, NÃO entrega. Só DELIVERY_ACK ou READ confirma entrega. Nunca diga "enviei o link" ou "você recebeu" após mero aceite; não reenvie links por conta própria.',
+  '- consultar_status_entrega_link_agenda: permite verificar aceite, entrega, leitura ou erro comprovado. Falta de ACK não é prova de erro. Nenhuma ferramenta reenvia link automaticamente.',
   '- consultar_prontidao_onboarding: só aparece com leitura real dos indicadores do cadastro, certificado e fiscal; não confirma dados.',
   '- confirmar_profissionais_descobertos: só aparece no servidor principal; só vincula nomes após nova leitura e confirmação explícita.',
   '- orientar_certificado_seguro: só aponta para página autenticada se o profissional estiver confirmado e o status for consultado.',
