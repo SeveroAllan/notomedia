@@ -28,6 +28,16 @@ async function bancoIsolado(executar: (banco: pg.Client) => Promise<void>) {
   let criado = false;
   await admin.connect();
   try {
+    // Papéis globais protegidos por lock no MESMO banco do schema-test.
+    // O banco temporario de cada caso cria apenas as suas proprias tabelas.
+    await admin.query(`
+      DO $$ BEGIN
+        PERFORM pg_advisory_xact_lock(76022026);
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;
+      END $$;
+    `);
     // So usa postgres descartavel criado pelo job de CI, nunca Supabase.
     await admin.query('CREATE DATABASE ' + nome);
     criado = true;
@@ -38,15 +48,6 @@ async function bancoIsolado(executar: (banco: pg.Client) => Promise<void>) {
     try {
       // Papéis globais podem ja existir pelo teste de schema da mesma suite.
       await banco.query(`
-        DO $ BEGIN
-          PERFORM pg_advisory_xact_lock(76022026);
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
-            CREATE ROLE anon; END IF;
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
-            CREATE ROLE authenticated; END IF;
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
-            CREATE ROLE service_role; END IF;
-        END $$;
         CREATE TABLE public.contas (id uuid PRIMARY KEY);
         CREATE TABLE public.medicos (id uuid PRIMARY KEY, conta_id uuid REFERENCES public.contas(id));
         INSERT INTO public.contas (id) VALUES
