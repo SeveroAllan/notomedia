@@ -19,6 +19,7 @@ export interface DiagnosticoDescoberta {
   nomesFiltrados: number;
   detalhesPendentes: number|null;
   leituraConfiavelParaDescoberta: boolean;
+  recuperacaoPontual: 'NAO_NECESSARIA'|'MELHOROU'|'SEM_MELHORIA'|'FALHOU';
   causas: CausaLeitura[];
 }
 
@@ -55,9 +56,31 @@ export function diagnosticarDescobertaTribemd(resultado: ResultadoLeituraTribemd
     nomesFiltrados:nomes.length-validos.length,
     detalhesPendentes:resultado?.detalhes?.pendentes??null,
     leituraConfiavelParaDescoberta:completa,
+    recuperacaoPontual:resultado?.recuperacaoPontual??'NAO_NECESSARIA',
     causas
   };
   return {diagnostico,nomesComprovados:completa?validos.slice(0,20):[]};
+}
+
+/** Uma única nova leitura na MESMA sessão é útil só quando a cobertura ou
+ * detalhes falharam. Nome ausente em recorte completo não causa loop.
+ */
+export function mereceSegundaLeituraPontual(resultado: ResultadoLeituraTribemd):boolean {
+  const d=diagnosticarDescobertaTribemd(resultado).diagnostico;
+  return d.causas.some(c=>['COBERTURA_PARCIAL','AGENDA_LIMITADA','DETALHES_NAO_DISPONIVEIS','DETALHES_PENDENTES'].includes(c));
+}
+export function preferirSegundaLeitura(
+  primeira:ResultadoLeituraTribemd, segunda:ResultadoLeituraTribemd
+):boolean {
+  const a=diagnosticarDescobertaTribemd(primeira).diagnostico;
+  const b=diagnosticarDescobertaTribemd(segunda).diagnostico;
+  // Cobertura validada prevalece sobre número bruto de linhas.
+  if(b.leituraConfiavelParaDescoberta !== a.leituraConfiavelParaDescoberta)
+    return b.leituraConfiavelParaDescoberta;
+  const pendA=a.detalhesPendentes??Number.MAX_SAFE_INTEGER;
+  const pendB=b.detalhesPendentes??Number.MAX_SAFE_INTEGER;
+  if(pendA!==pendB) return pendB<pendA;
+  return b.causas.length<a.causas.length;
 }
 
 /** Mensagem sobre o estágio comprovado, não atribuição de causa técnica. */

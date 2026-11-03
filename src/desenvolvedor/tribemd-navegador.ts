@@ -12,6 +12,7 @@ export class ErroTribemd extends Error {
 export interface ResultadoLeituraTribemd {
  consultas:ConsultaTribemd[]; cobertura:'somente_linhas_visiveis'|'intervalo_carregado_pelo_portal'; pagina:'agenda'|'pacientes';
  historicoCompleto:false; detalhe:string; detalhes?:ResumoDetalhesTribemd; agenda?:Omit<RecorteAgendaTribemd,'consultas'>;
+ recuperacaoPontual?:'NAO_NECESSARIA'|'MELHOROU'|'SEM_MELHORIA'|'FALHOU';
 }
 export class NavegadorTribemd {
  private page?:Page; private autenticando=true; private autenticado=false; private fechado=false;

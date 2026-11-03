@@ -1,4 +1,5 @@
 import type { FonteAgenda, ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
+import { mereceSegundaLeituraPontual, preferirSegundaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 export class ErroCofre extends Error {
@@ -124,6 +125,25 @@ export class CofreTribemd {
                 await navegador?.encerrar();
                 await autenticar(false);
                 resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
+            }
+            t.controller.signal.throwIfAborted();
+            if (mereceSegundaLeituraPontual(resultado) && navegador!.estaAutenticado()) {
+                // No máximo UMA leitura adicional, na mesma sessão já autenticada.
+                // Nem segundo login, nem novo trabalho, nem loop de portal.
+                try {
+                    const segunda = t.janela
+                        ? await navegador!.ler('agenda', true, t.janela)
+                        : await navegador!.ler('agenda', true);
+                    t.controller.signal.throwIfAborted();
+                    if (preferirSegundaLeitura(resultado, segunda)) {
+                        resultado = { ...segunda, recuperacaoPontual:'MELHOROU' };
+                    } else {
+                        resultado = { ...resultado, recuperacaoPontual:'SEM_MELHORIA' };
+                    }
+                } catch (erro) {
+                    t.controller.signal.throwIfAborted();
+                    resultado = { ...resultado, recuperacaoPontual:'FALHOU' };
+                }
             }
             t.controller.signal.throwIfAborted();
             p.estado = await navegador!.perfil();
