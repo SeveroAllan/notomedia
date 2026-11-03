@@ -122,7 +122,7 @@ describe('panorama fiscal real e isolado', () => {
 
   it('o foco fiscal confirmado sobrevive à leitura posterior; não guarda contagens ou pacientes', async () => {
     const estado = { ultimaConsultaFiscal: {
-      escopo: 'profissional', profissionalNome: 'Dra. Alice Silva', verificadaEm: '2026-11-03T13:00:00.000Z'
+      escopo: 'profissional' as const, profissionalNome: 'Dra. Alice Silva', verificadaEm: '2026-11-03T13:00:00.000Z'
     } };
     const b = banco([{estado}]);
     expect(await lerEstadoConversa(b.pool, CONTA)).toMatchObject(estado);
