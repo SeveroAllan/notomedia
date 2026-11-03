@@ -563,3 +563,61 @@ describe('correlação de recibos Evolution no webhook, inclusive byEvents',()=>
     }finally{aviso.mockRestore();}
   });
 });
+
+
+describe('panorama fiscal: evidência, envio e foco persistido no webhook', () => {
+  for (const entregueAoTransporte of [true, false]) {
+    it(entregueAoTransporte
+      ? 'registra foco somente após consulta e balões aceitos, sem conteúdo fiscal na memória'
+      : 'não confirma o foco conversacional quando o envio falha', async () => {
+      const estadosSalvos: Array<Record<string, unknown>> = [];
+      const query = vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('distinct conta_id')) return { rows: [{conta_id:'conta-a'}] };
+        if (sql.startsWith('select id,nome_completo from medicos')) {
+          expect(params).toEqual(['conta-a']);
+          return { rows: [{id:'alice-id',nome_completo:'Alice Souza'}] };
+        }
+        if (sql.startsWith('select estado from noto_agent_conversas')) return { rows: [{estado:{}}] };
+        if (sql.startsWith('insert into noto_agent_mensagens')) return { rows: [{mensagem_id:params[2]}] };
+        if (sql.startsWith('insert into noto_agent_conversas')) {
+          estadosSalvos.push(JSON.parse(String(params[1])));
+          return { rows: [], rowCount:1 };
+        }
+        if (sql.startsWith('update noto_agent_mensagens')) return { rows: [], rowCount:1 };
+        throw new Error('SQL inesperado no panorama');
+      });
+      const modeloTeste = new ScriptedModel([
+        [functionCall('consultar_panorama_operacional', {profissional:'Alice'}, {callId:'fiscal'})],
+        [assistantMessage('Encontrei 999 notas sem emissão.')]
+      ]);
+      const consultarPanorama = vi.fn().mockResolvedValue({
+        ok:true, janelaDias:30,
+        profissionais:[{nome:'Alice Souza',solicitacoes:[{status:'pronta',quantidade:2}],
+          notas:[{status:'autorizada',quantidade:1}]}],
+        limite:'REGISTROS_FISCAIS_DA_BASE'
+      });
+      const enviar = vi.fn().mockResolvedValue(entregueAoTransporte);
+      const {app} = preparar({
+        pool:{query} as unknown as pg.Pool, modeloTeste, consultarPanorama, enviar,
+        persistirConversa:true
+      });
+      const pedido = {...evento, data:{...evento.data,
+        message:{conversation:'Noto, como está a situação fiscal da Alice?'}}};
+      await comServidor(app, async postar => {
+        expect((await postar(pedido)).status).toBe(entregueAoTransporte ? 200 : 503);
+      });
+      expect(consultarPanorama).toHaveBeenCalledExactlyOnceWith('conta-a',['alice-id']);
+      expect(enviar.mock.calls.map(c=>c[1]).join(' ')).not.toContain('999');
+      if (entregueAoTransporte) {
+        expect(estadosSalvos).toHaveLength(1);
+        expect(estadosSalvos[0]?.ultimaConsultaFiscal).toEqual({
+          escopo:'profissional', profissionalNome:'Alice Souza', verificadaEm:expect.any(String)
+        });
+        expect(JSON.stringify(estadosSalvos)).not.toMatch(/cpf|paciente|autorizada|pronta|quantidade/i);
+      } else {
+        expect(estadosSalvos).toHaveLength(0);
+      }
+      modeloTeste.assertComplete();
+    });
+  }
+});
