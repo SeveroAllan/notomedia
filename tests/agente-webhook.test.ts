@@ -395,16 +395,18 @@ describe('tarefas entre mensagens: ✅ sempre no balão original', () => {
   });
 });
 
-describe('webhook: referência técnica sempre da conta autenticada',()=>{
+describe('webhook: referência pertence à conta autenticada',()=>{
+  const contaId='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const chaveConta='conta_'+contaId;
   it('não usa cadastro provisório como médico; referência do link é obtida sob conta_id verificado',async()=>{
     const query=vi.fn(async(sql:string,params:unknown[])=>{
-      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-teste'}]};
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:contaId}]};
       if(sql.includes('select id,nome_completo from medicos')) {
-        expect(params).toEqual(['conta-teste']);
+        expect(params).toEqual([contaId]);
         return {rows:[{id:'provisorio-6133',nome_completo:'Médico 6133'}]};
       }
       if(sql.includes('select id from medicos where conta_id=$1')) {
-        expect(params).toEqual(['conta-teste']);
+        expect(params).toEqual([contaId]);
         return {rows:[{id:'provisorio-6133'}]};
       }
       throw Error('Consulta inesperada '+sql);
@@ -422,12 +424,61 @@ describe('webhook: referência técnica sempre da conta autenticada',()=>{
     });
     const eventoNovo={...evento,data:{...evento.data,key:{...evento.data.key,id:'primeira-6133'},message:{conversation:'Quero conectar a TribeMD, me envie o link'}}};
     await comServidor(app,async postar=>expect((await postar(eventoNovo)).status).toBe(200));
-    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('provisorio-6133','tribemd','5551999998888');
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(chaveConta,'tribemd','5551999998888');
     expect(query.mock.calls.filter(([sql])=>String(sql).startsWith('select id from medicos where conta_id=$1'))).toHaveLength(1);
     expect(JSON.stringify(modeloTeste.lastCall?.request.input)).not.toContain('6133');
     modeloTeste.assertComplete();
   });
 
+
+  it('conta nova sem qualquer linha em medicos inicia via token do Cofre da conta',async()=>{
+    const query=vi.fn(async(sql:string,params:unknown[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:contaId}]};
+      if(sql.includes('select id,nome_completo from medicos') ||
+         sql.includes('select id from medicos where conta_id=$1')) {
+        expect(params).toEqual([contaId]);return {rows:[]};
+      }
+      throw Error('SQL não permitido');
+    });
+    const modeloTeste=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'conta-zero-medicos'})],
+      [assistantMessage('Enviei um link seguro. A senha fica somente na página de conexão.')]
+    ]);
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,solicitarLinkAgenda,
+      consultarStatus:vi.fn().mockResolvedValue({
+        tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}
+      })});
+    const req={...evento,data:{...evento.data,key:{...evento.data.key,id:'nova-conta-zero-medicos'},
+      message:{conversation:'Quero conectar a Tribe, pode mandar o link seguro?'}}};
+    await comServidor(app,async postar=>expect((await postar(req)).status).toBe(200));
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(chaveConta,'tribemd','5551999998888');
+    expect(query.mock.calls.some(([sql])=>/insert into medicos/i.test(String(sql)))).toBe(false);
+    expect(JSON.stringify(modeloTeste.lastCall?.request.input)).not.toContain(contaId);
+    modeloTeste.assertComplete();
+  });
+  it('conta já conectada sem médico conserva a sessão da própria conta',async()=>{
+    const query=vi.fn(async(sql:string)=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:contaId}]};
+      if(sql.includes('select id,nome_completo from medicos'))return {rows:[]};
+      throw Error('SQL não permitido');
+    });
+    const modeloTeste=new ScriptedModel([
+      [functionCall('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},{callId:'retomar-conectado'})],
+      [assistantMessage('A sua TribeMD já está conectada. Vou descobrir os médicos da agenda.')]
+    ]);
+    const consultarStatus=vi.fn().mockResolvedValue({
+      tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
+    });
+    const solicitarLinkAgenda=vi.fn();
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,consultarStatus,solicitarLinkAgenda});
+    const req={...evento,data:{...evento.data,key:{...evento.data.key,id:'conta-conectada-zero-medicos'},
+      message:{conversation:'A minha Tribe está conectada?'}}};
+    await comServidor(app,async postar=>expect((await postar(req)).status).toBe(200));
+    expect(consultarStatus).toHaveBeenCalledWith(chaveConta);
+    expect(solicitarLinkAgenda).not.toHaveBeenCalled();
+    modeloTeste.assertComplete();
+  });
   it('sem conta autenticada não lê referência técnica nem envia link de agenda',async()=>{
     const query=vi.fn().mockResolvedValue({rows:[]});
     const solicitarLinkAgenda=vi.fn();
