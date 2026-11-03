@@ -140,3 +140,24 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     scripted.assertComplete();
   });
 });
+
+it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com nome válido e confirmação',async()=>{
+  const modeloTeste=new ScriptedModel([
+    [functionCall('confirmar_profissionais_descobertos',{
+      agenda:'tribemd',profissionalBase:null,nomes:['Alice Silva']
+    },{callId:'sem-descoberta-previa'})],
+    [assistantMessage('Preciso primeiro consultar os nomes na sua agenda conectada.')]
+  ]);
+  const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva']});
+  const confirmarProfissionais=vi.fn();
+  const resposta=await responderAgente({
+    texto:'Confirmo adicionar Alice Silva',profissionais:[],estadoConversa:{agendaEscolhida:'tribemd'}
+  },{modeloTeste,consultarStatus:vi.fn().mockResolvedValue({
+    tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
+  }),referenciaContaAgenda:vi.fn().mockResolvedValue('id-tecnico-da-conta'),
+  descobrirProfissionais,confirmarProfissionais});
+  expect(resposta).toContain('primeiro consultar');
+  expect(descobrirProfissionais).not.toHaveBeenCalled();
+  expect(confirmarProfissionais).not.toHaveBeenCalled();
+  modeloTeste.assertComplete();
+});

@@ -300,7 +300,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         const resultado=await deps.descobrirProfissionais!(id,agenda);
         const nomes = resultado.ok ? (resultado.nomes??[]).filter(nomeProfissionalValido).slice(0,20) : [];
-        registrar('descobrir_profissionais_agenda',resultado.ok?'PROFISSIONAIS_ENCONTRADOS':'STATUS_INDISPONIVEL',inicio);
+        registrar('descobrir_profissionais_agenda',resultado.ok ? (nomes.length ? 'PROFISSIONAIS_ENCONTRADOS' : 'PROFISSIONAIS_NAO_IDENTIFICADOS') : 'STATUS_INDISPONIVEL',inicio);
         if (resultado.ok && nomes.length) deps.aoComprovante?.({ tipo: 'descobrir_profissionais', profissionalId: id, agenda });
         return resultado.ok ? {ok:true,nomes, aviso:'Nomes da leitura real da agenda, ainda não confirmados nem vinculados. Não apresentar cadastro técnico.'}
           : {ok:false,motivo:resultado.motivo??'LEITURA_INDISPONIVEL'};
@@ -320,6 +320,15 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }),
     async execute({agenda,profissionalBase,nomes}) {
       const inicio=Date.now();
+      // A primeira vinculação exige descoberta verificada em turno anterior
+      // nesta mesma conta/conversa, seguida de confirmação explícita.
+      if (profissionalBase === null && (
+        entrada.estadoConversa?.descoberta?.agenda !== agenda ||
+        !nomes.every(nome => entrada.estadoConversa!.descoberta!.nomes.some(
+          visto => normalizarNomeMedico(visto) === normalizarNomeMedico(nome))))) {
+        registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:'DESCOBERTA_PREVIA_NECESSARIA'};
+      }
       const base=profissionalBase === null ? null : identificar(profissionalBase,profissionais);
       const baseId=base ? base.encontrados.length===1 ? base.encontrados[0]!.id : null
         : await ancoraDaConta().catch(()=>null);
