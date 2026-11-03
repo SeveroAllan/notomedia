@@ -16,7 +16,7 @@ BEGIN
 END $$;
 -- Compatibilidade com o código anterior: campo opcional, sem perda de links.
 ALTER TABLE public.cofre_links ADD COLUMN IF NOT EXISTS destino_telefone text;
-DO $
+DO $cofre$
 DECLARE col_type text;
 BEGIN
  SELECT udt_name INTO col_type FROM information_schema.columns
@@ -25,10 +25,10 @@ BEGIN
  IF col_type IS DISTINCT FROM 'text' THEN
    RAISE EXCEPTION 'COFRE_DESTINO_TELEFONE_INCOMPATIVEL';
  END IF;
-END $;
+END $cofre$;
 -- O código grava 'concluido'. Trocar somente o CHECK conhecido da 20261020;
 -- não remover restrições desconhecidas de um banco divergente.
-DO $
+DO $cofre$
 DECLARE definition text;
 BEGIN
  SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
@@ -49,7 +49,7 @@ BEGIN
      ADD CONSTRAINT cofre_links_auditoria_evento_check
      CHECK (evento IN ('criado','aberto','enviado','expirado','concluido'));
  END IF;
-END $;
+END $cofre$;
 ALTER TABLE public.cofre_links
   ADD COLUMN IF NOT EXISTS conta_id uuid REFERENCES public.contas(id) ON DELETE CASCADE;
 ALTER TABLE public.cofre_links ALTER COLUMN medico_id DROP NOT NULL;
