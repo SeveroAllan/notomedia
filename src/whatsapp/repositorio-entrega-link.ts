@@ -1,7 +1,7 @@
 import type pg from 'pg';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
 import {
-  diagnosticarEntregaLink, evoluirEstadoEntrega, hashDestinatario,
+  diagnosticarEntregaLink, hashDestinatario,
   interpretarEstadoEvolution, type EstadoEntregaLink, type DiagnosticoEntregaLink
 } from './status-entrega-link.js';
 import { contaDoCofreId } from '../cofre/identidade-conta.js';
@@ -32,16 +32,8 @@ export async function registrarEstadoEvolution(
   const candidatos=[...new Set(evento.destinatarios.flatMap(numero=>
     gerarVariantesTelefoneBrasileiro(numero)).map(t=>hashDestinatario(segredo,t)))];
   if (!candidatos.length) return false;
-  const atual=await pool.query(`
-    select estado from public.cofre_links_entregas
-    where instancia=$1 and mensagem_id=$2 and destino_hash=ANY($3::text[])
-    for update
-  `,[evento.instancia,evento.mensagemId,candidatos]);
-  // Reprocessamento idempotente com atualizacao condicional no mesmo UPDATE
-  // (sem transacao aberta entre SELECT/UPDATE em pool).
-  if (!atual.rows.length) return false;
-  const estados:EstadoEntregaLink[]=['ACEITO_API','PENDING','SERVER_ACK','DELIVERY_ACK','READ','ERROR'];
-  // SQL recebe apenas o estado e faz precedencia atomicamente.
+  // Unico UPDATE atomico, sem SELECT FOR UPDATE fora de uma transacao.
+  // Apenas recibo da mesma instancia, identificador e hash de destinatario.
   const result=await pool.query(`
     update public.cofre_links_entregas set
       estado=case
@@ -60,7 +52,6 @@ export async function registrarEstadoEvolution(
     returning link_id
   `,[evento.instancia,evento.mensagemId,candidatos,evento.estado]);
   // Explicitamente ignorar mensagens estranhas em vez de expor a existencia do link.
-  void evoluirEstadoEntrega; void estados;
   return !!result.rows.length;
 }
 

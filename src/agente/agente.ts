@@ -423,6 +423,37 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
     }
   }));
+  if (deps.consultarEntregaLink) extras.push(tool({
+    name:'consultar_status_entrega_link_agenda',
+    description:'Consulta comprovantes reais da mensagem que contem link seguro. Nao le token, URL ou senha; nao dispara reenvio.',
+    parameters:z.object({agenda:z.enum(['tribemd','amplimed'])}),
+    async execute({agenda}) {
+      const inicio=Date.now();
+      const referencia=await ancoraDaConta().catch(()=>null);
+      if(!referencia) {
+        registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONTA',inicio);
+        return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
+      }
+      try {
+        const status=await deps.consultarEntregaLink!(referencia,agenda);
+        registrar('consultar_status_entrega_link_agenda','ENTREGA_CONSULTADA',inicio);
+        if(!status) return {ok:true,estado:'SEM_EVIDENCIA',orientacao:'Nao encontrei um recibo de envio confirmado. Nao presuma entrega nem gere novo link automaticamente.'};
+        const mensagens:Record<string,string>={
+          ACEITO_SEM_CONFIRMACAO:'O pedido foi aceito pelo serviço de mensagens, mas ainda não há confirmação de entrega.',
+          AGUARDANDO_ENTREGA:'O servidor do WhatsApp aceitou a mensagem; ainda não há confirmação de entrega ao aparelho.',
+          SEM_CONFIRMACAO:'Ainda não veio confirmação de entrega. A demora não prova uma falha.',
+          ENTREGUE:'O WhatsApp confirmou a entrega ao aparelho. Isso não prova que a página foi aberta.',
+          LIDO:'O WhatsApp registrou leitura. Isso não prova que o link foi aberto ou que o login foi realizado.',
+          ERRO_COMPROVADO:'O WhatsApp informou erro para essa mensagem; não vou reenviar o link automaticamente.'
+        };
+        return {ok:true,estado:status.estado,orientacao:mensagens[status.estado]??mensagens.SEM_CONFIRMACAO,
+          semReenvioAutomatico:true};
+      } catch {
+        registrar('consultar_status_entrega_link_agenda','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'STATUS_ENTREGA_INDISPONIVEL'};
+      }
+    }
+  }));
   if (deps.consultarProntidao) extras.push(tool({
     name:'consultar_prontidao_onboarding',
     description:'Consulta apenas flags do cadastro, certificado e fiscal sem emitir, modificar ou revelar dados fiscais.',
