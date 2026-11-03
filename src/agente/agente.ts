@@ -336,6 +336,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         return normalizado && (texto.includes(normalizado) ||
           normalizado.split(' ').some(token => token.length >= 4 && texto.split(' ').includes(token)));
       });
+      // Uma mensagem que cita outro médico (ou vários) não herda o foco antigo.
+      if (nomesCitados.length > 1 || (nomesCitados.length === 1 && nomesCitados[0]!.id !== medico.id)) {
+        return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
+      }
       const focoValido = entrada.estadoConversa?.profissionalConfirmadoId === medico.id ||
         (nomesCitados.length === 1 && nomesCitados[0]!.id === medico.id) ||
         profissionais.length === 1;
@@ -344,12 +348,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         const status=await deps.consultarStatus(medico.id);
         const conectadas=(['tribemd','amplimed'] as const).filter(fonte =>
           status[fonte].conectada && !status[fonte].indisponivel);
-        const explicitou=agenda==='tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) :
-          /\bamplimed\b/i.test(entrada.texto);
+        const citouTribe=/\btribe(?:md)?\b/i.test(entrada.texto);
+        const citouAmplimed=/\bamplimed\b/i.test(entrada.texto);
+        if ((citouTribe && citouAmplimed) ||
+            (citouTribe && agenda!=='tribemd') ||
+            (citouAmplimed && agenda!=='amplimed')) {
+          return entregar({ok:false,motivo:'AGENDA_AMBIGUA'});
+        }
+        const explicitou=agenda==='tribemd' ? citouTribe : citouAmplimed;
         const agendaJustificada=explicitou || entrada.estadoConversa?.agendaEscolhida===agenda ||
           (conectadas.length===1 && conectadas[0]===agenda && !status[agenda==='tribemd'?'amplimed':'tribemd'].indisponivel);
         if (!agendaJustificada || !conectadas.includes(agenda)) {
-          return entregar({ok:false,motivo:'INTEGRACAO_INDISPONIVEL'});
+          return entregar({ok:false,motivo:!agendaJustificada?'AGENDA_AMBIGUA':'INTEGRACAO_INDISPONIVEL'});
         }
         const chave=medico.id+':'+agenda;
         if (conferenciaEscolhida && conferenciaEscolhida !== chave) {

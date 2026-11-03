@@ -5,7 +5,7 @@ import type { AgendaEscolhida } from './estado-conversa.js';
 export type MotivoConferencia =
   'ESCOPO_NAO_CONFERIDO' | 'MEDICO_NAO_CONFIRMADO' | 'LEITURA_INCOMPLETA' |
   'IDENTIDADE_INCOMPLETA' | 'REFERENCIAS_AMBIGUAS' | 'RECORTE_MUITO_GRANDE' |
-  'INTEGRACAO_INDISPONIVEL' | 'CONCILIACAO_INDISPONIVEL';
+  'INTEGRACAO_INDISPONIVEL' | 'AGENDA_AMBIGUA' | 'CONCILIACAO_INDISPONIVEL';
 
 export type LeituraParaConferencia =
   | { ok: true; agenda: AgendaEscolhida; totalRealizados: number;
@@ -134,6 +134,8 @@ export function descreverConferencia(resultado: ResultadoConferencia): string {
       case 'MEDICO_NAO_CONFIRMADO':
       case 'ESCOPO_NAO_CONFERIDO':
         return 'Ainda não consegui confirmar qual profissional desta conta posso consultar. Preciso dessa identificação antes de conferir a agenda.';
+      case 'AGENDA_AMBIGUA':
+        return 'Há mais de uma agenda possível, ou a fonte indicada não corresponde ao pedido. Qual agenda devo conferir: TribeMD ou Amplimed?';
       case 'IDENTIDADE_INCOMPLETA':
         return 'A agenda não identificou com segurança o profissional responsável por todas as consultas. Não atribuí atendimentos por suposição.';
       case 'LEITURA_INCOMPLETA':

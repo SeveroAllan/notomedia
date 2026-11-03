@@ -12,7 +12,6 @@ const janela={inicio:'2026-10-05',fim:'2026-11-03'};
 const consulta = (idExterno:string, profissional:string|null='Dra. Alice Silva', dataHora='2026-10-20T10:00:00-03:00') =>
   ({pacienteId:'PACIENTE-NUNCA-EXPOSTO',idExterno,profissional,dataHora,
     status:'realizada' as const,valorConsultaCentavos:10000});
-const leitor = vi.fn().mockResolvedValue({ok:true,agenda:'tribemd',totalRealizados:2,referencias:['tribe-1','tribe-2'],semReferencia:0});
 function banco(rows: unknown[] = []) {
   const query=vi.fn(async (sql:string, parametros:unknown[]) => {
     if(sql.startsWith('select nome_completo')) {
