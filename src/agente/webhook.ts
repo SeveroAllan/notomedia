@@ -20,6 +20,7 @@ import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { cofreIdDaConta } from '../cofre/identidade-conta.js';
 import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operacional.js';
+import type { ResultadoConferencia } from './conferencia-atendimentos.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -59,6 +60,7 @@ export function criarRouterWebhookAgente(deps: {
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
+  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
@@ -223,6 +225,7 @@ export function criarRouterWebhookAgente(deps: {
       let diagnostico: DiagnosticoAgente | undefined;
       const comprovantes: ComprovanteTarefa[] = [];
       const panoramaDaMensagem: { atual?: { foco: string | null; resultado: PanoramaFiscal } } = {};
+      const conferenciaDaMensagem: { atual?: ResultadoConferencia } = {};
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const agendaDoLink=agenda??estado.agendaEscolhida;
       const ultimoLink=contaId && agendaDoLink && deps.consultarEntregaLink
@@ -267,6 +270,13 @@ export function criarRouterWebhookAgente(deps: {
           aoPanorama: (foco: string | null, resultado: ResultadoPanoramaFiscal) => {
             if (resultado.ok) panoramaDaMensagem.atual = { foco, resultado };
           }
+        } : {}),
+        ...(contaId && deps.consultarConferencia ? {
+          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida) =>
+            deps.consultarConferencia!(contaId!,medicoId,fonte),
+          aoConferencia: (resultado: ResultadoConferencia) => {
+            if (resultado.ok) conferenciaDaMensagem.atual=resultado;
+          }
         } : {})
       });
 
@@ -282,7 +292,12 @@ export function criarRouterWebhookAgente(deps: {
       if (enviado) {
         const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
         const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
-        if (panoramaDaMensagem.atual) {
+        if (conferenciaDaMensagem.atual?.ok) {
+          novo.ultimaConsultaFiscal = {
+            escopo:'profissional', profissionalNome:conferenciaDaMensagem.atual.profissional,
+            verificadaEm:new Date().toISOString()
+          };
+        } else if (panoramaDaMensagem.atual) {
           const { foco } = panoramaDaMensagem.atual;
           novo.ultimaConsultaFiscal = {
             escopo: foco === null ? 'conta' : 'profissional',

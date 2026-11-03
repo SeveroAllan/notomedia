@@ -8,6 +8,7 @@ import { INSTRUCOES_NOTO } from './instrucoes.js';
 import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
+import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
@@ -27,6 +28,8 @@ export interface EntradaAgente {
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
+  consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
+  aoConferencia?: (resultado: ResultadoConferencia) => void;
   aoPanorama?: (foco: string | null, resultado: ResultadoPanoramaFiscal) => void;
   /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
   referenciaContaAgenda?: () => Promise<string | null>;
@@ -306,6 +309,57 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         deps.aoPanorama?.(profissional, { ok: false, motivo: 'DADOS_FISCAIS_INDISPONIVEIS' });
         registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_INDISPONIVEL', inicio);
         return { ok: false, motivo: 'DADOS_FISCAIS_INDISPONIVEIS' };
+      }
+    }
+  }));
+  // Um único trabalho de comparação por turno. O modelo não pode forçar
+  // leituras repetidas do portal nem migrar de médico durante a execução.
+  let conferenciaEscolhida: string | null = null;
+  let conferenciaEmVoo: Promise<ResultadoConferencia> | null = null;
+  if (deps.consultarConferencia) extras.push(tool({
+    name: 'conferir_atendimentos_e_notas',
+    description: 'Confere a agenda real de UM médico autorizado com vínculos fiscais exatos dos últimos 30 dias; não declara consultas sem nota, não emite e não cadastra nada. Escolha a agenda somente se explícita, já confirmada ou única conectada.',
+    parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
+    async execute({ profissional, agenda }) {
+      const inicio = Date.now();
+      const entregar = (resultado: ResultadoConferencia) => {
+        deps.aoConferencia?.(resultado);
+        registrar('conferir_atendimentos_e_notas', resultado.ok ? 'CONFERENCIA_REALIZADA' : 'CONFERENCIA_PENDENTE', inicio);
+        return resultado;
+      };
+      const r = identificar(profissional, profissionais);
+      if (r.erro || r.encontrados.length !== 1) return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
+      const medico = r.encontrados[0]!;
+      const texto = normalizarNomeMedico(entrada.texto);
+      const nomesCitados = profissionais.filter(p => {
+        const normalizado=normalizarNomeMedico(p.nome);
+        return normalizado && (texto.includes(normalizado) ||
+          normalizado.split(' ').some(token => token.length >= 4 && texto.split(' ').includes(token)));
+      });
+      const focoValido = entrada.estadoConversa?.profissionalConfirmadoId === medico.id ||
+        (nomesCitados.length === 1 && nomesCitados[0]!.id === medico.id) ||
+        profissionais.length === 1;
+      if (!focoValido) return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
+      try {
+        const status=await deps.consultarStatus(medico.id);
+        const conectadas=(['tribemd','amplimed'] as const).filter(fonte =>
+          status[fonte].conectada && !status[fonte].indisponivel);
+        const explicitou=agenda==='tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) :
+          /\bamplimed\b/i.test(entrada.texto);
+        const agendaJustificada=explicitou || entrada.estadoConversa?.agendaEscolhida===agenda ||
+          (conectadas.length===1 && conectadas[0]===agenda && !status[agenda==='tribemd'?'amplimed':'tribemd'].indisponivel);
+        if (!agendaJustificada || !conectadas.includes(agenda)) {
+          return entregar({ok:false,motivo:'INTEGRACAO_INDISPONIVEL'});
+        }
+        const chave=medico.id+':'+agenda;
+        if (conferenciaEscolhida && conferenciaEscolhida !== chave) {
+          return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
+        }
+        conferenciaEscolhida=chave;
+        conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda);
+        return entregar(await conferenciaEmVoo);
+      } catch {
+        return entregar({ok:false,motivo:'INTEGRACAO_INDISPONIVEL'});
       }
     }
   }));
@@ -772,11 +826,16 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   const relogio = setTimeout(() => abort.abort(), 20_000);
   try {
     const panoramaTurno: { resultado?: ResultadoPanoramaFiscal } = {};
+    const conferenciaTurno: { resultado?: ResultadoConferencia } = {};
     const agent = criarAgenteNoto(entrada, {
       ...deps,
       aoPanorama: (foco, resultado) => {
         panoramaTurno.resultado = resultado;
         deps.aoPanorama?.(foco, resultado);
+      },
+      aoConferencia: resultado => {
+        conferenciaTurno.resultado=resultado;
+        deps.aoConferencia?.(resultado);
       },
       registrarFerramenta: e => ferramentas.push(e)
     });
@@ -803,15 +862,20 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
-    // Os números fiscais nunca são gerados pelo modelo: apenas pela leitura autorizada.
-    if (panoramaTurno.resultado) {
+    // Conciliação e registros fiscais são narrados exclusivamente pelos fatos verificados.
+    if (panoramaTurno.resultado || conferenciaTurno.resultado) {
+      const textos: string[]=[];
+      if (conferenciaTurno.resultado) textos.push(descreverConferencia(conferenciaTurno.resultado));
+      if (panoramaTurno.resultado) {
+        if (panoramaTurno.resultado.ok) textos.push(descreverPanoramaFiscal(panoramaTurno.resultado));
+        else textos.push(panoramaTurno.resultado.motivo === 'SEM_PROFISSIONAIS_CONFIRMADOS'
+          ? 'Ainda não tenho um médico confirmado nesta conta. Vou precisar identificar os profissionais na agenda antes de consultar os registros fiscais.'
+          : panoramaTurno.resultado.motivo === 'ESCOPO_NAO_CONFERIDO'
+            ? 'Não consegui conferir a identidade desse profissional na sua conta. Qual médico você quer consultar?'
+            : 'Não consegui acessar os registros fiscais agora. Isso não significa que não haja notas ou solicitações; vou preservar a etapa para continuar com segurança.');
+      }
       registrar('RESPOSTA',uso);
-      if (panoramaTurno.resultado.ok) return descreverPanoramaFiscal(panoramaTurno.resultado);
-      return panoramaTurno.resultado.motivo === 'SEM_PROFISSIONAIS_CONFIRMADOS'
-        ? 'Ainda não tenho um médico confirmado nesta conta. Vou precisar identificar os profissionais na agenda antes de consultar os registros fiscais.'
-        : panoramaTurno.resultado.motivo === 'ESCOPO_NAO_CONFERIDO'
-          ? 'Não consegui conferir a identidade desse profissional na sua conta. Qual médico você quer consultar?'
-          : 'Não consegui acessar os registros fiscais agora. Isso não significa que não haja notas ou solicitações; vou preservar a etapa para continuar com segurança.';
+      return textos.join('\n');
     }
     const relato=acompanhamentoVerificado(entrada,ferramentas);
     if(relato) {

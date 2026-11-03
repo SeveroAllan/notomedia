@@ -20,6 +20,9 @@ import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } fr
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
 import { consultarPanoramaFiscalDaConta } from './agente/panorama-operacional.js';
+import { conferirAgendaComFiscal, type LeituraParaConferencia } from './agente/conferencia-atendimentos.js';
+import { janelaConferencia, leituraTribemdParaConferencia, leituraAmplimedParaConferencia } from './agente/leitura-atendimentos.js';
+import { normalizarNomeMedico } from './conta/medicos-conta.js';
 import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
@@ -270,6 +273,28 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
+    consultarConferencia: (contaId, medicoId, agenda) =>
+      conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
+        const janela=janelaConferencia();
+        if (fonte==='tribemd') {
+          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:30});
+          return leituraTribemdParaConferencia(r,nome,janela);
+        }
+        // Amplimed já valida a escolha do código no filtro e o resourceId
+        // de cada evento. Sem correspondência exata de nome: não ler.
+        const lista=await cofres.listarProfissionaisAmplimed(id);
+        if (!lista.ok) return {ok:false,motivo:'INTEGRACAO_INDISPONIVEL'};
+        const encontrados=lista.profissionais.filter(p =>
+          normalizarNomeMedico(p.nome)===normalizarNomeMedico(nome) && !!p.codigo?.trim());
+        if (encontrados.length!==1) return {ok:false,motivo:'IDENTIDADE_INCOMPLETA'};
+        const codigo=encontrados[0]!.codigo;
+        if (lista.profissionais.filter(p=>p.codigo===codigo).length!==1) {
+          return {ok:false,motivo:'IDENTIDADE_INCOMPLETA'};
+        }
+        const r=await cofres.lerAgendaAmplimed(id,janela.inicio,janela.fim,false,codigo);
+        if (!r.ok) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
+        return leituraAmplimedParaConferencia(r.dias,janela);
+      }),
     consultarEntregaLink: async (referencia, agenda) => {
       const contaId=contaDoCofreId(referencia);
       if (!contaId) {
