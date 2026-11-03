@@ -9,6 +9,7 @@ import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
+import { contaDoCofreId } from '../cofre/identidade-conta.js';
 import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
@@ -413,7 +414,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA'};
         }
         if(deps.solicitarTrabalho) {
-          const pedido=await deps.solicitarTrabalho('descoberta_agenda',agenda,r ? id : null);
+          // A referência técnica de uma conexão legada pode ser médico da conta.
+          // Isso NÃO atribui consulta ao médico; apenas reusa a sessão correta.
+          const referenciaLegada=contaDoCofreId(id)?null:id;
+          const pedido=await deps.solicitarTrabalho('descoberta_agenda',agenda,referenciaLegada);
           deps.aoTrabalho?.({tipo:'descoberta_agenda',agenda,estado:pedido});
           registrar('descobrir_profissionais_agenda',pedido.ok?'TRABALHO_REGISTRADO':'TRABALHO_INDISPONIVEL',inicio);
           return pedido.ok?{ok:true,estado:pedido.estado,observacao:'A leitura dos nomes será entregue quando o navegador concluir. Nenhum nome novo foi confirmado ainda.'}:

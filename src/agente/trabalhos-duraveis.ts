@@ -108,7 +108,8 @@ export async function concluirLeituraNoto(
   pool: Banco, id: string, executor: string, resultado: unknown
 ): Promise<boolean> {
   const texto=JSON.stringify(resultado);
-  if (!texto || texto.length>6000) return false;
+  if (!texto || texto.length>6000 ||
+    /"(?:cpf|pacienteId|nomeAoVivo|telefonePaciente|idExterno|telefone|senha|token|consultaIndividual)"\s*:/i.test(texto)) return false;
   const r=await pool.query([
     'update public.noto_agent_trabalhos',
     "set estado='resultado_pronto',resultado=$3::jsonb,bloqueado_ate=null,atualizado_em=now()",
@@ -126,6 +127,23 @@ export async function falharLeituraNoto(pool: Banco,id:string,executor:string,mo
     'bloqueado_ate=null,atualizado_em=now()',
     "where id=$1 and executado_por=$2 and estado='executando'"
   ].join('\n'),[id,executor,permitidos.includes(motivo)?motivo:'EXECUCAO_INDISPONIVEL']);
+}
+/** Leitura interrompida duas vezes não fica pendurada para sempre.
+ * Notificação já iniciada nunca é reenviada automaticamente: entrega incerta.
+ */
+export async function recuperarTrabalhosInterrompidos(pool:Banco):Promise<void>{
+  await pool.query([
+    'update public.noto_agent_trabalhos',
+    "set estado='resultado_pronto',",
+    "resultado=jsonb_build_object('ok',false,'motivo','EXECUCAO_INDISPONIVEL'),",
+    'bloqueado_ate=null,atualizado_em=now()',
+    "where estado='executando' and tentativas>=2 and bloqueado_ate<now()"
+  ].join('\n'),[]);
+  await pool.query([
+    'update public.noto_agent_trabalhos',
+    "set estado='envio_incerto',atualizado_em=now()",
+    "where estado='notificando' and atualizado_em<now()-interval '4 minutes'"
+  ].join('\n'),[]);
 }
 export interface TrabalhoParaNotificar extends TrabalhoNoto {resultado:unknown}
 export async function reservarNotificacaoNoto(pool:Banco):Promise<TrabalhoParaNotificar|null>{

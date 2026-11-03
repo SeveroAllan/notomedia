@@ -6,7 +6,7 @@ import { descreverConferencia, type ResultadoConferencia } from './conferencia-a
 import type { AgendaEscolhida } from './estado-conversa.js';
 import {
   reservarTrabalhoNoto,reservarNotificacaoNoto,concluirLeituraNoto,
-  falharLeituraNoto,terminarNotificacaoNoto,type TrabalhoParaNotificar
+  falharLeituraNoto,terminarNotificacaoNoto,recuperarTrabalhosInterrompidos,type TrabalhoParaNotificar
 } from './trabalhos-duraveis.js';
 
 type Banco=Pick<pg.Pool,'query'>;
@@ -139,8 +139,9 @@ export function iniciarTrabalhosNoto(deps:DependenciasTrabalhos,intervaloMs=2500
   const rodada=()=>{
     if(!ativo||execucao)return;
     execucao=(async()=>{
-      const fez=await executarLeituraPendente(deps,executor);
-      if(!fez)await notificarResultadoPendente(deps);
+      await recuperarTrabalhosInterrompidos(deps.pool);
+      const notificou=await notificarResultadoPendente(deps);
+      if(!notificou) await executarLeituraPendente(deps,executor);
     })().catch(()=>deps.relatar?.('ERRO_CICLO',0,'worker')).finally(()=>{execucao=null});
   };
   const timer=setInterval(rodada,intervaloMs);

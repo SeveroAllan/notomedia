@@ -9,7 +9,6 @@ import {
 import { executarLeituraPendente, notificarResultadoPendente } from '../src/agente/worker-trabalhos.js';
 
 const CONTA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const ALICE='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const TELEFONE='5551999998888';
 const pedido = {
   contaId:CONTA,instancia:'notomed_assistente',mensagemId:'WA-12345',
