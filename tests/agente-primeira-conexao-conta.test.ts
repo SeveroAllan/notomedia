@@ -146,7 +146,7 @@ it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com no
     [functionCall('confirmar_profissionais_descobertos',{
       agenda:'tribemd',profissionalBase:null,nomes:['Alice Silva']
     },{callId:'sem-descoberta-previa'})],
-    [assistantMessage('Preciso primeiro consultar os nomes na sua agenda conectada.')]
+    [assistantMessage('Preciso primeiro consultar os nomes na sua agenda.')] 
   ]);
   const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva']});
   const confirmarProfissionais=vi.fn();
@@ -160,4 +160,19 @@ it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com no
   expect(descobrirProfissionais).not.toHaveBeenCalled();
   expect(confirmarProfissionais).not.toHaveBeenCalled();
   modeloTeste.assertComplete();
+});
+
+it('apelido Tribe é escolha explícita preservada no próximo turno',async()=>{
+  const { evoluirEstadoConversa } = await import('../src/agente/estado-conversa.js');
+  const estado=evoluirEstadoConversa({},'Eu uso Tribe','Posso enviar o link seguro?',[{id:'placeholder',nome:'Médico 6133'}]);
+  expect(estado.agendaEscolhida).toBe('tribemd');
+  const scripted=modelo('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},
+    'Enviei o link seguro da TribeMD. Informe a senha somente na página.');
+  const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+  await responderAgente({texto:'Sim, pode enviar',profissionais:[],estadoConversa:estado},{
+    modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue({
+      tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}
+    }),referenciaContaAgenda:vi.fn().mockResolvedValue('id-tecnico-da-conta'),solicitarLinkAgenda});
+  expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('id-tecnico-da-conta','tribemd');
+  scripted.assertComplete();
 });

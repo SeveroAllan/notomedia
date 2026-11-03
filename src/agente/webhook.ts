@@ -154,7 +154,7 @@ export function criarRouterWebhookAgente(deps: {
       const anteriores = deps.persistirConversa && contaId ?
         estado.tarefasPendentes ?? [] : tarefasEmMemoria.get(chaveContexto) ?? [];
       const pedidoTipo = classificarPedidoTarefa(texto);
-      const tribemdMencionada = /\btribemd\b/i.test(texto);
+      const tribemdMencionada = /\btribe(?:md)?\b/i.test(texto);
       const amplimedMencionada = /\bamplimed\b/i.test(texto);
       const agenda = tribemdMencionada !== amplimedMencionada ?
         (tribemdMencionada ? 'tribemd' : 'amplimed') : undefined;

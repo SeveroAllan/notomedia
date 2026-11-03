@@ -392,7 +392,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         (entrada.estadoConversa?.profissionalConfirmadoId===id ||
         normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional))));
       const agendaEscolhida=entrada.estadoConversa?.agendaEscolhida===agenda ||
-        normalizarNomeMedico(entrada.texto).includes(agenda);
+        (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
         return {enviado:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
