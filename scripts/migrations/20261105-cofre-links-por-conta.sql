@@ -14,6 +14,42 @@ BEGIN
      AND column_name='medico_id' AND udt_name='uuid'
  ) THEN RAISE EXCEPTION 'COFRE_MEDICO_ID_INCOMPATIVEL'; END IF;
 END $$;
+-- Compatibilidade com o código anterior: campo opcional, sem perda de links.
+ALTER TABLE public.cofre_links ADD COLUMN IF NOT EXISTS destino_telefone text;
+DO $cofre$
+DECLARE col_type text;
+BEGIN
+ SELECT udt_name INTO col_type FROM information_schema.columns
+ WHERE table_schema='public' AND table_name='cofre_links'
+   AND column_name='destino_telefone';
+ IF col_type IS DISTINCT FROM 'text' THEN
+   RAISE EXCEPTION 'COFRE_DESTINO_TELEFONE_INCOMPATIVEL';
+ END IF;
+END $cofre$;
+-- O código grava 'concluido'. Trocar somente o CHECK conhecido da 20261020;
+-- não remover restrições desconhecidas de um banco divergente.
+DO $cofre$
+DECLARE definition text;
+BEGIN
+ SELECT pg_get_constraintdef(oid) INTO definition FROM pg_constraint
+ WHERE conrelid='public.cofre_links_auditoria'::regclass
+   AND conname='cofre_links_auditoria_evento_check' AND contype='c';
+ IF definition IS NOT NULL AND definition NOT ILIKE '%concluido%' THEN
+   IF definition NOT ILIKE '%criado%' OR definition NOT ILIKE '%aberto%'
+      OR definition NOT ILIKE '%enviado%' OR definition NOT ILIKE '%expirado%' THEN
+     RAISE EXCEPTION 'COFRE_AUDITORIA_CHECK_DESCONHECIDO';
+   END IF;
+   ALTER TABLE public.cofre_links_auditoria
+     DROP CONSTRAINT cofre_links_auditoria_evento_check;
+ END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint
+   WHERE conrelid='public.cofre_links_auditoria'::regclass
+     AND conname='cofre_links_auditoria_evento_check') THEN
+   ALTER TABLE public.cofre_links_auditoria
+     ADD CONSTRAINT cofre_links_auditoria_evento_check
+     CHECK (evento IN ('criado','aberto','enviado','expirado','concluido'));
+ END IF;
+END $cofre$;
 ALTER TABLE public.cofre_links
   ADD COLUMN IF NOT EXISTS conta_id uuid REFERENCES public.contas(id) ON DELETE CASCADE;
 ALTER TABLE public.cofre_links ALTER COLUMN medico_id DROP NOT NULL;
@@ -46,6 +82,12 @@ BEGIN
     AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE')) THEN
    RAISE EXCEPTION 'COFRE_PRIVILEGIOS_ABERTOS';
  END IF;
+ IF NOT EXISTS (SELECT 1 FROM pg_constraint
+   WHERE conrelid='public.cofre_links_auditoria'::regclass
+     AND conname='cofre_links_auditoria_evento_check'
+     AND contype='c' AND convalidated
+     AND pg_get_constraintdef(oid) ILIKE '%concluido%')
+ THEN RAISE EXCEPTION 'COFRE_AUDITORIA_CONCLUIDO_NAO_ACEITO'; END IF;
  IF NOT EXISTS(
    SELECT 1 FROM pg_constraint c JOIN pg_attribute a
      ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey)
