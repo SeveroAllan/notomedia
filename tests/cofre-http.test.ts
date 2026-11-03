@@ -10,6 +10,9 @@ import { criarCofreContas } from '../src/cofre/router.js';
 import { PerfisTribemd, type PerfilTribemd } from '../src/desenvolvedor/tribemd-perfil.js';
 
 const medicoA = '11111111-1111-4111-8111-111111111111';
+const contaA = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const contaB = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const contaNova = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const medicoB = '22222222-2222-4222-8222-222222222222';
 let servidor: Server;
 let servico: ReturnType<typeof criarCofreContas>;
@@ -23,8 +26,8 @@ beforeAll(async () => {
   diretorio = await mkdtemp(join(tmpdir(), 'noto-cofre-http-')); const chave = randomBytes(32).toString('base64');
   servidor = createServer(); await new Promise<void>(resolver => servidor.listen(0, '127.0.0.1', resolver));
   base = `http://127.0.0.1:${(servidor.address() as AddressInfo).port}`;
-  const pool = { async query(_sql: string, valores: string[]) { return { rows: valores[0] === 'auth-a' ? [{ id: medicoA }] : valores[0] === 'auth-b' ? [{ id: medicoB }] : [] }; } } as unknown as pg.Pool;
-  servico = criarCofreContas({ pool, autenticar: async token => ({ 'sessao-a': 'auth-a', 'sessao-b': 'auth-b', 'sessao-sem-conta': 'auth-inativo' })[token] ?? null,
+  const pool = { async query(_sql: string, valores: string[]) { return { rows: valores[0] === 'auth-a' ? [{ conta_id: contaA, medico_id: medicoA }] : valores[0] === 'auth-b' ? [{ conta_id: contaB, medico_id: medicoB }] : valores[0] === 'auth-novo' ? [{ conta_id: contaNova, medico_id: null }] : [] }; } } as unknown as pg.Pool;
+  servico = criarCofreContas({ pool, autenticar: async token => ({ 'sessao-a': 'auth-a', 'sessao-b': 'auth-b', 'sessao-sem-conta': 'auth-inativo', 'sessao-nova': 'auth-novo' })[token] ?? null,
     env: { COFRE_ORIGEM: base, COFRE_DIRETORIO: diretorio, COFRE_CHAVE: chave } });
   servidor.on('request', servico.app); perfis = new PerfisTribemd(join(diretorio, 'cofres-contas-v1'), chave);
 });
@@ -47,6 +50,18 @@ describe('cofre HTTP real com identidade e banco fake na borda', () => {
     const resposta = await fetch(base + '/tribemd?medicoId=' + medicoB, { headers: { Authorization: 'Bearer sessao-a' } });
     expect(resposta.status).toBe(200); expect(resposta.headers.get('cache-control')).toBe('no-store');
     expect(await resposta.json()).toEqual({ ok: true, cofre: { salvo: true, estado: 'conectado', ativo: true, verificadoEm: null, codigo: null, consultasDisponiveis: null } });
+  });
+
+  it('conta com zero medicos acessa Cofre por sessão OTP, nunca pelo ID medico',async()=>{
+    const resposta=await fetch(base+'/tribemd',{headers:{Authorization:'Bearer sessao-nova'}});
+    expect(resposta.status).toBe(200);
+    expect(await resposta.json()).toMatchObject({ok:true,cofre:{salvo:false,estado:'vazio'}});
+  });
+  it('uma conta nova não pode ler envelopes de conta antiga ou outra conta',async()=>{
+    const a=await fetch(base+'/tribemd?medicoId='+medicoA,{headers:{Authorization:'Bearer sessao-nova'}});
+    expect(a.status).toBe(200);
+    expect(await a.json()).toMatchObject({cofre:{salvo:false}});
+    expect((await perfis.ler(medicoA)).cofre?.ativo).toBe(true);
   });
   it('não aceita mutação sem origem e cabeçalho próprios', async () => {
     const resposta = await fetch(base + '/tribemd/desconectar', { method: 'POST', headers: { Authorization: 'Bearer sessao-a', 'Content-Type': 'application/json' }, body: '{}' });
