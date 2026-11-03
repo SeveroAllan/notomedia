@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import type { CausaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { validarTarefas, type TarefaPendente } from './tarefas.js';
 
@@ -11,8 +12,16 @@ export interface EstadoConversa {
   profissionalPerguntadoId?: string;
   nomeProfissionalPerguntado?: string;
   descoberta?: { agenda: AgendaEscolhida; nomes: string[] };
+  /** Fase sem nomes ou dados clínicos. Permite retomar após callback autenticado. */
+  faseAgenda?: 'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE';
+  causaDescoberta?: CausaLeitura;
   tarefasPendentes?: TarefaPendente[];
 }
+const causasLeituraValidas:readonly CausaLeitura[]=[
+  'SEM_RESULTADO','COBERTURA_PARCIAL','AGENDA_LIMITADA',
+  'DETALHES_NAO_DISPONIVEIS','DETALHES_PENDENTES',
+  'SEM_CONSULTAS_NO_RECORTE','SEM_IDENTIFICACAO_PROFISSIONAL','NOMES_NAO_VALIDOS'
+];
 type Banco = Pick<pg.Pool, 'query'>;
 
 export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<EstadoConversa> {
@@ -27,6 +36,10 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
+    ...(['DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE'].includes(e.faseAgenda) ?
+      {faseAgenda:e.faseAgenda as EstadoConversa['faseAgenda']} : {}),
+    ...(typeof e.causaDescoberta==='string' && causasLeituraValidas.includes(e.causaDescoberta as CausaLeitura) ?
+      {causaDescoberta:e.causaDescoberta as CausaLeitura}:{}),
     ...(e.descoberta && ['tribemd','amplimed'].includes(e.descoberta.agenda) && Array.isArray(e.descoberta.nomes) ? {
       descoberta: { agenda: e.descoberta.agenda as AgendaEscolhida, nomes: e.descoberta.nomes.filter((n: unknown) => typeof n === 'string' && n.length <= 150).slice(0,20) as string[] }
     } : {})
@@ -115,6 +128,9 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
   const permitido: EstadoConversa = {};
   if (estado.agendaEscolhida) permitido.agendaEscolhida = estado.agendaEscolhida;
   if (estado.profissionalConfirmadoId) permitido.profissionalConfirmadoId = estado.profissionalConfirmadoId;
+  if (estado.faseAgenda) permitido.faseAgenda = estado.faseAgenda;
+  if (estado.causaDescoberta && causasLeituraValidas.includes(estado.causaDescoberta))
+    permitido.causaDescoberta = estado.causaDescoberta;
   if (estado.perguntaPendente !== undefined) permitido.perguntaPendente = estado.perguntaPendente;
   if (estado.profissionalPerguntadoId) permitido.profissionalPerguntadoId = estado.profissionalPerguntadoId;
   if (estado.nomeProfissionalPerguntado && estado.nomeProfissionalPerguntado.length <= 150) permitido.nomeProfissionalPerguntado = estado.nomeProfissionalPerguntado;

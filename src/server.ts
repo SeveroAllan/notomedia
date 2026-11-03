@@ -155,6 +155,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const anterior=await lerEstadoConversa(pool,contaId);
         await salvarEstadoConversa(pool,contaId,{
           ...anterior,agendaEscolhida:evento.agenda,
+          faseAgenda:nomes.length?'CONFIRMACAO_PENDENTE':'DESCOBERTA_PENDENTE',
+          causaDescoberta:nomes.length?undefined:evento.diagnosticoLeitura?.causas[0],
           descoberta:nomes.length?{agenda:evento.agenda,nomes}:undefined,
           perguntaPendente:nomes.length===1?'confirmar_profissional':null,
           nomeProfissionalPerguntado:nomes.length===1?nomes[0]:undefined

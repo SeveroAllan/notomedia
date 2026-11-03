@@ -677,13 +677,29 @@ export function acompanhamentoVerificado(
     'A verificação dos médicos começa depois da conexão autenticada.'
   ].join(' ');
   // Acompanhamento entre turnos só trata a mesma tarefa de conexão.
-  // Reconhece o assunto, NÃO tenta detectar ou banir formulações do modelo.
-  const falandoDoLink=/\b(?:link|agenda|conect|acesso|tribemd|amplimed)\b/i.test(entrada.texto);
-  if(falandoDoLink && entrada.situacaoUltimoLink && !entrada.estadoConversa?.descoberta) {
+  // Reconhece o ASSUNTO, não usa regex de promessas proibidas.
+  const falandoDaAgenda=/\b(?:link|agenda|conex[aã]o|conectar|conectei|acesso|tribemd|amplimed|m[eé]dic[oa]s?|profissionais)\b/i.test(entrada.texto);
+  if(falandoDaAgenda && entrada.estadoConversa?.faseAgenda==='DESCOBERTA_PENDENTE') {
+    const causa=entrada.estadoConversa.causaDescoberta;
+    const detalhe=causa==='COBERTURA_PARCIAL'?'a cobertura ainda é parcial':
+      causa==='AGENDA_LIMITADA'?'o recorte consultado ficou limitado':
+      causa==='DETALHES_PENDENTES'?'alguns detalhes ainda estão pendentes':
+      causa==='DETALHES_NAO_DISPONIVEIS'?'os detalhes necessários não vieram na leitura':
+      causa==='SEM_CONSULTAS_NO_RECORTE'?'não houve consultas verificáveis no recorte':
+      causa==='SEM_IDENTIFICACAO_PROFISSIONAL'?'as consultas não identificaram o profissional':
+      causa==='NOMES_NAO_VALIDOS'?'os nomes observados não passaram na validação':
+      'a leitura não trouxe evidência suficiente';
+    return [
+      `A conexão com a ${nomeAgenda} está confirmada, mas ${detalhe}.`,
+      'Já usei a leitura disponível e não vou inventar médicos nem repetir acessos ao portal em sequência.',
+      'A confirmação dos profissionais permanece pendente.'
+    ].join(' ');
+  }
+  if(falandoDaAgenda && entrada.situacaoUltimoLink && !entrada.estadoConversa?.descoberta) {
     const estado=entrada.situacaoUltimoLink.estado;
     if(estado==='ENTREGUE'||estado==='LIDO') return [
       estado==='LIDO'?'O WhatsApp registrou a leitura do último link.':'O WhatsApp confirmou a entrega do último link.',
-      'Vou continuar a partir do acesso confirmado no portal, sem gerar outro link.'
+      'A entrega não comprova que o login no portal aconteceu; ainda preciso dessa evidência para avançar.'
     ].join(' ');
     if(estado==='ERRO_COMPROVADO') return [
       'O WhatsApp registrou um erro para a mensagem do link.',
