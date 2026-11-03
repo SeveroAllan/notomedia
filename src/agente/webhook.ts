@@ -204,7 +204,7 @@ export function criarRouterWebhookAgente(deps: {
         ...(contaId ? { referenciaContaAgenda: async () => {
           // Novo acesso sempre pertence à conta. Para quem já tinha agenda
           // conectada sob médico, reutilizar a conexão antiga sem migrá-la.
-          const chave = cofreIdDaConta(contaId);
+          const chave = cofreIdDaConta(contaId!);
           const statusConta = await deps.consultarStatus(chave);
           if (statusConta.tribemd.salvo || statusConta.amplimed.salvo) return chave;
           const r = await deps.pool.query(
