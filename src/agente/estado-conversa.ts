@@ -16,6 +16,8 @@ export interface EstadoConversa {
   faseAgenda?: 'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE';
   causaDescoberta?: CausaLeitura;
   tarefasPendentes?: TarefaPendente[];
+  /** Última consulta comprovada, sem texto livre nem dados fiscais de pacientes. */
+  ultimaConsultaFiscal?: { escopo: 'conta' | 'profissional'; profissionalNome?: string; verificadaEm: string };
 }
 const causasLeituraValidas:readonly CausaLeitura[]=[
   'SEM_RESULTADO','COBERTURA_PARCIAL','AGENDA_LIMITADA',
@@ -36,6 +38,20 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
+    ...(e.ultimaConsultaFiscal && ['conta','profissional'].includes(e.ultimaConsultaFiscal.escopo) &&
+      typeof e.ultimaConsultaFiscal.verificadaEm === 'string' &&
+      e.ultimaConsultaFiscal.verificadaEm.length <= 40 &&
+      Number.isFinite(Date.parse(e.ultimaConsultaFiscal.verificadaEm)) &&
+      (e.ultimaConsultaFiscal.escopo === 'conta' ||
+        (typeof e.ultimaConsultaFiscal.profissionalNome === 'string' &&
+          e.ultimaConsultaFiscal.profissionalNome.length <= 150)) ? {
+        ultimaConsultaFiscal: {
+          escopo: e.ultimaConsultaFiscal.escopo as 'conta' | 'profissional',
+          verificadaEm: e.ultimaConsultaFiscal.verificadaEm as string,
+          ...(e.ultimaConsultaFiscal.escopo === 'profissional' ?
+            { profissionalNome: e.ultimaConsultaFiscal.profissionalNome as string } : {})
+        }
+      } : {}),
     ...(['DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE'].includes(e.faseAgenda) ?
       {faseAgenda:e.faseAgenda as EstadoConversa['faseAgenda']} : {}),
     ...(typeof e.causaDescoberta==='string' && causasLeituraValidas.includes(e.causaDescoberta as CausaLeitura) ?
@@ -138,6 +154,12 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
     agenda: estado.descoberta.agenda, nomes: estado.descoberta.nomes.filter(n => n && n.length <= 150).slice(0,20)
   };
   if (estado.tarefasPendentes) permitido.tarefasPendentes = validarTarefas(estado.tarefasPendentes);
+  if (estado.ultimaConsultaFiscal && Number.isFinite(Date.parse(estado.ultimaConsultaFiscal.verificadaEm)) &&
+      (estado.ultimaConsultaFiscal.escopo === 'conta' ||
+        (estado.ultimaConsultaFiscal.escopo === 'profissional' &&
+         !!estado.ultimaConsultaFiscal.profissionalNome && estado.ultimaConsultaFiscal.profissionalNome.length <= 150))) {
+    permitido.ultimaConsultaFiscal = estado.ultimaConsultaFiscal;
+  }
   await pool.query(
     'insert into noto_agent_conversas(conta_id,estado) values($1,$2::jsonb) on conflict(conta_id) do update set estado=excluded.estado,atualizado_em=now()',
     [contaId, JSON.stringify(permitido)]

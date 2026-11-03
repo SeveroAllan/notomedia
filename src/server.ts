@@ -19,6 +19,7 @@ import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-convers
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
+import { consultarPanoramaFiscalDaConta } from './agente/panorama-operacional.js';
 import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
@@ -268,6 +269,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
     consultarEntregaLink: async (referencia, agenda) => {
       const contaId=contaDoCofreId(referencia);
       if (!contaId) {
