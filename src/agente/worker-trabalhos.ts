@@ -100,7 +100,7 @@ export async function notificarResultadoPendente(deps:DependenciasTrabalhos):Pro
   const job=await reservarNotificacaoNoto(deps.pool);
   if(!job)return false;
   const inicio=Date.now();
-  let confirmou=false;
+  let aceitoApi=false;
   try{
     if(await destinatarioAutorizado(deps,job)){
       // Escrita atômica de evidência: nunca sobrescrever a conversa de outra
@@ -120,12 +120,12 @@ export async function notificarResultadoPendente(deps:DependenciasTrabalhos):Pro
           ].join('\n'),[job.contaId,JSON.stringify({agenda:job.agenda,nomes}),job.agenda]);
         }
       }
-      confirmou=await deps.enviar(job.telefone,textoResultado(job));
+      aceitoApi=await deps.enviar(job.telefone,textoResultado(job));
     }
-  }catch{ confirmou=false; }
+  }catch{ aceitoApi=false; }
   finally {
-    await terminarNotificacaoNoto(deps.pool,job.id,confirmou);
-    deps.relatar?.(confirmou?'NOTIFICACAO_ACEITA':'NOTIFICACAO_INCERTA',
+    await terminarNotificacaoNoto(deps.pool,job.id,aceitoApi);
+    deps.relatar?.(aceitoApi?'NOTIFICACAO_ACEITA_API':'NOTIFICACAO_INCERTA',
       Date.now()-inicio,job.tipo);
   }
   return true;

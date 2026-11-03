@@ -164,7 +164,7 @@ describe('worker retoma o resultado sem resposta genérica ou envio duplicado',(
     expect(String(enviar.mock.calls[0]![1])).toContain('Quais desses médicos');
     expect(query.mock.calls[1]![0]).toContain('u.conta_id=$1');
     expect(query.mock.calls[2]![0]).toContain('jsonb_set');
-    expect(query.mock.calls[3]![1]).toEqual([trabalho.id,'concluido']);
+    expect(query.mock.calls[3]![1]).toEqual([trabalho.id,'aceito_api']);
   });
   it('envio com resultado incerto não entra em retry automático',async()=>{
     const query=vi.fn().mockResolvedValueOnce({rows:[{...trabalho,

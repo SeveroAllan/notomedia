@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS public.noto_agent_trabalhos (
  agenda text NOT NULL CHECK(agenda IN ('tribemd','amplimed')),
  medico_id uuid REFERENCES public.medicos(id),
  estado text NOT NULL DEFAULT 'pendente'
-   CHECK(estado IN ('pendente','executando','resultado_pronto','notificando','concluido','falhou','envio_incerto')),
+   CHECK(estado IN ('pendente','executando','resultado_pronto','notificando','aceito_api','falhou','envio_incerto')),
  tentativas smallint NOT NULL DEFAULT 0 CHECK(tentativas BETWEEN 0 AND 2),
  executado_por text,
  bloqueado_ate timestamptz,

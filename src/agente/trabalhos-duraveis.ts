@@ -3,7 +3,7 @@ import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone
 import type { AgendaEscolhida } from './estado-conversa.js';
 
 export type TipoTrabalhoNoto = 'descoberta_agenda' | 'conferencia_fiscal';
-export type EstadoTrabalhoNoto = 'pendente'|'executando'|'resultado_pronto'|'notificando'|'concluido'|'falhou'|'envio_incerto';
+export type EstadoTrabalhoNoto = 'pendente'|'executando'|'resultado_pronto'|'notificando'|'aceito_api'|'falhou'|'envio_incerto';
 export interface PedidoTrabalhoNoto {
   contaId: string; instancia: string; mensagemId: string; telefone: string;
   tipo: TipoTrabalhoNoto; agenda: AgendaEscolhida; medicoId: string | null;
@@ -19,7 +19,7 @@ export type ResultadoEnfileirar = { ok: true; estado: 'iniciado'|'ja_em_andament
 
 type Banco = Pick<pg.Pool, 'query'>;
 const tipos = ['descoberta_agenda','conferencia_fiscal'];
-const estados: EstadoTrabalhoNoto[] = ['pendente','executando','resultado_pronto','notificando','concluido','falhou','envio_incerto'];
+const estados: EstadoTrabalhoNoto[] = ['pendente','executando','resultado_pronto','notificando','aceito_api','falhou','envio_incerto'];
 const idSeguro = (s: unknown, min: number, max: number) =>
   typeof s === 'string' && s.length >= min && s.length <= max && !/[\u0000-\u001f]/.test(s);
 
@@ -71,6 +71,7 @@ export async function listarTrabalhosNoto(
     const r=await pool.query([
       'select tipo,agenda,estado from public.noto_agent_trabalhos',
       'where conta_id=$1 and telefone_destino=$2 and instancia=$3',
+      "and estado in ('pendente','executando','resultado_pronto','notificando','envio_incerto')",
       'order by criado_em desc limit 4'
     ].join('\n'),[contaId,telefone,instancia]);
     return r.rows.filter((x:Record<string,unknown>)=>tipos.includes(String(x.tipo)) &&
@@ -164,9 +165,10 @@ export async function reservarNotificacaoNoto(pool:Banco):Promise<TrabalhoParaNo
     estado:x.estado,tentativas:x.tentativas,resultado:x.resultado
   }:null;
 }
+/** 'aceito_api' confirma apenas HTTP/servidor, NUNCA entrega ou leitura no WhatsApp. */
 export async function terminarNotificacaoNoto(pool:Banco,id:string,confirmado:boolean):Promise<void>{
   await pool.query([
     'update public.noto_agent_trabalhos set estado=$2,atualizado_em=now()',
     "where id=$1 and estado='notificando'"
-  ].join('\n'),[id,confirmado?'concluido':'envio_incerto']);
+  ].join('\n'),[id,confirmado?'aceito_api':'envio_incerto']);
 }
