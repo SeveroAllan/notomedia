@@ -112,7 +112,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         config.evolutionAssistantApiKey,config.evolutionOfficialInstanceName,
         config.evolutionOfficialInstanceName).enviarTexto({
           instanciaNome:config.evolutionAssistantInstanceName,
-          contatoTelefone:telefone,texto:url
+          contatoTelefone:telefone,texto:url,linkPreview:false
         });
       if(!resultado.sucesso) return 'erro';
       try {

@@ -141,7 +141,7 @@ export class EvolutionApiClient
 
   async enviarTexto(params: EnviarMensagemPacienteParams): Promise<ResultadoEnvioMensagemPaciente> {
     if(params.instanciaNome===this.instanciaSomenteOtp)return {sucesso:false,erro:'CANAL_OFICIAL_SOMENTE_OTP'};
-    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto);
+    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto, params.linkPreview);
   }
 
   async enviarPdf(params: EnviarPdfDanfseParams): Promise<ResultadoEnvioPdf> {
@@ -231,7 +231,8 @@ export class EvolutionApiClient
   private async enviarTextoGenerico(
     instancia: string,
     telefone: string,
-    texto: string
+    texto: string,
+    linkPreview?: boolean
   ): Promise<ResultadoEnvioMensagemPaciente> {
     const url = `${this.baseUrl.replace(/\/$/, '')}/message/sendText/${instancia}`;
     try {
@@ -244,7 +245,8 @@ export class EvolutionApiClient
         },
         body: JSON.stringify({
           number: this.normalizarTelefone(telefone),
-          text: texto
+          text: texto,
+          ...(linkPreview === undefined ? {} : { linkPreview })
         })
       });
 
