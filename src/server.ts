@@ -15,6 +15,7 @@ import { localizarContaExistentePorTelefone } from './agente/conta-existente.js'
 import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { separarBaloes } from './agente/baloes.js';
+import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-conversa.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
@@ -99,6 +100,50 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone, texto
       });
       return resultado.sucesso ? 'enviado' : 'erro';
+    },
+    aoConcluirConta: async (contaId, evento) => {
+      // Resultado de uma sessão REAL do navegador. Não atribui identidade
+      // clínica; apenas permite ao operador confirmar os nomes observados.
+      if (!config.notoPilotoRestrito || !config.notoAgentEnvioAtivo) return;
+      const telefone=evento.contatoTelefone ?? '';
+      const variantes=gerarVariantesTelefoneBrasileiro(telefone);
+      const allowlist=config.envioRealAllowlist ?? [];
+      if (!telefone || allowlist.length!==1 ||
+        !gerarVariantesTelefoneBrasileiro(allowlist[0]!).some(v=>variantes.includes(v))) return;
+      const autor=await pool.query(`
+        select 1 from usuarios where conta_id=$1 and ativo=true and auth_user_id is not null
+          and regexp_replace(telefone,'[^0-9]','','g')=any($2::text[])
+        limit 1`,[contaId,variantes]);
+      if (autor.rows.length!==1) return;
+      const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
+      const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
+      const mensagens=!evento.conectado
+        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
+        : !nomes.length
+          ? [`Conectei sua agenda ${plataforma} pela página segura.`,
+            'Ainda não consegui identificar profissionais com segurança na leitura da agenda.',
+            'Posso consultar novamente quando você quiser.']
+          : [`Conectei sua agenda ${plataforma} pela página segura.`,
+            `Na agenda encontrei: ${nomes.join(', ')}.`,
+            nomes.length===1
+              ? `Você confirma vincular ${nomes[0]} à sua conta?`
+              : 'Quais desses profissionais você confirma vincular à sua conta?'];
+      for(const frase of mensagens) for(const balao of separarBaloes(frase)){
+        const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
+          config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
+        });
+        if(!enviado.sucesso) return;
+      }
+      if (evento.conectado && nomes.length){
+        const estado=await lerEstadoConversa(pool,contaId);
+        await salvarEstadoConversa(pool,contaId,{
+          ...estado,agendaEscolhida:evento.agenda,
+          descoberta:{agenda:evento.agenda,nomes},
+          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
+          ...(nomes.length===1 ? {nomeProfissionalPerguntado:nomes[0]} : {})
+        });
+      }
     },
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
