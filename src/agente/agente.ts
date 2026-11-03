@@ -663,12 +663,12 @@ export function acompanhamentoVerificado(
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
   if(tem('LINK_ACEITO_PARA_ENVIO')) return [
     `O serviço de mensagens aceitou o pedido do link seguro para a ${nomeAgenda}.`,
-    'Ainda não há comprovante de entrega no WhatsApp.',
+    'O link já foi aceito para envio, mas não tenho confirmação de entrega no WhatsApp.',
     'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
   ].join(' ');
   if(tem('CONEXAO_EXISTENTE')) return [
-    `A conexão com a ${nomeAgenda} já está confirmada.`,
-    'Agora precisamos conferir os médicos identificados na leitura, antes de qualquer vínculo.',
+    `A agenda ${nomeAgenda} já está conectada.`,
+    'Antes de vincular qualquer médico, precisamos verificar os profissionais na fonte.',
     'Nenhum profissional será adicionado sem sua confirmação.'
   ].join(' ');
   if(tem('LINK_ENTREGUE')||tem('LINK_LIDO')) return [
@@ -706,8 +706,8 @@ export function acompanhamentoVerificado(
       'Não vou enviar outro link sensível automaticamente.'
     ].join(' ');
     return [
-      `O pedido do link seguro da ${nomeAgenda} já foi aceito pelo serviço de mensagens.`,
-      'A entrega ao aparelho ainda não foi confirmada.',
+      `O pedido do link já foi aceito pelo serviço de mensagens para a ${nomeAgenda}.`,
+      'Ainda não tenho confirmação de entrega ao aparelho.',
       'Não vou criar nem reenviar outro link por conta própria.'
     ].join(' ');
   }
@@ -772,8 +772,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
       return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
-        ? 'A integração ainda não está configurada neste ambiente. Sua senha só entra na página segura.'
-        : 'Não tenho confirmação suficiente para afirmar essa ação. Vou preservar a etapa atual.';
+        ? 'A integração ainda não está configurada neste ambiente. É uma pendência local do Noto. Sua senha só entra na página segura.'
+        : 'Não consegui confirmar isso pelas verificações disponíveis. Vou preservar a etapa atual sem afirmar que a ação foi concluída.';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
