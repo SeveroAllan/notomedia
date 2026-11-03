@@ -5,6 +5,7 @@ import { cofreIdDaConta, contaDoCofreId } from '../src/cofre/identidade-conta.js
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const telefone='5551999998888';
 function montar(conta:string=A,operador:string=telefone,contato:string=telefone){
+  const aoConcluirConta=vi.fn().mockResolvedValue(undefined);
   const chamadas:Array<{sql:string;params:unknown[]}>=[];
   const banco={ query:vi.fn(async(sql:string,params:unknown[]=[])=>{
     chamadas.push({sql,params});
@@ -13,6 +14,7 @@ function montar(conta:string=A,operador:string=telefone,contato:string=telefone)
     if(sql.includes('select telefone from usuarios'))return {rows:[{telefone:operador}]};
     if(sql.includes('count(*)::int as total from cofre_links'))return {rows:[{total:0}]};
     if(sql.includes('insert into cofre_links\n'))return {rows:[{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}]};
+    if(sql.includes("values ($1, 'concluido')") && sql.includes('returning link_id'))return {rows:[{link_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}]};
     if(sql.includes('returning medico_id, conta_id'))return {rows:[{medico_id:null,conta_id:conta,
       id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',agenda:'tribemd',destino_telefone:contato}]};
     return {rows:[],rowCount:1};
@@ -20,8 +22,8 @@ function montar(conta:string=A,operador:string=telefone,contato:string=telefone)
   const pool={connect:vi.fn().mockResolvedValue(banco),query:banco.query} as unknown as pg.Pool;
   const cofre={status:vi.fn().mockResolvedValue({estado:'vazio',ativo:false}),iniciar:vi.fn().mockResolvedValue({estado:'conectando'})};
   const enviar=vi.fn().mockResolvedValue('enviado');
-  const links=new LinksCofre({pool,origem:'https://homologacao.example.test',cofre,enviar});
-  return {links,cofre,enviar,banco,chamadas};
+  const links=new LinksCofre({pool,origem:'https://homologacao.example.test',cofre,enviar,aoConcluirConta});
+  return {links,cofre,enviar,banco,chamadas,aoConcluirConta};
 }
 describe('Cofre da conta sem qualquer registro em medicos',()=>{
   it('chave estável de conta separada do UUID do médico e sem caminhos perigosos',()=>{
@@ -62,6 +64,20 @@ describe('Cofre da conta sem qualquer registro em medicos',()=>{
     expect(t.cofre.iniciar).toHaveBeenCalledExactlyOnceWith(cofreIdDaConta(A),dados);
     expect(t.cofre.iniciar).not.toHaveBeenCalledWith(B,expect.anything());
     expect(t.chamadas.some(c=>c.sql.includes('returning medico_id, conta_id'))).toBe(true);
+  });
+
+  it('depois de login confirmado, evento pertence à conta e NÃO dispara callback clínico',async()=>{
+    const t=montar();
+    await t.links.enviarCredencial('A'.repeat(43),{
+      email:'teste@example.invalid',senha:'senha-ficticia',consentimento:'tribemd-leitura-v1'
+    });
+    await t.links.concluir(cofreIdDaConta(A),true);
+    expect(t.aoConcluirConta).toHaveBeenCalledExactlyOnceWith(A,expect.objectContaining({
+      agenda:'tribemd',conectado:true,contatoTelefone:telefone
+    }));
+    expect(t.enviar).not.toHaveBeenCalled();
+    await t.links.concluir(cofreIdDaConta(A),true);
+    expect(t.aoConcluirConta).toHaveBeenCalledOnce();
   });
   it('não permite gerar link quando cofre já está conectado',async()=>{
     const t=montar();
