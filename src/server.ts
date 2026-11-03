@@ -15,8 +15,11 @@ import { localizarContaExistentePorTelefone } from './agente/conta-existente.js'
 import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { separarBaloes } from './agente/baloes.js';
+import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-conversa.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
+import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
+import { contaDoCofreId } from './cofre/identidade-conta.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -85,7 +88,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   );
   const cofres = criarCofreContas({
     pool, enviarCofre: async (id, texto, contatoTelefone) => {
-      if (!config.notoPilotoRestrito) return comunicacaoHomologacao.cofre(id, texto);
+      if (!config.notoPilotoRestrito) return contaDoCofreId(id) ? 'erro' : comunicacaoHomologacao.cofre(id, texto);
       const permitidos = config.envioRealAllowlist ?? [];
       const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone ?? '');
       if (!contatoTelefone || permitidos.length !== 1 ||
@@ -97,6 +100,50 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone, texto
       });
       return resultado.sucesso ? 'enviado' : 'erro';
+    },
+    aoConcluirConta: async (contaId, evento) => {
+      // Resultado de uma sessão REAL do navegador. Não atribui identidade
+      // clínica; apenas permite ao operador confirmar os nomes observados.
+      if (!config.notoPilotoRestrito || !config.notoAgentEnvioAtivo) return;
+      const telefone=evento.contatoTelefone ?? '';
+      const variantes=gerarVariantesTelefoneBrasileiro(telefone);
+      const allowlist=config.envioRealAllowlist ?? [];
+      if (!telefone || allowlist.length!==1 ||
+        !gerarVariantesTelefoneBrasileiro(allowlist[0]!).some(v=>variantes.includes(v))) return;
+      const autor=await pool.query(`
+        select 1 from usuarios where conta_id=$1 and ativo=true and auth_user_id is not null
+          and regexp_replace(telefone,'[^0-9]','','g')=any($2::text[])
+        limit 1`,[contaId,variantes]);
+      if (autor.rows.length!==1) return;
+      const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
+      const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
+      const mensagens=!evento.conectado
+        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
+        : !nomes.length
+          ? [`Conectei sua agenda ${plataforma} pela página segura.`,
+            'Ainda não consegui identificar profissionais com segurança na leitura da agenda.',
+            'Posso consultar novamente quando você quiser.']
+          : [`Conectei sua agenda ${plataforma} pela página segura.`,
+            `Na agenda encontrei: ${nomes.join(', ')}.`,
+            nomes.length===1
+              ? `Você confirma vincular ${nomes[0]} à sua conta?`
+              : 'Quais desses profissionais você confirma vincular à sua conta?'];
+      for(const frase of mensagens) for(const balao of separarBaloes(frase)){
+        const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
+          config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
+        });
+        if(!enviado.sucesso) return;
+      }
+      if (evento.conectado && nomes.length){
+        const estado=await lerEstadoConversa(pool,contaId);
+        await salvarEstadoConversa(pool,contaId,{
+          ...estado,agendaEscolhida:evento.agenda,
+          descoberta:{agenda:evento.agenda,nomes},
+          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
+          ...(nomes.length===1 ? {nomeProfissionalPerguntado:nomes[0]} : {})
+        });
+      }
     },
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
@@ -182,12 +229,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r = await cofres.listarProfissionaisAmplimed(medicoId);
         return r.ok
           ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
-              ? r.profissionais.map(p => p.nome).filter(Boolean).slice(0, 20) : [] }
+              ? r.profissionais.map(p => p.nome).filter(nomeProfissionalValido).slice(0, 20) : [] }
           : { ok: false, motivo: r.motivo };
       }
       const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
       return r.tipo === 'consultas'
-        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).slice(0, 20) }
+        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).filter(nomeProfissionalValido).slice(0, 20) }
         : { ok: false, motivo: r.codigo };
     },
     confirmarProfissionais: async (medicoBaseId, nomes) => {
@@ -203,7 +250,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
       if (!seguro || !cofres.links) return { enviado: false, motivo:
         !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL' };
-      const r = await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
+      const r = contaDoCofreId(medicoId)
+        ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)
+        : await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
       return { enviado: Boolean(r.ok && r.motivo === 'enviado'), ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {}) };
     },
     salvarDadosProfissionais: async (medicoId, dados) => {

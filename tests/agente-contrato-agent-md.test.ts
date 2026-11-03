@@ -24,24 +24,24 @@ describe('agent.md como contrato operacional de instrucoes', () => {
     expect(INSTRUCOES_NOTO).toContain('Nenhuma ferramenta disponível emite, cancela');
   });
 
-  it('resposta curta SIM aproveita contexto, pede somente identificacao pendente', async () => {
+  it('resposta curta SIM mantém contexto e libera primeira conexão da conta', async () => {
     const modelo = new ScriptedModel([
       [functionCall('orientar_conexao_agenda', { agenda: 'amplimed', profissional: null }, { callId: 'curta' })],
-      [assistantMessage('Entendi, Amplimed. Para qual profissional será essa agenda?')]
+      [assistantMessage('Entendi, Amplimed. Posso enviar o link seguro para conectar sua agenda.')] 
     ]);
-    const consultarStatus = vi.fn();
+    const consultarStatus = vi.fn().mockResolvedValue(pendente);
     const diagnostico = vi.fn();
     const resposta = await responderAgente({
       texto: 'sim', contexto: ['Você usa a Amplimed?'], profissionais
-    }, { modeloTeste: modelo, consultarStatus, aoDiagnostico: diagnostico });
-    expect(resposta).toContain('qual profissional');
-    expect(consultarStatus).not.toHaveBeenCalled();
+    }, { modeloTeste: modelo, consultarStatus, referenciaContaAgenda:vi.fn().mockResolvedValue('conta-tecnica'), aoDiagnostico: diagnostico });
+    expect(resposta).toContain('link seguro');
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('conta-tecnica');
     expect(diagnostico).toHaveBeenCalledWith(expect.objectContaining({
       codigo: 'RESPOSTA', ferramentas: [expect.objectContaining({
-        nome: 'orientar_conexao_agenda', codigo: 'DEPENDENCIA_PROFISSIONAL'
+        nome: 'orientar_conexao_agenda', codigo: 'CONEXAO_PENDENTE'
       })]
     }));
-    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Perguntar para qual profissional');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('solicitar_link_seguro_agenda');
     modelo.assertComplete();
   });
 

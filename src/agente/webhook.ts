@@ -17,6 +17,8 @@ import {
 } from './estado-conversa.js';
 import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
+import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
+import { cofreIdDaConta } from '../cofre/identidade-conta.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -139,7 +141,7 @@ export function criarRouterWebhookAgente(deps: {
       ) : { rows: [] };
       const profissionais = medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
         id: m.id, nome: String(m.nome_completo ?? '')
-      }));
+      })).filter(p => nomeProfissionalValido(p.nome));
       const estado: EstadoConversa = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
       if (deps.persistirConversa && contaId) {
         if (!await reservarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id)) {
@@ -153,7 +155,7 @@ export function criarRouterWebhookAgente(deps: {
       const anteriores = deps.persistirConversa && contaId ?
         estado.tarefasPendentes ?? [] : tarefasEmMemoria.get(chaveContexto) ?? [];
       const pedidoTipo = classificarPedidoTarefa(texto);
-      const tribemdMencionada = /\btribemd\b/i.test(texto);
+      const tribemdMencionada = /\btribe(?:md)?\b/i.test(texto);
       const amplimedMencionada = /\bamplimed\b/i.test(texto);
       const agenda = tribemdMencionada !== amplimedMencionada ?
         (tribemdMencionada ? 'tribemd' : 'amplimed') : undefined;
@@ -199,10 +201,24 @@ export function criarRouterWebhookAgente(deps: {
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
         modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
+        ...(contaId ? { referenciaContaAgenda: async () => {
+          // Novo acesso sempre pertence à conta. Para quem já tinha agenda
+          // conectada sob médico, reutilizar a conexão antiga sem migrá-la.
+          const chave = cofreIdDaConta(contaId!);
+          const statusConta = await deps.consultarStatus(chave);
+          if (statusConta.tribemd.salvo || statusConta.amplimed.salvo) return chave;
+          const r = await deps.pool.query(
+            'select id from medicos where conta_id=$1 order by criado_em,id limit 21',[contaId]);
+          for (const p of r.rows) {
+            const antigo = await deps.consultarStatus(p.id);
+            if (antigo.tribemd.conectada || antigo.amplimed.conectada) return p.id;
+          }
+          return chave;
+        } } : {}),
         aoComprovante: comprovante => comprovantes.push(comprovante),
         ...(deps.descobrirProfissionais ? { descobrirProfissionais: async (medicoId: string, agenda: AgendaEscolhida) => {
           const r = await deps.descobrirProfissionais!(medicoId, agenda);
-          if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.slice(0,20) };
+          if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.filter(nomeProfissionalValido).slice(0,20) };
           return r;
         } } : {}),
         ...(deps.confirmarProfissionais ? { confirmarProfissionais: deps.confirmarProfissionais } : {}),

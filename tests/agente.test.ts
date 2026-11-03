@@ -153,18 +153,18 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
     modelo.assertComplete();
   });
 
-  it('escolha de agenda não presume que o único profissional cadastrado é o desejado', async () => {
+  it('escolha de agenda não atribui conexão a médico: libera link por conta', async () => {
     const modelo = new ScriptedModel([
       [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: null }, { callId: 'trace-3' })],
-      [assistantMessage('Perfeito, você usa TribeMD. Para qual profissional deseja configurar a agenda?')]
+      [assistantMessage('Perfeito, você usa TribeMD. Podemos conectar pelo link seguro primeiro.')] 
     ]);
-    const consultarStatus = vi.fn();
+    const consultarStatus = vi.fn().mockResolvedValue(vazia);
     const resposta = await responderAgente({
       texto: 'Eu uso tribemd', profissionais: [profissionais[0]!]
-    }, { modeloTeste: modelo, consultarStatus });
-    expect(resposta).toContain('Para qual profissional');
-    expect(consultarStatus).not.toHaveBeenCalled();
-    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('Não presumir');
+    }, { modeloTeste: modelo, consultarStatus, referenciaContaAgenda:vi.fn().mockResolvedValue('tecnico-da-conta') });
+    expect(resposta).toContain('link seguro');
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith('tecnico-da-conta');
+    expect(JSON.stringify(modelo.lastCall?.request.input)).toContain('sem escolher médico');
     modelo.assertComplete();
   });
 
