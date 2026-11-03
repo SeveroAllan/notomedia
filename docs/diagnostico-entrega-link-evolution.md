@@ -31,6 +31,36 @@ não pertence ao repositório. Conferir versão da **instância emissora**
 provedor/canal Baileys, webhook ativo, `linkPreview`, Redis e status
 conectado **somente por inspeção autorizada**, sem revelar segredos.
 
+## Nova evidência diretamente comparável (22/10/2026)
+
+O issue **#2762 da Evolution**, publicado em 22/10/2026, descreve um
+teste na versão **2.4.0-rc2** (Baileys): duas chamadas
+`POST /message/sendText/{instance}` com **mesma URL, remetente, domínio
+e destinatário**, alterando apenas `linkPreview`.
+Com `true`, a mensagem permaneceu em PENDING e não foi entregue;
+com `false`, chegou. O relato inclui uma hipótese de diferença na
+estrutura `contextInfo.externalAdReply`; **não demonstra que a
+versão instalada no Noto é essa nem que esse seja o defeito de nossa
+instância**. A versão e o payload efetivo do assistente continuam
+desconhecidos. A prioridade diagnóstica passa a ser **preview x
+caminho Baileys na versão real**, antes de atribuir ao domínio.
+
+Referência: https://github.com/evolution-foundation/evolution-api/issues/2762
+
+Também há ocorrência em **2.3.7** onde encaminhamento com JID
+`@s.whatsapp.net` falha em `ERROR` e o mesmo contato pelo identificador
+`@lid` funciona. Isso motiva examinar, **sem mudar o envio**, o
+mapeamento de destinatário PN/LID nos logs/versionamento reais.
+Referência: https://github.com/evolution-foundation/evolution-api/issues/2689
+
+**Atenção ao webhook:** a documentação oficial confirma que, ao
+habilitar `webhookByEvents=true`, `MESSAGES_UPDATE` será enviado à rota
+`/messages-update` acrescentada à URL, **não** ao receptor atual
+`/webhook/evolution`. Assim, o plano atual de ativação só é
+compatível com `webhookByEvents=false` e URL base correta; qualquer
+outra opção requer nova revisão de roteamento.
+Referência: https://github.com/evolution-foundation/evolution-docs/blob/main/docs/02-Configuration/Webhooks.md
+
 ## O que a documentação atual autoriza afirmar
 
 - `sendText` com `text` na raiz do corpo e opção `linkPreview`
