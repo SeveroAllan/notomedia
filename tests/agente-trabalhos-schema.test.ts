@@ -12,6 +12,14 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
   const dbName='noto_fila_'+randomUUID().replace(/-/g,'').slice(0,18);
   const admin=new pg.Client({connectionString:url});
   await admin.connect();
+  await admin.query([
+    'DO $ BEGIN',
+    'PERFORM pg_advisory_xact_lock(76022026);',
+    "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;",
+    "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;",
+    "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;",
+    'END $;'
+  ].join('\n'));
   const isolada=new URL(url);isolada.pathname='/'+dbName;
   let client:pg.Client|undefined;
   try{
@@ -19,19 +27,13 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
     client=new pg.Client({connectionString:isolada.toString()});
     await client.connect();
     await client.query([
-      'create table public.contas (id uuid primary key)',
-      'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id))',
-      'create table public.usuarios (id uuid primary key,conta_id uuid references public.contas(id),',
-      'auth_user_id uuid,ativo boolean not null,telefone text)',
-      "insert into public.contas(id) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),",
-      "('dddddddd-dddd-4ddd-8ddd-dddddddddddd')",
-      "insert into public.medicos(id,conta_id) values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',",
-      "'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),",
-      "('cccccccc-cccc-4ccc-8ccc-cccccccccccc','dddddddd-dddd-4ddd-8ddd-dddddddddddd')",
-      "insert into public.usuarios (id,conta_id,auth_user_id,ativo,telefone) values",
-      "('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',",
-      "'99999999-9999-4999-8999-999999999999',true,'5551999998888')"
-    ].join(' ;\n'));
+      'create table public.contas (id uuid primary key);',
+      'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id));',
+      'create table public.usuarios (id uuid primary key,conta_id uuid references public.contas(id), auth_user_id uuid,ativo boolean not null,telefone text);',
+      "insert into public.contas(id) values('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),('dddddddd-dddd-4ddd-8ddd-dddddddddddd');",
+      "insert into public.medicos(id,conta_id) values('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),('cccccccc-cccc-4ccc-8ccc-cccccccccccc','dddddddd-dddd-4ddd-8ddd-dddddddddddd');",
+      "insert into public.usuarios (id,conta_id,auth_user_id,ativo,telefone) values('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','99999999-9999-4999-8999-999999999999',true,'5551999998888');"
+    ].join('\n'));
     await client.query(sql);
     await client.query(sql);
     const props=await client.query([
