@@ -46,9 +46,22 @@ BEGIN
     AND privilege_type IN ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE')) THEN
    RAISE EXCEPTION 'COFRE_PRIVILEGIOS_ABERTOS';
  END IF;
- IF NOT EXISTS(SELECT 1 FROM pg_constraint
-   WHERE conrelid='public.cofre_links'::regclass AND conname='cofre_links_titular_exclusivo') THEN
-   RAISE EXCEPTION 'COFRE_TITULAR_INDEFINIDO';
- END IF;
+ IF NOT EXISTS(
+   SELECT 1 FROM pg_constraint c JOIN pg_attribute a
+     ON a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey)
+   WHERE c.conrelid='public.cofre_links'::regclass
+     AND c.confrelid='public.contas'::regclass
+     AND c.contype='f' AND a.attname='conta_id'
+ ) THEN RAISE EXCEPTION 'COFRE_CONTA_FK_AUSENTE'; END IF;
+ IF NOT EXISTS(
+   SELECT 1 FROM pg_constraint
+   WHERE conrelid='public.cofre_links'::regclass
+     AND conname='cofre_links_titular_exclusivo'
+     AND contype='c' AND convalidated
+     AND pg_get_constraintdef(oid) ILIKE '%medico_id IS NOT NULL%'
+     AND pg_get_constraintdef(oid) ILIKE '%conta_id IS NOT NULL%'
+     AND pg_get_constraintdef(oid) ILIKE '%medico_id IS NULL%'
+     AND pg_get_constraintdef(oid) ILIKE '%conta_id IS NULL%'
+ ) THEN RAISE EXCEPTION 'COFRE_TITULAR_ESTRUTURA_INCOMPATIVEL'; END IF;
 END $$;
 COMMIT;
