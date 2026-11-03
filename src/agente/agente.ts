@@ -20,6 +20,8 @@ export interface EntradaAgente {
   painelUrl?: string;
   contexto?: readonly string[];
   estadoConversa?: EstadoConversa;
+  /** Estado consultado em banco, sem token/URL/ID; aceite nao e entrega. */
+  situacaoUltimoLink?: {agenda:AgendaEscolhida;estado:string};
 }
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
@@ -89,6 +91,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         painel: painelSeguro(entrada.painelUrl),
         etapasPossiveis: ['identificar conta', 'escolher agenda', 'conexão em página segura', 'descobrir profissionais na agenda', 'confirmar nomes descobertos'],
         escolhasJaResolvidas: entrada.estadoConversa ?? {},
+        situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
     }
@@ -398,17 +401,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
-        return {enviado:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
+        return {aceitoParaEnvio:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
       }
       try {
         const estado=(await deps.consultarStatus(id))[agenda];
         if (estado.indisponivel) {
           registrar('solicitar_link_seguro_agenda',estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'STATUS_INDISPONIVEL',inicio);
-          return {enviado:false,motivo:estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'NAO_CONSEGUI_VERIFICAR'};
+          return {aceitoParaEnvio:false,motivo:estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'NAO_CONSEGUI_VERIFICAR'};
         }
         if (estado.conectada) {
           registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);
-          return {enviado:false,motivo:'JA_CONECTADA'};
+          return {aceitoParaEnvio:false,motivo:'JA_CONECTADA',
+            proximaEtapa:'Conexao comprovada: descobrir profissionais na agenda antes de pedir confirmacao.'};
         }
         const resultado=await deps.solicitarLinkAgenda!(id,agenda);
         registrar('solicitar_link_seguro_agenda',resultado.aceitoParaEnvio?'LINK_ACEITO_PARA_ENVIO':'FERRAMENTA_INDISPONIVEL',inicio);
@@ -419,7 +423,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           : {aceitoParaEnvio:false,entregue:false,motivo:resultado.motivo??'ENVIO_INDISPONIVEL'};
       } catch {
         registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
-        return {enviado:false,motivo:'ENVIO_INDISPONIVEL'};
+        return {aceitoParaEnvio:false,motivo:'ENVIO_INDISPONIVEL'};
       }
     }
   }));
@@ -684,7 +688,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         // nunca no contexto enviado ao modelo externo.
         estadoConversacionalVerificado: Object.fromEntries(
           Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) => campo !== 'tarefasPendentes')
-        )
+        ),
+        situacaoUltimoLink: entrada.situacaoUltimoLink??null
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
@@ -692,12 +697,23 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
-    if (resposta && !respostaCompativelComFerramentas(resposta, ferramentas)) {
+    const afirmouFuturoDepoisDoAceite = (
+      ferramentas.some(e=>e.codigo==='LINK_ACEITO_PARA_ENVIO') ||
+      entrada.situacaoUltimoLink!==undefined
+    ) && /(?:ja solicitei|acabei de solicitar|assim que (?:o link|ele) (?:estiver|ficar)|(?:vai|ira|irá) receber (?:o |um )?link|link (?:vai|sera|será) (?:ser|estar|ficar) (?:enviado|disponivel|disponível)|(?:quando|assim que) (?:estiver|ficar) disponivel)/i.test(resposta);
+    const encerramentoPrematuro = (
+      ferramentas.some(e=>['LINK_ACEITO_PARA_ENVIO','CONEXAO_EXISTENTE','CONEXAO_PENDENTE'].includes(e.codigo)) ||
+      !!entrada.situacaoUltimoLink || !!entrada.estadoConversa?.descoberta
+    ) && /(?:estou (?:a|à) disposi[cç][aã]o|quando quiser|qualquer coisa (?:me avise|estou aqui)|se precisar de algo)/i.test(resposta);
+    if (resposta && (afirmouFuturoDepoisDoAceite || encerramentoPrematuro ||
+      !respostaCompativelComFerramentas(resposta, ferramentas))) {
       registrar('RESPOSTA_BLOQUEADA', uso);
       return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
          ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
-         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO')
-         ? 'O serviço de mensagens aceitou o pedido do link seguro, mas ainda não tenho confirmação de entrega no seu WhatsApp. Não vou gerar outro link automaticamente.'
+         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO') || entrada.situacaoUltimoLink
+         ? 'O pedido do link já foi aceito pelo serviço de mensagens. Ainda não tenho confirmação de entrega. Depois da conexão, sigo para identificar os médicos da agenda; não vou gerar outro link automaticamente.'
+         : ferramentas.some(e=>e.codigo==='CONEXAO_EXISTENTE')
+         ? 'A conexão da agenda já está confirmada. O próximo passo é verificar os profissionais na fonte antes de pedir sua confirmação.'
          : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);

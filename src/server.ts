@@ -21,7 +21,7 @@ import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
 import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
-import { registrarAceiteLink, registrarEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
+import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -265,8 +265,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       return consultarEntregaLink(pool,contaId,agenda);
     },
-    atualizarEstadoLink: entrada => registrarEstadoEvolution(pool,entrada,
-      config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret),
+    atualizarEstadoLink: async entrada => {
+      const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
+        config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);
+      // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
+      console.info('NOTO_RECIBO_LINK',codigo);
+      return codigo==='ATUALIZADO';
+    },
     descobrirProfissionais: async (medicoId, agenda) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.

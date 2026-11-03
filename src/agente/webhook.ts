@@ -221,8 +221,13 @@ export function criarRouterWebhookAgente(deps: {
       let diagnostico: DiagnosticoAgente | undefined;
       const comprovantes: ComprovanteTarefa[] = [];
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
+      const agendaDoLink=agenda??estado.agendaEscolhida;
+      const ultimoLink=contaId && agendaDoLink && deps.consultarEntregaLink
+        ? await deps.consultarEntregaLink(cofreIdDaConta(contaId),agendaDoLink).catch(()=>null)
+        : null;
       const resposta = await responderAgente({
         texto, profissionais, semConta: !contaId, estadoConversa: estado,
+        ...(ultimoLink && agendaDoLink ? {situacaoUltimoLink:{agenda:agendaDoLink,estado:ultimoLink.estado}} : {}),
         painelUrl: deps.painelUrl,
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
