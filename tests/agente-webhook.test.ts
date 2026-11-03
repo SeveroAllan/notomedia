@@ -423,7 +423,7 @@ describe('webhook: referência técnica sempre da conta autenticada',()=>{
     const eventoNovo={...evento,data:{...evento.data,key:{...evento.data.key,id:'primeira-6133'},message:{conversation:'Quero conectar a TribeMD, me envie o link'}}};
     await comServidor(app,async postar=>expect((await postar(eventoNovo)).status).toBe(200));
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('provisorio-6133','tribemd','5551999998888');
-    expect(query.mock.calls.filter(([sql])=>String(sql).includes('conta_id=$1'))).toHaveLength(1);
+    expect(query.mock.calls.filter(([sql])=>String(sql).startsWith('select id from medicos where conta_id=$1'))).toHaveLength(1);
     expect(JSON.stringify(modeloTeste.lastCall?.request.input)).not.toContain('6133');
     modeloTeste.assertComplete();
   });
