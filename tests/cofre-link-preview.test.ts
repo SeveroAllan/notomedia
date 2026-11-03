@@ -136,6 +136,30 @@ describe('Link seguro: Evolution/Baileys 2.4.0-rc2 — apenas URL sem prévia',(
       {number:CONTATO,text:'texto normal'}
     ]);
   });
+  it('fallback do OTP oficial continua sem linkPreview no sendText',async()=>{
+    const capturas:Array<{url:string;corpo:Record<string,unknown>}>=[];
+    vi.stubGlobal('fetch',vi.fn(async (url:string|URL|Request,opcoes?:RequestInit)=>{
+      const destino=String(url);
+      capturas.push({url:destino,corpo:JSON.parse(String(opcoes?.body??'{}')) as Record<string,unknown>});
+      // Simula versão sem suporte a botões: fallback legado segue intacto.
+      if(destino.includes('/message/sendButtons/')) return new Response('indisponível',{status:422});
+      return new Response(JSON.stringify({key:{id:'OTP-MOCK-ID'}}),{
+        status:200,headers:{'Content-Type':'application/json'}
+      });
+    }));
+    const api=new EvolutionApiClient('https://evolution.example.invalid','chave-falsa','oficial','oficial');
+    const aviso=vi.spyOn(console,'warn').mockImplementation(()=>{});
+    try {
+      expect((await api.enviar({telefone:CONTATO,codigo:'123456'})).sucesso).toBe(true);
+      expect(capturas.map(c=>c.url)).toEqual([
+        'https://evolution.example.invalid/message/sendButtons/oficial',
+        'https://evolution.example.invalid/message/sendText/oficial'
+      ]);
+      expect(capturas[1]!.corpo).toEqual({
+        number:CONTATO,text:'Seu código de verificação é *123456*.'
+      });
+    } finally { aviso.mockRestore(); }
+  });
   it('envio comum de PDF não recebe linkPreview',async()=>{
     const {api,capturas}=simularEvolution();
     const r=await api.enviarPdf({
