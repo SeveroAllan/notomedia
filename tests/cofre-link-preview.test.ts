@@ -106,7 +106,7 @@ async function exercitarCaminho(tipo:'conta'|'medico') {
   // Nenhuma URL/token bruto foi escrita no banco; 15 minutos e regras de dono mantidos.
   expect(JSON.stringify(consultas)).not.toContain(url);
   expect(JSON.stringify(consultas)).not.toContain(token);
-  const insercao=consultas.find(c=>c.sql.includes('insert into cofre_links'))!;
+  const insercao=consultas.find(c=>/\binsert\s+into\s+cofre_links\s*\(/i.test(c.sql))!;
   expect(insercao.sql).toContain("interval '15 minutes'");
   expect(insercao.sql).toContain(tipo==='conta'?'conta_id,medico_id':'medico_id, agenda');
 }
