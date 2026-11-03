@@ -50,12 +50,15 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
         INSERT INTO public.contas VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
         INSERT INTO public.contas VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
         INSERT INTO public.medicos(id,conta_id,nome_completo) VALUES ('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Dr. Legado');
-        INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
-          VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes');
       `);
       // Executa o SQL historico integral, sem o fixture antes inventado
       // com destino_telefone e a auditoria sem CHECK.
       await banco.query(sqlHistorico);
+      await banco.query(`
+        INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
+        VALUES ('11111111-1111-4111-8111-111111111111',
+                'tribemd','legado',now()+interval '15 minutes')
+      `);
       await banco.query(sqlReconciliado);
       await banco.query(sql);
       await banco.query(sql);
