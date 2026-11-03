@@ -29,7 +29,7 @@ describe('agent.md como contrato operacional de instrucoes', () => {
       [functionCall('orientar_conexao_agenda', { agenda: 'amplimed', profissional: null }, { callId: 'curta' })],
       [assistantMessage('Entendi, Amplimed. Posso enviar o link seguro para conectar sua agenda.')] 
     ]);
-    const consultarStatus = vi.fn();
+    const consultarStatus = vi.fn().mockResolvedValue(pendente);
     const diagnostico = vi.fn();
     const resposta = await responderAgente({
       texto: 'sim', contexto: ['Você usa a Amplimed?'], profissionais

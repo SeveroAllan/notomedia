@@ -158,7 +158,7 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
       [functionCall('orientar_conexao_agenda', { agenda: 'tribemd', profissional: null }, { callId: 'trace-3' })],
       [assistantMessage('Perfeito, você usa TribeMD. Podemos conectar pelo link seguro primeiro.')] 
     ]);
-    const consultarStatus = vi.fn();
+    const consultarStatus = vi.fn().mockResolvedValue(vazia);
     const resposta = await responderAgente({
       texto: 'Eu uso tribemd', profissionais: [profissionais[0]!]
     }, { modeloTeste: modelo, consultarStatus, referenciaContaAgenda:vi.fn().mockResolvedValue('tecnico-da-conta') });
