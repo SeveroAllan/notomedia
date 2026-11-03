@@ -13,12 +13,12 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
   const admin=new pg.Client({connectionString:url});
   await admin.connect();
   await admin.query([
-    'DO $ BEGIN',
+    'DO $roles$ BEGIN',
     'PERFORM pg_advisory_xact_lock(76022026);',
     "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;",
     "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;",
     "IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;",
-    'END $;'
+    'END $roles$;'
   ].join('\n'));
   const isolada=new URL(url);isolada.pathname='/'+dbName;
   let client:pg.Client|undefined;
