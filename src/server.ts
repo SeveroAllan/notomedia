@@ -286,7 +286,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       // e a instância fiscal de pacientes permanece desligada.
       const seguro = config.envioRealAllowlist?.length === 1 &&
         gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
-      if (!seguro || !cofres.links) return { enviado: false, motivo:
+      if (!seguro || !cofres.links) return { aceitoParaEnvio: false, motivo:
         !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL' };
       const r = contaDoCofreId(medicoId)
         ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)

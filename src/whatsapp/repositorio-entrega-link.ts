@@ -4,7 +4,7 @@ import {
   diagnosticarEntregaLink, hashDestinatario,
   interpretarEstadoEvolution, type EstadoEntregaLink, type DiagnosticoEntregaLink
 } from './status-entrega-link.js';
-import { contaDoCofreId } from '../cofre/identidade-conta.js';
+
 
 type Banco = Pick<pg.Pool,'query'>;
 
