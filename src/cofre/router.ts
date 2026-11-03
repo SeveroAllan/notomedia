@@ -58,6 +58,8 @@ export function criarCofreContas(deps: {
     obterWhatsappAssistente?: () => Promise<string | null>;
     registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
+    enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
+        Promise<'enviado' | 'erro'>;
 }) {
     const env = deps.env ?? process.env, app = express();
     const homologacao = env['NOTO_PILOTO_RESTRITO'] === 'true';
@@ -89,6 +91,7 @@ export function criarCofreContas(deps: {
         if (origem && deps.enviarCofre) links = new LinksCofre({
             pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed },
             registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre,
+            enviarUrlComRecibo: deps.enviarUrlComRecibo,
             aoConcluir: deps.aoConcluirAgenda,
             aoConcluirConta: async (contaId, evento) => {
                 if (!deps.aoConcluirConta) return;

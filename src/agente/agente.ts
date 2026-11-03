@@ -27,7 +27,10 @@ export interface DependenciasAgente {
   referenciaContaAgenda?: () => Promise<string | null>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
-  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
+  solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
+  consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
+    estado:string; comId:boolean; segundosDesdeAceite:number
+  }|null>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   apiKey?: string;
@@ -407,13 +410,48 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);
           return {enviado:false,motivo:'JA_CONECTADA'};
         }
-        const enviado=await deps.solicitarLinkAgenda!(id,agenda);
-        registrar('solicitar_link_seguro_agenda',enviado.enviado?'LINK_ENVIADO':'FERRAMENTA_INDISPONIVEL',inicio);
-        if (enviado.enviado) deps.aoComprovante?.({ tipo: 'enviar_link_agenda', profissionalId: id, agenda });
-        return enviado.enviado?{enviado:true,observacao:'Link enviado por mensagem separada; não repeti-lo.'}:{enviado:false,motivo:enviado.motivo??'ENVIO_INDISPONIVEL'};
+        const resultado=await deps.solicitarLinkAgenda!(id,agenda);
+        registrar('solicitar_link_seguro_agenda',resultado.aceitoParaEnvio?'LINK_ACEITO_PARA_ENVIO':'FERRAMENTA_INDISPONIVEL',inicio);
+        // Jamais produzir comprovante de tarefa concluída a partir de HTTP 2xx.
+        return resultado.aceitoParaEnvio
+          ? {aceitoParaEnvio:true,entregue:false,
+            observacao:'A Evolution aceitou o pedido de envio. Ainda não há comprovante de entrega. Não afirmar que a pessoa recebeu, não reenviar link ou URL automaticamente.'}
+          : {aceitoParaEnvio:false,entregue:false,motivo:resultado.motivo??'ENVIO_INDISPONIVEL'};
       } catch {
         registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
         return {enviado:false,motivo:'ENVIO_INDISPONIVEL'};
+      }
+    }
+  }));
+  if (deps.consultarEntregaLink) extras.push(tool({
+    name:'consultar_status_entrega_link_agenda',
+    description:'Consulta comprovantes reais da mensagem que contem link seguro. Nao le token, URL ou senha; nao dispara reenvio.',
+    parameters:z.object({agenda:z.enum(['tribemd','amplimed'])}),
+    async execute({agenda}) {
+      const inicio=Date.now();
+      const referencia=await ancoraDaConta().catch(()=>null);
+      if(!referencia) {
+        registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONTA',inicio);
+        return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
+      }
+      try {
+        const status=await deps.consultarEntregaLink!(referencia,agenda);
+        registrar('consultar_status_entrega_link_agenda',
+          status?.estado==='ENTREGUE'?'LINK_ENTREGUE':status?.estado==='LIDO'?'LINK_LIDO':'ENTREGA_CONSULTADA',inicio);
+        if(!status) return {ok:true,estado:'SEM_EVIDENCIA',orientacao:'Nao encontrei um recibo de envio confirmado. Nao presuma entrega nem gere novo link automaticamente.'};
+        const mensagens:Record<string,string>={
+          ACEITO_SEM_CONFIRMACAO:'O pedido foi aceito pelo serviço de mensagens, mas ainda não há confirmação de entrega.',
+          AGUARDANDO_ENTREGA:'O servidor do WhatsApp aceitou a mensagem; ainda não há confirmação de entrega ao aparelho.',
+          SEM_CONFIRMACAO:'Ainda não veio confirmação de entrega. A demora não prova uma falha.',
+          ENTREGUE:'O WhatsApp confirmou a entrega ao aparelho. Isso não prova que a página foi aberta.',
+          LIDO:'O WhatsApp registrou leitura. Isso não prova que o link foi aberto ou que o login foi realizado.',
+          ERRO_COMPROVADO:'O WhatsApp informou erro para essa mensagem; não vou reenviar o link automaticamente.'
+        };
+        return {ok:true,estado:status.estado,orientacao:mensagens[status.estado]??mensagens.SEM_CONFIRMACAO,
+          semReenvioAutomatico:true};
+      } catch {
+        registrar('consultar_status_entrega_link_agenda','FERRAMENTA_INDISPONIVEL',inicio);
+        return {ok:false,motivo:'STATUS_ENTREGA_INDISPONIVEL'};
       }
     }
   }));
@@ -580,7 +618,13 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
       }
       return true;
     };
-    if (!verificarAcao(/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b/g, 'LINK_ENVIADO')) return false;
+    // Sem DELIVERY_ACK/READ na mesma mensagem, nao afirmar "enviei/recebeu".
+    if (/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b|\b(?:voce|tu)\s+(?:ja\s+)?(?:recebeu|recebeste)\s+(?:(?:o|um)\s+)?link\b/.test(oracao)) {
+      const match=oracao.match(/\b(?:enviei|mandei|enviamos|mandamos|recebeu|recebeste)\b/);
+      if (!negada(oracao.slice(0,match?.index??0).trimEnd())) return false;
+    }
+    if (/\b(?:o|esse|meu|seu)\s+link\b[^.!?;\n]{0,65}\b(?:foi|esta|chegou)\s+(?:ja\s+)?(?:entregue|recebido)\b|\b(?:whatsapp|aparelho)\s+(?:ja\s+)?(?:recebeu|confirmou a entrega)\s+(?:(?:o|do|um)\s+)?link\b/.test(oracao)
+        && !eventos.some(e=>e.codigo==='LINK_ENTREGUE'||e.codigo==='LINK_LIDO')) return false;
     if (!verificarAcao(/\b(?:registrei|atualizei|salvei)\s+(?:(?:o|um|os)\s+)?(?:crm|rqe|nome completo|dados profissionais)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:crm|rqe|dados profissionais)\s+(?:(?:ja|esta|foi)\s+)*(?:registrad[oa]s?|atualizad[oa]s?|salv[oa]s?)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:foi adicionad[oa]|foram adicionad[oa]s|cadastrei|adicionei)\b[^.!?;\n]{0,65}\b(?:conta|medic[oa]s?|profissionais)\b/g, 'PROFISSIONAIS_CONFIRMADOS')) return false;
@@ -652,6 +696,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA_BLOQUEADA', uso);
       return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
          ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
+         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO')
+         ? 'O serviço de mensagens aceitou o pedido do link seguro, mas ainda não tenho confirmação de entrega no seu WhatsApp. Não vou gerar outro link automaticamente.'
          : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);

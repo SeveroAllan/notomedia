@@ -119,7 +119,6 @@ describe('guard exige evidência das novas ações de onboarding sem bloquear ne
   it.each([
     ['CRM registrado.', 'DADOS_PROFISSIONAIS_SALVOS'],
     ['Registrei o CRM.', 'DADOS_PROFISSIONAIS_SALVOS'],
-    ['Enviei o link seguro.', 'LINK_ENVIADO'],
     ['Bruno foi adicionado à conta.', 'PROFISSIONAIS_CONFIRMADOS'],
     ['Encontrei Bruno na agenda.', 'PROFISSIONAIS_ENCONTRADOS']
   ] as const)('bloqueia afirmação %s sem ferramenta, mas permite com prova %s',(frase,codigo)=>{
@@ -127,6 +126,13 @@ describe('guard exige evidência das novas ações de onboarding sem bloquear ne
     expect(respostaCompativelComFerramentas(frase,evento(codigo))).toBe(true);
   });
 
+  it('aceite HTTP e SERVER_ACK não provam entrega do link',()=>{
+    expect(respostaCompativelComFerramentas('Enviei o link seguro.',evento('LINK_ACEITO_PARA_ENVIO'))).toBe(false);
+    expect(respostaCompativelComFerramentas('O link foi entregue.',evento('LINK_ACEITO_PARA_ENVIO'))).toBe(false);
+    expect(respostaCompativelComFerramentas('O link foi entregue.',evento('LINK_ENTREGUE'))).toBe(true);
+    expect(respostaCompativelComFerramentas('O link foi entregue.',evento('LINK_LIDO'))).toBe(true);
+    expect(respostaCompativelComFerramentas('O serviço aceitou o pedido, mas não tenho confirmação de entrega.',evento('LINK_ACEITO_PARA_ENVIO'))).toBe(true);
+  });
   it('negação isolada não bloqueia, mas não libera uma segunda ação inventada',()=>{
     expect(respostaCompativelComFerramentas('Não registrei o CRM.',[])).toBe(true);
     expect(respostaCompativelComFerramentas('Não enviei link.',[])).toBe(true);
