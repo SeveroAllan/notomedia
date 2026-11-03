@@ -146,37 +146,47 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       // Evidência estruturada de leitura produzida antes de expirar o cache:
       // o registro não contém nomes, pacientes, consultas ou credenciais.
       if (evento.diagnosticoLeitura) console.info('NOTO_AGENDA_LEITURA',JSON.stringify(evento.diagnosticoLeitura));
-      if (!config.notoAgentEnvioAtivo) return;
       const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
-      const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
+      const nomes=evento.conectado
+        ? evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20) : [];
+      // Persista o estágio da conta ANTES de notificar o WhatsApp. Mesmo
+      // se uma bolha não for aceita, a próxima mensagem retoma do estado real.
+      if (evento.conectado) {
+        const anterior=await lerEstadoConversa(pool,contaId);
+        await salvarEstadoConversa(pool,contaId,{
+          ...anterior,agendaEscolhida:evento.agenda,
+          descoberta:nomes.length?{agenda:evento.agenda,nomes}:undefined,
+          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
+          nomeProfissionalPerguntado:nomes.length===1?nomes[0]:undefined
+        });
+      }
+      if (!config.notoAgentEnvioAtivo) return;
+      const diagnostico=evento.diagnosticoLeitura;
+      const recuperacao=diagnostico?.recuperacaoPontual;
+      const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
+        recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
+        recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
       const mensagens=!evento.conectado
-        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
-        : !nomes.length
-          ? [`Conexão com a agenda ${plataforma} confirmada.`,
-            evento.agenda==='tribemd'
-              ? explicarLeituraPendente(evento.diagnosticoLeitura)
-              : 'A confirmação da conexão ainda não inclui uma lista verificada dos profissionais da Amplimed.',
-            'A identificação dos médicos é a próxima etapa. Vou preservar a conexão e não cadastrar ninguém sem confirmação.']
-          : [`Conectei sua agenda ${plataforma} pela página segura.`,
-            `Na agenda encontrei: ${nomes.join(', ')}.`,
+        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
+        : nomes.length
+          ? [`Conexão com a ${plataforma} confirmada.`,
+            ...(andamento?[andamento]:[]),
+            `Identifiquei na agenda: ${nomes.join(', ')}.`,
             nomes.length===1
               ? `Você confirma vincular ${nomes[0]} à sua conta?`
-              : 'Quais desses profissionais você confirma vincular à sua conta?'];
+              : 'Quais desses médicos você confirma vincular à sua conta?']
+          : [`Conexão com a ${plataforma} confirmada.`,
+            ...(andamento?[andamento]:[]),
+            evento.agenda==='tribemd'
+              ? explicarLeituraPendente(diagnostico)
+              : 'A conexão não trouxe uma lista autenticada de médicos na Amplimed.',
+            'Mantive a conexão e a descoberta pendente, sem vincular profissionais por suposição.'];
       for(const frase of mensagens) for(const balao of separarBaloes(frase)){
         const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
           config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
           instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
         });
         if(!enviado.sucesso) return;
-      }
-      if (evento.conectado && nomes.length){
-        const estado=await lerEstadoConversa(pool,contaId);
-        await salvarEstadoConversa(pool,contaId,{
-          ...estado,agendaEscolhida:evento.agenda,
-          descoberta:{agenda:evento.agenda,nomes},
-          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
-          ...(nomes.length===1 ? {nomeProfissionalPerguntado:nomes[0]} : {})
-        });
       }
     },
     autenticar: async token => {
