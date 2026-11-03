@@ -98,12 +98,20 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     async execute({ profissional }) {
       const inicio = Date.now();
       const registrarStatus = (codigo: CodigoFerramenta) => registrar('consultar_status_agendas', codigo, inicio);
-      if (entrada.semConta || !profissionais.length) {
+      if (entrada.semConta) {
         registrarStatus('DEPENDENCIA_CONTA');
         return { ok: false, motivo: 'SEM_CADASTRO_AUTORIZADO' };
       }
-      const resolucao = identificar(profissional, profissionais);
-      if (resolucao.erro) {
+      // Sem nome profissional confirmado, consultar o acesso da CONTA.
+      // Em contas já configuradas, mantém consulta por profissional explícito.
+      const referencia = profissional === null && !profissionais.length
+        ? await ancoraDaConta().catch(()=>null) : null;
+      if (profissional === null && !profissionais.length && !referencia) {
+        registrarStatus('DEPENDENCIA_CONTA');
+        return {ok:false,motivo:'REFERENCIA_CONTA_NAO_ENCONTRADA'};
+      }
+      const resolucao = referencia ? {encontrados:[{id:referencia,nome:'conta'}]} : identificar(profissional,profissionais);
+      if ('erro' in resolucao && resolucao.erro) {
         registrarStatus(resolucao.erro.includes('ambíguo') ? 'PROFISSIONAL_AMBIGUO' : 'PROFISSIONAL_NAO_ENCONTRADO');
         return { ok: false, motivo: resolucao.erro };
       }
