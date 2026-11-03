@@ -18,6 +18,7 @@ import {
 import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
+import { cofreIdDaConta } from '../cofre/identidade-conta.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -201,10 +202,18 @@ export function criarRouterWebhookAgente(deps: {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
         modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
         ...(contaId ? { referenciaContaAgenda: async () => {
-          // ID técnico exigido pelo esquema atual de links/cofre; não é
-          // identidade profissional confirmada e nunca é exposto ao agente.
-          const r = await deps.pool.query('select id from medicos where conta_id=$1 order by criado_em,id limit 1', [contaId]);
-          return typeof r.rows[0]?.id === 'string' ? r.rows[0].id : null;
+          // Novo acesso sempre pertence à conta. Para quem já tinha agenda
+          // conectada sob médico, reutilizar a conexão antiga sem migrá-la.
+          const chave = cofreIdDaConta(contaId);
+          const statusConta = await deps.consultarStatus(chave);
+          if (statusConta.tribemd.salvo || statusConta.amplimed.salvo) return chave;
+          const r = await deps.pool.query(
+            'select id from medicos where conta_id=$1 order by criado_em,id limit 21',[contaId]);
+          for (const p of r.rows) {
+            const antigo = await deps.consultarStatus(p.id);
+            if (antigo.tribemd.conectada || antigo.amplimed.conectada) return p.id;
+          }
+          return chave;
         } } : {}),
         aoComprovante: comprovante => comprovantes.push(comprovante),
         ...(deps.descobrirProfissionais ? { descobrirProfissionais: async (medicoId: string, agenda: AgendaEscolhida) => {

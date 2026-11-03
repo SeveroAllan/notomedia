@@ -101,7 +101,7 @@ export function criarCofreContas(deps: {
                 return;
             }
             const chaveConta = cofreIdDaConta(identidades[0].conta_id);
-            const statusConta = await cofre.status(chaveConta);
+            const statusConta = cofre ? await cofre.status(chaveConta) : {salvo:false};
             res.locals.dono = statusConta.salvo || !identidades[0].medico_id
                 ? chaveConta : identidades[0].medico_id;
             next();
