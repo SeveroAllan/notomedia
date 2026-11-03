@@ -13,6 +13,8 @@ import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js'
 import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
 import { consultarStatusAgendasInterno } from './status-interno.js';
 import { validarCofreHomologacao } from './configuracao-homologacao.js';
+import { profissionaisIdentificados } from '../agenda/profissionais-agenda.js';
+import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
@@ -39,6 +41,7 @@ export function criarCofreContas(deps: {
     env?: NodeJS.ProcessEnv;
     aoAlterarAcesso?: (medicoId: string) => void;
     aoConcluirAgenda?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
+    aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda & { nomesDescobertos: string[] }) => Promise<void>;
     obterWhatsappAssistente?: () => Promise<string | null>;
     registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
@@ -70,7 +73,23 @@ export function criarCofreContas(deps: {
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
             verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
             pedirCodigo2fa: dir2fa ? id => pedirCodigo2faPorArquivo(dir2fa, id) : undefined });
-        if (origem && deps.enviarCofre) links = new LinksCofre({ pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed }, registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre, aoConcluir: deps.aoConcluirAgenda });
+        if (origem && deps.enviarCofre) links = new LinksCofre({
+            pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed },
+            registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre,
+            aoConcluir: deps.aoConcluirAgenda,
+            aoConcluirConta: async (contaId, evento) => {
+                if (!deps.aoConcluirConta) return;
+                // A descoberta nasce exclusivamente do resultado do navegador
+                // que acabou de autenticar e ler a agenda, nunca de medicos.
+                const r=evento.conectado && evento.agenda==='tribemd'
+                  ? cofre?.resultado(cofreIdDaConta(contaId)) : null;
+                const completo=r?.cobertura==='intervalo_carregado_pelo_portal' &&
+                  !!r.agenda && !r.agenda.limitado && !!r.detalhes && !r.detalhes.pendentes;
+                const nomes= completo ? profissionaisIdentificados(r!.consultas)
+                  .filter(nomeProfissionalValido).slice(0,20) : [];
+                await deps.aoConcluirConta(contaId,{...evento,nomesDescobertos:nomes});
+            }
+        });
     }
     catch { /* Configuração indisponível afeta somente o cofre; não publicar valores. */ }
     app.use(async (req, res, next) => {

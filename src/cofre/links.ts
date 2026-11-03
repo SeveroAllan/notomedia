@@ -32,6 +32,7 @@ export class LinksCofre {
         /** Cofres de outras agendas; a chave é a agenda do link. */
         cofres?: Partial<Record<AgendaSuportada, CofreAgenda>>;
         aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
+        aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda) => Promise<void>;
         registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
@@ -246,8 +247,18 @@ export class LinksCofre {
         const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
         if (!rows.length) return;
         const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
+        // O sucesso da conta é um evento de onboarding, não de médico/emissão.
+        const contaId = contaDoCofreId(medicoId);
+        if (contaId && this.deps.aoConcluirConta) {
+            await this.deps.aoConcluirConta(contaId, {
+                agenda: link.agenda as AgendaSuportada, conectado, chave: link.id,
+                ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}),
+                ...(!conectado?{falhaAcesso}:{})
+            });
+            return;
+        }
         // Notificações fiscais/por médico não recebem o ID da conta.
-        if (this.deps.aoConcluir && !contaDoCofreId(medicoId)) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
+        if (this.deps.aoConcluir && !contaId) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
         await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}: o serviço está exigindo uma etapa de verificação a mais na sua conta (como a verificação em duas etapas, 2FA). Sem concluir essa etapa na área segura da sua conta, não consigo acessar.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.', link.contatoTelefone);
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>, contatoTelefone?:string) {
