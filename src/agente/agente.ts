@@ -34,6 +34,7 @@ export interface DependenciasAgente {
   consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
   solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null) => Promise<ResultadoEnfileirar>;
   aoTrabalho?: (trabalho: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar }) => void;
+  aoConsultaEntregaLink?: (agenda:AgendaEscolhida, estado:{estado:string;comId:boolean}|null) => void;
   aoConferencia?: (resultado: ResultadoConferencia) => void;
   aoPanorama?: (foco: string | null, resultado: ResultadoPanoramaFiscal) => void;
   /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
@@ -559,6 +560,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       try {
         const status=await deps.consultarEntregaLink!(referencia,agenda);
+        deps.aoConsultaEntregaLink?.(agenda,status);
         registrar('consultar_status_entrega_link_agenda',
           status?.estado==='ENTREGUE'?'LINK_ENTREGUE':status?.estado==='LIDO'?'LINK_LIDO':'ENTREGA_CONSULTADA',inicio);
         if(!status) return {ok:true,estado:'SEM_EVIDENCIA',orientacao:'Nao encontrei um recibo de envio confirmado. Nao presuma entrega nem gere novo link automaticamente.'};
@@ -821,6 +823,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
+  const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
   try {
@@ -840,6 +843,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         trabalhoTurno.atual=trabalho;
         deps.aoTrabalho?.(trabalho);
       },
+      aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
@@ -866,6 +870,18 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    // Recibo deste turno, não lembrança de um link antigo.
+    if (linkConsultado.atual) {
+      const {agenda,estado}=linkConsultado.atual;
+      const fonte=agenda==='tribemd'?'TribeMD':'Amplimed';
+      registrar('RESPOSTA',uso);
+      if(!estado) return 'Consultei o envio do link da '+fonte+', mas não encontrei recibo confirmado. Não vou presumir entrega nem gerar outro link.';
+      if(estado.estado==='ENTREGUE') return 'O WhatsApp confirmou a entrega do link da '+fonte+'. Ainda vou precisar da conexão autenticada para avançar.';
+      if(estado.estado==='LIDO') return 'O WhatsApp registrou a leitura do link da '+fonte+'. Isso ainda não confirma o login na agenda.';
+      if(estado.estado==='ERRO_COMPROVADO') return 'A entrega do link da '+fonte+' teve um erro comprovado. Não vou reenviar a credencial sem sua autorização.';
+      if(estado.comId) return 'O pedido do link já foi aceito pelo serviço de mensagens para a '+fonte+'. Ainda não tenho confirmação de entrega no WhatsApp.';
+      return 'Consultei o link da '+fonte+', mas a entrega ainda não está comprovada. Isso não quer dizer que houve uma falha.';
+    }
     // Longa navegação virou trabalho registrado: não aguardar 62s no Runner.
     if (trabalhoTurno.atual) {
       const t=trabalhoTurno.atual, fonte=t.agenda==='tribemd'?'TribeMD':'Amplimed';

@@ -105,8 +105,8 @@ describe('Noto Agent — Agent SDK, ferramentas e decisões em loop', () => {
     const resposta = await responderAgente({ texto: 'Veja a agenda', profissionais }, {
       modeloTeste: modelo, consultarStatus: vi.fn().mockResolvedValue(vazia)
     });
-    expect(resposta).toContain('Não consegui concluir');
-    expect(resposta).toContain('Não alterei');
+    expect(resposta).toContain('Não consegui continuar');
+    expect(resposta).not.toContain('Não alterei nenhuma configuração');
     expect(resposta).not.toContain('está conectada');
   });
 
