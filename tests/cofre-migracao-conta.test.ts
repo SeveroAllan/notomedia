@@ -8,6 +8,10 @@ import { cofreIdDaConta } from '../src/cofre/identidade-conta.js';
 
 const sql=readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261105-cofre-links-por-conta.sql',import.meta.url)), 'utf8');
+const original=readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261020-cofre-links.sql',import.meta.url)),'utf8');
+const bootstrap=readFileSync(fileURLToPath(new URL(
+  '../scripts/migrations/20261104-cofre-links-bootstrap.sql',import.meta.url)),'utf8');
 const dbUrl=process.env['NOTO_SCHEMA_TEST_DATABASE_URL'];
 const testeBanco=dbUrl ? it : it.skip;
 
@@ -43,37 +47,33 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
           status text,
           valido_ate date
         );
-        CREATE TABLE public.cofre_links (
-          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-          medico_id uuid NOT NULL REFERENCES public.medicos(id) ON DELETE CASCADE,
-          agenda text NOT NULL,
-          token_hash text NOT NULL UNIQUE,
-          expira_em timestamptz NOT NULL,
-          usado_em timestamptz,
-          criado_em timestamptz NOT NULL DEFAULT now(),
-          destino_telefone text
-        );
-        CREATE TABLE public.cofre_links_auditoria (
-          link_id uuid NOT NULL REFERENCES public.cofre_links(id) ON DELETE CASCADE,
-          evento text NOT NULL,
-          criado_em timestamptz NOT NULL DEFAULT now(),
-          PRIMARY KEY(link_id,evento)
-        );
         INSERT INTO public.contas VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
         INSERT INTO public.contas VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
         INSERT INTO public.medicos(id,conta_id,nome_completo) VALUES ('11111111-1111-4111-8111-111111111111','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Dr. Legado');
-        INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
-          VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes');
+
       `);
+      // Cenário legado: aplicar o SQL de 20261020 REAL, sem modificar o CHECK
+      // nem acrescentar destino_telefone no fixture.
+      await banco.query(original);
+      await banco.query(`INSERT INTO public.cofre_links(medico_id,agenda,token_hash,expira_em)
+        VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes')`);
+      await banco.query(`INSERT INTO public.cofre_links_auditoria(link_id,evento)
+        SELECT id,'criado' FROM public.cofre_links WHERE token_hash='legado'`);
+      await banco.query(bootstrap);
+      await banco.query(bootstrap);
       await banco.query(sql);
       await banco.query(sql);
+      await banco.query(`insert into public.cofre_links_auditoria(link_id,evento)
+        select id,'concluido' from public.cofre_links where token_hash='legado'`);
       const antes=await banco.query('select count(*)::int as n from public.medicos');
       expect(antes.rows[0].n).toBe(1);
       await banco.query(`
         insert into public.cofre_links(conta_id,medico_id,agenda,token_hash,expira_em)
         values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',null,'tribemd','nova-conta',now()+interval '15 minutes')
       `);
-      const links=await banco.query('select medico_id,conta_id,token_hash from public.cofre_links order by token_hash');
+      await banco.query(`INSERT INTO public.cofre_links(conta_id,agenda,token_hash,expira_em,destino_telefone)
+        VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','tribemd','nova-com-telefone',now()+interval '15 minutes','5551999998888')`);
+      const links=await banco.query('select medico_id,conta_id,token_hash from public.cofre_links where token_hash in (\'legado\',\'nova-conta\') order by token_hash');
       expect(links.rows).toHaveLength(2);
       expect(links.rows[0]).toMatchObject({token_hash:'legado',conta_id:null});
       expect(links.rows[1]).toMatchObject({token_hash:'nova-conta',medico_id:null,conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'});
