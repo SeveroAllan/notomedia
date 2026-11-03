@@ -8,7 +8,7 @@ const vazio={tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conecta
 const conectado={tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}};
 const origem={agendaEscolhida:'tribemd' as const};
 const nomes=['Dra. Alice Silva','Dr. Bruno Costa'];
-const modelo=(ferramenta:string,args:object,resposta:string)=>new ScriptedModel([
+const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>new ScriptedModel([
   [functionCall(ferramenta,args,{callId:'agenda-conta'})],[assistantMessage(resposta)]
 ]);
 
