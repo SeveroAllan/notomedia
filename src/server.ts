@@ -17,6 +17,7 @@ import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-
 import { separarBaloes } from './agente/baloes.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
+import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -182,12 +183,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r = await cofres.listarProfissionaisAmplimed(medicoId);
         return r.ok
           ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
-              ? r.profissionais.map(p => p.nome).filter(Boolean).slice(0, 20) : [] }
+              ? r.profissionais.map(p => p.nome).filter(nomeProfissionalValido).slice(0, 20) : [] }
           : { ok: false, motivo: r.motivo };
       }
       const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
       return r.tipo === 'consultas'
-        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).slice(0, 20) }
+        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).filter(nomeProfissionalValido).slice(0, 20) }
         : { ok: false, motivo: r.codigo };
     },
     confirmarProfissionais: async (medicoBaseId, nomes) => {
