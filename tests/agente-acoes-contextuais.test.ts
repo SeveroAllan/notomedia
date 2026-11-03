@@ -84,3 +84,45 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
     modelo.assertComplete();
   });
 });
+
+describe('estado de ação controla o relato, não uma lista de frases proibidas',()=>{
+  const variacoes=[
+    'Agora vou pedir seu link para você usar quando ele estiver pronto.',
+    'Tudo certo, o endereço chegará assim que o sistema concluir.',
+    'Fico à disposição. O acesso será encaminhado em breve.',
+    'O link poderá ser enviado em alguns instantes, aguarde.',
+    'Já está entregue e você já pode abrir a página.'
+  ];
+  for (const [indice,livre] of variacoes.entries()) {
+    it('variação de linguagem #'+(indice+1)+' não altera aceite para entrega/futuro',async()=>{
+      const modelo=new ScriptedModel([
+        [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'evidencia-'+indice})],
+        [assistantMessage(livre)]
+      ]);
+      const saida=await responderAgente({
+        texto:'Quero receber o link seguro da TribeMD',profissionais:[],
+        estadoConversa:{agendaEscolhida:'tribemd'}
+      },{
+        modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(vazio),
+        referenciaContaAgenda:ancora(),
+        solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true})
+      });
+      expect(saida).toMatch(/aceit/i);
+      expect(saida).toMatch(/não (?:há|tenho) comprovante|não tenho confirmação/i);
+      expect(saida).not.toMatch(/em breve|será encaminhado|já está entregue|vou pedir|quando ele estiver pronto/i);
+      modelo.assertComplete();
+    });
+  }
+  it('sem ação de link não desvia pergunta independente para status do Cofre',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Vamos conferir sua pergunta sobre horários.') ]]);
+    const saida=await responderAgente({
+      texto:'Você pode me explicar o horário do atendimento?',profissionais:[],
+      estadoConversa:{agendaEscolhida:'tribemd'},
+      situacaoUltimoLink:{agenda:'tribemd',estado:'SEM_CONFIRMACAO'}
+    },{
+      modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(vazio)
+    });
+    expect(saida).toBe('Vamos conferir sua pergunta sobre horários.');
+    modelo.assertComplete();
+  });
+});
