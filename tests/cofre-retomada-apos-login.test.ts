@@ -11,13 +11,15 @@ const credencial={email:'teste@example.invalid',senha:'segredo-ficticio-nunca-em
 const parcial=():ResultadoLeituraTribemd=>({
   pagina:'agenda',cobertura:'somente_linhas_visiveis',historicoCompleto:false,
   detalhe:'dados clínicos que não serão registrados',
-  consultas:[{nome:'Paciente Privado',profissional:'Dra. Alice Silva'}]
+  consultas:[{nome:'Paciente Privado',profissional:'Dra. Alice Silva',
+      ultimaConsulta:null,evidencia:'consulta_realizada_observada'}]
 });
 const completa=():ResultadoLeituraTribemd=>({
   ...parcial(),cobertura:'intervalo_carregado_pelo_portal',
   agenda:{limitado:false,intervalo:{inicio:'2026-10-01',fim:'2026-11-03'}} as any,
   detalhes:{selecionadas:1,processadas:1,pendentes:0,comPendencias:0,incluiAtendidos:true},
-  consultas:[{nome:'Paciente Privado',profissional:'Dra. Alice Silva'}]
+  consultas:[{nome:'Paciente Privado',profissional:'Dra. Alice Silva',
+      ultimaConsulta:null,evidencia:'consulta_realizada_observada'}]
 });
 const criados:Array<{cofre:CofreTribemd;diretorio:string}>=[];
 afterEach(async()=>{
