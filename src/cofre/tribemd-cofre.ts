@@ -1,4 +1,5 @@
 import type { FonteAgenda, ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
+import { mereceSegundaLeituraPontual, preferirSegundaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 export class ErroCofre extends Error {
@@ -26,6 +27,8 @@ export class CofreTribemd {
     private trabalhos = new Map<string, Trabalho>();
     private parando = false;
     private alterando = new Set<string>();
+    private recuperacoes = new Map<string,'NAO_NECESSARIA'|'MELHOROU'|'SEM_MELHORIA'|'FALHOU'>();
+    recuperacao(id:string) { return this.recuperacoes.get(id)??'NAO_NECESSARIA'; }
     private resultados = new Map<string, {
         resultado: ResultadoLeituraTribemd;
         timer: NodeJS.Timeout;
@@ -33,7 +36,7 @@ export class CofreTribemd {
     constructor(private opcoes: OpcoesCofre) { this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave); }
     private limparCredencial(p: PerfilTribemd) { p.email = ''; p.senha = ''; }
     private limparResultado(id: string) { const anterior = this.resultados.get(id); if (anterior)
-        clearTimeout(anterior.timer); this.resultados.delete(id); }
+        clearTimeout(anterior.timer); this.resultados.delete(id); this.recuperacoes.delete(id); }
     /** Quando o médico consentiu a conexão (para escolher a agenda mais recente). Não faz parte do status público. */
     async consentimentoEm(id: string): Promise<string | null> {
         const p = await this.perfis.ler(id);
@@ -124,6 +127,26 @@ export class CofreTribemd {
                 await navegador?.encerrar();
                 await autenticar(false);
                 resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
+            }
+            t.controller.signal.throwIfAborted();
+            if (!t.janela && mereceSegundaLeituraPontual(resultado) && navegador!.estaAutenticado()) {
+                // No máximo UMA leitura adicional, na mesma sessão já autenticada.
+                // Nem segundo login, nem novo trabalho, nem loop de portal.
+                try {
+                    const segunda = t.janela
+                        ? await navegador!.ler('agenda', true, t.janela)
+                        : await navegador!.ler('agenda', true);
+                    t.controller.signal.throwIfAborted();
+                    if (preferirSegundaLeitura(resultado, segunda)) {
+                        resultado = segunda;
+                        this.recuperacoes.set(id,'MELHOROU');
+                    } else {
+                        this.recuperacoes.set(id,'SEM_MELHORIA');
+                    }
+                } catch (erro) {
+                    t.controller.signal.throwIfAborted();
+                    this.recuperacoes.set(id,'FALHOU');
+                }
             }
             t.controller.signal.throwIfAborted();
             p.estado = await navegador!.perfil();

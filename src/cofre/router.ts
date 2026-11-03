@@ -13,8 +13,7 @@ import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js'
 import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
 import { consultarStatusAgendasInterno } from './status-interno.js';
 import { validarCofreHomologacao } from './configuracao-homologacao.js';
-import { profissionaisIdentificados } from '../agenda/profissionais-agenda.js';
-import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
+import { diagnosticarDescobertaTribemd, type DiagnosticoDescoberta } from '../agenda/diagnostico-descoberta.js';
 import type { ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
 /** Nomes só se o navegador autenticado tiver carregado um recorte completo.
@@ -22,11 +21,7 @@ import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
  * Nunca retorna pacientes, consultas ou identificadores técnicos.
  */
 export function nomesDaLeituraAutenticada(resultado: ResultadoLeituraTribemd | null | undefined): string[] {
-    const completo=resultado?.cobertura==='intervalo_carregado_pelo_portal' &&
-        !!resultado.agenda && !resultado.agenda.limitado &&
-        !!resultado.detalhes && !resultado.detalhes.pendentes;
-    return completo ? profissionaisIdentificados(resultado!.consultas)
-        .filter(nomeProfissionalValido).slice(0,20) : [];
+    return diagnosticarDescobertaTribemd(resultado).nomesComprovados;
 }
 
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
@@ -54,7 +49,7 @@ export function criarCofreContas(deps: {
     env?: NodeJS.ProcessEnv;
     aoAlterarAcesso?: (medicoId: string) => void;
     aoConcluirAgenda?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
-    aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda & { nomesDescobertos: string[] }) => Promise<void>;
+    aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda & { nomesDescobertos: string[]; diagnosticoLeitura?: DiagnosticoDescoberta }) => Promise<void>;
     obterWhatsappAssistente?: () => Promise<string | null>;
     registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
@@ -99,8 +94,15 @@ export function criarCofreContas(deps: {
                 // que acabou de autenticar e ler a agenda, nunca de medicos.
                 const r=evento.conectado && evento.agenda==='tribemd'
                   ? cofre?.resultado(cofreIdDaConta(contaId)) : null;
-                const nomes=nomesDaLeituraAutenticada(r);
-                await deps.aoConcluirConta(contaId,{...evento,nomesDescobertos:nomes});
+                const leitura=evento.agenda==='tribemd' ? diagnosticarDescobertaTribemd(r) : null;
+                if(leitura && cofre) leitura.diagnostico.recuperacaoPontual=
+                    cofre.recuperacao(cofreIdDaConta(contaId));
+                // Captura a razão da leitura insuficiente ANTES do TTL de 5 minutos.
+                // Apenas agregados/enums, jamais conteúdo do portal ou nomes no log.
+                await deps.aoConcluirConta(contaId,{
+                    ...evento,nomesDescobertos:leitura?.nomesComprovados??[],
+                    ...(leitura?{diagnosticoLeitura:leitura.diagnostico}:{})
+                });
             }
         });
     }

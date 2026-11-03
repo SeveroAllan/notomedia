@@ -2,7 +2,7 @@ import type pg from 'pg';
 import { gerarVariantesTelefoneBrasileiro } from './variantes-telefone-brasileiro.js';
 import {
   diagnosticarEntregaLink, hashDestinatario,
-  interpretarEstadoEvolution, type EstadoEntregaLink, type DiagnosticoEntregaLink
+  interpretarEstadoEvolutionComDiagnostico, type EstadoEntregaLink, type DiagnosticoEntregaLink
 } from './status-entrega-link.js';
 
 
@@ -24,14 +24,23 @@ export async function registrarAceiteLink(
 }
 
 /** Nao ha envio, reenvio nem consulta de URL neste handler. */
-export async function registrarEstadoEvolution(
-  pool: Banco, entrada:unknown, instanciaPermitida:string, segredo:string
-):Promise<boolean> {
-  const evento=interpretarEstadoEvolution(entrada);
-  if (!evento || evento.instancia!==instanciaPermitida) return false;
+export type ResultadoRecibo = 'ATUALIZADO'|'DUPLICADO_OU_SEM_AVANCO'|
+  'SEM_CORRELACAO'|'OUTRA_INSTANCIA'|'EVENTO_INESPERADO'|'CORPO_NAO_RECONHECIDO'|
+  'STATUS_NAO_RECONHECIDO'|'MENSAGEM_SEM_ORIGEM_COMPROVADA'|
+  'SEM_ID_DA_MENSAGEM'|'SEM_NUMERO_PN';
+/** Esta funcao devolve somente um codigo seguro para o log.
+ * Nenhum ID, telefone, nome, token ou payload sai no diagnostico.
+ */
+export async function diagnosticarRegistroEstadoEvolution(
+  pool:Banco,entrada:unknown,instanciaPermitida:string,segredo:string
+):Promise<ResultadoRecibo> {
+  const recebido=interpretarEstadoEvolutionComDiagnostico(entrada);
+  if (!recebido.ok) return recebido.motivo;
+  const evento=recebido.evento;
+  if(evento.instancia!==instanciaPermitida) return 'OUTRA_INSTANCIA';
   const candidatos=[...new Set(evento.destinatarios.flatMap(numero=>
     gerarVariantesTelefoneBrasileiro(numero)).map(t=>hashDestinatario(segredo,t)))];
-  if (!candidatos.length) return false;
+  if (!candidatos.length) return 'SEM_NUMERO_PN';
   // Unico UPDATE atomico, sem SELECT FOR UPDATE fora de uma transacao.
   // Apenas recibo da mesma instancia, identificador e hash de destinatario.
   const result=await pool.query(`
@@ -49,10 +58,32 @@ export async function registrarEstadoEvolution(
       atualizado_em=clock_timestamp()
     where instancia=$1 and mensagem_id=$2 and destino_hash=ANY($3::text[])
       and estado <> 'READ'
+      and estado IS DISTINCT FROM (
+        case
+          when estado='DELIVERY_ACK' and $4='ERROR' then estado
+          when $4='READ' then 'READ'
+          when $4='DELIVERY_ACK' then 'DELIVERY_ACK'
+          when $4='ERROR' and estado not in ('DELIVERY_ACK','READ') then 'ERROR'
+          when $4='SERVER_ACK' and estado in ('ACEITO_API','PENDING') then 'SERVER_ACK'
+          when $4='PENDING' and estado='ACEITO_API' then 'PENDING'
+          else estado
+        end
+      )
     returning link_id
   `,[evento.instancia,evento.mensagemId,candidatos,evento.estado]);
-  // Explicitamente ignorar mensagens estranhas em vez de expor a existencia do link.
-  return !!result.rows.length;
+  if(result.rows.length) return 'ATUALIZADO';
+  const anterior=await pool.query(`
+    select estado from public.cofre_links_entregas
+    where instancia=$1 and mensagem_id=$2 and destino_hash=ANY($3::text[])
+    limit 1
+  `,[evento.instancia,evento.mensagemId,candidatos]);
+  return anterior.rows.length ? 'DUPLICADO_OU_SEM_AVANCO' : 'SEM_CORRELACAO';
+}
+/** Compatibilidade: a API booleana informa somente quando houve evolucao real. */
+export async function registrarEstadoEvolution(
+  pool:Banco,entrada:unknown,instanciaPermitida:string,segredo:string
+):Promise<boolean> {
+  return (await diagnosticarRegistroEstadoEvolution(pool,entrada,instanciaPermitida,segredo))==='ATUALIZADO';
 }
 
 /** Escopo imutavel: somente links da conta validada pela camada do webhook. */

@@ -20,6 +20,8 @@ export interface EntradaAgente {
   painelUrl?: string;
   contexto?: readonly string[];
   estadoConversa?: EstadoConversa;
+  /** Estado consultado em banco, sem token/URL/ID; aceite nao e entrega. */
+  situacaoUltimoLink?: {agenda:AgendaEscolhida;estado:string};
 }
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
@@ -89,6 +91,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         painel: painelSeguro(entrada.painelUrl),
         etapasPossiveis: ['identificar conta', 'escolher agenda', 'conexão em página segura', 'descobrir profissionais na agenda', 'confirmar nomes descobertos'],
         escolhasJaResolvidas: entrada.estadoConversa ?? {},
+        situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
     }
@@ -398,17 +401,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
-        return {enviado:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
+        return {aceitoParaEnvio:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
       }
       try {
         const estado=(await deps.consultarStatus(id))[agenda];
         if (estado.indisponivel) {
           registrar('solicitar_link_seguro_agenda',estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'STATUS_INDISPONIVEL',inicio);
-          return {enviado:false,motivo:estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'NAO_CONSEGUI_VERIFICAR'};
+          return {aceitoParaEnvio:false,motivo:estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'NAO_CONSEGUI_VERIFICAR'};
         }
         if (estado.conectada) {
           registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);
-          return {enviado:false,motivo:'JA_CONECTADA'};
+          return {aceitoParaEnvio:false,motivo:'JA_CONECTADA',
+            proximaEtapa:'Conexao comprovada: descobrir profissionais na agenda antes de pedir confirmacao.'};
         }
         const resultado=await deps.solicitarLinkAgenda!(id,agenda);
         registrar('solicitar_link_seguro_agenda',resultado.aceitoParaEnvio?'LINK_ACEITO_PARA_ENVIO':'FERRAMENTA_INDISPONIVEL',inicio);
@@ -419,7 +423,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           : {aceitoParaEnvio:false,entregue:false,motivo:resultado.motivo??'ENVIO_INDISPONIVEL'};
       } catch {
         registrar('solicitar_link_seguro_agenda','FERRAMENTA_INDISPONIVEL',inicio);
-        return {enviado:false,motivo:'ENVIO_INDISPONIVEL'};
+        return {aceitoParaEnvio:false,motivo:'ENVIO_INDISPONIVEL'};
       }
     }
   }));
@@ -645,6 +649,71 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
   return true;
 }
 
+/**
+ * O transportador e as ferramentas são a autoridade dos MARCOS de ação.
+ * Para transições executadas neste turno, o modelo não narra o estado do
+ * transporte: a resposta vem de evidência tipada, não de frases proibidas.
+ * Fora dessas transições, preserva integralmente a conversa livre.
+ */
+export function acompanhamentoVerificado(
+  entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
+): string | null {
+  const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
+  const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
+  const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
+  if(tem('LINK_ACEITO_PARA_ENVIO')) return [
+    `O serviço de mensagens aceitou o pedido do link seguro para a ${nomeAgenda}.`,
+    'O link já foi aceito para envio, mas não tenho confirmação de entrega no WhatsApp.',
+    'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
+  ].join(' ');
+  if(tem('CONEXAO_EXISTENTE')) return [
+    `A agenda ${nomeAgenda} já está conectada.`,
+    'Antes de vincular qualquer médico, precisamos verificar os profissionais na fonte.',
+    'Nenhum profissional será adicionado sem sua confirmação.'
+  ].join(' ');
+  if(tem('LINK_ENTREGUE')||tem('LINK_LIDO')) return [
+    tem('LINK_LIDO')?'O WhatsApp registrou a leitura do link seguro.':'O WhatsApp confirmou a entrega do link seguro.',
+    'Isso não confirma o login na agenda.',
+    'A verificação dos médicos começa depois da conexão autenticada.'
+  ].join(' ');
+  // Acompanhamento entre turnos só trata a mesma tarefa de conexão.
+  // Reconhece o ASSUNTO, não usa regex de promessas proibidas.
+  const falandoDaAgenda=/\b(?:link|agenda|conex[aã]o|conectar|conectei|acesso|tribemd|amplimed|m[eé]dic[oa]s?|profissionais)\b/i.test(entrada.texto);
+  if(falandoDaAgenda && entrada.estadoConversa?.faseAgenda==='DESCOBERTA_PENDENTE') {
+    const causa=entrada.estadoConversa.causaDescoberta;
+    const detalhe=causa==='COBERTURA_PARCIAL'?'a cobertura ainda é parcial':
+      causa==='AGENDA_LIMITADA'?'o recorte consultado ficou limitado':
+      causa==='DETALHES_PENDENTES'?'alguns detalhes ainda estão pendentes':
+      causa==='DETALHES_NAO_DISPONIVEIS'?'os detalhes necessários não vieram na leitura':
+      causa==='SEM_CONSULTAS_NO_RECORTE'?'não houve consultas verificáveis no recorte':
+      causa==='SEM_IDENTIFICACAO_PROFISSIONAL'?'as consultas não identificaram o profissional':
+      causa==='NOMES_NAO_VALIDOS'?'os nomes observados não passaram na validação':
+      'a leitura não trouxe evidência suficiente';
+    return [
+      `A conexão com a ${nomeAgenda} está confirmada, mas ${detalhe}.`,
+      'Já usei a leitura disponível e não vou inventar médicos nem repetir acessos ao portal em sequência.',
+      'A confirmação dos profissionais permanece pendente.'
+    ].join(' ');
+  }
+  if(falandoDaAgenda && entrada.situacaoUltimoLink && !entrada.estadoConversa?.descoberta) {
+    const estado=entrada.situacaoUltimoLink.estado;
+    if(estado==='ENTREGUE'||estado==='LIDO') return [
+      estado==='LIDO'?'O WhatsApp registrou a leitura do último link.':'O WhatsApp confirmou a entrega do último link.',
+      'A entrega não comprova que o login no portal aconteceu; ainda preciso dessa evidência para avançar.'
+    ].join(' ');
+    if(estado==='ERRO_COMPROVADO') return [
+      'O WhatsApp registrou um erro para a mensagem do link.',
+      'Não vou enviar outro link sensível automaticamente.'
+    ].join(' ');
+    return [
+      `O pedido do link já foi aceito pelo serviço de mensagens para a ${nomeAgenda}.`,
+      'Ainda não tenho confirmação de entrega ao aparelho.',
+      'Não vou criar nem reenviar outro link por conta própria.'
+    ].join(' ');
+  }
+  return null;
+}
+
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
@@ -684,7 +753,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         // nunca no contexto enviado ao modelo externo.
         estadoConversacionalVerificado: Object.fromEntries(
           Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) => campo !== 'tarefasPendentes')
-        )
+        ),
+        situacaoUltimoLink: entrada.situacaoUltimoLink??null
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
@@ -692,13 +762,22 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
-    if (resposta && !respostaCompativelComFerramentas(resposta, ferramentas)) {
-      registrar('RESPOSTA_BLOQUEADA', uso);
-      return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
-         ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
-         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO')
-         ? 'O serviço de mensagens aceitou o pedido do link seguro, mas ainda não tenho confirmação de entrega no seu WhatsApp. Não vou gerar outro link automaticamente.'
-         : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
+    const relato=acompanhamentoVerificado(entrada,ferramentas);
+    if(relato) {
+      // A abertura natural é livre, mas o relato da ação provém do
+      // estado comprovado. Saída fora do contrato usa só o relato seguro.
+      const partes=resposta.split('[[RESULTADO_ACAO]]');
+      const introducao=partes.length===2 ? partes[0]!.trim() : '';
+      const narracao=introducao.length>0 && introducao.length<=120
+        ? introducao+' '+relato : relato;
+      registrar('RESPOSTA',uso);
+      return narracao;
+    }
+    if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
+      registrar('RESPOSTA_BLOQUEADA',uso);
+      return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
+        ? 'A integração ainda não está configurada neste ambiente. É uma pendência local do Noto. Sua senha só entra na página segura.'
+        : 'Não consegui confirmar isso pelas verificações disponíveis. Vou preservar a etapa atual sem afirmar que a ação foi concluída.';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';

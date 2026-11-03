@@ -19,8 +19,9 @@ import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-convers
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
+import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
-import { registrarAceiteLink, registrarEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
+import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -131,7 +132,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     aoConcluirConta: async (contaId, evento) => {
       // Resultado de uma sessão REAL do navegador. Não atribui identidade
       // clínica; apenas permite ao operador confirmar os nomes observados.
-      if (!config.notoPilotoRestrito || !config.notoAgentEnvioAtivo) return;
+      if (!config.notoPilotoRestrito) return;
       const telefone=evento.contatoTelefone ?? '';
       const variantes=gerarVariantesTelefoneBrasileiro(telefone);
       const allowlist=config.envioRealAllowlist ?? [];
@@ -142,34 +143,52 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           and regexp_replace(telefone,'[^0-9]','','g')=any($2::text[])
         limit 1`,[contaId,variantes]);
       if (autor.rows.length!==1) return;
+      // Evidência estruturada de leitura produzida antes de expirar o cache:
+      // o registro não contém nomes, pacientes, consultas ou credenciais.
+      if (evento.diagnosticoLeitura) console.info('NOTO_AGENDA_LEITURA',JSON.stringify(evento.diagnosticoLeitura));
       const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
-      const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
+      const nomes=evento.conectado
+        ? evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20) : [];
+      // Persista o estágio da conta ANTES de notificar o WhatsApp. Mesmo
+      // se uma bolha não for aceita, a próxima mensagem retoma do estado real.
+      if (evento.conectado) {
+        const anterior=await lerEstadoConversa(pool,contaId);
+        await salvarEstadoConversa(pool,contaId,{
+          ...anterior,agendaEscolhida:evento.agenda,
+          faseAgenda:nomes.length?'CONFIRMACAO_PENDENTE':'DESCOBERTA_PENDENTE',
+          causaDescoberta:nomes.length?undefined:evento.diagnosticoLeitura?.causas[0],
+          descoberta:nomes.length?{agenda:evento.agenda,nomes}:undefined,
+          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
+          nomeProfissionalPerguntado:nomes.length===1?nomes[0]:undefined
+        });
+      }
+      if (!config.notoAgentEnvioAtivo) return;
+      const diagnostico=evento.diagnosticoLeitura;
+      const recuperacao=diagnostico?.recuperacaoPontual;
+      const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
+        recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
+        recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
       const mensagens=!evento.conectado
-        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
-        : !nomes.length
-          ? [`Conectei sua agenda ${plataforma} pela página segura.`,
-            'Ainda não consegui identificar profissionais com segurança na leitura da agenda.',
-            'Posso consultar novamente quando você quiser.']
-          : [`Conectei sua agenda ${plataforma} pela página segura.`,
-            `Na agenda encontrei: ${nomes.join(', ')}.`,
+        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
+        : nomes.length
+          ? [`Conexão com a ${plataforma} confirmada.`,
+            ...(andamento?[andamento]:[]),
+            `Identifiquei na agenda: ${nomes.join(', ')}.`,
             nomes.length===1
               ? `Você confirma vincular ${nomes[0]} à sua conta?`
-              : 'Quais desses profissionais você confirma vincular à sua conta?'];
+              : 'Quais desses médicos você confirma vincular à sua conta?']
+          : [`Conexão com a ${plataforma} confirmada.`,
+            ...(andamento?[andamento]:[]),
+            evento.agenda==='tribemd'
+              ? explicarLeituraPendente(diagnostico)
+              : 'A conexão não trouxe uma lista autenticada de médicos na Amplimed.',
+            'Mantive a conexão e a descoberta pendente, sem vincular profissionais por suposição.'];
       for(const frase of mensagens) for(const balao of separarBaloes(frase)){
         const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
           config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
           instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
         });
         if(!enviado.sucesso) return;
-      }
-      if (evento.conectado && nomes.length){
-        const estado=await lerEstadoConversa(pool,contaId);
-        await salvarEstadoConversa(pool,contaId,{
-          ...estado,agendaEscolhida:evento.agenda,
-          descoberta:{agenda:evento.agenda,nomes},
-          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
-          ...(nomes.length===1 ? {nomeProfissionalPerguntado:nomes[0]} : {})
-        });
       }
     },
     autenticar: async token => {
@@ -258,8 +277,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       return consultarEntregaLink(pool,contaId,agenda);
     },
-    atualizarEstadoLink: entrada => registrarEstadoEvolution(pool,entrada,
-      config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret),
+    atualizarEstadoLink: async entrada => {
+      const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
+        config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);
+      // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
+      console.info('NOTO_RECIBO_LINK',codigo);
+      return codigo==='ATUALIZADO';
+    },
     descobrirProfissionais: async (medicoId, agenda) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.

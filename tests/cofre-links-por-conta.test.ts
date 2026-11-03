@@ -79,6 +79,18 @@ describe('Cofre da conta sem qualquer registro em medicos',()=>{
     await t.links.concluir(cofreIdDaConta(A),true);
     expect(t.aoConcluirConta).toHaveBeenCalledOnce();
   });
+  it('callback repetido em paralelo conclui uma única vez, sem segundo onboarding',async()=>{
+    const t=montar();
+    await t.links.enviarCredencial('A'.repeat(43),{
+      email:'teste@example.invalid',senha:'senha-ficticia',consentimento:'tribemd-leitura-v1'
+    });
+    await Promise.all([t.links.concluir(cofreIdDaConta(A),true),
+      t.links.concluir(cofreIdDaConta(A),true),
+      t.links.concluir(cofreIdDaConta(A),true)]);
+    expect(t.aoConcluirConta).toHaveBeenCalledOnce();
+    expect(t.enviar).not.toHaveBeenCalled();
+    expect(t.chamadas.filter(c=>c.sql.includes("'concluido') on conflict"))).toHaveLength(1);
+  });
   it('não permite gerar link quando cofre já está conectado',async()=>{
     const t=montar();
     t.cofre.status.mockResolvedValue({estado:'conectado',ativo:true});
