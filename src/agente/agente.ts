@@ -2,6 +2,7 @@ import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents'
 import { z } from 'zod';
 import { normalizarNomeMedico, linkCertificadoMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
+import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
 import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
@@ -22,6 +23,8 @@ export interface EntradaAgente {
 }
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
+  /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
+  referenciaContaAgenda?: () => Promise<string | null>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ enviado: boolean; motivo?: string }>;
@@ -65,7 +68,9 @@ function identificar(nome: string | null, profissionais: ProfissionalAgente[]): 
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
-  const profissionais = entrada.profissionais.filter(p => p.id && p.nome.trim()).slice(0, 21);
+  const profissionais = entrada.profissionais.filter(p => p.id && nomeProfissionalValido(p.nome)).slice(0, 21);
+  // Nunca expor o ID técnico ao modelo, nem usá-lo como nome de profissional.
+  const ancoraDaConta = async () => entrada.semConta ? null : await deps.referenciaContaAgenda?.() ?? null;
   const registrar = (nome: FerramentaNoto, codigo: CodigoFerramenta, inicio: number) =>
     deps.registrarFerramenta?.({ nome, codigo, duracaoMs: Math.max(0, Date.now() - inicio) });
   const consultarConta = tool({
@@ -79,7 +84,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         contaCadastrada: !entrada.semConta,
         profissionais: entrada.semConta ? [] : profissionais.map(p => p.nome),
         painel: painelSeguro(entrada.painelUrl),
-        etapasPossiveis: ['identificar conta', 'identificar profissional', 'escolher agenda', 'conexão em página segura'],
+        etapasPossiveis: ['identificar conta', 'escolher agenda', 'conexão em página segura', 'descobrir profissionais na agenda', 'confirmar nomes descobertos'],
         escolhasJaResolvidas: entrada.estadoConversa ?? {},
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
@@ -93,12 +98,20 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     async execute({ profissional }) {
       const inicio = Date.now();
       const registrarStatus = (codigo: CodigoFerramenta) => registrar('consultar_status_agendas', codigo, inicio);
-      if (entrada.semConta || !profissionais.length) {
+      if (entrada.semConta) {
         registrarStatus('DEPENDENCIA_CONTA');
         return { ok: false, motivo: 'SEM_CADASTRO_AUTORIZADO' };
       }
-      const resolucao = identificar(profissional, profissionais);
-      if (resolucao.erro) {
+      // Sem nome profissional confirmado, consultar o acesso da CONTA.
+      // Em contas já configuradas, mantém consulta por profissional explícito.
+      const referencia = profissional === null && !profissionais.length
+        ? await ancoraDaConta().catch(()=>null) : null;
+      if (profissional === null && !profissionais.length && !referencia) {
+        registrarStatus('DEPENDENCIA_CONTA');
+        return {ok:false,motivo:'REFERENCIA_CONTA_NAO_ENCONTRADA'};
+      }
+      const resolucao = referencia ? {encontrados:[{id:referencia,nome:'conta'}]} : identificar(profissional,profissionais);
+      if ('erro' in resolucao && resolucao.erro) {
         registrarStatus(resolucao.erro.includes('ambíguo') ? 'PROFISSIONAL_AMBIGUO' : 'PROFISSIONAL_NAO_ENCONTRADO');
         return { ok: false, motivo: resolucao.erro };
       }
@@ -162,16 +175,43 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         log('DEPENDENCIA_CONTA');
         return { pronto: false, proximaEtapa: 'Vincular este WhatsApp a uma conta ' + painel, agendaEscolhida: plataforma };
       }
-      if (!profissionais.length) {
-        log('DEPENDENCIA_PROFISSIONAL');
-        return { pronto: false, proximaEtapa: 'Identificar e cadastrar o profissional ' + painel, agendaEscolhida: plataforma };
-      }
       if (profissional === null && entrada.estadoConversa?.profissionalConfirmadoId) {
         profissional = profissionais.find(p => p.id === entrada.estadoConversa?.profissionalConfirmadoId)?.nome ?? null;
       }
+      // Primeira conexão é da CONTA. O esquema de links exige um medico_id
+      // como referência técnica de armazenamento, não identidade profissional.
       if (profissional === null) {
-        log('DEPENDENCIA_PROFISSIONAL');
-        return { pronto: false, agendaEscolhida: plataforma, proximaEtapa: 'Perguntar para qual profissional deseja configurar a agenda: ' + profissionais.map(p => p.nome).join(', ') + '. Não presumir que pertence ao único cadastro.' };
+        const referencia = await ancoraDaConta().catch(() => null);
+        if (!referencia) {
+          log('DEPENDENCIA_CONTA');
+          return { pronto: false, agendaEscolhida: plataforma,
+            proximaEtapa: 'A conta não tem referência técnica para o Cofre. Não criar nem escolher automaticamente um médico.' };
+        }
+        try {
+          const estado = (await deps.consultarStatus(referencia))[agenda];
+          if (estado.motivo === 'INTEGRACAO_NAO_CONFIGURADA') {
+            log('INTEGRACAO_NAO_CONFIGURADA');
+            return { pronto: false, agendaEscolhida: plataforma, codigo: 'INTEGRACAO_NAO_CONFIGURADA',
+              proximaEtapa: 'A integração ainda não está configurada neste ambiente do Noto. Não é falha da plataforma e repetir não resolverá.' };
+          }
+          if (estado.indisponivel) {
+            log('STATUS_INDISPONIVEL');
+            return { pronto: false, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
+              proximaEtapa: 'Não consegui conferir a conexão agora; não presumir desconexão.' };
+          }
+          if (estado.conectada) {
+            log('CONEXAO_EXISTENTE');
+            return { pronto: true, agendaEscolhida: plataforma,
+              orientacao: 'A agenda da conta já está conectada. Chame descobrir_profissionais_agenda com profissional=null para consultar nomes reais. Só depois peça confirmação.' };
+          }
+          log('CONEXAO_PENDENTE');
+          return { pronto: false, agendaEscolhida: plataforma,
+            proximaEtapa: 'Pode solicitar o link seguro para esta conta sem escolher médico. Chame solicitar_link_seguro_agenda com profissional=null; depois do login pelo navegador, descubra nomes reais e peça confirmação. Senha somente na página segura ' + painel + '.' };
+        } catch {
+          log('STATUS_INDISPONIVEL');
+          return { pronto: false, agendaEscolhida: plataforma, codigo: 'STATUS_INDISPONIVEL',
+            proximaEtapa: 'Não consegui verificar a conexão agora. Nenhum médico foi selecionado.' };
+        }
       }
       const resolucao = identificar(profissional, profissionais);
       if (resolucao.erro) {
@@ -232,16 +272,20 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   const extras: ReturnType<typeof tool>[] = [];
   if (deps.descobrirProfissionais) extras.push(tool({
     name: 'descobrir_profissionais_agenda',
-    description: 'Somente se a conexão da agenda estiver confirmada, lê nomes dos profissionais identificados. Não revela pacientes e não presume correspondência com cadastro.',
-    parameters: z.object({ agenda: z.enum(['tribemd','amplimed']), profissional: z.string() }),
+    description: 'Após conexão comprovada, consulta nomes REAIS na agenda. profissional=null usa somente referência técnica da conta (sem escolher médico). Nunca revela pacientes.',
+    parameters: z.object({ agenda: z.enum(['tribemd','amplimed']), profissional: z.string().nullable() }),
     async execute({agenda, profissional}) {
       const inicio=Date.now();
-      const r=identificar(profissional, profissionais);
-      if (r.erro || r.encontrados.length!==1) {
+      const r=profissional === null ? null : identificar(profissional,profissionais);
+      if (r && (r.erro || r.encontrados.length!==1)) {
         registrar('descobrir_profissionais_agenda','PROFISSIONAL_NAO_ENCONTRADO',inicio);
         return {ok:false,motivo:'PROFISSIONAL_NAO_RESOLVIDO'};
       }
-      const id=r.encontrados[0]!.id;
+      const id=r ? r.encontrados[0]!.id : await ancoraDaConta().catch(()=>null);
+      if (!id) {
+        registrar('descobrir_profissionais_agenda','DEPENDENCIA_CONTA',inicio);
+        return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
+      }
       try {
         const status=(await deps.consultarStatus(id))[agenda];
         if (status.indisponivel) {
@@ -255,9 +299,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA'};
         }
         const resultado=await deps.descobrirProfissionais!(id,agenda);
-        registrar('descobrir_profissionais_agenda',resultado.ok?'PROFISSIONAIS_ENCONTRADOS':'STATUS_INDISPONIVEL',inicio);
-        if (resultado.ok) deps.aoComprovante?.({ tipo: 'descobrir_profissionais', profissionalId: id, agenda });
-        return resultado.ok ? {ok:true,nomes:(resultado.nomes??[]).slice(0,20), aviso:'Nomes vistos na fonte, ainda não vinculados à conta.'}
+        const nomes = resultado.ok ? (resultado.nomes??[]).filter(nomeProfissionalValido).slice(0,20) : [];
+        registrar('descobrir_profissionais_agenda',resultado.ok ? (nomes.length ? 'PROFISSIONAIS_ENCONTRADOS' : 'PROFISSIONAIS_NAO_IDENTIFICADOS') : 'STATUS_INDISPONIVEL',inicio);
+        if (resultado.ok && nomes.length) deps.aoComprovante?.({ tipo: 'descobrir_profissionais', profissionalId: id, agenda });
+        return resultado.ok ? {ok:true,nomes, aviso:'Nomes da leitura real da agenda, ainda não confirmados nem vinculados. Não apresentar cadastro técnico.'}
           : {ok:false,motivo:resultado.motivo??'LEITURA_INDISPONIVEL'};
       } catch {
         registrar('descobrir_profissionais_agenda','STATUS_INDISPONIVEL',inicio);
@@ -267,32 +312,42 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   }));
   if (deps.confirmarProfissionais && deps.descobrirProfissionais) extras.push(tool({
     name:'confirmar_profissionais_descobertos',
-    description:'Somente com nomes verificados na fonte e confirmação explícita da pessoa, vincula profissionais à mesma conta. Não presume que o profissional da agenda já é o cadastrado e não herda dados fiscais ou certificado.',
+    description:'Após nomes vistos na agenda real e confirmação explícita, vincula à conta. profissionalBase=null usa referência técnica da conta. Nunca herda fiscal ou certificado.',
     parameters:z.object({
       agenda:z.enum(['tribemd','amplimed']),
-      profissionalBase:z.string(),
+      profissionalBase:z.string().nullable(),
       nomes:z.array(z.string().trim().min(2).max(150)).min(1).max(10)
     }),
     async execute({agenda,profissionalBase,nomes}) {
       const inicio=Date.now();
-      const base=identificar(profissionalBase,profissionais);
-      if(base.encontrados.length!==1) {
+      // A primeira vinculação exige descoberta verificada em turno anterior
+      // nesta mesma conta/conversa, seguida de confirmação explícita.
+      if (profissionalBase === null && (
+        entrada.estadoConversa?.descoberta?.agenda !== agenda ||
+        !nomes.every(nome => entrada.estadoConversa!.descoberta!.nomes.some(
+          visto => normalizarNomeMedico(visto) === normalizarNomeMedico(nome))))) {
+        registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:'DESCOBERTA_PREVIA_NECESSARIA'};
+      }
+      const base=profissionalBase === null ? null : identificar(profissionalBase,profissionais);
+      const baseId=base ? base.encontrados.length===1 ? base.encontrados[0]!.id : null
+        : await ancoraDaConta().catch(()=>null);
+      if(!baseId) {
         registrar('confirmar_profissionais_descobertos','PROFISSIONAL_NAO_ENCONTRADO',inicio);
         return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
       }
-      const medico=base.encontrados[0]!;
       try {
-        const estado=(await deps.consultarStatus(medico.id))[agenda];
+        const estado=(await deps.consultarStatus(baseId))[agenda];
         if(estado.indisponivel || !estado.conectada) {
           registrar('confirmar_profissionais_descobertos',estado.indisponivel?'STATUS_INDISPONIVEL':'CONEXAO_PENDENTE',inicio);
           return {ok:false,motivo:estado.indisponivel?'CONSULTA_INDISPONIVEL':'AGENDA_SEM_CONEXAO'};
         }
-        const atual=await deps.descobrirProfissionais!(medico.id,agenda);
+        const atual=await deps.descobrirProfissionais!(baseId,agenda);
         if(!atual.ok || !atual.nomes?.length) {
           registrar('confirmar_profissionais_descobertos','STATUS_INDISPONIVEL',inicio);
           return {ok:false,motivo:'IDENTIDADES_NAO_VERIFICADAS'};
         }
-        const comprovados=nomes.map(n=>atual.nomes!.filter(c=>normalizarNomeMedico(c)===normalizarNomeMedico(n)));
+        const comprovados=nomes.map(n=>atual.nomes!.filter(c=>nomeProfissionalValido(c) && normalizarNomeMedico(c)===normalizarNomeMedico(n)));
         if(comprovados.some(c=>c.length!==1)) {
           registrar('confirmar_profissionais_descobertos','PROFISSIONAL_AMBIGUO',inicio);
           return {ok:false,motivo:'NOME_NAO_CONFERIDO_NA_FONTE'};
@@ -313,9 +368,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           registrar('confirmar_profissionais_descobertos','DEPENDENCIA_PROFISSIONAL',inicio);
           return {ok:false,motivo:'CONFIRMACAO_EXPLICITA_NECESSARIA'};
         }
-        const resultado=await deps.confirmarProfissionais!(medico.id,comprovados.map(c=>c[0]!));
+        const resultado=await deps.confirmarProfissionais!(baseId,comprovados.map(c=>c[0]!));
         registrar('confirmar_profissionais_descobertos',resultado.ok?'PROFISSIONAIS_CONFIRMADOS':'PROFISSIONAL_AMBIGUO',inicio);
-        if (resultado.ok) deps.aoComprovante?.({ tipo: 'vincular_profissionais', profissionalId: medico.id, agenda });
+        if (resultado.ok) deps.aoComprovante?.({ tipo: 'vincular_profissionais', profissionalId: baseId, agenda });
         return resultado.ok ? {ok:true,nomes:resultado.nomes??[],fiscalConfirmado:false,certificadosHerdados:false}
           : {ok:false,motivo:resultado.motivo??'FALHA_CONFIRMAR'};
       }catch {
@@ -326,25 +381,27 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   }));
   if (deps.solicitarLinkAgenda) extras.push(tool({
     name: 'solicitar_link_seguro_agenda',
-    description: 'Após escolha explícita de agenda e profissional autorizado, envia link de uso único ao próprio operador verificado. Não recebe senhas na conversa.',
-    parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string() }),
+    description: 'Após escolha explícita de agenda, envia link único ao operador autorizado. profissional=null permite primeira conexão pela CONTA, sem médico conhecido. Nunca recebe senha.',
+    parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string().nullable() }),
     async execute({agenda,profissional}) {
       const inicio=Date.now();
-      const r=identificar(profissional,profissionais);
-      const id=r.encontrados[0]?.id;
-      const escolhido=entrada.estadoConversa?.profissionalConfirmadoId===id ||
-        normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional));
+      const r=profissional === null ? null : identificar(profissional,profissionais);
+      const id=r ? r.encontrados.length===1 ? r.encontrados[0]!.id : null
+        : await ancoraDaConta().catch(()=>null);
+      const escolhido=profissional === null || (r?.encontrados.length===1 &&
+        (entrada.estadoConversa?.profissionalConfirmadoId===id ||
+        normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional))));
       const agendaEscolhida=entrada.estadoConversa?.agendaEscolhida===agenda ||
-        normalizarNomeMedico(entrada.texto).includes(agenda);
-      if (!id || r.encontrados.length!==1 || !escolhido || !agendaEscolhida) {
-        registrar('solicitar_link_seguro_agenda','DEPENDENCIA_PROFISSIONAL',inicio);
-        return {enviado:false,motivo:'ESCOLHA_DE_AGENDA_E_PROFISSIONAL_NECESSARIA'};
+        (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
+      if (!id || !escolhido || !agendaEscolhida) {
+        registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
+        return {enviado:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
       }
       try {
         const estado=(await deps.consultarStatus(id))[agenda];
         if (estado.indisponivel) {
-          registrar('solicitar_link_seguro_agenda','STATUS_INDISPONIVEL',inicio);
-          return {enviado:false,motivo:'NAO_CONSEGUI_VERIFICAR'};
+          registrar('solicitar_link_seguro_agenda',estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'STATUS_INDISPONIVEL',inicio);
+          return {enviado:false,motivo:estado.motivo==='INTEGRACAO_NAO_CONFIGURADA'?'INTEGRACAO_NAO_CONFIGURADA':'NAO_CONSEGUI_VERIFICAR'};
         }
         if (estado.conectada) {
           registrar('solicitar_link_seguro_agenda','CONEXAO_EXISTENTE',inicio);

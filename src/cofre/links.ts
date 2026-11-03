@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import type pg from 'pg';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { AGENDAS_SUPORTADAS, agendaSuportada, type AgendaSuportada } from '../agenda/agendas-suportadas.js';
+import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
 
 export interface ContextoConexaoAgenda {
     aguardandoConexao: boolean;
@@ -31,6 +32,7 @@ export class LinksCofre {
         /** Cofres de outras agendas; a chave é a agenda do link. */
         cofres?: Partial<Record<AgendaSuportada, CofreAgenda>>;
         aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
+        aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda) => Promise<void>;
         registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
     }) {}
@@ -126,6 +128,71 @@ export class LinksCofre {
         } finally { token = ''; }
     }
 
+    /** Novo vínculo: conta autenticada -> Cofre. Não requer nem cria medicos.
+     * A FK de conta_id e a chave de envelope permanecem independentes de identidade clínica.
+     */
+    async solicitarLinkConta(contaId: string, agenda: string, contatoTelefone: string) {
+        const cofreAgenda = this.cofreDe(agenda);
+        if (!cofreAgenda) return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
+        const chaveCofre = cofreIdDaConta(contaId);
+        const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone);
+        if (!variantes.length) return { ok: false, motivo: 'OPERADOR_NAO_AUTORIZADO' };
+        const cliente = await this.deps.pool.connect();
+        let link: { id: string };
+        let token = '', confirmou = false;
+        try {
+            await cliente.query('begin');
+            // Serialização da própria conta (não da linha de médico).
+            const titular = await cliente.query('select id from contas where id=$1 for update',[contaId]);
+            if (titular.rows.length !== 1) return { ok: false, motivo: 'CONTA_INDISPONIVEL' };
+            const operadores = await cliente.query(`
+              select telefone from usuarios
+              where conta_id=$1 and ativo=true and auth_user_id is not null
+            `,[contaId]);
+            if (!operadores.rows.some(u => gerarVariantesTelefoneBrasileiro(String(u.telefone ?? ''))
+                  .some(v => variantes.includes(v)))) {
+                return { ok: false, motivo: 'OPERADOR_NAO_AUTORIZADO' };
+            }
+            const status = await cofreAgenda.status(chaveCofre);
+            if (!['vazio','desconectado','atencao'].includes(status.estado)) {
+                return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
+            }
+            const limite = await cliente.query(`
+                select count(*)::int as total from cofre_links
+                where conta_id=$1 and criado_em>clock_timestamp()-interval '1 hour'
+            `,[contaId]);
+            if (Number(limite.rows[0]?.total ?? 0) >= 3) {
+                return { ok: false, motivo: 'LIMITE_PEDIDOS' };
+            }
+            await cliente.query(`with expirados as (
+              update cofre_links set expira_em=least(expira_em,clock_timestamp())
+              where conta_id=$1 and agenda=$2 and usado_em is null returning id
+            ) insert into cofre_links_auditoria(link_id,evento)
+              select id,'expirado' from expirados on conflict do nothing`,[contaId,agenda]);
+            token = randomBytes(32).toString('base64url');
+            link = (await cliente.query(`insert into cofre_links
+              (conta_id,medico_id,agenda,token_hash,expira_em,criado_em,destino_telefone)
+              values ($1,null,$2,$3,clock_timestamp()+interval '15 minutes',clock_timestamp(),$4)
+              returning id`,[contaId,agenda,this.hash(token),contatoTelefone])).rows[0];
+            await cliente.query('insert into cofre_links_auditoria(link_id,evento) values ($1,$2)',[link.id,'criado']);
+            await cliente.query('commit');
+            confirmou = true;
+        } finally {
+            try { if (!confirmou) await cliente.query('rollback'); } finally { cliente.release(); }
+        }
+        try {
+            const url = `${this.deps.origem}/c/${token}`;
+            const textos = [FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA,url];
+            for (const texto of textos) {
+                const envio = await this.deps.enviar(chaveCofre,texto,contatoTelefone);
+                if (envio !== 'enviado') return {ok:false,motivo:envio==='simulado'?'simulado':'erro'};
+            }
+            await this.auditar(link!.id,'enviado');
+            return {ok:true,motivo:'enviado'};
+        } catch { return {ok:false,motivo:'erro'}; }
+        finally { token=''; }
+    }
+
     async lerContextoConexao(medicoId: string, agora: Date): Promise<ContextoConexaoAgenda> {
         // O link mais recente define a agenda do contexto: renovação preserva a agenda já escolhida pelo médico.
         const link = (await this.deps.pool.query(`select l.agenda, l.usado_em, l.expira_em,
@@ -160,15 +227,17 @@ export class LinksCofre {
     async enviarCredencial(token: string, dados: { email: string; senha: string; consentimento: string }) {
         if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
         const link = (await this.deps.pool.query(`update cofre_links set usado_em=now()
-            where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id, id, agenda, destino_telefone`, [this.hash(token)])).rows[0];
+            where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id, conta_id, id, agenda, destino_telefone`, [this.hash(token)])).rows[0];
         if (!link) { await this.validar(token); return false; }
-        this.aguardando.set(link.medico_id, { id: link.id, agenda: link.agenda, ...(link.destino_telefone?{contatoTelefone:link.destino_telefone}:{}) });
+        const chaveCofre = link.conta_id ? cofreIdDaConta(link.conta_id) : link.medico_id;
+        if (!chaveCofre) throw Error('COFRE_TITULAR_INVALIDO');
+        this.aguardando.set(chaveCofre, { id: link.id, agenda: link.agenda, ...(link.destino_telefone?{contatoTelefone:link.destino_telefone}:{}) });
         try {
             const c = this.cofreDe(link.agenda);
             if (!c || dados.consentimento !== AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].consentimento) throw Error();
-            await c.iniciar(link.medico_id, dados);
+            await c.iniciar(chaveCofre, dados);
         }
-        catch { await this.concluir(link.medico_id, false); throw Error('COFRE_INDISPONIVEL'); }
+        catch { await this.concluir(chaveCofre, false); throw Error('COFRE_INDISPONIVEL'); }
         return true;
     }
     async concluir(medicoId: string, conectado: boolean) {
@@ -178,7 +247,18 @@ export class LinksCofre {
         const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
         if (!rows.length) return;
         const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
-        if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
+        // O sucesso da conta é um evento de onboarding, não de médico/emissão.
+        const contaId = contaDoCofreId(medicoId);
+        if (contaId && this.deps.aoConcluirConta) {
+            await this.deps.aoConcluirConta(contaId, {
+                agenda: link.agenda as AgendaSuportada, conectado, chave: link.id,
+                ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}),
+                ...(!conectado?{falhaAcesso}:{})
+            });
+            return;
+        }
+        // Notificações fiscais/por médico não recebem o ID da conta.
+        if (this.deps.aoConcluir && !contaId) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
         await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}: o serviço está exigindo uma etapa de verificação a mais na sua conta (como a verificação em duas etapas, 2FA). Sem concluir essa etapa na área segura da sua conta, não consigo acessar.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.', link.contatoTelefone);
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>, contatoTelefone?:string) {

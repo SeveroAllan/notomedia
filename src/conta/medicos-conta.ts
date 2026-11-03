@@ -1,5 +1,6 @@
 import type pg from 'pg';
 import { nomeProfissionalValido } from './validar-dados-emissao.js';
+import { contaDoCofreId } from '../cofre/identidade-conta.js';
 
 export interface MedicoConta {
   id: string;
@@ -100,7 +101,11 @@ export async function confirmarMedicosDaConta(
   const client=await pool.connect();
   try {
     await client.query('begin');
-    const base=(await client.query('select conta_id from medicos where id=$1 for share',[medicoBaseId])).rows[0];
+    const conta = contaDoCofreId(medicoBaseId);
+    const base=(await client.query(conta
+      ? 'select id as conta_id from contas where id=$1 for share'
+      : 'select conta_id from medicos where id=$1 for share',
+      [conta ?? medicoBaseId])).rows[0];
     if(!base){await client.query('rollback');return {ok:false,motivo:'MEDICO_NAO_IDENTIFICADO',nome:nomes[0]??''};}
     const resultado:MedicoConta[]=[];
     for(const informado of nomes) {
