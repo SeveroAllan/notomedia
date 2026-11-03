@@ -28,8 +28,12 @@ ferramentas realmente habilitadas no processo**.
 5. Verificar cobertura, limite do recorte, detalhes disponíveis e
    pendentes antes de interpretar nomes. Leitura parcial/limitada,
    detalhes pendentes ou zero consultas no recorte **não são** prova de
-   agenda vazia ou de médico inexistente. Manter a verificação pendente;
-   não criar médico e não inventar diagnóstico de seletor.
+   agenda vazia ou de médico inexistente. No onboarding TribeMD inicial,
+   a mesma sessão autenticada pode fazer **uma única** releitura pontual
+   quando faltam cobertura ou detalhes; nunca repetir login nem abrir
+   uma sequência de consultas. Se continuar insuficiente, guardar
+   só a fase e código seguro do impedimento, manter a descoberta
+   pendente e não criar médico nem inventar falha de seletor.
 6. Se nomes forem comprovados na fonte, perguntar autorização explícita
    para vinculá-los à conta; `confirmar_profissionais_descobertos`
    deve **reconsultar** a agenda e cruzar nomes antes de persistir.

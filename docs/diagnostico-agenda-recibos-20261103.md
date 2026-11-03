@@ -28,6 +28,37 @@ Não alterar `main`, domínio, prévia desligada, chaves, allowlist ou banco.
   ser correlacionado pelo HMAC. **Nenhum desses pontos foi verificado no
   serviço ativo**; não atribuir a causa sem a próxima evidência.
 
+## Revisão complementar: 03/11, continuidade sem novo pedido
+
+- A narração de marcos de ação no `src/agente/agente.ts` utiliza
+  eventos tipados e a fase persistida da conta, sem lista de frases
+  proibidas. O modelo mantém liberdade para assuntos sem marco
+  operacional. Aceite de transporte, entrega e conexão autenticada
+  seguem separados. A resposta de ação é construída apenas com fatos
+  verificados; a fala genérica do modelo não muda esses fatos.
+- Na primeira autenticação TribeMD, o `CofreTribemd` aproveita o
+  resultado e, somente em cobertura/detalhes insuficientes, executa
+  **no máximo uma releitura na mesma sessão do navegador**. Sem nova
+  requisição de login, sem fila, sem cron, sem loop, sem segunda
+  leitura nas consultas comuns da `FonteAgenda`. O callback recebe
+  a melhor leitura; em falta de nomes, preserva conexão e motivo.
+- `src/server.ts` salva fase de confirmação ou descoberta pendente
+  na conta **antes de enviar** o WhatsApp, sem depender de mensagem
+  de continuação. `LinksCofre.concluir` já remove a referência
+  pendente e faz o registro `concluido` com conflito ignorado:
+  mesmo callback repetido não dispara outra descoberta nem cadastra
+  profissionais. Nenhum cadastro ocorre no callback.
+- Verificação operacional comunicada pelo usuário:
+  **`webhookByEvents=false` já estava ativo** na ocorrência.
+  Portanto a rota adicional `/messages-update` da PR anterior
+  **não explica** a falta de atualização real de `ACEITO_API`.
+  A causa fica em aberto; os códigos agregados de recebimento,
+  autenticação e correlação vão ajudar na próxima janela.
+- Testes de conversa com variações de linguagem, recuperação uma vez,
+  leitura completa sem segunda execução, falha inicial/segunda,
+  callbacks paralelos e estado seguro sem dados clínicos.
+  Os testes são todos locais, com browser falso e `ScriptedModel`.
+
 ## Cada problema em sua camada
 
 | Problema | Local | Modificação e motivo |
