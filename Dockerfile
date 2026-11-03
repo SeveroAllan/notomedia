@@ -15,6 +15,7 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY agent.md ./agent.md
 COPY onboarding-noto.md ./onboarding-noto.md
+COPY .agents/skills/noto-acesso-agendas/SKILL.md ./.agents/skills/noto-acesso-agendas/SKILL.md
 COPY src ./src
 COPY scripts ./scripts
 

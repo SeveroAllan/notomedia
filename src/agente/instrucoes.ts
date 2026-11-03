@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs';
 /** agent.md é a fonte de comunicação/decisão; AGENTS.md continua exclusivo para regras de código. */
 const fonte = readFileSync(new URL('../../agent.md', import.meta.url), 'utf8').trim();
 const mapa = readFileSync(new URL('../../onboarding-noto.md', import.meta.url), 'utf8').trim();
+const skillAgenda = readFileSync(new URL('../../.agents/skills/noto-acesso-agendas/SKILL.md',import.meta.url),'utf8').trim();
+if (!skillAgenda.startsWith('# Noto — acesso e descoberta de agendas') ||
+    !skillAgenda.includes('## Procedimento operacional'))
+  throw new Error('NOTO_AGENDA_SKILL_INVALIDA');
 if (!fonte.startsWith('# agent.md') || !fonte.includes('## 5. Ferramentas e verdade operacional') ||
     !fonte.includes('## 6. Boas-vindas')) {
   throw new Error('NOTO_AGENT_MD_INVALIDO');
@@ -14,6 +18,9 @@ export const INSTRUCOES_NOTO = [
   '',
   '### Mapa da jornada: contexto, não roteiro fixo',
   mapa,
+  '',
+  '### Skill operacional carregada — conexão e leitura de agendas',
+  skillAgenda,
   '',
   '### Ferramentas efetivamente disponíveis neste processo',
   '- consultar_contexto_conta: identidade e lista de profissionais autorizados; não lê notas ou mensagens.',

@@ -19,6 +19,7 @@ import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-convers
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
+import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
 import { contaDoCofreId } from './cofre/identidade-conta.js';
 import { registrarAceiteLink, registrarEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
@@ -131,7 +132,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     aoConcluirConta: async (contaId, evento) => {
       // Resultado de uma sessão REAL do navegador. Não atribui identidade
       // clínica; apenas permite ao operador confirmar os nomes observados.
-      if (!config.notoPilotoRestrito || !config.notoAgentEnvioAtivo) return;
+      if (!config.notoPilotoRestrito) return;
       const telefone=evento.contatoTelefone ?? '';
       const variantes=gerarVariantesTelefoneBrasileiro(telefone);
       const allowlist=config.envioRealAllowlist ?? [];
@@ -142,14 +143,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           and regexp_replace(telefone,'[^0-9]','','g')=any($2::text[])
         limit 1`,[contaId,variantes]);
       if (autor.rows.length!==1) return;
+      // Evidência estruturada de leitura produzida antes de expirar o cache:
+      // o registro não contém nomes, pacientes, consultas ou credenciais.
+      if (evento.diagnosticoLeitura) console.info('NOTO_AGENDA_LEITURA',JSON.stringify(evento.diagnosticoLeitura));
+      if (!config.notoAgentEnvioAtivo) return;
       const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
       const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
       const mensagens=!evento.conectado
         ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
         : !nomes.length
-          ? [`Conectei sua agenda ${plataforma} pela página segura.`,
-            'Ainda não consegui identificar profissionais com segurança na leitura da agenda.',
-            'Posso consultar novamente quando você quiser.']
+          ? [`Conexão com a agenda ${plataforma} confirmada.`,
+            evento.agenda==='tribemd'
+              ? explicarLeituraPendente(evento.diagnosticoLeitura)
+              : 'A confirmação da conexão ainda não inclui uma lista verificada dos profissionais da Amplimed.',
+            'A identificação dos médicos é a próxima etapa. Vou preservar a conexão e não cadastrar ninguém sem confirmação.']
           : [`Conectei sua agenda ${plataforma} pela página segura.`,
             `Na agenda encontrei: ${nomes.join(', ')}.`,
             nomes.length===1
