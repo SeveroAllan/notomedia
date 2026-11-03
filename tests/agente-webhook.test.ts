@@ -394,3 +394,51 @@ describe('tarefas entre mensagens: ✅ sempre no balão original', () => {
     modeloTeste.assertComplete();
   });
 });
+
+describe('webhook: referência técnica sempre da conta autenticada',()=>{
+  it('não usa cadastro provisório como médico; referência do link é obtida sob conta_id verificado',async()=>{
+    const query=vi.fn(async(sql:string,params:unknown[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-teste'}]};
+      if(sql.includes('select id,nome_completo from medicos')) {
+        expect(params).toEqual(['conta-teste']);
+        return {rows:[{id:'provisorio-6133',nome_completo:'Médico 6133'}]};
+      }
+      if(sql.includes('select id from medicos where conta_id=$1')) {
+        expect(params).toEqual(['conta-teste']);
+        return {rows:[{id:'provisorio-6133'}]};
+      }
+      throw Error('Consulta inesperada '+sql);
+    });
+    const modeloTeste=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'primeiro-link'})],
+      [assistantMessage('Enviei um link seguro para conectar a TribeMD. Informe a senha somente na página.')]
+    ]);
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const {app}=preparar({
+      pool:{query} as unknown as pg.Pool,modeloTeste,
+      solicitarLinkAgenda,consultarStatus:vi.fn().mockResolvedValue({
+        tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}
+      })
+    });
+    const eventoNovo={...evento,data:{...evento.data,key:{...evento.data.key,id:'primeira-6133'},message:{conversation:'Quero conectar a TribeMD, me envie o link'}}};
+    await comServidor(app,async postar=>expect((await postar(eventoNovo)).status).toBe(200));
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('provisorio-6133','tribemd','5551999998888');
+    expect(query.mock.calls.filter(([sql])=>String(sql).includes('conta_id=$1'))).toHaveLength(1);
+    expect(JSON.stringify(modeloTeste.lastCall?.request.input)).not.toContain('6133');
+    modeloTeste.assertComplete();
+  });
+
+  it('sem conta autenticada não lê referência técnica nem envia link de agenda',async()=>{
+    const query=vi.fn().mockResolvedValue({rows:[]});
+    const solicitarLinkAgenda=vi.fn();
+    const modeloTeste=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'sem-conta'})],
+      [assistantMessage('Preciso confirmar sua conta antes de liberar a página segura.')]
+    ]);
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,solicitarLinkAgenda});
+    const novo={...evento,data:{...evento.data,key:{...evento.data.key,id:'sem-conta-xyz'},message:{conversation:'Quero conectar TribeMD'}}};
+    await comServidor(app,async postar=>expect((await postar(novo)).status).toBe(200));
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(solicitarLinkAgenda).not.toHaveBeenCalled();
+  });
+});
