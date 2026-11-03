@@ -28,7 +28,8 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
     await banco.connect();
     try {
       await banco.query(`
-        DO $$ BEGIN
+        DO $ BEGIN
+          PERFORM pg_advisory_xact_lock(76022026);
           IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon; END IF;
           IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated; END IF;
           IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role; END IF;

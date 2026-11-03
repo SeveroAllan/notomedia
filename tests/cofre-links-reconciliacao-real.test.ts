@@ -38,7 +38,8 @@ async function bancoIsolado(executar: (banco: pg.Client) => Promise<void>) {
     try {
       // Papéis globais podem ja existir pelo teste de schema da mesma suite.
       await banco.query(`
-        DO $$ BEGIN
+        DO $ BEGIN
+          PERFORM pg_advisory_xact_lock(76022026);
           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
             CREATE ROLE anon; END IF;
           IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
@@ -277,6 +278,9 @@ describe('Cofre: migracao real sem fixture artificial', () => {
       `);
       await expect(banco.query(sqlReconciliar))
         .rejects.toThrow(/COFRE_COLUNA_INCOMPATIVEL|COFRE_TOKEN_UNIQUE_AUSENTE/);
+      // O SQL inicia BEGIN; em erro real o cliente precisa encerrar a
+      // transacao abortada. So depois verificamos o rollback integral.
+      await banco.query('ROLLBACK');
       const check = await banco.query(`
         select count(*)::int n from information_schema.columns
         where table_name='cofre_links' and column_name in ('conta_id','destino_telefone')
