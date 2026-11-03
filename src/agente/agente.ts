@@ -820,12 +820,12 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar('SEM_MODELO');
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
+  const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
   try {
     const panoramaTurno: { resultado?: ResultadoPanoramaFiscal } = {};
     const conferenciaTurno: { resultado?: ResultadoConferencia } = {};
-    const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
     const agent = criarAgenteNoto(entrada, {
       ...deps,
       aoPanorama: (foco, resultado) => {
@@ -909,6 +909,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch (erro) {
+    if (trabalhoTurno.atual?.estado.ok) {
+      const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
+      registrar('RESPOSTA');
+      return 'A leitura da '+fonte+' foi registrada. Vou continuar a conferência fora desta conversa e volto com os dados verificados.';
+    }
     const natureza=abort.signal.aborted?'ABORT_SIGNAL':
       erro instanceof Error && erro.name==='MaxTurnsExceededError'?'MAX_TURNS':'FALHA_RUNNER';
     deps.aoDiagnostico?.({codigo:'FALLBACK_MODELO',ferramentas:[...ferramentas],uso:semUso(),
