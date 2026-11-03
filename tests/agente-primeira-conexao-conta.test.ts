@@ -32,9 +32,9 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
 
   it('envia link da conta sem identidade clínica, somente depois da escolha Tribe',async()=>{
     const scripted=modelo('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},
-      'Enviei o link seguro da TribeMD. Informe a senha somente na página.');
+      'A Evolution aceitou o pedido do link seguro. Ainda não há confirmação de entrega.');
     const consultarStatus=vi.fn().mockResolvedValue(vazio);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const aoComprovante=vi.fn();
     await responderAgente({texto:'Quero conectar TribeMD. Envie meu link.',
       profissionais:[medicoProvisorio],estadoConversa:origem},
@@ -42,9 +42,7 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
         referenciaContaAgenda:vi.fn().mockResolvedValue(referencia),
         solicitarLinkAgenda,aoComprovante});
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
-    expect(aoComprovante).toHaveBeenCalledWith({
-      tipo:'enviar_link_agenda',profissionalId:referencia,agenda:'tribemd'
-    });
+    expect(aoComprovante).not.toHaveBeenCalled(); // sem DELIVERY_ACK, tarefa não concluída
     expect(JSON.stringify(scripted.lastCall?.request.input)).not.toContain('6133');
     scripted.assertComplete();
   });
@@ -167,8 +165,8 @@ it('apelido Tribe é escolha explícita preservada no próximo turno',async()=>{
   const estado=evoluirEstadoConversa({},'Eu uso Tribe','Posso enviar o link seguro?',[{id:'placeholder',nome:'Médico 6133'}]);
   expect(estado.agendaEscolhida).toBe('tribemd');
   const scripted=modelo('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},
-    'Enviei o link seguro da TribeMD. Informe a senha somente na página.');
-  const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    'A Evolution aceitou o pedido do link seguro. Ainda não há confirmação de entrega.');
+  const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
   await responderAgente({texto:'Sim, pode enviar',profissionais:[],estadoConversa:estado},{
     modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue({
       tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}

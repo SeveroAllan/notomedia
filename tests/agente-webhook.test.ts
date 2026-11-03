@@ -413,9 +413,9 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     });
     const modeloTeste=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'primeiro-link'})],
-      [assistantMessage('Enviei um link seguro para conectar a TribeMD. Informe a senha somente na página.')]
+      [assistantMessage('O serviço aceitou o envio do link seguro, sem confirmação de entrega ainda.')]
     ]);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const {app}=preparar({
       pool:{query} as unknown as pg.Pool,modeloTeste,
       solicitarLinkAgenda,consultarStatus:vi.fn().mockResolvedValue({
@@ -442,9 +442,9 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     });
     const modeloTeste=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'conta-zero-medicos'})],
-      [assistantMessage('Enviei um link seguro. A senha fica somente na página de conexão.')]
+      [assistantMessage('O link seguro foi aceito para envio. A senha fica somente na página de conexão.')]
     ]);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const {app}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,solicitarLinkAgenda,
       consultarStatus:vi.fn().mockResolvedValue({
         tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conectada:false}

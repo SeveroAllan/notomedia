@@ -436,7 +436,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       try {
         const status=await deps.consultarEntregaLink!(referencia,agenda);
-        registrar('consultar_status_entrega_link_agenda','ENTREGA_CONSULTADA',inicio);
+        registrar('consultar_status_entrega_link_agenda',
+          status?.estado==='ENTREGUE'?'LINK_ENTREGUE':status?.estado==='LIDO'?'LINK_LIDO':'ENTREGA_CONSULTADA',inicio);
         if(!status) return {ok:true,estado:'SEM_EVIDENCIA',orientacao:'Nao encontrei um recibo de envio confirmado. Nao presuma entrega nem gere novo link automaticamente.'};
         const mensagens:Record<string,string>={
           ACEITO_SEM_CONFIRMACAO:'O pedido foi aceito pelo serviço de mensagens, mas ainda não há confirmação de entrega.',
@@ -622,6 +623,8 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
       const match=oracao.match(/\b(?:enviei|mandei|enviamos|mandamos|recebeu|recebeste)\b/);
       if (!negada(oracao.slice(0,match?.index??0).trimEnd())) return false;
     }
+    if (/\b(?:o|esse|meu|seu)\s+link\b[^.!?;\n]{0,65}\b(?:foi|esta|chegou)\s+(?:ja\s+)?(?:entregue|recebido)\b|\b(?:whatsapp|aparelho)\s+(?:ja\s+)?(?:recebeu|confirmou a entrega)\s+(?:(?:o|do|um)\s+)?link\b/.test(oracao)
+        && !eventos.some(e=>e.codigo==='LINK_ENTREGUE'||e.codigo==='LINK_LIDO')) return false;
     if (!verificarAcao(/\b(?:registrei|atualizei|salvei)\s+(?:(?:o|um|os)\s+)?(?:crm|rqe|nome completo|dados profissionais)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:crm|rqe|dados profissionais)\s+(?:(?:ja|esta|foi)\s+)*(?:registrad[oa]s?|atualizad[oa]s?|salv[oa]s?)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
     if (!verificarAcao(/\b(?:foi adicionad[oa]|foram adicionad[oa]s|cadastrei|adicionei)\b[^.!?;\n]{0,65}\b(?:conta|medic[oa]s?|profissionais)\b/g, 'PROFISSIONAIS_CONFIRMADOS')) return false;
@@ -693,6 +696,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA_BLOQUEADA', uso);
       return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
          ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
+         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO')
+         ? 'O serviço de mensagens aceitou o pedido do link seguro, mas ainda não tenho confirmação de entrega no seu WhatsApp. Não vou gerar outro link automaticamente.'
          : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);

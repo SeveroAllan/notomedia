@@ -65,9 +65,9 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
   it('solicita link só para agenda e profissional explicitamente escolhidos',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'amplimed',profissional:'Alice'},{callId:'link'})],
-      [assistantMessage('Enviei o link seguro para você conectar a Amplimed. Sua senha fica só na página.')]
+      [assistantMessage('O pedido do link seguro foi aceito para envio. Ainda não tenho confirmação de entrega.')]
     ]);
-    const solicitarLinkAgenda=vi.fn().mockResolvedValue({enviado:true});
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
     const diagnostico=vi.fn();
     const resposta=await responderAgente({
       texto:'Amplimed da Alice. Pode me mandar o link?',profissionais,
@@ -76,7 +76,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
       solicitarLinkAgenda,aoDiagnostico:diagnostico});
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('m1','amplimed');
     expect(resposta).toContain('link seguro');
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('LINK_ENVIADO');
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('LINK_ACEITO_PARA_ENVIO');
     modelo.assertComplete();
   });
 
