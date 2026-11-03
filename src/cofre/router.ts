@@ -13,6 +13,7 @@ import { CofreTribemd, ErroCofre, consentimentoCofre } from './tribemd-cofre.js'
 import { resolverReferenciaAgendaConta } from '../conta/referencia-agenda-conta.js';
 import { consultarStatusAgendasInterno } from './status-interno.js';
 import { validarCofreHomologacao } from './configuracao-homologacao.js';
+import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
 const conectadoPorEstado: Record<Awaited<ReturnType<CofreTribemd['status']>>['estado'], boolean> = {
     vazio: false, salvo: false, conectando: false, conectado: true, desconectado: false, atencao: false
 };
@@ -80,13 +81,13 @@ export function criarCofreContas(deps: {
                 res.status(401).json({ ok: false, codigo: 'SESSAO_INVALIDA' });
                 return;
             }
-            const dono = (await deps.pool.query(`
-                select m.id
-                from usuarios u join medicos m on m.conta_id=u.conta_id
-                where u.auth_user_id=$1 and u.ativo=true
-                order by m.criado_em,m.id
-                limit 1`, [authId])).rows[0];
-            if (!dono || !z.string().uuid().safeParse(dono.id).success) {
+            const identidades = (await deps.pool.query(`
+                select u.conta_id,
+                  (select m.id from medicos m where m.conta_id=u.conta_id
+                   order by m.criado_em,m.id limit 1) as medico_id
+                from usuarios u where u.auth_user_id=$1
+                  and u.ativo=true and u.conta_id is not null limit 2`, [authId])).rows;
+            if (identidades.length !== 1 || !z.string().uuid().safeParse(identidades[0]?.conta_id).success) {
                 res.status(403).json({ ok: false, codigo: 'CONTA_INDISPONIVEL' });
                 return;
             }
@@ -99,7 +100,10 @@ export function criarCofreContas(deps: {
                 res.status(403).json({ ok: false, codigo: 'ORIGEM_INVALIDA' });
                 return;
             }
-            res.locals.dono = dono.id;
+            const chaveConta = cofreIdDaConta(identidades[0].conta_id);
+            const statusConta = await cofre.status(chaveConta);
+            res.locals.dono = statusConta.salvo || !identidades[0].medico_id
+                ? chaveConta : identidades[0].medico_id;
             next();
         }
         catch {
@@ -156,8 +160,19 @@ export function criarCofreContas(deps: {
     app.delete('/amplimed', rota(async (req, res) => { vazio.parse(req.body); if (!cofreAmplimed) throw new ErroCofre('COFRE_INDISPONIVEL'); res.json({ ok: true, cofre: await cofreAmplimed.excluir(res.locals.dono) }); }));
     app.use((_req, res) => res.status(404).json({ ok: false, codigo: 'COFRE_ROTA_INVALIDA' }));
     app.use((_erro: unknown, req: Request, res: Response, _next: unknown) => { apagar(req); res.status(400).json({ ok: false, codigo: 'ENTRADA_INVALIDA' }); });
-    const referencia = (medicoId:string,agenda:'tribemd'|'amplimed') =>
-        resolverReferenciaAgendaConta(deps.pool,medicoId,agenda).catch(()=>medicoId);
+    const referencia = async (id:string,agenda:'tribemd'|'amplimed') => {
+        if (contaDoCofreId(id)) return id;
+        try {
+            // Depois de confirmar médicos, manter a sessão que pertencia à conta.
+            const r=await deps.pool.query('select conta_id from medicos where id=$1',[id]);
+            if (r.rows.length === 1 && r.rows[0].conta_id) {
+                const chave=cofreIdDaConta(r.rows[0].conta_id);
+                const status=agenda==='tribemd' ? await cofre?.status(chave) : await cofreAmplimed?.status(chave);
+                if (status?.salvo) return chave;
+            }
+        } catch { /* Retomar a referência médica antiga sem atribuir consultas. */ }
+        return resolverReferenciaAgendaConta(deps.pool,id,agenda).catch(()=>id);
+    };
     return { app, links, configuracaoOk: !!cofre && !!origem && !!links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
         return cofre.detalheAoVivo(await referencia(medicoId,'tribemd'), atendimentoId);
@@ -166,11 +181,14 @@ export function criarCofreContas(deps: {
         const ref=await referencia(entrada.medicoId,'tribemd');
         return cofre.fonteAgenda.consultar({...entrada,medicoId:ref,referenciaCofre:ref});
     } }, encerrar: async () => { await cofre?.encerrar(); },
+        solicitarLinkConta: (contaId:string,agenda:'tribemd'|'amplimed',telefone:string) =>
+            links ? links.solicitarLinkConta(contaId,agenda,telefone) :
+                Promise.resolve({ok:false,motivo:'INTEGRACAO_NAO_CONFIGURADA'}),
         statusAgendas: (medicoId: string) => consultarStatusAgendasInterno({
             medicoId,
             cofreTribemd: homologacao && (!origem || !links) ? undefined : cofre,
             cofreAmplimed: homologacao && (!origem || !links) ? undefined : cofreAmplimed,
-            resolver: (id, agenda) => resolverReferenciaAgendaConta(deps.pool, id, agenda)
+            resolver: (id, agenda) => referencia(id, agenda)
         }),
         statusAgenda: async (medicoId: string) => {
             if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
