@@ -95,6 +95,8 @@ export function criarCofreContas(deps: {
                 const r=evento.conectado && evento.agenda==='tribemd'
                   ? cofre?.resultado(cofreIdDaConta(contaId)) : null;
                 const leitura=evento.agenda==='tribemd' ? diagnosticarDescobertaTribemd(r) : null;
+                if(leitura && cofre) leitura.diagnostico.recuperacaoPontual=
+                    cofre.recuperacao(cofreIdDaConta(contaId));
                 // Captura a razão da leitura insuficiente ANTES do TTL de 5 minutos.
                 // Apenas agregados/enums, jamais conteúdo do portal ou nomes no log.
                 await deps.aoConcluirConta(contaId,{

@@ -61,7 +61,7 @@ describe('callback de conexão continua descoberta na MESMA sessão sem nova men
     expect(r.aoConcluir).toHaveBeenCalledExactlyOnceWith('conta-a',true);
     const d=diagnosticarDescobertaTribemd(r.cofre.resultado('conta-a'));
     expect(d.nomesComprovados).toEqual(['Dra. Alice Silva']);
-    expect(d.diagnostico.recuperacaoPontual).toBe('MELHOROU');
+    expect(r.cofre.recuperacao('conta-a')).toBe('MELHOROU');
     expect(JSON.stringify(d.diagnostico)).not.toMatch(/Paciente|Alice|senha|Privado/);
   });
   it('recorte ainda parcial faz apenas duas leituras, sem inventar médico',async()=>{
@@ -71,8 +71,9 @@ describe('callback de conexão continua descoberta na MESMA sessão sem nova men
     expect(r.aoConcluir).toHaveBeenCalledTimes(1);
     const d=diagnosticarDescobertaTribemd(r.cofre.resultado('conta-a'));
     expect(d.nomesComprovados).toEqual([]);
+    expect(r.cofre.recuperacao('conta-a')).toBe('SEM_MELHORIA');
     expect(d.diagnostico).toMatchObject({
-      recuperacaoPontual:'SEM_MELHORIA',cobertura:'somente_linhas_visiveis'
+      cobertura:'somente_linhas_visiveis'
     });
   });
   it('erro na tentativa pontual preserva a leitura anterior e a conexão',async()=>{
@@ -82,7 +83,7 @@ describe('callback de conexão continua descoberta na MESMA sessão sem nova men
     expect((await r.cofre.status('conta-a')).estado).toBe('conectado');
     const d=diagnosticarDescobertaTribemd(r.cofre.resultado('conta-a'));
     expect(d.nomesComprovados).toEqual([]);
-    expect(d.diagnostico.recuperacaoPontual).toBe('FALHOU');
+    expect(r.cofre.recuperacao('conta-a')).toBe('FALHOU');
   });
   it('falha da primeira leitura não dispara a segunda; callback identifica acesso confirmado sem nomes',async()=>{
     const r=await rodar([new Error('LEITURA_HTTP_ERRO')]);
