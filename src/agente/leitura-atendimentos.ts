@@ -62,7 +62,7 @@ export function leituraAmplimedParaConferencia(
       return {ok:false,motivo:'LEITURA_INCOMPLETA'};
     }
     vistos.add(d.data);
-    totalRealizados += d.consultas.filter(c=>c.status==='realizada').length;
+    totalRealizados += d.consultas.filter((c: DiaConferenciaAmplimed['consultas'][number])=>c.status==='realizada').length;
     for (const e of d.elegiveis) {
       if (!e.idExterno || !e.idExterno.startsWith(d.data + 'T')) {
         return {ok:false,motivo:'REFERENCIAS_AMBIGUAS'};
