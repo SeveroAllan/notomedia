@@ -48,6 +48,53 @@ export class EvolutionApiClient
     } catch { return { sucesso: false, erro: 'EVOLUTION_LEITURA_INDISPONIVEL' }; }
   }
 
+
+  /** Indicador visual, nunca confirmação de ação. Falha de presença não impede atendimento. */
+  async enviarPresenca(instanciaNome: string, telefone: string, presenca: 'composing' | 'paused'): Promise<boolean> {
+    if (!this.destinoDoAssistenteValido(instanciaNome, telefone)) return false;
+    try {
+      const resposta = await fetch(
+        this.baseUrl.replace(/\/$/, '') + '/chat/sendPresence/' + encodeURIComponent(instanciaNome), {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+          headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+          body: JSON.stringify({ number: telefone.replace(/\D/g, ''), presence: presenca, delay: presenca === 'composing' ? 1800 : 0 })
+        });
+      await resposta.body?.cancel().catch(() => {});
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  /** Reage somente ao ID real da mensagem recebida. */
+  async reagirMensagem(instanciaNome: string, chave: { id: string; remoteJid: string; fromMe: boolean }, emoji: string): Promise<boolean> {
+    if (!chave || chave.fromMe || !/^[A-Za-z0-9_-]{5,150}$/.test(chave.id) ||
+        !/^\d{10,13}@s\.whatsapp\.net$/.test(chave.remoteJid) ||
+        !this.destinoDoAssistenteValido(instanciaNome, chave.remoteJid.split('@')[0] ?? '') ||
+        !['👍', '❤️', '🔎', '👀', '✅'].includes(emoji)) return false;
+    try {
+      const url = this.baseUrl.replace(/\/$/, '') + '/message/sendReaction/' + encodeURIComponent(instanciaNome);
+      const key = { id: chave.id, remoteJid: chave.remoteJid, fromMe: false };
+      const postar = (corpo: object) => fetch(url, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify(corpo)
+      });
+      let resposta = await postar({ key, reaction: emoji });
+      const formatoAlternativo = resposta.status === 400 || resposta.status === 422;
+      await resposta.body?.cancel().catch(() => {});
+      if (formatoAlternativo) {
+        // Duas variantes publicadas da Evolution; só tenta outra se a primeira foi rejeitada.
+        resposta = await postar({ reactionKey: key, reactionMessage: emoji });
+        await resposta.body?.cancel().catch(() => {});
+      }
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  private destinoDoAssistenteValido(instancia: string, telefone: string): boolean {
+    return !!instancia && instancia !== (this.instanciaSomenteOtp || this.instanciaOficialNome) &&
+      /^\d{10,13}$/.test(telefone.replace(/\D/g, ''));
+  }
+
   async obterBase64MensagemMidia(
     instancia: string,
     mensagemId: string
@@ -94,7 +141,7 @@ export class EvolutionApiClient
 
   async enviarTexto(params: EnviarMensagemPacienteParams): Promise<ResultadoEnvioMensagemPaciente> {
     if(params.instanciaNome===this.instanciaSomenteOtp)return {sucesso:false,erro:'CANAL_OFICIAL_SOMENTE_OTP'};
-    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto);
+    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto, params.linkPreview);
   }
 
   async enviarPdf(params: EnviarPdfDanfseParams): Promise<ResultadoEnvioPdf> {
@@ -184,7 +231,8 @@ export class EvolutionApiClient
   private async enviarTextoGenerico(
     instancia: string,
     telefone: string,
-    texto: string
+    texto: string,
+    linkPreview?: boolean
   ): Promise<ResultadoEnvioMensagemPaciente> {
     const url = `${this.baseUrl.replace(/\/$/, '')}/message/sendText/${instancia}`;
     try {
@@ -197,7 +245,8 @@ export class EvolutionApiClient
         },
         body: JSON.stringify({
           number: this.normalizarTelefone(telefone),
-          text: texto
+          text: texto,
+          ...(linkPreview === undefined ? {} : { linkPreview })
         })
       });
 

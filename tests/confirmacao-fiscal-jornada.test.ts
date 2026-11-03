@@ -51,7 +51,12 @@ async function confirmar(body: Record<string, unknown>) {
   const app = criarAppExpress();
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/api/onboarding/confirmar-fiscal').route.stack[0].handle;
   let status = 200, data: any;
-  const res = { status(n: number) { status = n; return res; }, json(c: unknown) { data = c; return res; } };
+  // Unidade de regra fiscal: simula aqui apenas o vínculo JÁ validado;
+  // tests/onboarding-rotas-authz.test.ts cobre a proteção HTTP real.
+  const res = {
+    locals: { medicoAutorizado: { medicoId: 'medico-1', usuarioId: 'usuario-1', medicoUsuarioId: 'usuario-1' } },
+    status(n: number) { status = n; return res; }, json(c: unknown) { data = c; return res; }
+  };
   await handler({ body: { medicoId: 'medico-1', ...body } }, res);
   return { status, data };
 }

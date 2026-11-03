@@ -9,6 +9,18 @@ import { criarRouterStatusWhatsapp } from './whatsapp/status-router.js';
 import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
+import { criarRouterWebhookAgente } from './agente/webhook.js';
+import { criarRouterWebhookPareamento } from './whatsapp/webhook-pareamento.js';
+import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
+import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
+import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
+import { separarBaloes } from './agente/baloes.js';
+import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-conversa.js';
+import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
+import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
+import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
+import { contaDoCofreId } from './cofre/identidade-conta.js';
+import { registrarAceiteLink, registrarEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -38,7 +50,6 @@ import { salvarCertificadoMedico } from './onboarding/fluxos/salvar-certificado-
 import { conectarInstanciaWhatsappMedico } from './onboarding/io/conectar-instancia-whatsapp-medico.js';
 import { consultarStatusInstanciaWhatsapp } from './onboarding/io/consultar-status-instancia-whatsapp.js';
 import { consultarStatusOnboarding } from './onboarding/io/consultar-status-onboarding.js';
-import { resolverMedicoId } from './onboarding/io/resolver-medico-id.js';
 import { salvarPerfilProfissional, ErroPerfilProfissional } from './io/postgres/salvar-perfil-profissional.js';
 import { salvarPreferenciasMedico } from './conta/salvar-preferencias-medico.js';
 import { ZodError } from 'zod';
@@ -49,6 +60,8 @@ import { carregarCertificadoMedico } from './io/fiscal/carregar-certificado-medi
 import { PostgresDadosProfissionaisService } from './io/postgres/postgres-dados-profissionais-service.js';
 import { configurarDesempenhoHttp, OPCOES_ARQUIVOS_ESTATICOS } from './http/configurar-desempenho-http.js';
 import { tratarErrosHttp } from './http/tratar-erros-http.js';
+import { criarGuardaMedicoDaConta, medicoAutorizado } from './http/autorizar-medico-sessao.js';
+import { codigoSeguroFalhaReady } from './http/diagnostico-ready.js';
 import { criarEncerramentoGracioso } from './processo/encerrar-gracioso.js';
 import { registrarSinaisDeProcesso } from './processo/registrar-sinais-de-processo.js';
 
@@ -75,7 +88,90 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     pool
   );
   const cofres = criarCofreContas({
-    pool, enviarCofre: (id, texto) => comunicacaoHomologacao.cofre(id, texto),
+    pool, enviarCofre: async (id, texto, contatoTelefone) => {
+      if (!config.notoPilotoRestrito) return contaDoCofreId(id) ? 'erro' : comunicacaoHomologacao.cofre(id, texto);
+      const permitidos = config.envioRealAllowlist ?? [];
+      const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone ?? '');
+      if (!contatoTelefone || permitidos.length !== 1 ||
+          !gerarVariantesTelefoneBrasileiro(permitidos[0]!).some(v => variantes.includes(v))) return 'erro';
+      const resultado = await new EvolutionApiClient(
+        config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+        config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+      ).enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone, texto
+      });
+      return resultado.sucesso ? 'enviado' : 'erro';
+    },
+    // Somente o balão contendo a URL; nenhuma mudança de formato, domínio,
+    // linkPreview ou canal nesta PR. HTTP 2xx = aceite, NUNCA entrega.
+    enviarUrlComRecibo: async ({url,linkId,telefone}) => {
+      if (!config.notoPilotoRestrito || config.envioRealAllowlist?.length!==1 ||
+          !gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v=>
+            gerarVariantesTelefoneBrasileiro(telefone).includes(v))) return 'erro';
+      const resultado=await new EvolutionApiClient(config.evolutionAssistantUrl,
+        config.evolutionAssistantApiKey,config.evolutionOfficialInstanceName,
+        config.evolutionOfficialInstanceName).enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,
+          contatoTelefone:telefone,texto:url,linkPreview:false
+        });
+      if(!resultado.sucesso) return 'erro';
+      try {
+        await registrarAceiteLink(pool,{
+          linkId,instancia:config.evolutionAssistantInstanceName,
+          mensagemId:resultado.mensagemId,telefone,
+          segredo:config.evolutionAssistantWebhookSecret
+        });
+      } catch {
+        // O aceite pode ter acontecido mesmo se persistência falhou:
+        // não repetir o segredo e não afirmar que foi entregue.
+        console.warn('COFRE_RECIBO_NAO_REGISTRADO');
+      }
+      return 'enviado';
+    },
+    aoConcluirConta: async (contaId, evento) => {
+      // Resultado de uma sessão REAL do navegador. Não atribui identidade
+      // clínica; apenas permite ao operador confirmar os nomes observados.
+      if (!config.notoPilotoRestrito || !config.notoAgentEnvioAtivo) return;
+      const telefone=evento.contatoTelefone ?? '';
+      const variantes=gerarVariantesTelefoneBrasileiro(telefone);
+      const allowlist=config.envioRealAllowlist ?? [];
+      if (!telefone || allowlist.length!==1 ||
+        !gerarVariantesTelefoneBrasileiro(allowlist[0]!).some(v=>variantes.includes(v))) return;
+      const autor=await pool.query(`
+        select 1 from usuarios where conta_id=$1 and ativo=true and auth_user_id is not null
+          and regexp_replace(telefone,'[^0-9]','','g')=any($2::text[])
+        limit 1`,[contaId,variantes]);
+      if (autor.rows.length!==1) return;
+      const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
+      const nomes=evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20);
+      const mensagens=!evento.conectado
+        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha permanece somente no Cofre.']
+        : !nomes.length
+          ? [`Conectei sua agenda ${plataforma} pela página segura.`,
+            'Ainda não consegui identificar profissionais com segurança na leitura da agenda.',
+            'Posso consultar novamente quando você quiser.']
+          : [`Conectei sua agenda ${plataforma} pela página segura.`,
+            `Na agenda encontrei: ${nomes.join(', ')}.`,
+            nomes.length===1
+              ? `Você confirma vincular ${nomes[0]} à sua conta?`
+              : 'Quais desses profissionais você confirma vincular à sua conta?'];
+      for(const frase of mensagens) for(const balao of separarBaloes(frase)){
+        const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
+          config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
+        });
+        if(!enviado.sucesso) return;
+      }
+      if (evento.conectado && nomes.length){
+        const estado=await lerEstadoConversa(pool,contaId);
+        await salvarEstadoConversa(pool,contaId,{
+          ...estado,agendaEscolhida:evento.agenda,
+          descoberta:{agenda:evento.agenda,nomes},
+          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
+          ...(nomes.length===1 ? {nomeProfissionalPerguntado:nomes[0]} : {})
+        });
+      }
+    },
     autenticar: async token => {
       const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
       return error ? null : data.user?.id ?? null;
@@ -103,6 +199,139 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
+  // A instância de emissão/pacientes não é encaminhada para o agente.
+  const transporteAgente = new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+    config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+  );
+  const boasVindasInstancia = async (nomeInstancia: string) => {
+    // O piloto não pode reutilizar o canal de pacientes nem alcançar outros números.
+    if (config.notoPilotoRestrito !== true || !config.notoAgentAtivo || !config.notoAgentEnvioAtivo ||
+        config.envioRealAllowlist?.length !== 1 ||
+        config.evolutionAssistantInstanceName === config.evolutionOfficialInstanceName) return;
+    await enviarBoasVindasAposPareamento({
+      pool, ativo: true, nomeInstancia, allowlist: config.envioRealAllowlist,
+      enviar: async (telefone, texto) => {
+        for (const balao of separarBaloes(texto)) {
+          if (!await transporteAgente.enviarTexto({ instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto: balao }).then(r => r.sucesso)) return false;
+        }
+        return true;
+      }
+    });
+  };
+  // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
+  app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
+    pool, segredo: config.evolutionWebhookSecret,
+    confirmarConexao: async instancia => {
+      try {
+        const resultado = await fetch(
+          `${config.evolutionApiUrl.replace(/\/+$/, '')}/instance/connectionState/${encodeURIComponent(instancia)}`,
+          { headers: { apikey: config.evolutionGlobalApiKey }, signal: AbortSignal.timeout(5000), redirect: 'error' }
+        );
+        if (!resultado.ok) return false;
+        const corpo = await resultado.json();
+        return corpo?.instance?.state === 'open';
+      } catch { return false; }
+    },
+    aoConectar: boasVindasInstancia
+  }));
+  app.use('/webhook/evolution', criarRouterWebhookAgente({
+    pool,
+    ativo: Boolean(config.notoAgentAtivo),
+    envioAtivo: Boolean(config.notoAgentEnvioAtivo),
+    segredo: config.notoAgentWebhookSecret ?? '',
+    instancia: config.evolutionAssistantInstanceName,
+    allowlist: config.envioRealAllowlist ?? [],
+    painelUrl: config.appPublicOrigin,
+    apiKey: config.openaiApiKey,
+    modeloNome: config.openaiTextoModel,
+    tracesAtivos: config.notoAgentTracesAtivos,
+    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    consultarEntregaLink: async (referencia, agenda) => {
+      const contaId=contaDoCofreId(referencia);
+      if (!contaId) {
+        const r=await pool.query('select conta_id from medicos where id=$1',[referencia]);
+        if (!r.rows[0]?.conta_id) return null;
+        return consultarEntregaLink(pool,r.rows[0].conta_id,agenda);
+      }
+      return consultarEntregaLink(pool,contaId,agenda);
+    },
+    atualizarEstadoLink: entrada => registrarEstadoEvolution(pool,entrada,
+      config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret),
+    descobrirProfissionais: async (medicoId, agenda) => {
+      // Autoridade já verificada no webhook e estado confirmado na ferramenta;
+      // devolver somente nomes, nunca o conteúdo de uma consulta.
+      if (agenda === 'amplimed') {
+        const r = await cofres.listarProfissionaisAmplimed(medicoId);
+        return r.ok
+          ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
+              ? r.profissionais.map(p => p.nome).filter(nomeProfissionalValido).slice(0, 20) : [] }
+          : { ok: false, motivo: r.motivo };
+      }
+      const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
+      return r.tipo === 'consultas'
+        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).filter(nomeProfissionalValido).slice(0, 20) }
+        : { ok: false, motivo: r.codigo };
+    },
+    confirmarProfissionais: async (medicoBaseId, nomes) => {
+      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CONFIRMACAO_DESLIGADA' };
+      const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
+      return resultado.ok ? { ok: true, nomes: resultado.medicos.map(m => m.nomeCompleto) }
+        : { ok: false, motivo: resultado.motivo };
+    },
+    solicitarLinkAgenda: async (medicoId, agenda, telefone) => {
+      // A criação exige operador autenticado pela mesma conta, destino autorizado
+      // e a instância fiscal de pacientes permanece desligada.
+      const seguro = config.envioRealAllowlist?.length === 1 &&
+        gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
+      if (!seguro || !cofres.links) return { aceitoParaEnvio: false, motivo:
+        !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL' };
+      const r = contaDoCofreId(medicoId)
+        ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)
+        : await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
+      return {
+        aceitoParaEnvio: Boolean(r.ok && r.motivo === 'enviado'),
+        ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {})
+      };
+    },
+    salvarDadosProfissionais: async (medicoId, dados) => {
+      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CADASTRO_CONVERSACIONAL_DESLIGADO' };
+      try {
+        const resultado = await salvarPerfilProfissional(pool, {
+          medicoId, ...dados
+        });
+        return { ok: true, nome: resultado.nome, crm: resultado.crm, rqe: resultado.rqe };
+      } catch {
+        return { ok: false, motivo: 'DADOS_PROFISSIONAIS_NAO_GRAVADOS' };
+      }
+    },
+    consultarProntidao: async medicoId => {
+      const status = await consultarStatusOnboarding(pool, medicoId, false);
+      return {
+        certificadoValido: status.passos.passo3CertificadoValido,
+        dadosProfissionaisCompletos: status.dadosProfissionaisCompletos && status.passos.passoProfissionalAprovado,
+        dadosFiscaisConfirmados: status.passos.passo2FiscalConfirmado,
+        liberadoParaEmitir: false // piloto: emissão sempre desligada, independentemente do cadastro.
+      };
+    },
+    persistirConversa: Boolean(config.notoPilotoRestrito),
+    marcarLida: async chave => (await transporteAgente.marcarLida({
+      instanciaNome: config.evolutionAssistantInstanceName,
+      contatoTelefone: chave.remoteJid.split('@')[0] ?? '',
+      mensagemId: chave.id, chaveMensagem: chave
+    })).sucesso,
+    reagir: (chave, emoji) => transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji),
+    presenca: (telefone, estado) => transporteAgente.enviarPresenca(config.evolutionAssistantInstanceName, telefone, estado),
+    enviar: async (telefone, texto) => {
+      const resultado = await transporteAgente.enviarTexto({
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+      });
+      return resultado.sucesso;
+    }
+  }));
+
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
   const consultaRegistro = pesquisaCrmConfigurada
     ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
@@ -114,7 +343,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!cert || cert.id !== certificadoId) return undefined;
       return extrairChavesCertificado(cert.pfxBuffer, cert.senhaCertificado).documentoTitular;
     }, hubCpfClient ? cpf => hubCpfClient.consultar(cpf) : undefined, pesquisaCrmConfigurada, 'openserp');
-  if (process.env.NODE_ENV !== 'test') {
+  if (process.env.NODE_ENV !== 'test' && config.notoPilotoRestrito !== true) {
     const timer = setInterval(() => {
       // Enriquecimento automático via OpenSerp sem envio de perguntas no WhatsApp.
       void cadastroCertificado.recuperar().catch(() => console.warn('[Cadastro automático]', {codigo:'RECUPERACAO_FALHOU',acao:'verificar migrate:cadastro'}));
@@ -124,11 +353,48 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const adnNfseClient = new AdnNfseClient();
 
-  const aoConectarWhatsapp = (_medicoId: string) => {};
+  const aoConectarWhatsapp = async (medicoId: string) => {
+    const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+    await boasVindasInstancia(nomeInstancia);
+  };
 
   // Healthcheck para o Easypanel
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // Readiness inclui as colunas usadas pelo onboarding: um banco conectado
+  // mas com schema incompleto nao pode receber novos cadastros.
+  let ultimoAvisoReady = 0;
+  app.get('/ready', async (_req: Request, res: Response) => {
+    try {
+      await pool.query(`select m.solicitar_cpf_direto_paciente,
+          pf.proximo_numero_dps, pf.serie_dps, pf.opcao_simples_nacional,
+          pf.extraido_automaticamente, pf.dados_reforma_tributaria,
+          msf.aliquota_iss, msf.parametros_emissao,
+          t.medico_id, w.nome_instancia
+        from medicos m
+        left join medico_perfil_fiscal pf on pf.medico_id=m.id
+        left join medico_servicos_fiscais msf on msf.medico_id=m.id
+        left join cadastro_certificado_trabalhos t on t.medico_id=m.id
+        left join whatsapp_instancias w on w.medico_id=m.id
+        limit 0`);
+      if (config.notoPilotoRestrito === true) {
+        // Bloqueia lançamento do piloto sem a reserva durável contra duplicidade.
+        await pool.query('select conta_id from noto_boas_vindas_pareamento limit 0');
+        await pool.query('select conta_id from noto_agent_conversas limit 0');
+        await pool.query('select conta_id from noto_agent_mensagens limit 0');
+      }
+      res.json({ status: 'ready' });
+    } catch (erro) {
+      // Nunca registrar a mensagem do driver (pode conter URL/credenciais).
+      // Limita o volume para healthchecks frequentes.
+      if (Date.now() - ultimoAvisoReady > 60_000) {
+        ultimoAvisoReady = Date.now();
+        console.warn('[ready] schema_ou_banco_indisponivel', { codigo: codigoSeguroFalhaReady(erro) });
+      }
+      res.status(503).json({ status: 'unavailable' });
+    }
   });
 
   app.use('/api/conta/cadastro', criarRouterCadastroPainel({
@@ -149,16 +415,37 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const routerNfse = criarRouterNfse({
     repositorio: emissaoApiRepo,
     autenticar: async token => {
-      const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (!error && data.user?.id) {
-        return resolverMedicoId(pool, data.user.id).catch(() => null);
+      // NFS-e: somente sessão Supabase Auth verificada. Nunca interpretar token
+      // como medicos.id/usuarios.id nem usar resolvedor com INSERT implícito.
+      try {
+        const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
+        if (error || !data.user?.id) return null;
+        const { rows } = await pool.query(`
+          select m.id from usuarios u
+          join medicos m on m.usuario_id = u.id and m.conta_id = u.conta_id
+          where u.auth_user_id = $1 and u.ativo = true
+          limit 2
+        `, [data.user.id]);
+        // A API legada recebe um token, não uma seleção explícita de médico:
+        // recusar vínculo ambíguo em vez de usar o primeiro arbitrariamente.
+        return rows.length === 1 ? String(rows[0]!.id) : null;
+      } catch {
+        return null;
       }
-      return resolverMedicoId(pool, token).catch(() => null);
     }
   });
-  app.use('/api/v1/nfse', routerNfse);
-  app.use('/v2/nfse', routerNfse);
-  app.use('/v2/nfsen', routerNfse);
+  // O piloto restrito permite leitura fiscal legada, mas não aceita criar solicitações.
+  // Mesmo com um token válido, nenhuma rota POST de NFS-e deve enfileirar emissão.
+  const bloquearEmissaoPiloto = (req: Request, res: Response, next: () => void) => {
+    if (config.notoPilotoRestrito === true && req.method !== 'GET' && req.method !== 'HEAD') {
+      res.status(503).json({ ok: false, codigo: 'EMISSAO_DESLIGADA_NA_HOMOLOGACAO' });
+      return;
+    }
+    next();
+  };
+  app.use('/api/v1/nfse', bloquearEmissaoPiloto, routerNfse);
+  app.use('/v2/nfse', bloquearEmissaoPiloto, routerNfse);
+  app.use('/v2/nfsen', bloquearEmissaoPiloto, routerNfse);
 
   // UI Web de Entrada e Assets Estáticos
   app.use('/assets', express.static(join(__dirname, 'assets'), OPCOES_ARQUIVOS_ESTATICOS));
@@ -190,6 +477,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone é obrigatório' });
       }
 
+      if (config.notoPilotoRestrito === true) {
+        const permitidos = config.envioRealAllowlist ?? [];
+        const variantes = gerarVariantesTelefoneBrasileiro(String(telefone));
+        if (permitidos.length !== 1 || !variantes.some(v =>
+          gerarVariantesTelefoneBrasileiro(permitidos[0]!).includes(v))) {
+          return res.status(403).json({ ok: false, motivo: 'telefone_nao_autorizado' });
+        }
+      }
+
       const resultado = await solicitarOtp(telefone, {
         repositorio: otpRepo,
         enviador: evolutionClient,
@@ -215,16 +511,26 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'Telefone e código são obrigatórios' });
       }
 
+      // Só o telefone explicitamente autorizado usa o login piloto
+      // "conta existente apenas"; demais usuários mantêm o login normal.
+      const allowlistTeste = config.envioRealAllowlist ?? [];
+      const testeAutorizado = allowlistTeste.length === 1 &&
+        gerarVariantesTelefoneBrasileiro(String(telefone ?? '')).some(
+          v => gerarVariantesTelefoneBrasileiro(allowlistTeste[0]!).includes(v));
       const resultado = await autenticarComOtp(telefone, codigo, {
         otpRepositorio: otpRepo,
         authAdminService,
-        pepper: config.appPepper
+        pepper: config.appPepper,
+        localizarContaExistente: config.notoAgentLoginContaExistenteApenas && testeAutorizado
+          ? numero => localizarContaExistentePorTelefone(pool, numero)
+          : undefined
       });
 
       if (!resultado.ok) {
         return res.status(401).json(resultado);
       }
 
+      // Nenhuma boas-vindas no OTP. O envio só ocorre após OPEN real na Evolution.
       return res.json(resultado);
     } catch (err: any) {
       console.error('Erro na verificação de OTP:', err);
@@ -251,29 +557,33 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   });
 
+  // O mesmo token Supabase emitido no OTP é validado antes de QUALQUER
+  // operação nessas rotas. A consulta de vínculo nunca cria registros.
+  const rotasProtegidas = [
+    '/api/onboarding/confirmar-fiscal', '/api/onboarding/certificado',
+    '/api/onboarding/nome', '/api/conta/perfil', '/api/conta/preferencias',
+    '/api/onboarding/buscar-referencia', '/api/onboarding/xml',
+    '/api/onboarding/status', '/api/onboarding/whatsapp/iniciar',
+    '/api/onboarding/whatsapp/status'
+  ];
+  app.use(rotasProtegidas, criarGuardaMedicoDaConta({
+    pool,
+    autenticar: async token => {
+      const { data, error } = await authAdminService.supabaseClient.auth.getUser(token);
+      return error ? null : data.user?.id ?? null;
+    }
+  }));
+
   // --- ROTAS DO ONBOARDING MÉDICO (5 PASSOS) ---
 
   // Passo 0: Status Geral do Onboarding
   app.get('/api/onboarding/status', async (req: Request, res: Response) => {
     try {
-      const medicoIdRaw = String(req.query['medicoId'] || '');
-      if (!medicoIdRaw) {
-        return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
-      }
-      const token = req.headers.authorization?.match(/^Bearer (.+)$/i)?.[1];
-      if (!token) return res.status(401).json({ ok: false, detalhe: 'Autenticação necessária' });
-      const { data: identidade, error: erroAuth } = await authAdminService.supabaseClient.auth.getUser(token);
-      if (erroAuth || !identidade.user) return res.status(401).json({ ok: false, detalhe: 'Sessão inválida' });
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const vinculo = await pool.query(
-        'select m.id from medicos m join usuarios u on u.id = m.usuario_id where m.id = $1 and u.auth_user_id = $2 and u.ativo = true',
-        [medicoId, identidade.user.id]
-      );
-      if (!vinculo.rowCount) return res.status(403).json({ ok: false, detalhe: 'Cadastro não autorizado' });
-      res.setHeader('Cache-Control', 'no-store');
+      // Guard já verificou sessão + vínculo sem SELECT sensível nem criação.
+      const { medicoId } = medicoAutorizado(res);
       let status = await consultarStatusOnboarding(pool, medicoId, config.preparacaoFiscalAtiva);
       // Reconcile an outdated local record before asking an already linked user to pair again.
-      if (status.passos.passo3CertificadoValido && !status.passos.passo4WhatsappConectado) {
+      if (status.passos.passo4WhatsappVinculado && !status.passos.passo4WhatsappConectado) {
         const conexao = await consultarStatusInstanciaWhatsapp(pool, {
           medicoId,
           evolutionUrl: config.evolutionApiUrl,
@@ -294,24 +604,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Passo 1: Nome do Médico / Usuário
   app.post('/api/onboarding/nome', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, nome } = req.body || {};
+      const { nome } = req.body || {};
+      const { medicoId, usuarioId, medicoUsuarioId } = medicoAutorizado(res);
       if (!nome || typeof nome !== 'string' || nome.trim().length < 2) {
         return res.status(400).json({ ok: false, detalhe: 'Nome completo é obrigatório' });
       }
       const nomeLimpo = nome.trim();
-      if (usuarioId) {
+      await pool.query('update medicos set nome_completo = $2, atualizado_em = now() where id = $1', [medicoId, nomeLimpo]);
+      // A atualização de identidade da conta só alcança o próprio usuário.
+      if (medicoUsuarioId === usuarioId) {
         await pool.query('update usuarios set nome = $2, atualizado_em = now() where id = $1', [usuarioId, nomeLimpo]);
       }
-      let medicoIdFinal = medicoIdRaw;
-      if (medicoIdRaw || usuarioId) {
-        try {
-          medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
-          await pool.query('update medicos set nome_completo = $2, atualizado_em = now() where id = $1', [medicoIdFinal, nomeLimpo]);
-        } catch {
-          // Mantém medicoIdRaw se não conseguir resolver
-        }
-      }
-      return res.json({ ok: true, nome: nomeLimpo, medicoId: medicoIdFinal });
+      return res.json({ ok: true, nome: nomeLimpo, medicoId });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao salvar nome' });
     }
@@ -320,11 +624,17 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Atualizar Perfil do Médico (Nome, CRM, RQE) na aba Conta
   app.post('/api/conta/perfil', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, nome, crm, rqe, email } = req.body || {};
-      const medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
-
-      const perfil = await salvarPerfilProfissional(pool, { medicoId: medicoIdFinal, usuarioId, nome, crm, rqe, email });
-      await dadosProfissionais.retomar(medicoIdFinal);
+      const { nome, crm, rqe, email } = req.body || {};
+      const { medicoId, usuarioId, medicoUsuarioId } = medicoAutorizado(res);
+      const proprioUsuario = medicoUsuarioId === usuarioId;
+      if (!proprioUsuario && email !== undefined) {
+        return res.status(403).json({ ok: false, detalhe: 'E-mail de outro usuário não pode ser alterado' });
+      }
+      const perfil = await salvarPerfilProfissional(pool, {
+        medicoId, nome, crm, rqe, email, atualizarUsuarioVinculado: proprioUsuario,
+        ...(proprioUsuario ? { usuarioId } : {})
+      });
+      await dadosProfissionais.retomar(medicoId);
       return res.json({ ok: true, ...perfil });
     } catch (err: any) {
       if (err instanceof ZodError) return res.status(400).json({ ok: false, detalhe: err.issues[0]?.message });
@@ -337,10 +647,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Atualizar Preferências do Médico (ex: solicitar CPF direto para o paciente ou médico)
   app.post('/api/conta/preferencias', async (req: Request, res: Response) => {
     try {
-      const { usuarioId, medicoId: medicoIdRaw, solicitarCpfDiretoPaciente } = req.body || {};
-      const medicoIdFinal = await resolverMedicoId(pool, medicoIdRaw || usuarioId);
+      const { solicitarCpfDiretoPaciente } = req.body || {};
+      const { medicoId } = medicoAutorizado(res);
       const resultado = await salvarPreferenciasMedico(pool, {
-        medicoId: medicoIdFinal,
+        medicoId,
         solicitarCpfDiretoPaciente: Boolean(solicitarCpfDiretoPaciente)
       });
       return res.json({ ok: true, ...resultado });
@@ -353,7 +663,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.post('/api/onboarding/buscar-referencia', async (req: Request, res: Response) => {
     try {
       if (!req.body?.medicoId) return res.status(400).json({ ok: false, detalhe: 'Médico não informado.' });
-      const medicoId = await resolverMedicoId(pool, req.body.medicoId);
+      const { medicoId } = medicoAutorizado(res);
       const certificado = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
       if (!certificado) throw new Error('Cadastre seu certificado A1 para localizar a nota.');
       const titular = extrairChavesCertificado(certificado.pfxBuffer, certificado.senhaCertificado);
@@ -383,7 +693,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw || !xmlString) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId e xmlString são obrigatórios' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       const certificado = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
       if (!certificado) throw new Error('Cadastre o certificado A1 antes de importar a nota de referência.');
       const documentoTitularEsperado = extrairChavesCertificado(certificado.pfxBuffer, certificado.senhaCertificado).documentoTitular;
@@ -424,7 +734,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       await confirmarParametrosFiscais(pool, usarReferencia === true ? { medicoId, referenciaHash, usarReferencia: true } : {
         medicoId,
         razaoSocial,
@@ -463,7 +773,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw || !arquivoBase64 || !senha) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId, arquivo e senha são obrigatórios' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       const arquivoBuffer = Buffer.from(arquivoBase64, 'base64');
 
       let documentoTitular: string | undefined;
@@ -555,14 +865,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
-      const revisaoProfissional = await cadastroCertificado.repo.revisaoPainel(medicoId);
-      if (!revisaoProfissional.aprovado) return res.status(409).json({ ok: false,
-        codigo: 'DADOS_PROFISSIONAIS_PENDENTES', detalhe: 'Revise e aprove seus dados profissionais antes de conectar o WhatsApp.' });
-
-      const appUrl = config.host === '0.0.0.0'
-        ? 'https://notomed-web.6t32my.easypanel.host'
-        : `http://${config.host}:${config.porta}`;
+      const { medicoId } = medicoAutorizado(res);
+      // Conectar WhatsApp antes do onboarding fiscal; dados profissionais serão solicitados na conversa.
+      const appUrl = config.pareamentoWebhookOrigin;
+      if (!appUrl || !/^https:\/\/[^/]+$/i.test(appUrl)) {
+        return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
+      }
 
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
@@ -594,7 +902,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       if (!medicoIdRaw) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
-      const medicoId = await resolverMedicoId(pool, medicoIdRaw);
+      const { medicoId } = medicoAutorizado(res);
       const resultado = await consultarStatusInstanciaWhatsapp(pool, {
         medicoId,
         evolutionUrl: config.evolutionApiUrl,
@@ -617,6 +925,11 @@ import { iniciarWorkerEmbutido } from './worker/iniciar-worker-embutido.js';
 
 // Inicia servidor quando executado diretamente
 if (process.env['NODE_ENV'] !== 'test') {
+  // Banco real do piloto NUNCA pode ser aberto pelo servidor completo, que
+  // mantém rotas mutáveis e o recuperador automático de cadastro profissional.
+  if (process.env['NOTO_AGENT_PILOTO_DATABASE_URL']) {
+    throw new Error('PILOTO_EXIGE_ENTRYPOINT_EXCLUSIVO_START_PILOTO_AGENTE');
+  }
   const app = criarAppExpress();
   const servidor = app.listen(config.porta, config.host, () => {
     console.log(`[Notomed Whats] Servidor rodando em http://${config.host}:${config.porta}`);
@@ -627,8 +940,12 @@ if (process.env['NODE_ENV'] !== 'test') {
   });
 
   // Inicia worker da fila em segundo plano no mesmo container
-  const worker = iniciarWorkerEmbutido(pool, config);
-  console.log('[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
+  const worker = config.workerEmbutidoAtivo === false
+    ? { parar: async () => {} }
+    : iniciarWorkerEmbutido(pool, config);
+  console.log(config.workerEmbutidoAtivo === false
+    ? '[Notomed Whats] Worker embutido desativado por configuração.'
+    : '[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
 
   registrarSinaisDeProcesso(process, criarEncerramentoGracioso({
     fecharServidor: async () => {

@@ -15,7 +15,7 @@ export type IniciarConexaoWhatsappInput = {
   evolutionApiKey: string;
   appWebhookUrl: string;
   webhookSecret: string;
-  aoConectar?: (medicoId: string) => void;
+  aoConectar?: (medicoId: string) => Promise<void> | void;
 };
 
 export type ResultadoConexaoWhatsapp = {
@@ -176,7 +176,7 @@ export async function conectarInstanciaWhatsappMedico(
     }
   }
 
-  // 5. Configura o webhook na Evolution para receber os comandos /agendado e /emissao
+  // 5. Configura webhook exclusivo de conexão; mensagens de pacientes não acionam IA
   let webhookConfigurado = false;
   try {
     const resWebhook = await fetch(`${baseUrl}/webhook/set/${nomeInstancia}`, {
@@ -189,7 +189,7 @@ export async function conectarInstanciaWhatsappMedico(
       body: JSON.stringify({
         webhook: {
           enabled: true,
-          url: `${appWebhookUrl.replace(/\/+$/, '')}/webhook/evolution`,
+          url: `${appWebhookUrl.replace(/\/+$/, '')}/webhook/evolution/pareamento`,
           headers: {
             'apikey': evolutionApiKey,
             'x-webhook-secret': webhookSecret || evolutionApiKey
@@ -210,14 +210,14 @@ export async function conectarInstanciaWhatsappMedico(
     // Falha silenciosa no setWebhook
   }
 
-  // 6. Salva ou atualiza a instância em whatsapp_instancias (coluna status com enum status_conexao_whatsapp)
+  // 6. Salva ou atualiza a instância em whatsapp_instancias (coluna status com CHECK de valores permitidos)
   const statusDb = status === 'open' ? 'conectado' : 'pendente';
   const conectadoEm = status === 'open' ? new Date() : null;
   const sql = `
     insert into whatsapp_instancias (
       medico_id, conta_id, nome_instancia, oficial, status, conectado_em, webhook_configurado
     ) values (
-      $1, (select conta_id from medicos where id = $1), $2, false, $3::status_conexao_whatsapp, $4, $5
+      $1, (select conta_id from medicos where id = $1), $2, false, $3, $4, $5
     )
     on conflict (nome_instancia) do update set
       status = excluded.status,
@@ -234,7 +234,7 @@ export async function conectarInstanciaWhatsappMedico(
     return falhar(diagnostico || { etapa: 'instance/connect', codigo: 'CODIGO_NAO_GERADO' });
   }
 
-  if (status === 'open') input.aoConectar?.(medicoId);
+  if (status === 'open') await input.aoConectar?.(medicoId);
 
   return {
     ok: true,

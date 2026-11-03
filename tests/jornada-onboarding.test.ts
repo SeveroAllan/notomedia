@@ -40,7 +40,7 @@ const objetos=new Map<string,Buffer>();
 const requisitarLocal=globalThis.fetch;
 beforeEach(async()=>{
   vi.clearAllMocks();objetos.clear();banco=new BancoJornada();codigo='';conectado=false;respostas=[];
-  config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
+  config.appPublicOrigin='https://homologacao.example.test';config.pareamentoWebhookOrigin='https://homologacao.example.test';config.notoPilotoRestrito=false;config.preparacaoFiscalAtiva=false;config.comunicacaoMedicoAtiva=true;config.evolutionApiUrl='https://evolution.invalid';config.evolutionGlobalApiKey='ficticia';config.evolutionWebhookSecret='ficticio';config.hubDesenvolvedorToken='';config.openserpBaseUrl='';
   fronteiras.query.mockImplementation((s,p)=>banco.query(s,p));fronteiras.connect.mockImplementation(()=>banco.connect());
   supabase={auth:{getUser:vi.fn(async(t:string)=>({data:{user:t===token?{id:authId}:null},error:t===token?null:{message:'Token invalido'}})),admin:{
     createUser:vi.fn(async()=>({data:{user:{id:authId}},error:null})),
@@ -94,6 +94,58 @@ async function chamar(caminho:string,body?:unknown,autorizacao=token){
   const resposta=await r.json() as any;respostas.push({caminho,body:resposta});
   return {status:r.status,body:resposta};
 }
+it('piloto restrito recusa telefone fora da allowlist sem envio nem persistencia de OTP', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[telefone];
+  const consultasAntes=banco.consultas.length;
+  const enviosAntes=rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length;
+  const resposta=await chamar('/api/auth/otp/solicitar',{telefone:'5511988881111'});
+  expect(resposta.status).toBe(403);
+  expect(resposta.body.motivo).toBe('telefone_nao_autorizado');
+  expect(banco.consultas.length).toBe(consultasAntes);
+  expect(rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length).toBe(enviosAntes);
+});
+it('piloto restrito exige exatamente um telefone permitido', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(403);
+  config.envioRealAllowlist=[telefone,'5511988881111'];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(403);
+});
+it('piloto restrito envia OTP somente ao telefone autorizado', async()=> {
+  config.notoPilotoRestrito=true;
+  config.envioRealAllowlist=[telefone];
+  expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);
+  expect(codigo).toMatch(/^\d{6}$/);
+});
+it('pareamento exige origem HTTPS explicita antes de chamar Evolution', async()=> {
+  const medicoId=await entrar();
+  config.pareamentoWebhookOrigin=undefined;
+  const antes=rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length;
+  const resposta=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
+  expect(resposta.status).toBe(503);
+  expect(rede.mock.calls.filter(([url]: any[]) => new URL(String(url)).hostname === 'evolution.invalid').length).toBe(antes);
+});
+it('pareamento usa APP_PUBLIC_ORIGIN explicita, nunca COFRE_ORIGEM antiga',async()=> {
+  const medicoId=await entrar();
+  config.appPublicOrigin='https://endereco-antigo.invalid';
+  config.pareamentoWebhookOrigin='https://homologacao.example.test';
+  const resultado=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});
+  expect(resultado.status).toBe(200);
+  const chamada=rede.mock.calls.find(([url]: any[]) => String(url).includes('/webhook/set/'));
+  expect(chamada).toBeDefined();
+  const payload=JSON.parse(String(chamada![1]?.body));
+  expect(payload.webhook.url).toBe('https://homologacao.example.test/webhook/evolution/pareamento');
+});
+it('piloto restrito bloqueia criacao de nota fiscal nas tres rotas',async()=> {
+  config.notoPilotoRestrito=true;
+  for(const rota of ['/api/v1/nfse','/v2/nfse','/v2/nfsen']) {
+    const retorno=await chamar(rota,{ref:'bloqueada'});
+    expect(retorno.status).toBe(503);
+    expect(retorno.body.codigo).toBe('EMISSAO_DESLIGADA_NA_HOMOLOGACAO');
+  }
+  expect(banco.consultas.some(q=>/insert into (solicitacoes_nota|notas_fiscais)/i.test(q))).toBe(false);
+});
 async function entrar(){
   expect((await chamar('/api/auth/otp/solicitar',{telefone})).status).toBe(200);expect(codigo).toMatch(/^\d{6}$/);
   const login=await chamar('/api/auth/otp/verificar',{telefone,codigo});expect(login.status).toBe(200);expect(login.body.sessao.tokenAcesso).toBe(token);
@@ -117,19 +169,33 @@ async function aprovar(){
   expect(r.status).toBe(200);expect(r.body.revisao).toMatchObject({aprovado:true,nome,crm:'54321/SC',rqe:'9876'});
 }
 
-it.each(['codigo','qrcode'] as const)('jornada OTP, A1, ADN real, revisão, WhatsApp %s, painel fiscal com flag padrão',async modoConexao=>{
+it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados fiscais; emissão permanece bloqueada',async modoConexao=>{
   const medicoId=await entrar();
   const statusInicial=await chamar(`/api/onboarding/status?medicoId=${medicoId}`);expect(statusInicial.status).toBe(200);expect(statusInicial.body.status.liberadoParaEmitir).toBe(false);
   expect((await chamar(`/api/onboarding/status?medicoId=${medicoId}`,undefined,'invalido')).status).toBe(401);
+  // O usuário autenticado conecta o canal antes de enviar certificado ou revisar CRM.
+  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao},'token-invalido')).status).toBe(401);
+  const outroUsuario = supabase.auth.getUser;
+  supabase.auth.getUser = vi.fn(async(t: string) => t === 'token-outra-conta'
+    ? { data: { user: { id: '00000000-0000-4000-8000-000000000099' } }, error: null }
+    : outroUsuario(t));
+  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao},'token-outra-conta')).status).toBe(403);
+  expect(rede.mock.calls.some(([url]: any[]) => String(url).includes('/instance/create'))).toBe(false);
+  const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
+  expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
+  expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-invalido')).status).toBe(401);
+  expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-outra-conta')).status).toBe(403);
+  conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
+  const antesFiscal=(await chamar(`/api/onboarding/status?medicoId=${medicoId}`)).body.status;
+  expect(antesFiscal.passos).toMatchObject({passoProfissionalAprovado:false,passo2FiscalConfirmado:false,passo4WhatsappConectado:true});
+  expect(antesFiscal.liberadoParaEmitir).toBe(false);
+  expect(banco.certificados).toHaveLength(0);
+  expect(banco.perfil).toBeNull();
   const certificado=await upload(medicoId);expect(certificado.status).toBe(200);expect(certificado.body.importacaoFiscal).toMatchObject({ok:true,fonte:'adn',nsu:2});
   expect(certificado.body.importacaoFiscal.parametros.dadosReformaTributaria.pendencias).toEqual([]);
   expect(certificado.body.adocaoFiscal).toMatchObject({ok:false});
   expect([...objetos.entries()].filter(([p])=>p.startsWith('xmls_referencia/')).map(([,v])=>v.toString())).toEqual([xmlRecente]);
-  expect((await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao})).status).toBe(409);
   await pesquisarProfissional();await aprovar();
-  const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
-  expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
-  conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
   const painel=await chamar(`/api/onboarding/status?medicoId=${medicoId}`);expect(painel.body.status.passos).toMatchObject({passoProfissionalAprovado:true,passo4WhatsappConectado:true,passo2FiscalConfirmado:false});
   const referenciaHash=painel.body.status.perfilFiscal.referenciaFiscal.hash;
   const confirmar=await chamar('/api/onboarding/confirmar-fiscal',{medicoId,usarReferencia:true,referenciaHash});expect(confirmar.status).toBe(200);

@@ -43,7 +43,12 @@ function painel() {
   const passos: Array<string | number> = [];
   const contexto = createContext({
     document: { getElementById: (id: string) => elementos.get(id) ?? null, createElement: () => new Elemento() },
-    fetch: async (url: string, opcoes?: { body?: string }) => {
+    fetch: async (url: string, opcoes?: { body?: string; method?: string; headers?: Record<string,string> }) => {
+      if (['/api/onboarding/confirmar-fiscal', '/api/onboarding/certificado',
+        '/api/onboarding/buscar-referencia', '/api/onboarding/xml',
+        '/api/conta/perfil', '/api/conta/preferencias'].includes(url) && opcoes?.method === 'POST') {
+        expect(opcoes.headers?.Authorization).toBe('Bearer token-ficticio');
+      }
       chamadas.push({ url, body: opcoes?.body ? JSON.parse(opcoes.body) : undefined });
       const resposta = respostas.get(url);
       if (!resposta) throw new Error('Requisição não prevista: ' + url);
@@ -144,13 +149,22 @@ describe('jornada fiscal no painel', () => {
     expect(p.el('fallbackXmlFiscal').classList.contains('hidden')).toBe(false);
   });
 
-  it('mantém a primeira revisão profissional quando o backend ainda exige aprovação', async () => {
+  it('não exige aprovação profissional web após conectar WhatsApp', async () => {
     const p = painel();
     p.el('inputSenhaCert').value = 'senha-ficticia';
     p.status(false);
     p.respostas.set('/api/onboarding/certificado', { data: { ok: true, importacaoFiscal: importacao } });
     await p.clicar('btnSalvarCertificado');
-    expect(p.passos).toEqual(['profissional']);
+    expect(p.passos).toEqual([5]);
     expect(p.el('fallbackXmlFiscal').classList.contains('hidden')).toBe(true);
+  });
+});
+
+describe('painel: compatibilidade com a sessão das rotas protegidas', () => {
+  it('POSTs de perfil e preferências enviam o token da mesma sessão OTP', () => {
+    for (const rota of ['/api/conta/perfil', '/api/conta/preferencias']) {
+      const trecho = html.slice(html.indexOf("fetch('"+rota+"'"));
+      expect(trecho.slice(0, 450)).toMatch(/Authorization['"]?\s*:\s*'Bearer '\s*\+/);
+    }
   });
 });

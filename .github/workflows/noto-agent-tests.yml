@@ -1,0 +1,81 @@
+name: Noto Agent - validação do PR
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/agente/**'
+      - 'src/server.ts'
+      - 'src/whatsapp/webhook-pareamento.ts'
+      - 'src/onboarding/io/conectar-instancia-whatsapp-medico.ts'
+      - 'src/onboarding/io/consultar-status-instancia-whatsapp.ts'
+      - 'agent.md'
+      - 'onboarding-noto.md'
+      - 'src/io/evolution/evolution-api-client.ts'
+      - 'scripts/migrations/20261104-noto-conversa-minima.sql'
+      - 'tests/agente-conversa-natural.test.ts'
+      - 'Dockerfile'
+      - 'scripts/migrations/20261102-boas-vindas-pareamento-idempotente.sql'
+      - 'tests/boas-vindas-pareamento.test.ts'
+      - 'tests/webhook-pareamento.test.ts'
+      - 'src/config.ts'
+      - 'src/worker/iniciar-worker-embutido.ts'
+      - 'src/auth/autenticar-com-otp.ts'
+      - 'src/cofre/**'
+      - 'src/conta/medicos-conta.ts'
+      - 'scripts/migrations/20261105-cofre-links-por-conta.sql'
+      - 'scripts/migrations/20261106-cofre-links-reconciliar-homologacao.sql'
+      - 'tests/cofre-*.test.ts'
+      - 'src/fiscal/preparacao/parametros-emissao.ts'
+      - 'tests/agente*.test.ts'
+      - 'tests/schema-homologacao.test.ts'
+      - 'scripts/migrations/20261101-homologacao-onboarding-schema-reconcile.sql'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile.piloto-agente'
+      - '.github/workflows/noto-agent-tests.yml'
+  push:
+    branches: [feat/noto-agent-entrega-a]
+permissions:
+  contents: read
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: noto_test_only
+          POSTGRES_DB: noto_schema_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d noto_schema_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      NOTO_SCHEMA_TEST_DATABASE_URL: postgres://postgres:noto_test_only@127.0.0.1:5432/noto_schema_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Instalar dependências reproduzíveis
+        run: npm ci
+      - name: Verificar tipos
+        run: npm run typecheck
+      - name: Executar suíte completa
+        run: npm test
+      - name: Validar imagem Docker isolada
+        run: docker build --file Dockerfile.piloto-agente --tag noto-agent-piloto-ci .
+      - name: Validar imagem Docker da homologacao web
+        run: docker build --file Dockerfile --tag noto-homologacao-web-ci .
+      - name: Build homologacao com navegador e entrada restrita
+        run: |
+          docker build --file Dockerfile.homologacao --tag noto-homolog-cofre-ci .
+          docker run --rm --entrypoint sh noto-homolog-cofre-ci -c 'command -v chromium-browser && command -v Xvfb && node -p "require.resolve(\"playwright-core\")" && node -p "require(\"./package.json\").scripts[\"start:homologacao\"]"'
