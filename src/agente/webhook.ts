@@ -264,8 +264,8 @@ export function criarRouterWebhookAgente(deps: {
         ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {}),
         ...(contaId && deps.consultarPanorama ? {
           consultarPanorama: (ids: string[]) => deps.consultarPanorama!(contaId!, ids),
-          aoPanorama: (foco: string | null, resultado: PanoramaFiscal) => {
-            panoramaDaMensagem.atual = { foco, resultado };
+          aoPanorama: (foco: string | null, resultado: ResultadoPanoramaFiscal) => {
+            if (resultado.ok) panoramaDaMensagem.atual = { foco, resultado };
           }
         } : {})
       });

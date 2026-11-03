@@ -7,7 +7,7 @@ import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerra
 import { INSTRUCOES_NOTO } from './instrucoes.js';
 import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
-import { descreverPanoramaFiscal, type PanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
+import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
@@ -27,7 +27,7 @@ export interface EntradaAgente {
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  aoPanorama?: (foco: string | null, resultado: PanoramaFiscal) => void;
+  aoPanorama?: (foco: string | null, resultado: ResultadoPanoramaFiscal) => void;
   /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
   referenciaContaAgenda?: () => Promise<string | null>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
@@ -287,6 +287,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const inicio = Date.now();
       const r = identificar(profissional, profissionais);
       if (r.erro || !r.encontrados.length) {
+        deps.aoPanorama?.(null, { ok: false, motivo: !profissionais.length ? 'SEM_PROFISSIONAIS_CONFIRMADOS' : 'ESCOPO_NAO_CONFERIDO' });
         registrar('consultar_panorama_operacional',
           r.erro?.includes('ambíguo') ? 'PROFISSIONAL_AMBIGUO' : 'DEPENDENCIA_PROFISSIONAL', inicio);
         return { ok: false, motivo: r.erro ?? 'SEM_PROFISSIONAIS_CONFIRMADOS' };
@@ -294,6 +295,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       try {
         const resultado = await deps.consultarPanorama!(r.encontrados.map(p => p.id));
         if (!resultado.ok) {
+          deps.aoPanorama?.(profissional, resultado);
           registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_INDISPONIVEL', inicio);
           return resultado;
         }
@@ -301,6 +303,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_CONSULTADO', inicio);
         return resultado;
       } catch {
+        deps.aoPanorama?.(profissional, { ok: false, motivo: 'DADOS_FISCAIS_INDISPONIVEIS' });
         registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_INDISPONIVEL', inicio);
         return { ok: false, motivo: 'DADOS_FISCAIS_INDISPONIVEIS' };
       }
@@ -803,7 +806,12 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // Os números fiscais nunca são gerados pelo modelo: apenas pela leitura autorizada.
     if (panoramaTurno.resultado) {
       registrar('RESPOSTA',uso);
-      return descreverPanoramaFiscal(panoramaTurno.resultado);
+      if (panoramaTurno.resultado.ok) return descreverPanoramaFiscal(panoramaTurno.resultado);
+      return panoramaTurno.resultado.motivo === 'SEM_PROFISSIONAIS_CONFIRMADOS'
+        ? 'Ainda não tenho um médico confirmado nesta conta. Vou precisar identificar os profissionais na agenda antes de consultar os registros fiscais.'
+        : panoramaTurno.resultado.motivo === 'ESCOPO_NAO_CONFERIDO'
+          ? 'Não consegui conferir a identidade desse profissional na sua conta. Qual médico você quer consultar?'
+          : 'Não consegui acessar os registros fiscais agora. Isso não significa que não haja notas ou solicitações; vou preservar a etapa para continuar com segurança.';
     }
     const relato=acompanhamentoVerificado(entrada,ferramentas);
     if(relato) {
