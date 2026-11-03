@@ -649,6 +649,55 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
   return true;
 }
 
+/**
+ * O transportador e as ferramentas são a autoridade dos MARCOS de ação.
+ * Para transições executadas neste turno, o modelo não narra o estado do
+ * transporte: a resposta vem de evidência tipada, não de frases proibidas.
+ * Fora dessas transições, preserva integralmente a conversa livre.
+ */
+export function acompanhamentoVerificado(
+  entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
+): string | null {
+  const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
+  const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
+  const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
+  if(tem('LINK_ACEITO_PARA_ENVIO')) return [
+    `O serviço de mensagens aceitou o pedido do link seguro para a ${nomeAgenda}.`,
+    'Ainda não há comprovante de entrega no WhatsApp.',
+    'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
+  ].join(' ');
+  if(tem('CONEXAO_EXISTENTE')) return [
+    `A conexão com a ${nomeAgenda} já está confirmada.`,
+    'Agora precisamos conferir os médicos identificados na leitura, antes de qualquer vínculo.',
+    'Nenhum profissional será adicionado sem sua confirmação.'
+  ].join(' ');
+  if(tem('LINK_ENTREGUE')||tem('LINK_LIDO')) return [
+    tem('LINK_LIDO')?'O WhatsApp registrou a leitura do link seguro.':'O WhatsApp confirmou a entrega do link seguro.',
+    'Isso não confirma o login na agenda.',
+    'A verificação dos médicos começa depois da conexão autenticada.'
+  ].join(' ');
+  // Acompanhamento entre turnos só trata a mesma tarefa de conexão.
+  // Reconhece o assunto, NÃO tenta detectar ou banir formulações do modelo.
+  const falandoDoLink=/\b(?:link|agenda|conect|acesso|tribemd|amplimed)\b/i.test(entrada.texto);
+  if(falandoDoLink && entrada.situacaoUltimoLink && !entrada.estadoConversa?.descoberta) {
+    const estado=entrada.situacaoUltimoLink.estado;
+    if(estado==='ENTREGUE'||estado==='LIDO') return [
+      estado==='LIDO'?'O WhatsApp registrou a leitura do último link.':'O WhatsApp confirmou a entrega do último link.',
+      'Vou continuar a partir do acesso confirmado no portal, sem gerar outro link.'
+    ].join(' ');
+    if(estado==='ERRO_COMPROVADO') return [
+      'O WhatsApp registrou um erro para a mensagem do link.',
+      'Não vou enviar outro link sensível automaticamente.'
+    ].join(' ');
+    return [
+      `O pedido do link seguro da ${nomeAgenda} já foi aceito pelo serviço de mensagens.`,
+      'A entrega ao aparelho ainda não foi confirmada.',
+      'Não vou criar nem reenviar outro link por conta própria.'
+    ].join(' ');
+  }
+  return null;
+}
+
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
@@ -697,25 +746,18 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
-    const respostaSemAcentos=resposta.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
-    const afirmouFuturoDepoisDoAceite = (
-      ferramentas.some(e=>e.codigo==='LINK_ACEITO_PARA_ENVIO') ||
-      entrada.situacaoUltimoLink!==undefined
-    ) && /(?:ja solicitei|acabei de solicitar|assim que (?:o link|ele) (?:estiver|ficar)|(?:vai|ira|irá) receber (?:o |um )?link|link (?:vai|sera|será) (?:ser|estar|ficar) (?:enviado|disponivel|disponível)|(?:quando|assim que) (?:estiver|ficar) disponivel)/i.test(respostaSemAcentos);
-    const encerramentoPrematuro = (
-      ferramentas.some(e=>['LINK_ACEITO_PARA_ENVIO','CONEXAO_EXISTENTE','CONEXAO_PENDENTE'].includes(e.codigo)) ||
-      !!entrada.situacaoUltimoLink || !!entrada.estadoConversa?.descoberta
-    ) && /(?:estou (?:a|à) disposi[cç][aã]o|quando quiser|qualquer coisa (?:me avise|estou aqui)|se precisar de algo)/i.test(resposta);
-    if (resposta && (afirmouFuturoDepoisDoAceite || encerramentoPrematuro ||
-      !respostaCompativelComFerramentas(resposta, ferramentas))) {
-      registrar('RESPOSTA_BLOQUEADA', uso);
-      return ferramentas.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA')
-         ? 'A integração da agenda ainda não está configurada neste ambiente de testes. É uma pendência local do Noto, não uma falha da plataforma. Sua senha será informada somente na página segura quando a conexão estiver habilitada.'
-         : ferramentas.some(e => e.codigo === 'LINK_ACEITO_PARA_ENVIO') || entrada.situacaoUltimoLink
-         ? 'O pedido do link já foi aceito pelo serviço de mensagens. Ainda não tenho confirmação de entrega. Depois da conexão, sigo para identificar os médicos da agenda; não vou gerar outro link automaticamente.'
-         : ferramentas.some(e=>e.codigo==='CONEXAO_EXISTENTE')
-         ? 'A conexão da agenda já está confirmada. O próximo passo é verificar os profissionais na fonte antes de pedir sua confirmação.'
-         : 'Não consegui confirmar isso pelas verificações disponíveis. Posso conferir a conexão da sua agenda novamente?';
+    const relato=acompanhamentoVerificado(entrada,ferramentas);
+    if(relato) {
+      // O marco foi produzido por ferramenta real ou estado da conta;
+      // a redação livre do modelo não pode alterá-lo nem antecipá-lo.
+      registrar('RESPOSTA',uso);
+      return relato;
+    }
+    if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
+      registrar('RESPOSTA_BLOQUEADA',uso);
+      return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
+        ? 'A integração ainda não está configurada neste ambiente. Sua senha só entra na página segura.'
+        : 'Não tenho confirmação suficiente para afirmar essa ação. Vou preservar a etapa atual.';
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
