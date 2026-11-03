@@ -493,3 +493,36 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     expect(solicitarLinkAgenda).not.toHaveBeenCalled();
   });
 });
+
+describe('Evolution MESSAGES_UPDATE: acompanhamento passivo e seguro de links',()=>{
+  const atualizarEstadoLink=vi.fn().mockResolvedValue(true);
+  const recibo={
+    event:'messages.update',instance:'notomed_assistente',
+    data:{keyId:'3EB0ABCDEFGH9',remoteJid:'5551999998888@s.whatsapp.net',
+      fromMe:true,status:'SERVER_ACK'}
+  };
+  it('webhook assinado registra recibo com IA pausada, sem enviar mensagens nem chamar modelo',async()=>{
+    atualizarEstadoLink.mockClear();
+    const {app,query,enviar,modeloTeste}=preparar({
+      ativo:false,envioAtivo:false,atualizarEstadoLink
+    });
+    await comServidor(app,async postar=>{
+      expect((await postar(recibo)).status).toBe(200);
+    });
+    expect(atualizarEstadoLink).toHaveBeenCalledExactlyOnceWith(recibo);
+    expect(query).not.toHaveBeenCalled();
+    expect(enviar).not.toHaveBeenCalled();
+    expect(modeloTeste.calls).toHaveLength(0);
+  });
+  it('nega recibos sem segredo ou de outra instancia, sem side effects',async()=>{
+    atualizarEstadoLink.mockClear();
+    const {app,query,enviar}=preparar({ativo:false,envioAtivo:false,atualizarEstadoLink});
+    await comServidor(app,async postar=>{
+      expect((await postar(recibo,'errado')).status).toBe(401);
+      expect((await postar({...recibo,instance:'notomed_oficial'})).status).toBe(204);
+    });
+    expect(atualizarEstadoLink).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(enviar).not.toHaveBeenCalled();
+  });
+});
