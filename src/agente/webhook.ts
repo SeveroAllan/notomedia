@@ -19,6 +19,7 @@ import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { cofreIdDaConta } from '../cofre/identidade-conta.js';
+import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operacional.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -57,6 +58,7 @@ export function criarRouterWebhookAgente(deps: {
   diagnosticoAtivo?: boolean;
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
+  consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
@@ -220,6 +222,7 @@ export function criarRouterWebhookAgente(deps: {
       let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
       let diagnostico: DiagnosticoAgente | undefined;
       const comprovantes: ComprovanteTarefa[] = [];
+      const panoramaDaMensagem: { atual?: { foco: string | null; resultado: PanoramaFiscal } } = {};
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       const agendaDoLink=agenda??estado.agendaEscolhida;
       const ultimoLink=contaId && agendaDoLink && deps.consultarEntregaLink
@@ -258,7 +261,13 @@ export function criarRouterWebhookAgente(deps: {
         ...(deps.solicitarLinkAgenda ? { solicitarLinkAgenda: (medicoId: string, agenda: AgendaEscolhida) => deps.solicitarLinkAgenda!(medicoId, agenda, telefone) } : {}),
         ...(deps.consultarEntregaLink ? { consultarEntregaLink: (ref:string,agenda:AgendaEscolhida) =>
           deps.consultarEntregaLink!(ref,agenda) } : {}),
-        ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {})
+        ...(deps.consultarProntidao ? { consultarProntidao: deps.consultarProntidao } : {}),
+        ...(contaId && deps.consultarPanorama ? {
+          consultarPanorama: (ids: string[]) => deps.consultarPanorama!(contaId!, ids),
+          aoPanorama: (foco: string | null, resultado: PanoramaFiscal) => {
+            panoramaDaMensagem.atual = { foco, resultado };
+          }
+        } : {})
       });
 
       const baloes = separarBaloes(resposta);
@@ -273,6 +282,14 @@ export function criarRouterWebhookAgente(deps: {
       if (enviado) {
         const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
         const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
+        if (panoramaDaMensagem.atual) {
+          const { foco } = panoramaDaMensagem.atual;
+          novo.ultimaConsultaFiscal = {
+            escopo: foco === null ? 'conta' : 'profissional',
+            ...(foco !== null ? { profissionalNome: foco } : {}),
+            verificadaEm: new Date().toISOString()
+          };
+        }
         // Somente comprovante real da ferramenta confirma uma ação,
         // nunca a resposta livre da IA ou um status ainda indisponível.
         const concluida = diagnostico?.codigo === 'RESPOSTA' ? selecionarConclusao(
