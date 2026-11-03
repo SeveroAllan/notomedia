@@ -79,7 +79,9 @@ export function criarRouterWebhookAgente(deps: {
   // Somente no piloto read-only; no modo durável o banco é a autoridade.
   const tarefasEmMemoria = new Map<string, TarefaPendente[]>();
 
-  router.post('/', async (req, res) => {
+  // byEvents=true adiciona /messages-update. Mesmo handler autenticado
+  // da rota-base, sem mudar a configuracao ativa da Evolution.
+  router.post(['/', '/messages-update'], async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     // Eventos de recibo autenticados sao passivos: nao disparam IA, nao
     // enviam mensagem e nao consomem URL, inclusive com IA pausada.
@@ -87,11 +89,21 @@ export function criarRouterWebhookAgente(deps: {
       req.body.event.toLowerCase().replace('_','.')==='messages.update';
     if (possivelRecibo) {
       if (!segredoIgual(req.header('x-webhook-secret'),deps.segredo)) {
+        console.info('NOTO_RECIBO_LINK','AUTENTICACAO_RECUSADA');
         res.sendStatus(401); return;
       }
-      if (req.body?.instance!==deps.instancia) { res.sendStatus(204); return; }
-      try { await deps.atualizarEstadoLink?.(req.body); res.sendStatus(200); }
-      catch { res.sendStatus(503); }
+      if (req.body?.instance!==deps.instancia) {
+        console.info('NOTO_RECIBO_LINK','OUTRA_INSTANCIA');
+        res.sendStatus(204); return;
+      }
+      try {
+        if(deps.atualizarEstadoLink) await deps.atualizarEstadoLink(req.body);
+        // No servidor, a funcao registra codigo detalhado sem payload.
+        res.sendStatus(200);
+      } catch {
+        console.warn('NOTO_RECIBO_LINK','PROCESSAMENTO_INDISPONIVEL');
+        res.sendStatus(503);
+      }
       return;
     }
     if (!deps.ativo || !deps.envioAtivo) { res.sendStatus(204); return; }

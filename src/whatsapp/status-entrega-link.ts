@@ -36,25 +36,41 @@ export interface EventoEstadoEvolution {
     status?: string;
   };
 }
+export type ReciboInvalido =
+  'EVENTO_INESPERADO'|'CORPO_NAO_RECONHECIDO'|'STATUS_NAO_RECONHECIDO'|
+  'MENSAGEM_SEM_ORIGEM_COMPROVADA'|'SEM_ID_DA_MENSAGEM'|'SEM_NUMERO_PN';
+export function interpretarEstadoEvolutionComDiagnostico(entrada: unknown):
+  | {ok:true; evento:{instancia:string;mensagemId:string;destinatarios:string[];estado:EstadoEntregaLink}}
+  | {ok:false; motivo:ReciboInvalido} {
+  if (!entrada || typeof entrada!=='object') return {ok:false,motivo:'CORPO_NAO_RECONHECIDO'};
+  const e=entrada as Partial<EventoEstadoEvolution>;
+  if (typeof e.event!=='string' || e.event.toLowerCase().replace('_','.')!=='messages.update')
+    return {ok:false,motivo:'EVENTO_INESPERADO'};
+  if (typeof e.instance!=='string' || !e.instance ||
+      !e.data || typeof e.data!=='object' || Array.isArray(e.data))
+    return {ok:false,motivo:'CORPO_NAO_RECONHECIDO'};
+  const d=e.data;
+  if (!['PENDING','SERVER_ACK','DELIVERY_ACK','READ','ERROR'].includes(d.status??''))
+    return {ok:false,motivo:'STATUS_NAO_RECONHECIDO'};
+  if (d.fromMe!==true && d.key?.fromMe!==true)
+    return {ok:false,motivo:'MENSAGEM_SEM_ORIGEM_COMPROVADA'};
+  const mensagemId=d.keyId||d.key?.id;
+  if(typeof mensagemId!=='string'||!/^[A-Za-z0-9_-]{5,150}$/.test(mensagemId))
+    return {ok:false,motivo:'SEM_ID_DA_MENSAGEM'};
+  // Nunca converter um JID @lid em numero de telefone por suposicao.
+  // So @s.whatsapp.net corresponde ao HMAC salvo no aceite do envio.
+  const jids=[d.remoteJid,d.remoteJidAlt,d.key?.remoteJid]
+    .filter((v):v is string=>typeof v==='string');
+  const destinatarios=[...new Set(jids.map(v=>/^([0-9]{10,15})@s\.whatsapp\.net$/.exec(v)?.[1])
+    .filter((v):v is string=>!!v))];
+  if(!destinatarios.length) return {ok:false,motivo:'SEM_NUMERO_PN'};
+  return {ok:true,evento:{instancia:e.instance,mensagemId,destinatarios,estado:d.status as EstadoEntregaLink}};
+}
 export function interpretarEstadoEvolution(entrada: unknown): {
   instancia: string; mensagemId: string; destinatarios: string[]; estado: EstadoEntregaLink
 } | null {
-  if (!entrada || typeof entrada !== 'object') return null;
-  const e = entrada as Partial<EventoEstadoEvolution>;
-  if (e.event?.toLowerCase().replace('_','.') !== 'messages.update' ||
-      !e.data || !e.instance || typeof e.instance !== 'string') return null;
-  const d = e.data;
-  const estado = d.status;
-  if (!['PENDING','SERVER_ACK','DELIVERY_ACK','READ','ERROR'].includes(estado ?? '')) return null;
-  // Nunca aceitar evento de recebimento do proprio usuario como ACK de saida.
-  if (d.fromMe !== true && d.key?.fromMe !== true) return null;
-  const mensagemId = d.keyId || d.key?.id;
-  if (typeof mensagemId !== 'string' || !/^[A-Za-z0-9_-]{5,150}$/.test(mensagemId)) return null;
-  const jids = [d.remoteJid, d.remoteJidAlt, d.key?.remoteJid]
-    .filter((v): v is string => typeof v === 'string');
-  const numeros = [...new Set(jids.map(v=>/^([0-9]{10,15})@s\.whatsapp\.net$/.exec(v)?.[1]).filter((v):v is string=>!!v))];
-  if (!numeros.length) return null;
-  return { instancia:e.instance, mensagemId, destinatarios:numeros, estado:estado as EstadoEntregaLink };
+  const resultado=interpretarEstadoEvolutionComDiagnostico(entrada);
+  return resultado.ok ? resultado.evento : null;
 }
 
 export function hashDestinatario(segredo: string, telefone: string): string {
