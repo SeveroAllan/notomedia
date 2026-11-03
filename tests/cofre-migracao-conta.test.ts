@@ -59,6 +59,13 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
         VALUES ('11111111-1111-4111-8111-111111111111','tribemd','legado',now()+interval '15 minutes')`);
       await banco.query(`INSERT INTO public.cofre_links_auditoria(link_id,evento)
         SELECT id,'criado' FROM public.cofre_links WHERE token_hash='legado'`);
+      // O SQL antigo, sem ajuste de fixture, rejeita 'concluido' e não tem telefone.
+      await expect(banco.query(`insert into public.cofre_links_auditoria(link_id,evento)
+        select id,'concluido' from public.cofre_links where token_hash='legado'`)).rejects.toThrow();
+      const colunaAntiga=await banco.query(`select count(*)::int as n
+        from information_schema.columns where table_schema='public'
+        and table_name='cofre_links' and column_name='destino_telefone'`);
+      expect(colunaAntiga.rows[0].n).toBe(0);
       await banco.query(bootstrap);
       await banco.query(bootstrap);
       await banco.query(sql);
