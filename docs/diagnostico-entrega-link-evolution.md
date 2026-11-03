@@ -21,15 +21,32 @@ na auditoria já no aceite. O Agent anotava `LINK_ENVIADO` e tratava como
 tarefa concluída. **Isso explica a afirmação indevida, não a causa da
 falta de entrega.**
 
-A versão do Noto no `package.json` é `notomed-whats@0.1.0`; a versão exata
-da Evolution e do Baileys **não é fixada nem verificável aqui**: Evolution roda
+A versão do Noto no `package.json` é `notomed-whats@0.1.0`. Segundo
+verificação controlada comunicada pelo operador, a Evolution do assistente
+está em **2.4.0-rc2**. Essa versão **não é fixada no repositório**: Evolution roda
 em serviço externo configurado por `EVOLUTION_ASSISTANT_URL`,
 `EVOLUTION_ASSISTANT_GLOBAL_API_KEY`/`EVOLUTION_ASSISTANT_API_KEY` e
 `EVOLUTION_ASSISTANT_INSTANCE_NAME`; a configuração executada no Easypanel
 não pertence ao repositório. Conferir versão da **instância emissora**
-(e não a Evolution oficial separada para OTP), tag e digest da imagem,
-provedor/canal Baileys, webhook ativo, `linkPreview`, Redis e status
-conectado **somente por inspeção autorizada**, sem revelar segredos.
+(e não a Evolution oficial separada para OTP), tag/digest da imagem,
+webhook ativo, Redis e estado da sessão por inspeção autorizada; não
+registrar segredos nem acessar o serviço sem autorização.
+
+## Evidência controlada comunicada pelo operador (03/11/2026)
+
+Na **mesma instância do assistente Evolution 2.4.0-rc2**, com o mesmo
+destinatário autorizado e a **mesma URL pública inofensiva
+`https://example.com/`**:
+- Com `linkPreview:true`, a mensagem ficou em `SERVER_ACK`, sem
+  `DELIVERY_ACK` nem `READ`; não chegou no aparelho.
+- Com `linkPreview:false`, houve `DELIVERY_ACK` e `READ`; o
+  operador confirmou que recebeu e leu a mensagem.
+
+A comparação isolou o fator prévia **nessas condições** e justifica
+preparar sua desativação **somente no balão da URL segura**. Não demonstra
+que o domínio Easypanel está bloqueado, nem garante entrega de links
+reais do Cofre ou de todas as mensagens. O teste com token verdadeiro
+está pendente de autorização separada.
 
 ## Nova evidência diretamente comparável (22/10/2026)
 
@@ -93,8 +110,14 @@ https://github.com/evolution-foundation/evolution-docs/blob/main/docs/02-Configu
 
 ## Correção de honestidade e recibos, SEM mudar o meio de envio
 
-Esta PR não altera domínio, texto da URL, `linkPreview`, número, instância,
-canal nem oferece reenvio automático. Mantém token, validade e HTTPS.
+O aditivo desta PR altera **somente o parâmetro `linkPreview:false`**
+no `POST /message/sendText` que transporta o balão da URL segura, tanto
+para conta sem médicos quanto para vínculo legado por médico. O cliente
+aceita o parâmetro opcionalmente e continua emitindo **apenas
+`{number,text}`** nas demais mensagens, incluindo balões de orientação.
+Não muda domínio, URL, número, instância, canal nem oferece reenvio
+automático. Mantém token de uso único, hash, validade de 15 minutos e
+senha informada exclusivamente na página HTTPS.
 `LINK_ACEITO_PARA_ENVIO` substitui `LINK_ENVIADO` no diagnóstico:
 aceite HTTP não conclui a tarefa nem justifica ✅. O agente não pode
 afirmar recebimento sem prova. Novo evento passivo `messages.update`
@@ -177,8 +200,20 @@ ou de outra conta/instância ignorados.
 3. Habilitar `MESSAGES_UPDATE` **somente após inspeção e aprovação da
    configuração Evolution existente**, preservando `MESSAGES_UPSERT`
    e segredo do webhook; `byEvents` determina a rota.
-4. Só depois de autorização específica, executar testes inofensivos.
-   Não mudar domínio, preview ou formato produtivo sem aprovação.
+4. O ensaio com `https://example.com/` foi feito pelo operador e
+   reportado antes deste aditivo; **nenhuma mensagem de teste foi
+   enviada durante o desenvolvimento**. Somente após autorização específica,
+   testar o link real do Cofre em conta e médico legado. Não alterar
+   domínio, canal, formato de balões ou configuração da Evolution.
+
+**Provas automatizadas adicionais**:
+`tests/cofre-link-preview.test.ts` intercepta `fetch` localmente,
+inspeciona o corpo JSON enviado à rota `sendText` nos caminhos por
+`conta_id` e por `medico_id`, exige `linkPreview:false` **somente**
+no terceiro balão, confirma ausência da opção nos balões normais,
+preservação de hashes, validade de 15 minutos, uso do callback de recibo
+e ausência de preview em envio comum de texto e mídia. Não há tráfego
+externo nem necessidade de rodar IA.
 
 Em rollback do código, preservar a tabela de recibos sem leitura pública;
 nunca apagar tokens ou links em uso nem alterar o Cofre persistente.
