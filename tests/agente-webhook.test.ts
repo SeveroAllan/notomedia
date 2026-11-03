@@ -48,13 +48,13 @@ function preparar(overrides: Record<string, unknown> = {}) {
 
 async function comServidor(
   app: ReturnType<typeof express>,
-  fn: (postar: (body: unknown, segredo?: string) => Promise<Response>) => Promise<void>
+  fn: (postar: (body: unknown, segredo?: string, rota?: string) => Promise<Response>) => Promise<void>
 ) {
   const server = createServer(app);
   await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
   const endereco = server.address() as AddressInfo;
-  const postar = (body: unknown, segredo = 'segredo-de-teste') => fetch(
-    'http://127.0.0.1:' + endereco.port + '/webhook/evolution',
+  const postar = (body: unknown, segredo = 'segredo-de-teste', rota='/webhook/evolution') => fetch(
+    'http://127.0.0.1:' + endereco.port + rota,
     { method: 'POST', headers: { 'content-type': 'application/json', 'x-webhook-secret': segredo }, body: JSON.stringify(body) }
   );
   try { await fn(postar); }
@@ -524,5 +524,42 @@ describe('Evolution MESSAGES_UPDATE: acompanhamento passivo e seguro de links',(
     expect(atualizarEstadoLink).not.toHaveBeenCalled();
     expect(query).not.toHaveBeenCalled();
     expect(enviar).not.toHaveBeenCalled();
+  });
+});
+
+describe('correlação de recibos Evolution no webhook, inclusive byEvents',()=>{
+  const dados={
+    event:'messages.update',instance:'notomed_assistente',
+    data:{keyId:'3EB0AAAAAAAAAAAA',remoteJid:'5551999998888@s.whatsapp.net',
+      fromMe:true,status:'DELIVERY_ACK'}
+  };
+  it('processa /messages-update com o mesmo segredo/instância e IA pausada',async()=>{
+    const atualizarEstadoLink=vi.fn().mockResolvedValue(true);
+    const {app,modeloTeste,enviar,query}=preparar({
+      ativo:false,envioAtivo:false,atualizarEstadoLink
+    });
+    await comServidor(app,async postar=>{
+      expect((await postar(dados,'segredo-de-teste','/webhook/evolution/messages-update')).status).toBe(200);
+    });
+    expect(atualizarEstadoLink).toHaveBeenCalledExactlyOnceWith(dados);
+    expect(query).not.toHaveBeenCalled();
+    expect(enviar).not.toHaveBeenCalled();
+    expect(modeloTeste.calls).toHaveLength(0);
+  });
+  it('byEvents não contorna autenticação e não processa instância errada',async()=>{
+    const atualizarEstadoLink=vi.fn();
+    const aviso=vi.spyOn(console,'info').mockImplementation(()=>{});
+    try{
+      const {app,query,enviar}=preparar({ativo:false,envioAtivo:false,atualizarEstadoLink});
+      await comServidor(app,async postar=>{
+        expect((await postar(dados,'segredo-errado','/webhook/evolution/messages-update')).status).toBe(401);
+        expect((await postar({...dados,instance:'instancia-outra'},'segredo-de-teste','/webhook/evolution/messages-update')).status).toBe(204);
+      });
+      expect(atualizarEstadoLink).not.toHaveBeenCalled();
+      expect(query).not.toHaveBeenCalled();
+      expect(enviar).not.toHaveBeenCalled();
+      expect(JSON.stringify(aviso.mock.calls)).not.toContain('3EB0AAAAAAAAAAAA');
+      expect(JSON.stringify(aviso.mock.calls)).not.toContain('5551999998888');
+    }finally{aviso.mockRestore();}
   });
 });
