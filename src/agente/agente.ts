@@ -11,7 +11,6 @@ import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panoram
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
 import { contaDoCofreId } from '../cofre/identidade-conta.js';
 import { decidirVinculo, explicarVinculoNaoExecutado } from './confirmacao-contextual.js';
-import type { PesquisaRegistroConversa } from './pesquisa-profissional-conversa.js';
 import { normalizarCrm } from '../conta/validar-dados-emissao.js';
 import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 

@@ -63,14 +63,15 @@ export function extrairSugestoes(nome:string,r:ResultadoConsultaRegistro):
   {razao:RazaoPesquisa;candidatos:SugestaoRegistro[]} {
   if(r.estado==='indisponivel')return {razao:'FONTE_INDISPONIVEL',candidatos:[]};
   if(r.estado==='nao_encontrado')return {razao:'SEM_RESULTADO',candidatos:[]};
+  if(r.estado!=='consultado')return {razao:'FONTE_INDISPONIVEL',candidatos:[]};
   const encontrados=new Map<string,SugestaoRegistro>();
-  for(const d of r.dados.slice(0,10)){
+  for(const d of (r.dados as DadosMedicoOnline[]).slice(0,10)){
     if(normalizarNomeMedico(d.nomeCompleto)!==normalizarNomeMedico(nome) || d.verificado===false)continue;
     const crm=normalizarCrm(d.crm+'/'+d.uf);
     if(!crm || !crm.includes('/'))continue;
     const link=d.urlOrigem;
     if(link!==undefined && !/^https:\/\/[^@\s/]+/i.test(link))continue;
-    const rqes=(d.rqes??(d.rqe?[d.rqe]:[])).filter((x):x is string=>typeof x==='string'&&rqeValido(x));
+    const rqes=(d.rqes??(d.rqe?[d.rqe]:[])).filter((x:string):x is string=>typeof x==='string'&&rqeValido(x));
     const item:SugestaoRegistro={crm,uf:crm.split('/')[1]!,rqes:[...new Set(rqes)].slice(0,5),
       origem:(d.origem??'Pesquisa pública, sugestão não oficial').slice(0,155),
       ...(link?{urlOrigem:link.slice(0,950)}:{})};
