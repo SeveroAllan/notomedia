@@ -70,6 +70,8 @@ export function criarRouterWebhookAgente(deps: {
     ok:boolean;nomes?:string[];motivo?:string;medicos?:{id:string;nome:string}[]
   }>;
   agendarPesquisa?: (contaId:string,medicoId:string,nome:string) => Promise<'agendada'|'ja_existe'|'indisponivel'>;
+  solicitarLinkRegistro?: (contaId:string,medicoId:string,telefone:string)=>Promise<{ok:boolean;motivo?:string}>;
+  aprovarRegistroProfissional?: (contaId:string,medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   proporCorrecaoPesquisa?: (contaId:string,medicoId:string,dados:{crm:string;rqe?:string})=>Promise<boolean>;
   concluirRevisaoPesquisa?: (contaId:string,medicoId:string)=>Promise<boolean>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
@@ -290,6 +292,13 @@ export function criarRouterWebhookAgente(deps: {
           }: {})
         } : {}),
         ...(deps.salvarDadosProfissionais ? { salvarDadosProfissionais: deps.salvarDadosProfissionais } : {}),
+        ...(contaId&&deps.solicitarLinkRegistro?{
+          solicitarLinkRegistro:(medicoId:string)=>deps.solicitarLinkRegistro!(contaId!,medicoId,telefone)
+        }:{}),
+        ...(contaId&&deps.aprovarRegistroProfissional?{
+          aprovarRegistroProfissional:(medicoId:string)=>
+            deps.aprovarRegistroProfissional!(contaId!,medicoId)
+        }:{}),
         ...(contaId && deps.proporCorrecaoPesquisa ? {
           proporCorrecaoPesquisa:(medicoId:string,dados:{crm:string;rqe?:string})=>
             deps.proporCorrecaoPesquisa!(contaId!,medicoId,dados)
