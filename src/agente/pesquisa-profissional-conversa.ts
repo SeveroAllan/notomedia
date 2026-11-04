@@ -130,8 +130,7 @@ export async function agendarPesquisaRegistro(
     return 'indisponivel';
   }
 }
-export interface PesquisaReservada {contaId:string;medicoId:string;nome:string}
-export interface PesquisaReservada {contaId:string;medicoId:string;nome:string;tentativas:number}
+export interface PesquisaReservada {contaId:string;medicoId:string;nome:string;tentativas?:number}
 /** Reserva da mesma linha JSONB, com incremento ANTES da chamada externa.
  * Se houver crash após a chamada paga, a tentativa continua consumida.
  */
@@ -155,7 +154,7 @@ export async function reservarPesquisaRegistro(pool:Banco):Promise<PesquisaReser
     "coalesce((proxima.item->>'tentativas')::int,0)+1 as tentativas"
   ].join('\n');
   const r=await pool.query(sql,[MAX_TENTATIVAS_REGISTRO]),x=r.rows[0];
-  return x?{contaId:x.conta_id,medicoId:x.medico_id,nome:x.nome,tentativas:x.tentativas}:null;
+  return x?{contaId:x.conta_id,medicoId:x.medico_id,nome:x.nome,tentativas:Number(x.tentativas)}:null;
 }
 async function atualizarPesquisa(
   pool:Banco,p:PesquisaReservada,anterior:StatusPesquisa,campos:Record<string,unknown>
@@ -166,7 +165,7 @@ async function atualizarPesquisa(
     "c.estado#>array['pesquisasRegistro',$2::text]||$3::jsonb,false),atualizado_em=now()",
     "where c.conta_id=$1 and c.estado#>>array['pesquisasRegistro',$2::text,'estado']=$4",
     "and c.estado#>>array['pesquisasRegistro',$2::text,'nome']=$5",
-    "and coalesce((c.estado#>>array['pesquisasRegistro',$2::text,'tentativas'])::int,0)=$6",
+    "and ($6::int is null or coalesce((c.estado#>>array['pesquisasRegistro',$2::text,'tentativas'])::int,0)=$6::int)",
     'returning conta_id'
   ].join('\n');
   const r=await pool.query(sql,[p.contaId,p.medicoId,JSON.stringify(campos),anterior,p.nome,p.tentativas]);
@@ -184,8 +183,8 @@ export async function executarPesquisaRegistro(pool:Banco,consulta:ConsultaRegis
     if(r.rows.length===1)pesquisa=extrairSugestoes(trabalho.nome,await consulta.buscar(trabalho.nome));
   }catch{/* Nem a falha nem um timeout confirmam ausência de CRM/RQE. */}
   const confiavel=pesquisa.razao==='ENCONTRADO'&&pesquisa.candidatos.length===1;
-  const esgotou=trabalho.tentativas>=MAX_TENTATIVAS_REGISTRO;
-  const espera=ESPERA_MINUTOS[Math.min(trabalho.tentativas-1,ESPERA_MINUTOS.length-1)]!;
+  const esgotou=(trabalho.tentativas??MAX_TENTATIVAS_REGISTRO)>=MAX_TENTATIVAS_REGISTRO;
+  const espera=ESPERA_MINUTOS[Math.min((trabalho.tentativas??1)-1,ESPERA_MINUTOS.length-1)]!;
   const proximaTentativaEm=new Date(Date.now()+espera*60_000).toISOString();
   // Uma pesquisa ambígua pode melhorar, mas NUNCA vira confirmação.
   await atualizarPesquisa(pool,trabalho,'executando',confiavel?
@@ -205,16 +204,17 @@ export async function reservarAvisoPesquisa(pool:Banco):Promise<PesquisaNotifica
     'order by c.atualizado_em,c.conta_id,p.key for update of c skip locked limit 1)',
     'update public.noto_agent_conversas c',
     "set estado=jsonb_set(c.estado,array['pesquisasRegistro',proxima.medico_id],",
-    "proxima.item||jsonb_build_object('estado','notificando'),false),",
+    "proxima.item||jsonb_build_object('estado','notificando','reservadoEm',now()::text),false),",
     'atualizado_em=now() from proxima where c.conta_id=proxima.conta_id',
     "returning c.conta_id,proxima.medico_id,proxima.item->>'nome' as nome,proxima.item"
   ].join('\n');
   const r=await pool.query(sql,[]),x=r.rows[0];
   return x?{contaId:x.conta_id,medicoId:x.medico_id,nome:x.nome,
+    tentativas: x.item?.tentativas ?? undefined,
     pesquisa:leituraPesquisaEstado({[x.medico_id]:x.item})[x.medico_id]!}:null;
 }
 export async function marcarAvisoPesquisa(pool:Banco,p:PesquisaNotificar,aceito:boolean):Promise<boolean>{
-  const proximo=p.pesquisa.razao==='ENCONTRADO'||p.pesquisa.razao==='HOMONIMOS'
+  const proximo=p.pesquisa.razao==='ENCONTRADO'||p.pesquisa.razao==='MANUAL_INFORMADO'
     ?'aguardando_confirmacao':'inconclusiva';
   return atualizarPesquisa(pool,p,'notificando',{estado:
     p.pesquisa.razao==='LIMITE_TENTATIVAS'?'manual_pendente':proximo,
