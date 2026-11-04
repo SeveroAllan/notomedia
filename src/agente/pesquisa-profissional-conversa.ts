@@ -117,6 +117,9 @@ export async function agendarPesquisaRegistro(
     const codigo=typeof (erro as {code?:unknown})?.code==='string'
       ? (erro as {code:string}).code:'INDEFINIDO';
     console.warn('NOTO_PESQUISA_AGENDAR',JSON.stringify({codigo}));
+    // Diagnóstico de fixture descartável: somente neste ambiente de testes.
+    if(process.env['NODE_ENV']==='test' && erro instanceof Error)
+      console.warn('NOTO_PESQUISA_TESTE_SQL',erro.message);
     return 'indisponivel';
   }
 }
