@@ -206,6 +206,20 @@ export async function destinatarioPesquisaAutorizado(
   return r.rows.length===1;
 }
 
+/** Notifica uma única vez e registra aceite da API sem presumir entrega. */
+export async function notificarPesquisaRegistro(
+  pool:Banco,telefone:string,enviar:(telefone:string,texto:string)=>Promise<boolean>
+):Promise<boolean>{
+  const tarefa=await reservarAvisoPesquisa(pool);
+  if(!tarefa)return false;
+  let aceito=false;
+  try{
+    if(await destinatarioPesquisaAutorizado(pool,tarefa.contaId,telefone))
+      aceito=await enviar(telefone,descreverPesquisaPublica(tarefa));
+  }catch{aceito=false;}
+  finally{await marcarAvisoPesquisa(pool,tarefa,aceito);}
+  return true;
+}
 export async function proporCorrecaoPesquisa(
   pool:Banco,contaId:string,medicoId:string,campos:{crm:string;rqe?:string}
 ):Promise<boolean>{
