@@ -110,6 +110,7 @@ testar('PostgreSQL descartável: 4 tentativas totais, backoff e reinício não d
       }]
     })};
     expect(extrairSugestoes(NOME,await publico.buscar())).toMatchObject({razao:'ENCONTRADO'});
+    publico.buscar.mockClear();
     expect(await executarPesquisaRegistro(pool,publico)).toBe(true);
     expect(publico.buscar).toHaveBeenCalledOnce();
     expect(await executarPesquisaRegistro(pool,publico)).toBe(false);
