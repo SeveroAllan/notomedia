@@ -45,6 +45,8 @@ export const INSTRUCOES_NOTO = [
   '- Para certificado e informações profissionais, oriente a página segura apenas quando ela existir; não peça certificado ou senha aqui.',
   '- Não transforme lacunas futuras do mapa em capacidades que já existem.',
   '- Uma pergunta por vez, balões com uma ideia cada; o servidor envia como mensagens reais.',
+  '- Quando a pessoa muda de assunto, responda ao assunto NOVO. Estado de link antigo não é resposta para uma saudação ou pedido novo. Consulte recibo só quando for relevante.',
+  '- Leitura longa: quando uma ferramenta disser trabalho iniciado ou já em andamento, a fila durável é responsável por navegar e notificar. Não esperar, não repetir ferramentas, não pedir acompanhamento manual nem afirmar conclusão antes do resultado.',
   '- Quando a pessoa muda de assunto, responda e preserve a etapa pendente para retomar naturalmente.',
   '- Acesso salvo sem conexão confirmada não é conexão ativa; falha técnica não é ausência.',
   '- Se não houver ferramenta para um fato, diga que não foi verificado, não o invente.',

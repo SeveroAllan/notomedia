@@ -9,6 +9,8 @@ import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
+import { contaDoCofreId } from '../cofre/identidade-conta.js';
+import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
@@ -24,11 +26,15 @@ export interface EntradaAgente {
   estadoConversa?: EstadoConversa;
   /** Estado consultado em banco, sem token/URL/ID; aceite nao e entrega. */
   situacaoUltimoLink?: {agenda:AgendaEscolhida;estado:string};
+  trabalhos?: SituacaoTrabalhoNoto[];
 }
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
   consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
+  solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null) => Promise<ResultadoEnfileirar>;
+  aoTrabalho?: (trabalho: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar }) => void;
+  aoConsultaEntregaLink?: (agenda:AgendaEscolhida, estado:{estado:string;comId:boolean}|null) => void;
   aoConferencia?: (resultado: ResultadoConferencia) => void;
   aoPanorama?: (foco: string | null, resultado: ResultadoPanoramaFiscal) => void;
   /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
@@ -366,6 +372,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
         }
         conferenciaEscolhida=chave;
+        if(deps.solicitarTrabalho) {
+          const pedido=await deps.solicitarTrabalho('conferencia_fiscal',agenda,medico.id);
+          deps.aoTrabalho?.({tipo:'conferencia_fiscal',agenda,estado:pedido});
+          registrar('conferir_atendimentos_e_notas',pedido.ok?'TRABALHO_REGISTRADO':'TRABALHO_INDISPONIVEL',inicio);
+          return pedido.ok?{ok:true,estado:pedido.estado,observacao:'A consulta está em andamento fora deste turno; nenhuma nota foi confirmada nesta execução.'}:
+            {ok:false,motivo:pedido.motivo};
+        }
         conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda);
         return entregar(await conferenciaEmVoo);
       } catch {
@@ -400,6 +413,16 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         if (!status.conectada) {
           registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
           return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA'};
+        }
+        if(deps.solicitarTrabalho) {
+          // A referência técnica de uma conexão legada pode ser médico da conta.
+          // Isso NÃO atribui consulta ao médico; apenas reusa a sessão correta.
+          const referenciaLegada=contaDoCofreId(id)?null:id;
+          const pedido=await deps.solicitarTrabalho('descoberta_agenda',agenda,referenciaLegada);
+          deps.aoTrabalho?.({tipo:'descoberta_agenda',agenda,estado:pedido});
+          registrar('descobrir_profissionais_agenda',pedido.ok?'TRABALHO_REGISTRADO':'TRABALHO_INDISPONIVEL',inicio);
+          return pedido.ok?{ok:true,estado:pedido.estado,observacao:'A leitura dos nomes será entregue quando o navegador concluir. Nenhum nome novo foi confirmado ainda.'}:
+            {ok:false,motivo:pedido.motivo};
         }
         const resultado=await deps.descobrirProfissionais!(id,agenda);
         const nomes = resultado.ok ? (resultado.nomes??[]).filter(nomeProfissionalValido).slice(0,20) : [];
@@ -537,6 +560,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       try {
         const status=await deps.consultarEntregaLink!(referencia,agenda);
+        deps.aoConsultaEntregaLink?.(agenda,status);
         registrar('consultar_status_entrega_link_agenda',
           status?.estado==='ENTREGUE'?'LINK_ENTREGUE':status?.estado==='LIDO'?'LINK_LIDO':'ENTREGA_CONSULTADA',inicio);
         if(!status) return {ok:true,estado:'SEM_EVIDENCIA',orientacao:'Nao encontrei um recibo de envio confirmado. Nao presuma entrega nem gere novo link automaticamente.'};
@@ -773,41 +797,7 @@ export function acompanhamentoVerificado(
     'Isso não confirma o login na agenda.',
     'A verificação dos médicos começa depois da conexão autenticada.'
   ].join(' ');
-  // Acompanhamento entre turnos só trata a mesma tarefa de conexão.
-  // Reconhece o ASSUNTO, não usa regex de promessas proibidas.
-  const falandoDaAgenda=/\b(?:link|agenda|conex[aã]o|conectar|conectei|acesso|tribemd|amplimed|m[eé]dic[oa]s?|profissionais)\b/i.test(entrada.texto);
-  if(falandoDaAgenda && entrada.estadoConversa?.faseAgenda==='DESCOBERTA_PENDENTE') {
-    const causa=entrada.estadoConversa.causaDescoberta;
-    const detalhe=causa==='COBERTURA_PARCIAL'?'a cobertura ainda é parcial':
-      causa==='AGENDA_LIMITADA'?'o recorte consultado ficou limitado':
-      causa==='DETALHES_PENDENTES'?'alguns detalhes ainda estão pendentes':
-      causa==='DETALHES_NAO_DISPONIVEIS'?'os detalhes necessários não vieram na leitura':
-      causa==='SEM_CONSULTAS_NO_RECORTE'?'não houve consultas verificáveis no recorte':
-      causa==='SEM_IDENTIFICACAO_PROFISSIONAL'?'as consultas não identificaram o profissional':
-      causa==='NOMES_NAO_VALIDOS'?'os nomes observados não passaram na validação':
-      'a leitura não trouxe evidência suficiente';
-    return [
-      `A conexão com a ${nomeAgenda} está confirmada, mas ${detalhe}.`,
-      'Já usei a leitura disponível e não vou inventar médicos nem repetir acessos ao portal em sequência.',
-      'A confirmação dos profissionais permanece pendente.'
-    ].join(' ');
-  }
-  if(falandoDaAgenda && entrada.situacaoUltimoLink && !entrada.estadoConversa?.descoberta) {
-    const estado=entrada.situacaoUltimoLink.estado;
-    if(estado==='ENTREGUE'||estado==='LIDO') return [
-      estado==='LIDO'?'O WhatsApp registrou a leitura do último link.':'O WhatsApp confirmou a entrega do último link.',
-      'A entrega não comprova que o login no portal aconteceu; ainda preciso dessa evidência para avançar.'
-    ].join(' ');
-    if(estado==='ERRO_COMPROVADO') return [
-      'O WhatsApp registrou um erro para a mensagem do link.',
-      'Não vou enviar outro link sensível automaticamente.'
-    ].join(' ');
-    return [
-      `O pedido do link já foi aceito pelo serviço de mensagens para a ${nomeAgenda}.`,
-      'Ainda não tenho confirmação de entrega ao aparelho.',
-      'Não vou criar nem reenviar outro link por conta própria.'
-    ].join(' ');
-  }
+  // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
   return null;
 }
 
@@ -832,6 +822,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar('SEM_MODELO');
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
+  const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
+  const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
   try {
@@ -847,6 +839,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         conferenciaTurno.resultado=resultado;
         deps.aoConferencia?.(resultado);
       },
+      aoTrabalho: trabalho => {
+        trabalhoTurno.atual=trabalho;
+        deps.aoTrabalho?.(trabalho);
+      },
+      aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
@@ -864,7 +861,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         estadoConversacionalVerificado: Object.fromEntries(
           Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) => campo !== 'tarefasPendentes')
         ),
-        situacaoUltimoLink: entrada.situacaoUltimoLink??null
+        situacaoUltimoLink: entrada.situacaoUltimoLink??null,
+        trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4)
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
@@ -872,6 +870,26 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    // Recibo deste turno, não lembrança de um link antigo.
+    if (linkConsultado.atual) {
+      const {agenda,estado}=linkConsultado.atual;
+      const fonte=agenda==='tribemd'?'TribeMD':'Amplimed';
+      registrar('RESPOSTA',uso);
+      if(!estado) return 'Consultei o envio do link da '+fonte+', mas não encontrei recibo confirmado. Não vou presumir entrega nem gerar outro link.';
+      if(estado.estado==='ENTREGUE') return 'O WhatsApp confirmou a entrega do link da '+fonte+'. Ainda vou precisar da conexão autenticada para avançar.';
+      if(estado.estado==='LIDO') return 'O WhatsApp registrou a leitura do link da '+fonte+'. Isso ainda não confirma o login na agenda.';
+      if(estado.estado==='ERRO_COMPROVADO') return 'A entrega do link da '+fonte+' teve um erro comprovado. Não vou reenviar a credencial sem sua autorização.';
+      if(estado.comId) return 'O pedido do link já foi aceito pelo serviço de mensagens para a '+fonte+'. Ainda não tenho confirmação de entrega no WhatsApp.';
+      return 'Consultei o link da '+fonte+', mas a entrega ainda não está comprovada. Isso não quer dizer que houve uma falha.';
+    }
+    // Longa navegação virou trabalho registrado: não aguardar 62s no Runner.
+    if (trabalhoTurno.atual) {
+      const t=trabalhoTurno.atual, fonte=t.agenda==='tribemd'?'TribeMD':'Amplimed';
+      registrar('RESPOSTA',uso);
+      if(!t.estado.ok) return 'Não consegui iniciar a leitura da '+fonte+' porque a fila de tarefas está indisponível. Não vou afirmar que a consulta foi feita.';
+      if(t.estado.estado==='ja_em_andamento') return 'A leitura da '+fonte+' já está em andamento. Pode continuar falando comigo enquanto ela termina.';
+      return 'Comecei a conferir a '+fonte+'. Pode falar comigo normalmente; te aviso assim que a leitura terminar.';
+    }
     // Conciliação e registros fiscais são narrados exclusivamente pelos fatos verificados.
     if (panoramaTurno.resultado || conferenciaTurno.resultado) {
       const textos: string[]=[];
@@ -906,9 +924,22 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     }
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
-  } catch {
-    registrar('FALLBACK_MODELO');
-    return 'Não consegui concluir a consulta agora. Não alterei nenhuma configuração. Posso te orientar a conferir a agenda na área segura do Noto.';
+  } catch (erro) {
+    if (trabalhoTurno.atual?.estado.ok) {
+      const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
+      registrar('RESPOSTA');
+      return 'A leitura da '+fonte+' foi registrada. Vou continuar a conferência fora desta conversa e volto com os dados verificados.';
+    }
+    const natureza=abort.signal.aborted?'ABORT_SIGNAL':
+      erro instanceof Error && erro.name==='MaxTurnsExceededError'?'MAX_TURNS':'FALHA_RUNNER';
+    deps.aoDiagnostico?.({codigo:'FALLBACK_MODELO',ferramentas:[...ferramentas],uso:semUso(),
+      duracaoMs:Math.max(0,Date.now()-inicio),falha:{natureza}});
+    // Sem texto, senha, nome, número, argumentos nem stack em observabilidade.
+    console.warn('NOTO_AGENT_EXECUCAO',JSON.stringify({codigo:natureza,duracaoMs:Math.max(0,Date.now()-inicio),
+      ferramentas:ferramentas.map(f=>({nome:f.nome,codigo:f.codigo,duracaoMs:f.duracaoMs}))}));
+    return natureza==='ABORT_SIGNAL'
+      ? 'A resposta demorou mais que o limite desta conversa. Vou manter o estado verificado; não vou dizer que a consulta falhou sem conferir o trabalho registrado.'
+      : 'Não consegui continuar esta etapa da conversa agora. Vou preservar o que já foi confirmado para retomarmos sem recomeçar.';
   } finally {
     clearTimeout(relogio);
   }

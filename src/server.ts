@@ -24,7 +24,10 @@ import { conferirAgendaComFiscal, type LeituraParaConferencia } from './agente/c
 import { janelaConferencia, leituraTribemdParaConferencia, leituraAmplimedParaConferencia } from './agente/leitura-atendimentos.js';
 import { normalizarNomeMedico } from './conta/medicos-conta.js';
 import { explicarLeituraPendente } from './agenda/diagnostico-descoberta.js';
-import { contaDoCofreId } from './cofre/identidade-conta.js';
+import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
+import type { AgendaEscolhida } from './agente/estado-conversa.js';
+import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
+import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -259,21 +262,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     },
     aoConectar: boasVindasInstancia
   }));
-  app.use('/webhook/evolution', criarRouterWebhookAgente({
-    pool,
-    ativo: Boolean(config.notoAgentAtivo),
-    envioAtivo: Boolean(config.notoAgentEnvioAtivo),
-    segredo: config.notoAgentWebhookSecret ?? '',
-    instancia: config.evolutionAssistantInstanceName,
-    allowlist: config.envioRealAllowlist ?? [],
-    painelUrl: config.appPublicOrigin,
-    apiKey: config.openaiApiKey,
-    modeloNome: config.openaiTextoModel,
-    tracesAtivos: config.notoAgentTracesAtivos,
-    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
-    consultarStatus: medicoId => cofres.statusAgendas(medicoId),
-    consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
-    consultarConferencia: (contaId, medicoId, agenda) =>
+  const consultarConferenciaConta = (contaId: string, medicoId: string, agenda: AgendaEscolhida) =>
       conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
         const janela=janelaConferencia();
         if (fonte==='tribemd') {
@@ -294,7 +283,66 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=await cofres.lerAgendaAmplimed(id,janela.inicio,janela.fim,false,codigo);
         if (!r.ok) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
         return leituraAmplimedParaConferencia(r.dias,janela);
-      }),
+      });
+  const descobrirProfissionaisConta = async (medicoId: string, agenda: AgendaEscolhida) => {
+      // Autoridade já verificada no webhook e estado confirmado na ferramenta;
+      // devolver somente nomes, nunca o conteúdo de uma consulta.
+      if (agenda === 'amplimed') {
+        const r = await cofres.listarProfissionaisAmplimed(medicoId);
+        return r.ok
+          ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
+              ? r.profissionais.map(p => p.nome).filter(nomeProfissionalValido).slice(0, 20) : [] }
+          : { ok: false, motivo: r.motivo };
+      }
+      const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
+      return r.tipo === 'consultas'
+        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).filter(nomeProfissionalValido).slice(0, 20) }
+        : { ok: false, motivo: r.codigo };
+    
+  };
+  // A fila só é ativada explicitamente após a migração autorizada.
+  const trabalhosHabilitados = process.env['NOTO_AGENT_TRABALHOS_ATIVO'] === 'true' &&
+    config.notoPilotoRestrito === true && config.notoAgentAtivo === true &&
+    config.notoAgentEnvioAtivo === true && (config.envioRealAllowlist?.length??0)===1;
+  app.locals.iniciarTrabalhos = () => trabalhosHabilitados ?
+    iniciarTrabalhosNoto({
+      pool,instancia:config.evolutionAssistantInstanceName,
+      descobrir:(contaId,medicoId,agenda) =>
+        descobrirProfissionaisConta(medicoId??cofreIdDaConta(contaId),agenda),
+      conferir:consultarConferenciaConta,
+      enviar:async(telefone,texto) => {
+        const permitido=config.envioRealAllowlist?.some(numero=>
+          gerarVariantesTelefoneBrasileiro(numero).some(v=>
+            gerarVariantesTelefoneBrasileiro(telefone).includes(v)));
+        if(!permitido)return false;
+        return (await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto
+        })).sucesso;
+      },
+      relatar:(codigo,duracaoMs,tipo)=>
+        console.info('NOTO_AGENT_TRABALHO',JSON.stringify({codigo,duracaoMs,tipo}))
+    }) : {parar:async()=>{}};
+  app.use('/webhook/evolution', criarRouterWebhookAgente({
+    pool,
+    ativo: Boolean(config.notoAgentAtivo),
+    envioAtivo: Boolean(config.notoAgentEnvioAtivo),
+    segredo: config.notoAgentWebhookSecret ?? '',
+    instancia: config.evolutionAssistantInstanceName,
+    allowlist: config.envioRealAllowlist ?? [],
+    painelUrl: config.appPublicOrigin,
+    apiKey: config.openaiApiKey,
+    modeloNome: config.openaiTextoModel,
+    tracesAtivos: config.notoAgentTracesAtivos,
+    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    consultarStatus: medicoId => cofres.statusAgendas(medicoId),
+    consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
+    ...(trabalhosHabilitados ? {
+      solicitarTrabalho: (pedido: import('./agente/trabalhos-duraveis.js').PedidoTrabalhoNoto) =>
+        enfileirarTrabalhoNoto(pool,pedido),
+      listarTrabalhos: (contaId:string,telefone:string,instancia:string) =>
+        listarTrabalhosNoto(pool,contaId,telefone,instancia)
+    } : {}),
+    consultarConferencia: consultarConferenciaConta,
     consultarEntregaLink: async (referencia, agenda) => {
       const contaId=contaDoCofreId(referencia);
       if (!contaId) {
@@ -311,21 +359,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       console.info('NOTO_RECIBO_LINK',codigo);
       return codigo==='ATUALIZADO';
     },
-    descobrirProfissionais: async (medicoId, agenda) => {
-      // Autoridade já verificada no webhook e estado confirmado na ferramenta;
-      // devolver somente nomes, nunca o conteúdo de uma consulta.
-      if (agenda === 'amplimed') {
-        const r = await cofres.listarProfissionaisAmplimed(medicoId);
-        return r.ok
-          ? { ok: true, nomes: descobrirProfissionaisDoFiltroAmplimed(r.profissionais).tipo === 'profissionais'
-              ? r.profissionais.map(p => p.nome).filter(nomeProfissionalValido).slice(0, 20) : [] }
-          : { ok: false, motivo: r.motivo };
-      }
-      const r = await cofres.fonteAgenda.consultar({ medicoId, referenciaCofre: medicoId, janelaDias: 90 });
-      return r.tipo === 'consultas'
-        ? { ok: true, nomes: profissionaisIdentificados(r.consultas).filter(nomeProfissionalValido).slice(0, 20) }
-        : { ok: false, motivo: r.codigo };
-    },
+    descobrirProfissionais: descobrirProfissionaisConta,
     confirmarProfissionais: async (medicoBaseId, nomes) => {
       if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CONFIRMACAO_DESLIGADA' };
       const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
@@ -994,6 +1028,7 @@ if (process.env['NODE_ENV'] !== 'test') {
   const worker = config.workerEmbutidoAtivo === false
     ? { parar: async () => {} }
     : iniciarWorkerEmbutido(pool, config);
+  const workerAgente = app.locals.iniciarTrabalhos();
   console.log(config.workerEmbutidoAtivo === false
     ? '[Notomed Whats] Worker embutido desativado por configuração.'
     : '[Notomed Whats] Worker de fila NFS-e iniciado com sucesso.');
@@ -1009,7 +1044,7 @@ if (process.env['NODE_ENV'] !== 'test') {
         app.locals.encerrarCofres()
       ]);
     },
-    pararWorker: () => worker.parar(),
+    pararWorker: async () => { await Promise.allSettled([worker.parar(), workerAgente.parar()]); },
     fecharPool: () => pool.end()
   }, { tempoLimiteMs: 8_000, sair: (codigo) => process.exit(codigo) }));
 }

@@ -34,7 +34,7 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
   });
   it('retoma o último link do banco sem pedir outro ou prometer novo envio',async()=>{
     const modelo=new ScriptedModel([
-      [functionCall('consultar_contexto_conta',{}, {callId:'retomada'})],
+      [functionCall('consultar_status_entrega_link_agenda',{agenda:'tribemd'}, {callId:'retomada'})],
       [assistantMessage('Assim que estiver disponível, você receberá o link. Estou à disposição.')]
     ]);
     const resposta=await responderAgente({
@@ -43,7 +43,8 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
       situacaoUltimoLink:{agenda:'tribemd',estado:'SEM_CONFIRMACAO'}
     },{
       modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(vazio),
-      referenciaContaAgenda:ancora()
+      referenciaContaAgenda:ancora(),
+      consultarEntregaLink:vi.fn().mockResolvedValue({estado:'SEM_CONFIRMACAO',comId:true,segundosDesdeAceite:120})
     });
     expect(resposta).toContain('pedido do link já foi aceito');
     expect(resposta).not.toMatch(/quando quiser|estou à disposição|receberá/i);
