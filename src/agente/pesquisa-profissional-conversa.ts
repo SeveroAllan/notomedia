@@ -29,19 +29,25 @@ export function leituraPesquisaEstado(obj:unknown):Record<string,PesquisaRegistr
     if(!/^[0-9a-f-]{36}$/i.test(id)||!r||typeof r!=='object'||Array.isArray(r))continue;
     const e=r as Record<string,unknown>;
     if(!nomeProfissionalValido(e['nome'])||!estados.includes(String(e['estado'])))continue;
-    const candidatos=Array.isArray(e['candidatos'])?
-      e['candidatos'].slice(0,5).filter((c:unknown):c is SugestaoRegistro=>{
-        if(!c||typeof c!=='object')return false;
-        const a=c as Record<string,unknown>;
-        const crm=String(a['crm']??'');
-        return typeof a['uf']==='string'&&
-          normalizarCrm(crm)===crm &&
-          typeof a['origem']==='string'&&a['origem'].length<160 &&
-          Array.isArray(a['rqes'])&&a['rqes'].length<=5&&
-          a['rqes'].every((v:unknown)=>typeof v==='string'&&rqeValido(v)) &&
-          (a['urlOrigem']===undefined ||
-           (typeof a['urlOrigem']==='string'&&a['urlOrigem'].startsWith('https://')&&a['urlOrigem'].length<1000));
-      }):[];
+    // Copia exclusivamente campos autorizados: dados inesperados de um
+    // registro persistido NUNCA podem chegar ao modelo ou ao WhatsApp.
+    const candidatos:SugestaoRegistro[]=[];
+    if(Array.isArray(e['candidatos'])){
+      for(const bruto of e['candidatos'].slice(0,5)){
+        if(!bruto||typeof bruto!=='object'||Array.isArray(bruto))continue;
+        const c=bruto as Record<string,unknown>;
+        const crm=c['crm'],uf=c['uf'],origem=c['origem'],url=c['urlOrigem'];
+        if(typeof crm!=='string'||normalizarCrm(crm)!==crm||!crm.includes('/')||
+          typeof uf!=='string'||crm.split('/')[1]!==uf||
+          typeof origem!=='string'||origem.length>155||!origem.trim()||
+          !Array.isArray(c['rqes'])||c['rqes'].length>5||
+          !c['rqes'].every((v:unknown)=>typeof v==='string'&&rqeValido(v))||
+          (url!==undefined&&(typeof url!=='string'||!url.startsWith('https://')||url.length>950)))
+          continue;
+        candidatos.push({crm,uf,rqes:[...c['rqes']] as string[],origem,
+          ...(typeof url==='string'?{urlOrigem:url}:{})});
+      }
+    }
     const proposta=e['proposta']&&typeof e['proposta']==='object'&&!Array.isArray(e['proposta'])
       ?e['proposta'] as Record<string,unknown>:null;
     resultado[id]={
