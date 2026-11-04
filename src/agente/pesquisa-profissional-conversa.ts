@@ -98,16 +98,16 @@ export async function agendarPesquisaRegistro(
   try{
     const sql=[
       'insert into public.noto_agent_conversas(conta_id,estado)',
-      'select $1,jsonb_build_object('+"'pesquisasRegistro'"+',jsonb_build_object($2,$3::jsonb))',
+      'select $1,jsonb_build_object('+"'pesquisasRegistro'"+',jsonb_build_object($2::text,$3::jsonb))',
       'where exists(select 1 from public.medicos m where m.conta_id=$1',
       'and m.id=$2::uuid and m.nome_completo=$4)',
       'on conflict(conta_id) do update',
-      "set estado=case when (coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb) ? $2)",
+      "set estado=case when (coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb) ? $2::text)",
       'then noto_agent_conversas.estado',
       "else jsonb_set(noto_agent_conversas.estado,'{pesquisasRegistro}',",
-      "coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb)||jsonb_build_object($2,$3::jsonb),true) end,",
+      "coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb),true) end,",
       'atualizado_em=now()',
-      "returning estado#>>array['pesquisasRegistro',$2,'estado'] as estado"
+      "returning estado#>>array['pesquisasRegistro',$2::text,'estado'] as estado"
     ].join('\n');
     const r=await pool.query(sql,[contaId,medicoId,JSON.stringify(pendente),nome]);
     return r.rows[0]?.estado==='pendente'?'agendada':
@@ -117,9 +117,6 @@ export async function agendarPesquisaRegistro(
     const codigo=typeof (erro as {code?:unknown})?.code==='string'
       ? (erro as {code:string}).code:'INDEFINIDO';
     console.warn('NOTO_PESQUISA_AGENDAR',JSON.stringify({codigo}));
-    // Diagnóstico de fixture descartável: somente neste ambiente de testes.
-    if(process.env['NODE_ENV']==='test' && erro instanceof Error)
-      console.warn('NOTO_PESQUISA_TESTE_SQL',erro.message);
     return 'indisponivel';
   }
 }
