@@ -334,17 +334,14 @@ describe('dados profissionais via conversa, com autorização exata',()=>{
     modelo.assertComplete();
   });
 
-  it('não grava sem profissional previamente identificado',async()=>{
-    const modelo=new ScriptedModel([
-      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'sem-identidade'})],
-      [assistantMessage('Para qual médico você está confirmando esse CRM?')]
-    ]);
+  it('ferramenta de cadastro não é exposta antes de vínculo',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Primeiro precisamos confirmar o profissional. Ainda não pesquisei o CRM.')]]);
     const salvarDadosProfissionais=vi.fn();
-    const diagnostico=vi.fn();
-    await responderAgente({texto:'Confirmo CRM: 12345/RS',profissionais:medicos},
-      {modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+    const resposta=await responderAgente({texto:'Confirmo CRM: 12345/RS',profissionais:medicos},{
+      modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais
+    });
     expect(salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    expect(resposta).toContain('confirmar o profissional');
     modelo.assertComplete();
   });
 });
