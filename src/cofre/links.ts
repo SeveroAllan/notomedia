@@ -207,7 +207,7 @@ export class LinksCofre {
         // O link mais recente define a agenda do contexto: renovação preserva a agenda já escolhida pelo médico.
         const link = (await this.deps.pool.query(`select l.agenda, l.usado_em, l.expira_em,
             (select a.criado_em from cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado' limit 1) as enviado_em
-            from cofre_links l where l.medico_id=$1 order by l.criado_em desc limit 1`, [medicoId])).rows[0];
+            from cofre_links l where l.medico_id=$1 and l.agenda in ('tribemd','amplimed') order by l.criado_em desc limit 1`, [medicoId])).rows[0];
         const cofreDoContexto = link ? this.cofreDe(link.agenda) ?? this.deps.cofre : this.deps.cofre;
         const status = await cofreDoContexto.status(medicoId);
         const agendaConectada = status.estado === 'conectado' && !!status.ativo;
@@ -417,7 +417,7 @@ export class LinksCofre {
         const credencial = contemCredencialAgenda(texto);
         // Enquanto há link pendente, nem uma senha sem rótulo segue para memória ou IA.
         const pendente = (await this.deps.pool.query(`select id, agenda from cofre_links where medico_id=$1
-            and usado_em is null and expira_em>now() order by criado_em desc limit 1`, [medicoId])).rows[0];
+            and agenda in ('tribemd','amplimed') and usado_em is null and expira_em>now() order by criado_em desc limit 1`, [medicoId])).rows[0];
         if (credencial || pendente) {
             const agendaPendente=agendaSuportada(pendente?.agenda);
             if(agendaPendente)await this.solicitarLinkCofre(medicoId, agendaPendente,{contatoTelefone});
