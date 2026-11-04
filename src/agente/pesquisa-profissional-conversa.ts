@@ -306,6 +306,58 @@ export async function concluirRevisaoPesquisa(
   return r.rows.length===1;
 }
 
+/** A aprovação é única, transacional e revalidada com o registro guardado.
+ * Jamais recebe números do modelo: somente a proposta apresentada ao médico.
+ * Não requer RQE; se houver mais de um RQE, salva apenas o CRM.
+ */
+export async function aprovarRegistroProfissional(
+  pool:pg.Pool,contaId:string,medicoId:string
+):Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>{
+  const client=await pool.connect();
+  let commit=false;
+  try{
+    await client.query('begin');
+    const r=await client.query(
+      'select estado from public.noto_agent_conversas where conta_id=$1 for update',
+      [contaId]);
+    const registro=leituraPesquisaEstado(r.rows[0]?.estado?.pesquisasRegistro)[medicoId];
+    if(registro?.estado!=='aguardando_confirmacao')
+      return {ok:false,motivo:'PROPOSTA_NAO_PENDENTE'};
+    const candidatos=registro.candidatos??[];
+    const proposta=registro.proposta;
+    if(!proposta && (registro.razao!=='ENCONTRADO'||candidatos.length!==1))
+      return {ok:false,motivo:'REGISTRO_AMBIGUO'};
+    const escolhido=proposta??candidatos[0]!;
+    const crm=normalizarCrm(escolhido.crm);
+    if(!crm?.includes('/'))return {ok:false,motivo:'CRM_NAO_COMPROVADO'};
+    const listaRqe='rqes' in escolhido?escolhido.rqes:[...((escolhido.rqe)?[escolhido.rqe]:[])];
+    const rqe=listaRqe.length===1?listaRqe[0]!:null;
+    const medico=(await client.query([
+      'select id,nome_completo from public.medicos',
+      'where id=$1::uuid and conta_id=$2 for update'
+    ].join('\n'),[medicoId,contaId])).rows[0];
+    if(!medico||medico.nome_completo!==registro.nome)
+      return {ok:false,motivo:'PROFISSIONAL_ALTERADO'};
+    const salvo=await client.query([
+      'update public.medicos set crm=$3,',
+      'rqe=case when $4::boolean then $5 else rqe end,',
+      'atualizado_em=now()',
+      'where id=$1::uuid and conta_id=$2 returning nome_completo,crm,rqe'
+    ].join('\n'),[medicoId,contaId,crm,rqe!==null,rqe]);
+    if(salvo.rows.length!==1)return {ok:false,motivo:'CADASTRO_NAO_GRAVADO'};
+    await client.query([
+      'update public.noto_agent_conversas c set',
+      "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
+      "'\"confirmada\"'::jsonb,false),atualizado_em=now()",
+      'where c.conta_id=$1'
+    ].join('\n'),[contaId,medicoId]);
+    await client.query('commit');commit=true;
+    return {ok:true,nome:salvo.rows[0].nome_completo,crm:salvo.rows[0].crm,
+      rqe:salvo.rows[0].rqe??null};
+  }catch{return {ok:false,motivo:'GRAVACAO_INDISPONIVEL'};}
+  finally{if(!commit)await client.query('rollback').catch(()=>undefined);client.release();}
+}
+
 /** Falhas de processo não repetem busca paga nem reenviam mensagem incerta. */
 export async function recuperarPesquisaInterrompida(pool:Banco):Promise<void>{
   // O marcador de tentativa já foi consumido antes de chamar o provedor.
