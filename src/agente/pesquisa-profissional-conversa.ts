@@ -105,23 +105,29 @@ export async function agendarPesquisaRegistro(
   pool:Banco,contaId:string,medicoId:string,nome:string
 ):Promise<'agendada'|'ja_existe'|'indisponivel'> {
   if(!nomeProfissionalValido(nome)||!/^[0-9a-f-]{36}$/i.test(medicoId))return 'indisponivel';
-  const pendente={nome,estado:'pendente'};
+  const pendente={nome,estado:'pendente',tentativas:0};
   try{
+    // A conversa existe pois a confirmação do médico já foi registrada.
+    // UPDATE com predicado negativo serializa concorrência na mesma conta.
     const sql=[
-      'insert into public.noto_agent_conversas(conta_id,estado)',
-      'select $1,jsonb_build_object('+"'pesquisasRegistro'"+',jsonb_build_object($2::text,$3::jsonb))',
-      'where exists(select 1 from public.medicos m where m.conta_id=$1',
+      'update public.noto_agent_conversas c',
+      "set estado=jsonb_set(c.estado,'{pesquisasRegistro}',",
+      "coalesce(c.estado->'pesquisasRegistro','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb),true),",
+      'atualizado_em=now() where c.conta_id=$1',
+      "and not coalesce(c.estado->'pesquisasRegistro','{}'::jsonb) ? $2::text",
+      'and exists(select 1 from public.medicos m where m.conta_id=$1',
       'and m.id=$2::uuid and m.nome_completo=$4)',
-      'on conflict(conta_id) do update',
-      "set estado=case when (coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb) ? $2::text)",
-      'then noto_agent_conversas.estado',
-      "else jsonb_set(noto_agent_conversas.estado,'{pesquisasRegistro}',",
-      "coalesce(noto_agent_conversas.estado->'pesquisasRegistro','{}'::jsonb)||jsonb_build_object($2::text,$3::jsonb),true) end,",
-      'atualizado_em=now()',
-      "returning (xmax = 0) as inserida, estado#>>array['pesquisasRegistro',$2::text,'estado'] as estado"
+      'returning conta_id'
     ].join('\n');
     const r=await pool.query(sql,[contaId,medicoId,JSON.stringify(pendente),nome]);
-    return r.rows.length===1 ? (r.rows[0]?.inserida===true?'agendada':'ja_existe') : 'indisponivel';
+    if(r.rows.length===1)return 'agendada';
+    const ja=await pool.query([
+      'select 1 from public.medicos m',
+      'join public.noto_agent_conversas c on c.conta_id=m.conta_id',
+      'where m.conta_id=$1 and m.id=$2::uuid and m.nome_completo=$3',
+      "and coalesce(c.estado->'pesquisasRegistro','{}'::jsonb) ? $2::text limit 1"
+    ].join('\n'),[contaId,medicoId,nome]);
+    return ja.rows.length?'ja_existe':'indisponivel';
   }catch(erro){
     // Apenas SQLSTATE, sem nome, telefone, CPF, query ou dados de pesquisa.
     const codigo=typeof (erro as {code?:unknown})?.code==='string'
