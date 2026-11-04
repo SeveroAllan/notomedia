@@ -166,12 +166,9 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
       candidatos:[{crm:'12345/RS',uf:'RS',rqes:[],origem:'OpenSerp'},
         {crm:'54321/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]
     }}};
-    // Na produção, a operação transacional verifica os candidatos; o
-    // modelo não escolhe o candidato e não recebe CRM como argumento.
     const r=await revisar('Sim, sou eu','aprovar',estado);
-    expect(r.aprovarRegistroProfissional).toHaveBeenCalledOnce();
-    const args=JSON.stringify(r.modelo.calls);
-    expect(args).not.toContain('"crm":"54321/RS"');
+    expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(r.resposta).toMatch(/Não salvei/);
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
   });
   it('sem vínculo ou sem resultado apresentado, não chama gravação',async()=>{
