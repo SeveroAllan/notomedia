@@ -43,7 +43,7 @@ describe('mesma ConsultaRegistro do cadastro: apenas dados com evidência retorn
     expect(r.candidatos.map(c=>c.crm)).toEqual(['12345/RS','9999/RS']);
     expect(descreverPesquisaPublica({contaId:CONTA,medicoId:ANA,nome,pesquisa:{
       nome,estado:'resultado_pronto',razao:r.razao,candidatos:r.candidatos
-    }})).toContain('Pode haver homônimos');
+    }})).toContain('informações conflitantes');
   });
   it('fonte indisponível, ausência de resultados e evidência incompleta são distintas',()=>{
     expect(extrairSugestoes(nome,{estado:'indisponivel',codigo:'OPENSERP_HTTP_503'}))
@@ -74,20 +74,20 @@ describe('mesma ConsultaRegistro do cadastro: apenas dados com evidência retorn
 
 describe('fila pública isolada, sem serviço externo real ou nova migração',()=>{
   it('insere a pesquisa somente após confirmação exata do médico pela conta e não refaz existente',async()=>{
-    const query=vi.fn().mockResolvedValueOnce({rows:[{estado:'pendente'}]})
-      .mockResolvedValueOnce({rows:[{estado:'aguardando_confirmacao'}]});
+    const query=vi.fn().mockResolvedValueOnce({rows:[{conta_id:CONTA}]})
+      .mockResolvedValueOnce({rows:[]}).mockResolvedValueOnce({rows:[{1:1}]});
     expect(await agendarPesquisaRegistro(pool(query),CONTA,ANA,nome)).toBe('agendada');
     expect(await agendarPesquisaRegistro(pool(query),CONTA,ANA,nome)).toBe('ja_existe');
     const sql=query.mock.calls[0]![0] as string;
     expect(sql).toContain('m.conta_id=$1');
     expect(sql).toContain('m.id=$2::uuid and m.nome_completo=$4');
-    expect(sql).toContain('on conflict(conta_id) do update');
-    expect(sql).toContain("coalesce(noto_agent_conversas.estado->'pesquisasRegistro'");
-    expect(query.mock.calls[0]![1]).toEqual([CONTA,ANA,JSON.stringify({nome,estado:'pendente'}),nome]);
+    expect(sql).toContain('and not coalesce');
+    expect(sql).toContain("coalesce(c.estado->'pesquisasRegistro'");
+    expect(query.mock.calls[0]![1]).toEqual([CONTA,ANA,JSON.stringify({nome,estado:'pendente',tentativas:0}),nome]);
   });
   it('a tarefa executa a mesma porta ConsultaRegistro com mock, não repete nem grava perfil',async()=>{
     const query=vi.fn()
-      .mockResolvedValueOnce({rows:[{conta_id:CONTA,medico_id:ANA,nome}]})
+      .mockResolvedValueOnce({rows:[{conta_id:CONTA,medico_id:ANA,nome,tentativas:1}]})
       .mockResolvedValueOnce({rows:[{1:1}]})
       .mockResolvedValueOnce({rows:[{conta_id:CONTA}]})
       .mockResolvedValueOnce({rows:[]});
@@ -104,7 +104,7 @@ describe('fila pública isolada, sem serviço externo real ou nova migração',(
     expect(consulta.buscar).toHaveBeenCalledTimes(1);
   });
   it('não consulta OpenSerp quando profissional não corresponde à conta',async()=>{
-    const query=vi.fn().mockResolvedValueOnce({rows:[{conta_id:CONTA,medico_id:OUTRA,nome}]})
+    const query=vi.fn().mockResolvedValueOnce({rows:[{conta_id:CONTA,medico_id:OUTRA,nome,tentativas:1}]})
       .mockResolvedValueOnce({rows:[]}).mockResolvedValueOnce({rows:[{conta_id:CONTA}]});
     const consulta={buscar:vi.fn()} as unknown as ConsultaRegistro;
     await executarPesquisaRegistro(pool(query),consulta);
