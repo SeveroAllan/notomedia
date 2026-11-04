@@ -112,7 +112,13 @@ export async function agendarPesquisaRegistro(
     const r=await pool.query(sql,[contaId,medicoId,JSON.stringify(pendente),nome]);
     return r.rows[0]?.estado==='pendente'?'agendada':
       r.rows.length?'ja_existe':'indisponivel';
-  }catch{return 'indisponivel';}
+  }catch(erro){
+    // Apenas SQLSTATE, sem nome, telefone, CPF, query ou dados de pesquisa.
+    const codigo=typeof (erro as {code?:unknown})?.code==='string'
+      ? (erro as {code:string}).code:'INDEFINIDO';
+    console.warn('NOTO_PESQUISA_AGENDAR',JSON.stringify({codigo}));
+    return 'indisponivel';
+  }
 }
 export interface PesquisaReservada {contaId:string;medicoId:string;nome:string}
 export async function reservarPesquisaRegistro(pool:Banco):Promise<PesquisaReservada|null>{
