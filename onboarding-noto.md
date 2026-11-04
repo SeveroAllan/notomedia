@@ -33,7 +33,7 @@ Fluxo padrão do primeiro contato à primeira nota emitida e entregue, quando o 
 
 ## 7. Dados do profissional
 
-- Confirmar CRM e nome completo pelo cadastro, e o RQE quando aplicável; o que faltar se coleta e confirma na conversa.
+- Após vínculo comprovado, consultar CRM na pesquisa pública existente com até quatro tentativas duráveis e intervalos de espera. Parar quando houver um CRM com evidência suficiente, mesmo sem RQE. Se a busca não trouxer dados confiáveis, oferecer formulário manual seguro do Cofre, nunca pedir CRM/RQE no WhatsApp. Após o preenchimento, retomar sem nova mensagem: apresentar a proposta e só salvar depois da aprovação contextual. RQE é opcional; ausência de resultado não é prova de inexistência.
 - Nunca inventar dados nem preencher por padrão; dúvida fiscal é do médico ou do contador.
 
 ## 8. Desde quando não emite notas
