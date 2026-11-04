@@ -107,72 +107,121 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
   });
 });
 
-describe('CRM/RQE públicos são proposta, não cadastro automático',()=>{
+describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
   const profissionais=[{id:ANA,nome:'Dra. Ana Souza'},{id:BRUNO,nome:'Dr. Bruno Lima'}];
   const sugestao:EstadoConversa={
     profissionalConfirmadoId:ANA,faseAgenda:'VINCULO_CONFIRMADO',
     pesquisasRegistro:{[ANA]:{nome:'Dra. Ana Souza',estado:'aguardando_confirmacao',
       razao:'ENCONTRADO',
-      candidatos:[{crm:'12345/RS',uf:'RS',rqes:['980'],origem:'Google via OpenSerp (sugestão não oficial)'}]}}
+      candidatos:[{crm:'12345/RS',uf:'RS',rqes:['980'],origem:'Pesquisa pública via OpenSerp'}]}}
   };
   async function revisar(
-    entrada:string,decisao:string,estado:EstadoConversa=sugestao,crm?:string,rqe?:string){
+    entrada:string,decisao:'aprovar'|'corrigir'|'recusar'|'esclarecer',
+    estado:EstadoConversa=sugestao
+  ){
     const modelo=new ScriptedModel([
       [functionCall('revisar_registro_profissional',{
-        profissional:'Ana',decisao,...(crm?{crm}:{}),...(rqe?{rqe}:{})
+        profissional:'Ana',decisao
       },{callId:'revisao'})],
-      [assistantMessage('Gravei CRM e RQE automaticamente; já validei no conselho.')]
+      [assistantMessage('Gravei CRM e RQE automaticamente, sem pedir confirmação.')]
     ]);
-    const salvarDadosProfissionais=vi.fn().mockResolvedValue({ok:true,nome:'Dra. Ana Souza',crm:'12345/RS',rqe:'980'});
-    const proporCorrecaoPesquisa=vi.fn().mockResolvedValue(true);
-    const concluirRevisaoPesquisa=vi.fn().mockResolvedValue(true);
+    const aprovarRegistroProfissional=vi.fn().mockResolvedValue({
+      ok:true,nome:'Dra. Ana Souza',crm:'12345/RS',rqe:'980'
+    });
+    const solicitarLinkRegistro=vi.fn().mockResolvedValue({ok:true,motivo:'ACEITO_API'});
+    const salvarDadosProfissionais=vi.fn();
     const resposta=await responderAgente({texto:entrada,profissionais,estadoConversa:estado},{
-      modeloTeste:modelo,consultarStatus:status,salvarDadosProfissionais,
-      proporCorrecaoPesquisa,concluirRevisaoPesquisa
+      modeloTeste:modelo,consultarStatus:status,
+      aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais
     });
     modelo.assertComplete();
-    return {resposta,salvarDadosProfissionais,proporCorrecaoPesquisa,concluirRevisaoPesquisa};
+    return {resposta,aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais,modelo};
   }
-  it('pesquisa não confirma: só grava após aprovação de proposta inequívoca',async()=>{
-    const r=await revisar('Sim, esses números estão certos','aprovar');
-    expect(r.salvarDadosProfissionais).toHaveBeenCalledExactlyOnceWith(ANA,{
-      crm:'12345/RS',rqe:'980'
-    });
-    expect(r.concluirRevisaoPesquisa).toHaveBeenCalledExactlyOnceWith(ANA);
+  it('aprovação natural grava apenas proposta persistida, não valores do modelo',async()=>{
+    const r=await revisar('Sim, são esses os dados que eu confirmei','aprovar');
+    expect(r.aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith(ANA);
+    expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
     expect(r.resposta).toContain('Registrei os dados confirmados');
     expect(r.resposta).not.toContain('automaticamente');
+    expect(JSON.stringify(r.modelo.calls)).not.toContain('66666/RS');
   });
-  it('correção "meu CRM é..." registra proposta, não escreve até o próximo aceite',async()=>{
-    const r=await revisar('Na verdade o CRM correto é 66666/RS e RQE 777','corrigir',sugestao,'66666/RS','777');
-    expect(r.proporCorrecaoPesquisa).toHaveBeenCalledExactlyOnceWith(ANA,{crm:'66666/RS',rqe:'777'});
+  it('correção pede página segura, não exige que se digite CRM no WhatsApp',async()=>{
+    const r=await revisar('Não, quero corrigir esses dados','corrigir');
+    expect(r.solicitarLinkRegistro).toHaveBeenCalledExactlyOnceWith(ANA);
+    expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(r.resposta).toContain('Confirma esses dados');
-    const retomada={...sugestao,pesquisasRegistro:{[ANA]:{
-      ...sugestao.pesquisasRegistro![ANA]!,
-      proposta:{crm:'66666/RS',rqe:'777',origem:'correcao' as const}
-    }}};
-    const aprovado=await revisar('Agora sim, pode salvar','aprovar',retomada);
-    expect(aprovado.salvarDadosProfissionais).toHaveBeenCalledExactlyOnceWith(ANA,{
-      crm:'66666/RS',rqe:'777'
-    });
+    expect(r.resposta).toMatch(/link seguro/i);
+    expect(r.resposta).not.toMatch(/salvei os dados|digite seu CRM aqui/i);
   });
-  it('números inventados pelo modelo e não presentes na mensagem não viram correção',async()=>{
-    const r=await revisar('Não, está errado','corrigir',sugestao,'66666/RS','777');
-    expect(r.proporCorrecaoPesquisa).not.toHaveBeenCalled();
+  it('texto contendo números não contorna o cofre nem vira proposta escrita',async()=>{
+    const r=await revisar('Meu CRM é 66666/RS, pode corrigir','corrigir');
+    expect(r.solicitarLinkRegistro).toHaveBeenCalledOnce();
+    expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
   });
-  it('duas sugestões de CRM não permitem "sim" sem desambiguação',async()=>{
-    const estado={...sugestao,pesquisasRegistro:{[ANA]:{...sugestao.pesquisasRegistro![ANA]!,
+  it('homônimos não aprovam um CRM por "sim"',async()=>{
+    const estado={...sugestao,pesquisasRegistro:{[ANA]:{
+      nome:'Dra. Ana Souza',estado:'aguardando_confirmacao' as const,
       razao:'HOMONIMOS' as const,
       candidatos:[{crm:'12345/RS',uf:'RS',rqes:[],origem:'OpenSerp'},
-        {crm:'54321/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]}}};
-    const r=await revisar('Sim, é meu','aprovar',estado);
+        {crm:'54321/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]
+    }}};
+    // Na produção, a operação transacional verifica os candidatos; o
+    // modelo não escolhe o candidato e não recebe CRM como argumento.
+    const r=await revisar('Sim, sou eu','aprovar',estado);
+    expect(r.aprovarRegistroProfissional).toHaveBeenCalledOnce();
+    const args=JSON.stringify(r.modelo.calls);
+    expect(args).not.toContain('"crm":"54321/RS"');
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(r.resposta).toContain('Não salvei');
   });
-  it('sem vínculo ou pesquisa concluída, não tenta validar CRM/RQE',async()=>{
+  it('sem vínculo ou sem resultado apresentado, não chama gravação',async()=>{
     const r=await revisar('Meu CRM é 100/RS','aprovar',{});
+    expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
     expect(r.resposta).toContain('Primeiro preciso concluir o vínculo');
+  });
+  it('recusa e esclarecimento não gravam CRM nem geram link',async()=>{
+    for(const decisao of ['recusar','esclarecer'] as const){
+      const r=await revisar('Ainda não, quero conferir melhor',decisao);
+      expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
+      expect(r.solicitarLinkRegistro).not.toHaveBeenCalled();
+      expect(r.resposta).not.toContain('Registrei os dados');
+    }
+  });
+  it('depois de quatro tentativas, link depende de autorização contextual, não de frase fixa',async()=>{
+    const estado:EstadoConversa={profissionalConfirmadoId:ANA,
+      pesquisasRegistro:{[ANA]:{nome:'Dra. Ana Souza',estado:'manual_pendente',
+        razao:'LIMITE_TENTATIVAS',tentativas:4}}};
+    const solicitarLinkRegistro=vi.fn().mockResolvedValue({ok:true,motivo:'ACEITO_API'});
+    for(const texto of ['Pode enviar a página segura','Sim, vamos preencher pelo link']){
+      const modelo=new ScriptedModel([
+        [functionCall('solicitar_link_seguro_registro',
+          {profissional:'Ana',decisao:'autorizar'},{callId:'link'})],
+        [assistantMessage('Já recebi seus dados!')]
+      ]);
+      const resposta=await responderAgente({texto,profissionais,estadoConversa:estado},{
+        modeloTeste:modelo,consultarStatus:status,solicitarLinkRegistro
+      });
+      expect(resposta).toMatch(/aceitou o link seguro/i);
+      expect(resposta).not.toContain('Já recebi seus dados');
+      modelo.assertComplete();
+    }
+    expect(solicitarLinkRegistro).toHaveBeenCalledTimes(2);
+  });
+  it('a intenção incerta não autoriza link novo',async()=>{
+    const estado:EstadoConversa={profissionalConfirmadoId:ANA,
+      pesquisasRegistro:{[ANA]:{nome:'Dra. Ana Souza',estado:'manual_pendente',
+        razao:'LIMITE_TENTATIVAS',tentativas:4}}};
+    const solicitarLinkRegistro=vi.fn();
+    const modelo=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_registro',{profissional:'Ana',decisao:'esclarecer'},{callId:'duvida'})],
+      [assistantMessage('Enviei um link')]
+    ]);
+    const resposta=await responderAgente({texto:'Como é esse link?',profissionais,estadoConversa:estado},{
+      modeloTeste:modelo,consultarStatus:status,solicitarLinkRegistro
+    });
+    expect(solicitarLinkRegistro).not.toHaveBeenCalled();
+    expect(resposta).not.toContain('Enviei');
+    modelo.assertComplete();
   });
 });
