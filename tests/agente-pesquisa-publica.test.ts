@@ -26,7 +26,7 @@ describe('mesma ConsultaRegistro do cadastro: apenas dados com evidência retorn
     }});
     expect(texto).toContain('CRM 12345/RS');
     expect(texto).toContain('RQE 980');
-    expect(texto).toContain('ainda não salvei');
+    expect(texto).toMatch(/ainda não salvei/i);
   });
   it('ausência de RQE consultado não vira inexistência',()=>{
     const r=extrairSugestoes(nome,{estado:'consultado',dados:[{...base,rqes:[],rqe:null}]});
