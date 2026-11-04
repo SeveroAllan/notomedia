@@ -710,6 +710,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           observacao:r.ok?'Link para correção aceito pela API; aguardar preenchimento e nova aprovação.':
             'Não confirmei o envio de um link. Não alterei dados profissionais.'};
       }
+      if(!estado.proposta && (estado.razao!=='ENCONTRADO' || (estado.candidatos?.length??0)!==1))
+        return falhar('REGISTRO_AMBIGUO');
       if(!deps.aprovarRegistroProfissional)return falhar('GRAVACAO_INDISPONIVEL');
       const r=await deps.aprovarRegistroProfissional(medico.id).catch(()=>({ok:false as const,motivo:'GRAVACAO_INDISPONIVEL'}));
       if(!r.ok)return falhar(r.motivo);
