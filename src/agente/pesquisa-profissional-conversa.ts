@@ -217,7 +217,7 @@ export async function marcarAvisoPesquisa(pool:Banco,p:PesquisaNotificar,aceito:
   const proximo=p.pesquisa.razao==='ENCONTRADO'||p.pesquisa.razao==='MANUAL_INFORMADO'
     ?'aguardando_confirmacao':'inconclusiva';
   return atualizarPesquisa(pool,p,'notificando',{estado:
-    p.pesquisa.razao==='LIMITE_TENTATIVAS'?'manual_pendente':proximo,
+    p.pesquisa.razao==='LIMITE_TENTATIVAS'?'manual_pendente':aceito?proximo:'inconclusiva',
     envio:aceito?'aceito_api':'incerto'});
 }
 export function descreverPesquisaPublica(p:PesquisaNotificar):string{
@@ -375,7 +375,8 @@ export async function recuperarPesquisaInterrompida(pool:Banco):Promise<void>{
     "set estado=jsonb_set(c.estado,array['pesquisasRegistro',antigas.medico_id],",
     "antigas.item||case when antigas.item->>'estado'='notificando'",
     // Um aviso pode ter sido aceito: manter incerteza, não reenviar.
-    "then jsonb_build_object('estado','inconclusiva','envio','incerto')",
+    "then jsonb_build_object('estado',case when antigas.item->>'razao'='LIMITE_TENTATIVAS'",
+    "then 'manual_pendente' else 'inconclusiva' end,'envio','incerto')",
     "when coalesce((antigas.item->>'tentativas')::int,0)>=$1",
     "then jsonb_build_object('estado','resultado_pronto','razao','LIMITE_TENTATIVAS','candidatos','[]'::jsonb)",
     "else jsonb_build_object('estado','pendente',",
