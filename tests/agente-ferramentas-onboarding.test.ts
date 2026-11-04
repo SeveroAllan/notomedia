@@ -223,72 +223,38 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
   });
 });
 
-describe('dados profissionais via conversa, com autorização exata',()=>{
+describe('CRM/RQE não são preenchidos nem confirmados por números no WhatsApp',()=>{
   const medicos=[{id:'m1',nome:'Dra. Alice Silva'}];
-  const toolArgs={profissional:'Alice',crm:'12345/RS'};
-
-  it('registra CRM informado e confirmado pelo próprio operador, sem tocar no fiscal',async()=>{
+  it.each([
+    'Meu CRM é 12345/RS',
+    'O CRM 12345/RS está certo?',
+    'Confirmo CRM 12345/RS',
+    'Na verdade, o CRM correto é 67890/RS'
+  ])('nenhum número escrito no WhatsApp chama gravação: %s',async texto=>{
     const modelo=new ScriptedModel([
-      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'confirma-crm'})],
-      [assistantMessage('CRM registrado. Os dados fiscais e a emissão continuam pendentes.')]
-    ]);
-    const salvarDadosProfissionais=vi.fn().mockResolvedValue({ok:true,nome:'Alice Silva',crm:'12345/RS',rqe:null});
-    const diagnostico=vi.fn();
-    const resposta=await responderAgente({
-      texto:'Confirmo CRM: 12345/RS',profissionais:medicos,
-      estadoConversa:{profissionalConfirmadoId:'m1'}
-    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
-    expect(salvarDadosProfissionais).toHaveBeenCalledExactlyOnceWith('m1',{crm:'12345/RS'});
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DADOS_PROFISSIONAIS_SALVOS');
-    expect(JSON.stringify(modelo.lastCall?.request.input)).toMatch(/emissaoAutorizada[^a-zA-Z]*false/);
-    expect(resposta).toContain('pendentes');
-    modelo.assertComplete();
-  });
-
-  it('não altera CRM apenas porque o valor foi mencionado em uma dúvida',async()=>{
-    const modelo=new ScriptedModel([
-      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'crm-pergunta'})],
-      [assistantMessage('Quer confirmar esse CRM para seu cadastro?')]
+      [assistantMessage('Para preencher ou corrigir números, use o cofre seguro.')]
     ]);
     const salvarDadosProfissionais=vi.fn();
-    const diagnostico=vi.fn();
-    await responderAgente({
-      texto:'O CRM 12345/RS está certo?',profissionais:medicos,
-      estadoConversa:{profissionalConfirmadoId:'m1'}
-    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
-    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
-    modelo.assertComplete();
-  });
-
-  it('não grava valor inventado pelo modelo, mesmo que a confirmação seja real',async()=>{
-    const modelo=new ScriptedModel([
-      [functionCall('confirmar_dados_profissionais',toolArgs,{callId:'crm-inventado'})],
-      [assistantMessage('Você confirma o CRM correto, por favor?')]
-    ]);
-    const salvarDadosProfissionais=vi.fn();
-    const diagnostico=vi.fn();
-    await responderAgente({
-      texto:'Confirmo CRM: 67890/RS',profissionais:medicos,
-      estadoConversa:{profissionalConfirmadoId:'m1'}
-    },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
-    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
-    modelo.assertComplete();
-  });
-
-  it('ferramenta de cadastro não é exposta antes de vínculo',async()=>{
-    const modelo=new ScriptedModel([[assistantMessage('Primeiro precisamos confirmar o profissional. Ainda não pesquisei o CRM.')]]);
-    const salvarDadosProfissionais=vi.fn();
-    const resposta=await responderAgente({texto:'Confirmo CRM: 12345/RS',profissionais:medicos},{
+    const resposta=await responderAgente({texto,profissionais:medicos,
+      estadoConversa:{profissionalConfirmadoId:'m1'}},{
       modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais
     });
     expect(salvarDadosProfissionais).not.toHaveBeenCalled();
-    expect(resposta).toContain('confirmar o profissional');
+    expect(resposta).toContain('cofre seguro');
+    expect(JSON.stringify(modelo.calls[0]?.request.tools)).not.toContain('confirmar_dados_profissionais');
+    modelo.assertComplete();
+  });
+  it('sem vínculo, não oferece cadastro por WhatsApp nem pesquisa',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Primeiro preciso confirmar o vínculo.') ]]);
+    const salvarDadosProfissionais=vi.fn();
+    const resposta=await responderAgente({texto:'CRM: 12345/RS',profissionais:medicos},{
+      modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais
+    });
+    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+    expect(resposta).toContain('confirmar o vínculo');
     modelo.assertComplete();
   });
 });
-
 
 describe('negações não são autorizações de escrita',()=>{
   it('não adiciona médico quando a pessoa diz que não confirma',async()=>{
@@ -315,24 +281,17 @@ describe('negações não são autorizações de escrita',()=>{
   });
 
   it.each(['Não confirmo CRM: 12345/RS','Não quero que salve CRM: 12345/RS'])(
-    'não grava cadastro quando a pessoa nega: %s',async texto=>{
-      const modelo=new ScriptedModel([
-        [functionCall('confirmar_dados_profissionais',{
-          profissional:'Alice',crm:'12345/RS'
-        },{callId:'negou-crm'})],
-        [assistantMessage('Entendi, não vou alterar seu CRM.')]
-      ]);
+    'negação mantém cadastro intacto: %s',async texto=>{
+      const modelo=new ScriptedModel([[assistantMessage('Não salvei seus dados profissionais.') ]]);
       const salvarDadosProfissionais=vi.fn();
-      const diagnostico=vi.fn();
-      await responderAgente({
-        texto,profissionais:[{id:'m1',nome:'Dra. Alice Silva'}],
-        estadoConversa:{profissionalConfirmadoId:'m1'}
-      },{modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais,aoDiagnostico:diagnostico});
+      await responderAgente({texto,profissionais:[{id:'m1',nome:'Dra. Alice Silva'}],
+        estadoConversa:{profissionalConfirmadoId:'m1'}},{
+        modeloTeste:modelo,consultarStatus:vi.fn(),salvarDadosProfissionais
+      });
       expect(salvarDadosProfissionais).not.toHaveBeenCalled();
-      expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
       modelo.assertComplete();
-    }
-  );
+    });
+
 });
 
 describe('configuração local não é instabilidade atribuída à TribeMD', () => {
