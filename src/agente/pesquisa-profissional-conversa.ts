@@ -202,14 +202,16 @@ export function descreverPesquisaPublica(p:PesquisaNotificar):string{
   return fonte+' Para '+p.nome+', encontrei CRM '+item.crm+'; '+rqe+'. Esses dados estão corretos? Ainda não salvei o registro.';
 }
 export async function destinatarioPesquisaAutorizado(
-  pool:Banco,contaId:string,telefone:string
+  pool:Banco,contaId:string,telefone:string,medicoId:string,nome:string
 ):Promise<boolean>{
   const variantes=[telefone,telefone.replace(/^55/,'')];
   const r=await pool.query([
-    'select 1 from public.usuarios u where u.conta_id=$1',
-    'and u.ativo=true and u.auth_user_id is not null',
+    'select 1 from public.usuarios u',
+    'join public.medicos m on m.conta_id=u.conta_id',
+    'and m.id=$3::uuid and m.nome_completo=$4',
+    'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
     "and regexp_replace(u.telefone,'[^0-9]','','g')=any($2::text[]) limit 1"
-  ].join('\n'),[contaId,variantes]);
+  ].join('\n'),[contaId,variantes,medicoId,nome]);
   return r.rows.length===1;
 }
 
@@ -221,7 +223,7 @@ export async function notificarPesquisaRegistro(
   if(!tarefa)return false;
   let aceito=false;
   try{
-    if(await destinatarioPesquisaAutorizado(pool,tarefa.contaId,telefone))
+    if(await destinatarioPesquisaAutorizado(pool,tarefa.contaId,telefone,tarefa.medicoId,tarefa.nome))
       aceito=await enviar(telefone,descreverPesquisaPublica(tarefa));
   }catch{aceito=false;}
   finally{await marcarAvisoPesquisa(pool,tarefa,aceito);}
