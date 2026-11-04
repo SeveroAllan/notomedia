@@ -4,6 +4,8 @@ import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
 import type { AgendaEscolhida } from './estado-conversa.js';
+import type { ConsultaRegistro } from '../cadastro/consultas.js';
+import { executarPesquisaRegistro,notificarPesquisaRegistro,recuperarPesquisaInterrompida } from './pesquisa-profissional-conversa.js';
 import {
   reservarTrabalhoNoto,reservarNotificacaoNoto,concluirLeituraNoto,
   falharLeituraNoto,terminarNotificacaoNoto,recuperarTrabalhosInterrompidos,type TrabalhoParaNotificar
@@ -18,6 +20,8 @@ export interface DependenciasTrabalhos {
   conferir:(contaId:string,medicoId:string,agenda:AgendaEscolhida)=>Promise<ResultadoConferencia>;
   enviar:(telefone:string,texto:string)=>Promise<boolean>;
   relatar?:(codigo:string, duracaoMs:number, tipo:string)=>void;
+  pesquisarRegistro?:ConsultaRegistro;
+  destinatarioPesquisa?:string;
 }
 const causaSegura=(motivo:string|undefined) =>
   ['LEITURA_INCOMPLETA','ACESSO_EXPIRADO','PROFISSIONAL_NAO_IDENTIFICADO',
@@ -142,8 +146,14 @@ export function iniciarTrabalhosNoto(deps:DependenciasTrabalhos,intervaloMs=2500
     if(!ativo||execucao)return;
     execucao=(async()=>{
       await recuperarTrabalhosInterrompidos(deps.pool);
+      if(deps.pesquisarRegistro&&deps.destinatarioPesquisa){
+        await recuperarPesquisaInterrompida(deps.pool);
+        if(await notificarPesquisaRegistro(deps.pool,deps.destinatarioPesquisa,deps.enviar))return;
+      }
       const notificou=await notificarResultadoPendente(deps);
-      if(!notificou) await executarLeituraPendente(deps,executor);
+      if(notificou)return;
+      if(deps.pesquisarRegistro&&await executarPesquisaRegistro(deps.pool,deps.pesquisarRegistro))return;
+      await executarLeituraPendente(deps,executor);
     })().catch(()=>deps.relatar?.('ERRO_CICLO',0,'worker')).finally(()=>{execucao=null});
   };
   const timer=setInterval(rodada,intervaloMs);
