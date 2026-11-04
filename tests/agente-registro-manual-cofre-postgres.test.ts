@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import {createServer,type Server} from 'node:http';
+import express from 'express';
 import type {AddressInfo} from 'node:net';
 import pg from 'pg';
 import {expect,it,vi} from 'vitest';
@@ -56,7 +57,8 @@ testar('cofre descartável: link 1x, formulário CRM/RQE, callback e revisão se
       enviarUrlComRecibo:envioLink
     });
     const router=criarRouterLinksCofre(links,origem,undefined,true);
-    server.on('request',router);
+    const app=express();app.use('/c',router);
+    server.on('request',app);
     const negar=await links.solicitarLinkRegistro(OUTRA,ANA,TEL);
     expect(negar.ok).toBe(false);
     expect(envioLink).not.toHaveBeenCalled();
