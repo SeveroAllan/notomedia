@@ -515,7 +515,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         registrar('confirmar_profissionais_descobertos','PROFISSIONAIS_CONFIRMADOS',inicio);
         deps.aoVinculoResultado?.({ok:true,nome:decisaoValidada.nomes[0]!,registrado,pesquisa});
         deps.aoComprovante?.({tipo:'vincular_profissionais',profissionalId:baseId,agenda});
-        return {ok:true,vinculoRegistrado:true,nome:decisaoValidada.nomes[0],
+        return {ok:true,vinculoRegistrado:registrado,nome:decisaoValidada.nomes[0],
           pesquisaPublica:pesquisa==='agendada'?'iniciada':pesquisa==='ja_existe'?'ja_em_andamento':'indisponivel',
           observacao:'CRM/RQE ainda não foram pesquisados nem validados. Nenhum dado profissional foi gravado.'};
       }catch{
@@ -991,6 +991,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(!v.ok) return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
         ? 'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
         : explicarVinculoNaoExecutado(v.motivo);
+      if(!v.registrado) return 'O cadastro aceitou o vínculo de '+v.nome+', mas ainda não consegui salvar a etapa na conversa. Vou verificar antes de consultar CRM/RQE.';
       const confirmacao='Vinculei '+v.nome+' à sua conta.';
       if(v.pesquisa==='agendada') return confirmacao+' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
       if(v.pesquisa==='ja_existe') return confirmacao+' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
@@ -999,6 +1000,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(revisaoTurno.atual){
       const r=revisaoTurno.atual;
       registrar('RESPOSTA',uso);
+      if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
       if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
         ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
         : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
