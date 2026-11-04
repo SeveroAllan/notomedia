@@ -28,7 +28,7 @@ import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
 import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
-import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa } from './agente/pesquisa-profissional-conversa.js';
+import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -349,6 +349,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
       agendarPesquisa: (contaId:string,medicoId:string,nome:string) =>
         agendarPesquisaRegistro(pool,contaId,medicoId,nome),
+      solicitarLinkRegistro:async(contaId:string,medicoId:string,telefone:string)=>{
+        const permitido=config.envioRealAllowlist?.length===1&&
+          gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v=>
+            gerarVariantesTelefoneBrasileiro(telefone).includes(v));
+        if(!permitido||!cofres.links)return {ok:false,motivo:'ENVIO_INDISPONIVEL'};
+        return cofres.links.solicitarLinkRegistro(contaId,medicoId,telefone);
+      },
+      aprovarRegistroProfissional:(contaId:string,medicoId:string)=>
+        aprovarRegistroProfissional(pool,contaId,medicoId),
       proporCorrecaoPesquisa:(contaId:string,medicoId:string,dados:{crm:string;rqe?:string}) =>
         proporCorrecaoPesquisa(pool,contaId,medicoId,dados),
       concluirRevisaoPesquisa:(contaId:string,medicoId:string) =>
