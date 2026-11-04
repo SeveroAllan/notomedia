@@ -210,7 +210,9 @@ export function criarCofreContas(deps: {
     return { app, links, configuracaoOk: !!cofre && !!origem && !!links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
         return cofre.detalheAoVivo(await referencia(medicoId,'tribemd'), atendimentoId);
-    }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
+    }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente,
+            env['NOTO_PILOTO_RESTRITO']==='true' && env['NOTO_AGENT_ATIVO']==='true' &&
+            env['NOTO_AGENT_ENVIO_ATIVO']==='true' && env['NOTO_AGENT_TRABALHOS_ATIVO']==='true'), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
         if(!cofre)return { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const };
         const ref=await referencia(entrada.medicoId,'tribemd');
         return cofre.fonteAgenda.consultar({...entrada,medicoId:ref,referenciaCofre:ref});
