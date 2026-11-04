@@ -294,7 +294,7 @@ describe('negações não são autorizações de escrita',()=>{
   it('não adiciona médico quando a pessoa diz que não confirma',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{
-        agenda:'tribemd',profissionalBase:'Alice',nomes:['Bruno Costa']
+        agenda:'tribemd',profissionalBase:'Alice',decisao:'negar',nomes:['Bruno Costa']
       },{callId:'negou-cadastro'})],
       [assistantMessage('Entendi, não vou adicionar Bruno. Podemos continuar sem alterar sua conta.')]
     ]);
@@ -303,14 +303,14 @@ describe('negações não são autorizações de escrita',()=>{
     const resposta=await responderAgente({
       texto:'Não confirmo adicionar Bruno Costa à conta.',
       profissionais:[{id:'m1',nome:'Dra. Alice Silva'}],
-      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1'}
+      estadoConversa:{agendaEscolhida:'tribemd',profissionalConfirmadoId:'m1',faseAgenda:'CONFIRMACAO_PENDENTE',descoberta:{agenda:'tribemd',nomes:['Bruno Costa']}}
     },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue({
       tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
     }),descobrirProfissionais:vi.fn().mockResolvedValue({ok:true,nomes:['Bruno Costa']}),
       confirmarProfissionais,aoDiagnostico:diagnostico});
     expect(confirmarProfissionais).not.toHaveBeenCalled();
-    expect(resposta).toContain('não vou adicionar');
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_PROFISSIONAL');
+    expect(resposta).toContain('não vinculei');
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
     modelo.assertComplete();
   });
 
