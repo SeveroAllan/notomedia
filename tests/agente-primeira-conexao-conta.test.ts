@@ -91,21 +91,24 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     scripted.assertComplete();
   });
 
-  it('só confirma após reconsulta real e autorização explícita; não herda fiscal',async()=>{
+  it('confirma um alvo comprovado sem reler agenda nem herdar autorização fiscal',async()=>{
     const scripted=modelo('confirmar_profissionais_descobertos',{
-      agenda:'tribemd',profissionalBase:null,nomes:['Alice Silva','Bruno Costa']
-    },'Alice e Bruno foram adicionados à conta. Isso não habilita emissão fiscal.');
-    const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes});
-    const confirmarProfissionais=vi.fn().mockResolvedValue({
-      ok:true,nomes:['Alice Silva','Bruno Costa']});
-    const resposta=await responderAgente({texto:'Confirmo adicionar Alice Silva e Bruno Costa à minha conta.',
-      profissionais:[medicoProvisorio],estadoConversa:{...origem,descoberta:{agenda:'tribemd',nomes}}},
-      {modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue(conectado),
-        referenciaContaAgenda:vi.fn().mockResolvedValue(referencia),
-        descobrirProfissionais,confirmarProfissionais});
-    expect(descobrirProfissionais).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
-    expect(confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(referencia,nomes);
-    expect(resposta).toContain('não habilita emissão');
+      agenda:'tribemd',profissionalBase:null,decisao:'confirmar',nomes:['Dra. Alice Silva']
+    },'Vínculo concluído.');
+    const descobrirProfissionais=vi.fn();
+    const confirmarProfissionais=vi.fn().mockResolvedValue({ok:true,
+      nomes:['Dra. Alice Silva'],medicos:[{id:'m-2',nome:'Dra. Alice Silva'}]});
+    const resposta=await responderAgente({
+      texto:'Confirmo vincular a Dra. Alice Silva à minha conta.',
+      profissionais:[medicoProvisorio],
+      estadoConversa:{...origem,faseAgenda:'CONFIRMACAO_PENDENTE',
+        descoberta:{agenda:'tribemd',nomes}}
+    },{modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue(conectado),
+      referenciaContaAgenda:vi.fn().mockResolvedValue(referencia),
+      descobrirProfissionais,confirmarProfissionais});
+    expect(descobrirProfissionais).not.toHaveBeenCalled();
+    expect(confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(referencia,['Dra. Alice Silva']);
+    expect(resposta).toContain('Vinculei Dra. Alice Silva');
     scripted.assertComplete();
   });
 
@@ -115,7 +118,7 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
       {texto:'Confirmo adicionar Alice Silva à conta.',lista:['Bruno Costa']}
     ]) {
       const scripted=modelo('confirmar_profissionais_descobertos',{
-        agenda:'tribemd',profissionalBase:null,nomes:['Alice Silva']
+        agenda:'tribemd',profissionalBase:null,decisao:'esclarecer',nomes:['Alice Silva']
       },'Vou confirmar os nomes pela agenda antes de cadastrar.');
       const confirmarProfissionais=vi.fn();
       await responderAgente({texto,profissionais:[medicoProvisorio],estadoConversa:origem},
@@ -142,7 +145,7 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
 it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com nome válido e confirmação',async()=>{
   const modeloTeste=new ScriptedModel([
     [functionCall('confirmar_profissionais_descobertos',{
-      agenda:'tribemd',profissionalBase:null,nomes:['Alice Silva']
+      agenda:'tribemd',profissionalBase:null,decisao:'confirmar',nomes:['Alice Silva']
     },{callId:'sem-descoberta-previa'})],
     [assistantMessage('Preciso primeiro consultar os nomes na sua agenda.')] 
   ]);
@@ -154,7 +157,7 @@ it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com no
     tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}
   }),referenciaContaAgenda:vi.fn().mockResolvedValue('id-tecnico-da-conta'),
   descobrirProfissionais,confirmarProfissionais});
-  expect(resposta).toContain('primeiro consultar');
+  expect(resposta).toContain('descoberta comprovada');
   expect(descobrirProfissionais).not.toHaveBeenCalled();
   expect(confirmarProfissionais).not.toHaveBeenCalled();
   modeloTeste.assertComplete();
