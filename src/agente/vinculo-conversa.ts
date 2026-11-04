@@ -35,11 +35,12 @@ export async function registrarVinculoConversa(
       'where c.conta_id=$1',
       "and c.estado->>'faseAgenda'='CONFIRMACAO_PENDENTE'",
       "and c.estado#>>'{descoberta,agenda}'=$5",
+      "and c.estado#>'{descoberta,nomes}'=$7::jsonb",
       'and exists(select 1 from public.medicos m where m.id=$2::uuid',
       'and m.conta_id=$1 and m.nome_completo=$6)',
       'returning conta_id'
     ].join('\n');
-    const r=await pool.query(sql,[contaId,profissional.id,fase,novo,agenda,profissional.nome]);
+    const r=await pool.query(sql,[contaId,profissional.id,fase,novo,agenda,profissional.nome,JSON.stringify(fonte.nomes)]);
     return r.rows.length===1?{ok:true,profissional,restantes}:
       {ok:false,motivo:'PENDENCIA_ALTERADA'};
   }catch{return {ok:false,motivo:'ESTADO_INDISPONIVEL'};}
