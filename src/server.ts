@@ -28,6 +28,7 @@ import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
 import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
+import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -225,6 +226,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const iaApiKey=iaOpenAiAtiva?config.openaiApiKey:config.nvidiaApiKey;
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
+  const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
+  const consultaRegistro = pesquisaCrmConfigurada
+    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
+        completar:(mensagens)=>completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, { temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1 })})
+    : new PesquisaRegistroIndisponivel();
   // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
   // A instância de emissão/pacientes não é encaminhada para o agente.
   const transporteAgente = new EvolutionApiClient(
@@ -310,6 +316,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       descobrir:(contaId,medicoId,agenda) =>
         descobrirProfissionaisConta(medicoId??cofreIdDaConta(contaId),agenda),
       conferir:consultarConferenciaConta,
+      ...(pesquisaCrmConfigurada&&config.envioRealAllowlist?.[0] ? {
+        pesquisarRegistro:consultaRegistro,
+        destinatarioPesquisa:gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0])[0]!
+      } : {}),
       enviar:async(telefone,texto) => {
         const permitido=config.envioRealAllowlist?.some(numero=>
           gerarVariantesTelefoneBrasileiro(numero).some(v=>
@@ -336,6 +346,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
+    ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
+      agendarPesquisa: (contaId:string,medicoId:string,nome:string) =>
+        agendarPesquisaRegistro(pool,contaId,medicoId,nome),
+      proporCorrecaoPesquisa:(contaId:string,medicoId:string,dados:{crm:string;rqe?:string}) =>
+        proporCorrecaoPesquisa(pool,contaId,medicoId,dados),
+      concluirRevisaoPesquisa:(contaId:string,medicoId:string) =>
+        concluirRevisaoPesquisa(pool,contaId,medicoId)
+    } : {}),
     ...(trabalhosHabilitados ? {
       solicitarTrabalho: (pedido: import('./agente/trabalhos-duraveis.js').PedidoTrabalhoNoto) =>
         enfileirarTrabalhoNoto(pool,pedido),
@@ -363,7 +381,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     confirmarProfissionais: async (medicoBaseId, nomes) => {
       if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CONFIRMACAO_DESLIGADA' };
       const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
-      return resultado.ok ? { ok: true, nomes: resultado.medicos.map(m => m.nomeCompleto) }
+      return resultado.ok ? { ok: true, nomes: resultado.medicos.map(m => m.nomeCompleto),
+          medicos:resultado.medicos.map(m=>({id:m.id,nome:m.nomeCompleto})) }
         : { ok: false, motivo: resultado.motivo };
     },
     solicitarLinkAgenda: async (medicoId, agenda, telefone) => {
@@ -417,11 +436,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   }));
 
-  const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
-  const consultaRegistro = pesquisaCrmConfigurada
-    ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
-        completar:(mensagens)=>completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, { temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1 })})
-    : new PesquisaRegistroIndisponivel();
   const cadastroCertificado = new CadastroCertificado(new PostgresCadastro(pool), criarConsultaEmpresa(config.hubDesenvolvedorToken), consultaRegistro,
     async (medicoId, certificadoId) => {
       const cert = await carregarCertificadoMedico(pool, authAdminService.supabaseClient, medicoId);
