@@ -71,7 +71,7 @@ export function criarRouterWebhookAgente(deps: {
   }>;
   agendarPesquisa?: (contaId:string,medicoId:string,nome:string) => Promise<'agendada'|'ja_existe'|'indisponivel'>;
   solicitarLinkRegistro?: (contaId:string,medicoId:string,telefone:string,
-    acao:'solicitar'|'consultar'|'substituir',mensagemId:string)=>Promise<{ok:boolean;motivo?:string}>;
+    acao:'solicitar'|'consultar'|'substituir',mensagemId:string)=>Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
   aprovarRegistroProfissional?: (contaId:string,medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   proporCorrecaoPesquisa?: (contaId:string,medicoId:string,dados:{crm:string;rqe?:string})=>Promise<boolean>;
   concluirRevisaoPesquisa?: (contaId:string,medicoId:string)=>Promise<boolean>;
