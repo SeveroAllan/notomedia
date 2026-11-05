@@ -54,7 +54,7 @@ export function criarCofreContas(deps: {
     registrarTextoLink?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
     enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
-        Promise<'enviado' | 'erro'>;
+        Promise<'enviado' | 'erro' | 'incerto'>;
 }) {
     const env = deps.env ?? process.env, app = express();
     const homologacao = env['NOTO_PILOTO_RESTRITO'] === 'true';
