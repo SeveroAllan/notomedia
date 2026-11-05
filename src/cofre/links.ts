@@ -229,7 +229,7 @@ export class LinksCofre {
     async solicitarLinkRegistro(
         contaId:string,medicoId:string,telefone:string,
         acao:'solicitar'|'consultar'|'substituir'='solicitar',mensagemId?:string
-    ):Promise<{ok:boolean;motivo:string}>{
+    ):Promise<{ok:boolean;motivo:string;anteriorInvalidado?:boolean}>{
         const variantes=gerarVariantesTelefoneBrasileiro(telefone);
         if(!variantes.length||!['solicitar','consultar','substituir'].includes(acao))
             return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
@@ -320,6 +320,8 @@ export class LinksCofre {
             if(!confirmado)await client.query('rollback').catch(()=>undefined);
             client.release();
         }
+        // O indicador só existe após o commit atômico que revogou o link antigo.
+        const anteriorInvalidado=acao==='substituir';
         // Erro ou crash após COMMIT não permite repetir URL automaticamente.
         try{
             const url=this.deps.origem+'/c/registro/'+token;
@@ -356,14 +358,14 @@ export class LinksCofre {
                         ].join('\n'),[contaId,medicoId,linkId]);
                     }
                     await c.query('commit');concluiu=true;
-                    if(falha.rows.length)return {ok:false,motivo:'FALHA_COMPROVADA'};
+                    if(falha.rows.length)return {ok:false,motivo:'FALHA_COMPROVADA',anteriorInvalidado};
                 }finally{
                     if(!concluiu)await c.query('rollback').catch(()=>undefined);
                     c.release();
                 }
-                return {ok:false,motivo:'ENVIO_INCERTO'};
+                return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};
             }
-            if(envio!=='enviado')return {ok:false,motivo:'ENVIO_INCERTO'};
+            if(envio!=='enviado')return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};
             await this.auditar(linkId,'enviado');
             await this.deps.pool.query([
               'update public.noto_agent_conversas c set',
@@ -374,8 +376,8 @@ export class LinksCofre {
               "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
               "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
             ].join('\n'),[contaId,medicoId,linkId]);
-            return {ok:true,motivo:'ACEITO_API'};
-        }catch{return {ok:false,motivo:'ENVIO_INCERTO'};}
+            return {ok:true,motivo:'ACEITO_API',anteriorInvalidado};
+        }catch{return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};}
         finally{token='';}
     }
 
