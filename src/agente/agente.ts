@@ -50,7 +50,7 @@ export interface DependenciasAgente {
   }>;
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
-  solicitarLinkRegistro?: (medicoId:string) => Promise<{ok:boolean;motivo?:string}>;
+  solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string}>;
   aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string})=>void;
   aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}) => void;
@@ -629,10 +629,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // Confirmação de sugestão já exibida é decisão tipada, não frase fixa.
   if(deps.solicitarLinkRegistro)extras.push(tool({
     name:'solicitar_link_seguro_registro',
-    description:'Quando o médico autorizar o preenchimento ou a correção de CRM/RQE depois da pesquisa, solicitar link do Cofre. A autorização refere-se ao médico comprovado da conta. Não recebe CRM nem RQE e não reenvia link já vivo.',
+    description:'CRM/RQE no Cofre: autorizar solicita link quando não há ativo ou falhou comprovadamente; consultar verifica recibo sem envio; substituir exige novo consentimento explícito para invalidar link incerto/aceito sem entrega e só então criar outro. Não inferir falha pela falta de ACK.',
     parameters:z.object({
       profissional:z.string(),
-      decisao:z.enum(['autorizar','recusar','esclarecer'])
+      decisao:z.enum(['autorizar','recusar','esclarecer','consultar','substituir'])
     }),
     async execute({profissional,decisao}){
       const inicio=Date.now();
@@ -640,18 +640,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const medico=alvo.encontrados.length===1?alvo.encontrados[0]:undefined;
       const estado=medico?entrada.estadoConversa?.pesquisasRegistro?.[medico.id]:undefined;
       if(!medico||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id ||
-         !estado||!['manual_pendente','aguardando_confirmacao'].includes(estado.estado)){
+         !estado||!['manual_pendente','aguardando_confirmacao','aguardando_preenchimento','link_manual_reservado'].includes(estado.estado)){
         registrar('solicitar_link_seguro_registro','DEPENDENCIA_PROFISSIONAL',inicio);
         deps.aoLinkRegistro?.({ok:false,nome:medico?.nome??'',motivo:'REVISAO_NAO_DISPONIVEL'});
         return {ok:false,motivo:'REVISAO_NAO_DISPONIVEL'};
       }
-      if(decisao!=='autorizar'){
+      if(!['autorizar','consultar','substituir'].includes(decisao)){
         registrar('solicitar_link_seguro_registro','DEPENDENCIA_CONFIRMACAO',inicio);
         deps.aoLinkRegistro?.({ok:false,nome:medico.nome,motivo:'SEM_AUTORIZACAO'});
         return {ok:false,motivo:'SEM_AUTORIZACAO'};
       }
       const pendencias=Object.entries(entrada.estadoConversa?.pesquisasRegistro??{})
-        .filter(([_,r])=>['manual_pendente','aguardando_confirmacao'].includes(r.estado));
+        .filter(([_,r])=>['manual_pendente','aguardando_confirmacao','aguardando_preenchimento','link_manual_reservado'].includes(r.estado));
       if(pendencias.length>1){
         const dito=normalizarNomeMedico(entrada.texto);
         const exato=normalizarNomeMedico(medico.nome);
@@ -665,12 +665,14 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
       }
       try{
-        const r=await deps.solicitarLinkRegistro!(medico.id);
-        registrar('solicitar_link_seguro_registro',r.ok?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
+        const r=await deps.solicitarLinkRegistro!(medico.id,decisao==='substituir'?'substituir':decisao==='consultar'?'consultar':'solicitar');
+        registrar('solicitar_link_seguro_registro',r.motivo==='ACEITO_API'?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
         deps.aoLinkRegistro?.({ok:r.ok,nome:medico.nome,motivo:r.motivo});
-        return r.ok?{ok:true,estado:'ACEITO_API',preenchido:false,confirmado:false,
-          observacao:'O serviço aceitou o envio da URL segura. Isso não prova entrega nem preenchimento.'}:
-          {ok:false,motivo:r.motivo??'LINK_NAO_ENVIADO'};
+        return {ok:r.ok,estado:r.motivo,preenchido:false,confirmado:false,
+          proximaAcao:r.motivo==='FALHA_COMPROVADA'?'solicitar_novo_com_autorizacao':
+            ['ENVIO_INCERTO','ACEITO_SEM_ENTREGA'].includes(r.motivo??'')?
+             'consultar_recibo_ou_substituir_com_autorizacao':'verificar_estado',
+          observacao:'O estado é de envio, não de preenchimento ou aprovação.'};
       }catch{
         registrar('solicitar_link_seguro_registro','FERRAMENTA_INDISPONIVEL',inicio);
         deps.aoLinkRegistro?.({ok:false,nome:medico.nome,motivo:'ENVIO_INCERTO'});
@@ -703,8 +705,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(decisao==='recusar')return falhar('NAO_APROVADO');
       if(decisao==='corrigir'){
         if(!deps.solicitarLinkRegistro)return falhar('COFRE_INDISPONIVEL');
-        const r=await deps.solicitarLinkRegistro(medico.id).catch(()=>({ok:false,motivo:'ENVIO_INCERTO'}));
-        registrar('revisar_registro_profissional',r.ok?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
+        const r=await deps.solicitarLinkRegistro(medico.id,'solicitar').catch(()=>({ok:false,motivo:'ENVIO_INCERTO'}));
+        registrar('revisar_registro_profissional',r.motivo==='ACEITO_API'?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
+        if(!r.ok)return falhar(r.motivo??'ENVIO_INCERTO');
         deps.aoRevisaoRegistro?.({ok:true,tipo:'correcao',nome:medico.nome,motivo:r.motivo});
         return {ok:r.ok,gravado:false,
           observacao:r.ok?'Link para correção aceito pela API; aguardar preenchimento e nova aprovação.':
