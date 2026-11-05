@@ -310,7 +310,7 @@ export class LinksCofre {
               "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
               "c.estado#>array['pesquisasRegistro',$2::text]||",
               "jsonb_build_object('estado','link_manual_reservado',",
-              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text),false),atualizado_em=now()"
+              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text),false),atualizado_em=now()",
               'where c.conta_id=$1'
             ].join('\n'),[contaId,medicoId,mensagemId??'',linkId]);
             await client.query('commit');
