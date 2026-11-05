@@ -33,7 +33,7 @@ testar('cofre descartável: link 1x, formulário CRM/RQE, callback e revisão se
       "create table public.noto_agent_conversas (conta_id uuid primary key references public.contas(id), estado jsonb not null default '{}'::jsonb, atualizado_em timestamptz not null default now());",
       'create table public.usuarios (id uuid primary key,conta_id uuid,auth_user_id uuid,telefone text,ativo boolean);',
       "create table public.cofre_links (id uuid primary key default gen_random_uuid(), medico_id uuid references public.medicos(id),agenda text not null, token_hash text unique not null, expira_em timestamptz not null, usado_em timestamptz, criado_em timestamptz default now(), destino_telefone text);",
-      'create table public.cofre_links_auditoria (link_id uuid references public.cofre_links(id),evento text,primary key(link_id,evento));',
+      "create table public.cofre_links_auditoria (link_id uuid references public.cofre_links(id),evento text check(evento in ('criado','aberto','enviado','expirado','concluido')),primary key(link_id,evento));",
       'create table public.cofre_links_entregas (link_id uuid primary key references public.cofre_links(id),instancia text,mensagem_id text,destino_hash text,estado text,aceito_em timestamptz default now());',
       "insert into public.contas(id) values('"+CONTA+"'),('"+OUTRA+"');",
       "insert into public.medicos(id,conta_id,nome_completo) values('"+ANA+"','"+CONTA+"','"+NOME+"');",
