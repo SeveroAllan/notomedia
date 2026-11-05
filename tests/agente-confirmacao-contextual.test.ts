@@ -221,4 +221,45 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     expect(resposta).not.toContain('Enviei');
     modelo.assertComplete();
   });
+  it('distingue status real e menciona invalidação apenas quando a troca foi confirmada',async()=>{
+    const estado:EstadoConversa={profissionalConfirmadoId:ANA,
+      pesquisasRegistro:{[ANA]:{nome:'Dra. Ana Souza',estado:'link_manual_reservado',
+        razao:'LIMITE_TENTATIVAS',tentativas:4}}};
+    const cenarios=[
+      {decisao:'consultar',motivo:'ENVIO_INCERTO',ok:true,revo:false,
+        trecho:'não vou reenviá-la às cegas'},
+      {decisao:'consultar',motivo:'ACEITO_SEM_ENTREGA',ok:true,revo:false,
+        trecho:'ainda não confirmou entrega'},
+      {decisao:'consultar',motivo:'FALHA_COMPROVADA',ok:false,revo:false,
+        trecho:'falhou de forma comprovada'},
+      {decisao:'consultar',motivo:'ENTREGUE',ok:true,revo:false,
+        trecho:'confirmou a entrega'},
+      {decisao:'substituir',motivo:'ACEITO_API',ok:true,revo:true,
+        trecho:'Invalidei o link anterior'},
+      {decisao:'substituir',motivo:'ENVIO_INCERTO',ok:false,revo:true,
+        trecho:'Invalidei o link anterior'},
+    ] as const;
+    for(const c of cenarios){
+      const modelo=new ScriptedModel([
+        [functionCall('solicitar_link_seguro_registro',
+          {profissional:'Ana',decisao:c.decisao},{callId:'link'})],
+        [assistantMessage('Entreguei o link e já gravei o CRM.')]
+      ]);
+      const solicitarLinkRegistro=vi.fn().mockResolvedValue({
+        ok:c.ok,motivo:c.motivo,anteriorInvalidado:c.revo
+      });
+      const resposta=await responderAgente({
+        texto:c.decisao==='substituir'?'Pode invalidar o anterior e tentar outro da Ana':
+          'Consegue conferir o que aconteceu com o link da Ana?',
+        profissionais,estadoConversa:estado
+      },{modeloTeste:modelo,consultarStatus:status,solicitarLinkRegistro});
+      expect(resposta).toContain(c.trecho);
+      if(!c.revo)expect(resposta).not.toContain('Invalidei o link anterior');
+      expect(resposta).not.toContain('já gravei');
+      expect(solicitarLinkRegistro).toHaveBeenCalledExactlyOnceWith(
+        ANA,c.decisao==='substituir'?'substituir':'consultar');
+      modelo.assertComplete();
+    }
+  });
+
 });
