@@ -112,7 +112,7 @@ export function planejarObjetivos(
           proximoPasso='verificar_inicio_pesquisa';dependeDe='resultado_persistido';
       }
     }else{
-      const relevant=trabalhos.filter(t=>t.tipo==='conferencia_fiscal'&&(!agenda||t.agenda===agenda));
+      const relevant=trabalhos.filter(t=>t.tipo==='conferencia_fiscal'&&t.medicoId===obj.medicoId&&(!agenda||t.agenda===agenda));
       if(!agenda){
         proximoPasso='escolher_agenda';dependeDe='agenda_autorizada';
       }else if(relevant.some(t=>['pendente','executando','resultado_pronto','notificando'].includes(t.estado))){
