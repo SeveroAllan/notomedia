@@ -34,15 +34,16 @@ testar('cofre descartável: link 1x, formulário CRM/RQE, callback e revisão se
       'create table public.usuarios (id uuid primary key,conta_id uuid,auth_user_id uuid,telefone text,ativo boolean);',
       "create table public.cofre_links (id uuid primary key default gen_random_uuid(), medico_id uuid references public.medicos(id),agenda text not null, token_hash text unique not null, expira_em timestamptz not null, usado_em timestamptz, criado_em timestamptz default now(), destino_telefone text);",
       'create table public.cofre_links_auditoria (link_id uuid references public.cofre_links(id),evento text,primary key(link_id,evento));',
+      'create table public.cofre_links_entregas (link_id uuid primary key references public.cofre_links(id),instancia text,mensagem_id text,destino_hash text,estado text,aceito_em timestamptz default now());',
       "insert into public.contas(id) values('"+CONTA+"'),('"+OUTRA+"');",
       "insert into public.medicos(id,conta_id,nome_completo) values('"+ANA+"','"+CONTA+"','"+NOME+"');",
       "insert into public.usuarios(id,conta_id,auth_user_id,telefone,ativo) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','"+CONTA+"','ffffffff-ffff-4fff-8fff-ffffffffffff','"+TEL+"',true);"
     ].join('\n'));
     const definirEstado=async(obj:object)=>{
       await pool!.query([
-        "insert into public.noto_agent_conversas(conta_id,estado) values($1,jsonb_build_object('pesquisasRegistro',$2::jsonb))",
+        "insert into public.noto_agent_conversas(conta_id,estado) values($1,jsonb_build_object('pesquisasRegistro',$2::jsonb,'profissionalConfirmadoId',$3::text))",
         "on conflict(conta_id) do update set estado=excluded.estado"
-      ].join('\n'),[CONTA,JSON.stringify(obj)]);
+      ].join('\n'),[CONTA,JSON.stringify(obj),ANA]);
     };
     await definirEstado(dados());
     server=createServer();
@@ -74,7 +75,7 @@ testar('cofre descartável: link 1x, formulário CRM/RQE, callback e revisão se
     expect(gravados.rows[0].usado_em).toBeNull();
 
     // Evento duplicado, ou simples clique no link, não é preenchimento.
-    expect((await links.solicitarLinkRegistro(CONTA,ANA,TEL)).motivo).toBe('LINK_JA_EXISTENTE');
+    expect((await links.solicitarLinkRegistro(CONTA,ANA,TEL)).motivo).toBe('ACEITO_SEM_ENTREGA');
     expect(envioLink).toHaveBeenCalledTimes(1);
     let r=await fetch(urlEnviada);
     expect(r.status).toBe(200);
