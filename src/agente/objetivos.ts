@@ -160,6 +160,17 @@ export async function alterarObjetivoNoto(
   ].join('\n');
   try{
     if(acao==='acompanhar'){
+      // Uma conta existente pode ainda não ter conversa; bootstrap autorizado.
+      // Mesmo entre réplicas, uma única linha de estado pode nascer por conta.
+      await pool.query([
+        'insert into public.noto_agent_conversas(conta_id,estado)',
+        "select $1,'{}'::jsonb where",
+        'exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
+        'and ($3::boolean or exists(select 1 from public.usuarios u',
+        'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
+        "and regexp_replace(u.telefone,'[^0-9]','','g')=any($4::text[])))",
+        'on conflict(conta_id) do nothing'
+      ].join('\n'),[contaId,medicoId,!telefone,variantes]);
       const sql=[
         'update public.noto_agent_conversas c',
         "set estado=jsonb_set(c.estado,'{objetivos}',",
@@ -172,10 +183,13 @@ export async function alterarObjetivoNoto(
       const r=await pool.query(sql,[contaId,medicoId,id,JSON.stringify(novo),!telefone,variantes]);
       if(r.rows.length===1)return {ok:true,estado:'iniciado'};
       const ja=await pool.query([
-        'select c.estado#>>array[\'objetivos\',$3::text,\'status\'] as status',
+        "select c.estado#>>array['objetivos',$3::text,'status'] as status",
         'from public.noto_agent_conversas c where c.conta_id=$1',
-        'and '+auth
-      ].join('\n'),[contaId,medicoId,id,null,!telefone,variantes]);
+        'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
+        'and ($4::boolean or exists(select 1 from public.usuarios u',
+        'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
+        "and regexp_replace(u.telefone,'[^0-9]','','g')=any($5::text[])))"
+      ].join('\n'),[contaId,medicoId,id,!telefone,variantes]);
       if(ja.rows[0]?.status==='ativo'||ja.rows[0]?.status==='pausado')
         return {ok:true,estado:'ja_existente'};
       return {ok:false,motivo:ja.rows.length?'LIMITE_OBJETIVOS':'SEM_AUTORIZACAO'};
@@ -195,8 +209,12 @@ export async function alterarObjetivoNoto(
     if(r.rows.length===1)return {ok:true,estado:destino==='ativo'?'retomado':'pausado'};
     const presente=await pool.query([
       "select c.estado#>>array['objetivos',$3::text,'status'] as status",
-      'from public.noto_agent_conversas c where c.conta_id=$1 and '+auth
-    ].join('\n'),[contaId,medicoId,id,null,!telefone,variantes]);
+      'from public.noto_agent_conversas c where c.conta_id=$1',
+      'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
+      'and ($4::boolean or exists(select 1 from public.usuarios u',
+      'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
+      "and regexp_replace(u.telefone,'[^0-9]','','g')=any($5::text[])))"
+    ].join('\n'),[contaId,medicoId,id,!telefone,variantes]);
     if(!presente.rows.length)return {ok:false,motivo:'SEM_AUTORIZACAO'};
     if(!presente.rows[0]?.status)return {ok:false,motivo:'SEM_OBJETIVO'};
     return {ok:true,estado:'ja_existente'};
