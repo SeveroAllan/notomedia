@@ -40,7 +40,7 @@ export class LinksCofre {
          * A ausência de ACK não permite repetir a URL automaticamente.
          */
         enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
-            Promise<'enviado' | 'erro'>;
+            Promise<'enviado' | 'erro' | 'incerto'>;
     }) {}
 
     private cofreDe(agenda: string): CofreAgenda | null {
