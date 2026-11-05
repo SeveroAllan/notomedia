@@ -55,7 +55,7 @@ testar('memória de objetivos no PostgreSQL descartável: isolada, idempotente e
     ].join('\n'),[CONTA]);
     await salvarEstadoConversa(pool,CONTA,{
       agendaEscolhida:'tribemd',
-      objetivos:{'concluir_cadastro:'+ANA:{
+      objetivos:{['concluir_cadastro:'+ANA]:{
         medicoId:ANA,tipo:'concluir_cadastro',status:'pausado',
         origem:'solicitacao_operador',criadoEm:new Date().toISOString(),atualizadoEm:new Date().toISOString()
       }}
