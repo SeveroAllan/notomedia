@@ -123,7 +123,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           instanciaNome:config.evolutionAssistantInstanceName,
           contatoTelefone:telefone,texto:url,linkPreview:false
         });
-      if(!resultado.sucesso) return 'erro';
+      if(!resultado.sucesso) {
+        // Só rejeição explícita e definitiva (4xx, exceto timeout/conflito/
+        // rate limit) prova que a Evolution NÃO aceitou a mensagem.
+        // 5xx, timeout, reset e erro de transporte são INDETERMINADOS.
+        const http=/^HTTP\s+(\d{3})\b/.exec(resultado.erro??'');
+        const status=http?Number(http[1]):null;
+        return status!==null&&status>=400&&status<500&&
+          ![408,409,425,429].includes(status) ? 'erro' : 'incerto';
+      }
       try {
         await registrarAceiteLink(pool,{
           linkId,instancia:config.evolutionAssistantInstanceName,
@@ -349,12 +357,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
       agendarPesquisa: (contaId:string,medicoId:string,nome:string) =>
         agendarPesquisaRegistro(pool,contaId,medicoId,nome),
-      solicitarLinkRegistro:async(contaId:string,medicoId:string,telefone:string)=>{
+      solicitarLinkRegistro:async(contaId:string,medicoId:string,telefone:string,
+        acao:'solicitar'|'consultar'|'substituir'='solicitar',mensagemId?:string)=>{
         const permitido=config.envioRealAllowlist?.length===1&&
           gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v=>
             gerarVariantesTelefoneBrasileiro(telefone).includes(v));
         if(!permitido||!cofres.links)return {ok:false,motivo:'ENVIO_INDISPONIVEL'};
-        return cofres.links.solicitarLinkRegistro(contaId,medicoId,telefone);
+        return cofres.links.solicitarLinkRegistro(contaId,medicoId,telefone,acao,mensagemId);
       },
       aprovarRegistroProfissional:(contaId:string,medicoId:string)=>
         aprovarRegistroProfissional(pool,contaId,medicoId),
