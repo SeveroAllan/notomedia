@@ -29,6 +29,7 @@ import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
+import {alterarObjetivoNoto} from './agente/objetivos.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -364,6 +365,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         concluirRevisaoPesquisa(pool,contaId,medicoId)
     } : {}),
     ...(trabalhosHabilitados ? {
+      alterarObjetivo:(contaId:string,medicoId:string,
+        tipo:import('./agente/objetivos.js').TipoObjetivoNoto,
+        acao:import('./agente/objetivos.js').AcaoObjetivoNoto,
+        telefone:string,origem:import('./agente/objetivos.js').OrigemObjetivoNoto)=>
+        alterarObjetivoNoto(pool,contaId,medicoId,tipo,acao,origem,telefone),
       solicitarTrabalho: (pedido: import('./agente/trabalhos-duraveis.js').PedidoTrabalhoNoto) =>
         enfileirarTrabalhoNoto(pool,pedido),
       listarTrabalhos: (contaId:string,telefone:string,instancia:string) =>
