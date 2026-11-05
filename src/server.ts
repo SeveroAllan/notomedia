@@ -30,6 +30,7 @@ import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
+import { classificarEnvioLinkEvolution } from './whatsapp/status-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
  * Servidor HTTP principal da aplicação Notomed Whats.
@@ -123,15 +124,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           instanciaNome:config.evolutionAssistantInstanceName,
           contatoTelefone:telefone,texto:url,linkPreview:false
         });
-      if(!resultado.sucesso) {
-        // Só rejeição explícita e definitiva (4xx, exceto timeout/conflito/
-        // rate limit) prova que a Evolution NÃO aceitou a mensagem.
-        // 5xx, timeout, reset e erro de transporte são INDETERMINADOS.
-        const http=/^HTTP\s+(\d{3})\b/.exec(resultado.erro??'');
-        const status=http?Number(http[1]):null;
-        return status!==null&&status>=400&&status<500&&
-          ![408,409,425,429].includes(status) ? 'erro' : 'incerto';
-      }
+      const classificacao=classificarEnvioLinkEvolution(resultado);
+      if(classificacao!=='enviado')return classificacao;
       try {
         await registrarAceiteLink(pool,{
           linkId,instancia:config.evolutionAssistantInstanceName,
