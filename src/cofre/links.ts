@@ -258,8 +258,7 @@ export class LinksCofre {
                 return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
             const ultimo=(await client.query([
               'select l.id,l.usado_em,l.expira_em, (l.usado_em is null and l.expira_em>clock_timestamp()) as ativo,e.estado,',
-              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado') as aceite_audit,",
-              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='falha_comprovada') as falha_audit",
+              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado') as aceite_audit",
               'from public.cofre_links l',
               'left join public.cofre_links_entregas e on e.link_id=l.id',
               "where l.medico_id=$1::uuid and l.agenda='registro_profissional'",
@@ -268,12 +267,12 @@ export class LinksCofre {
             const vivo=Boolean(ultimo?.ativo);
             const situacao=ultimo?.estado==='READ'?'LIDO':
               ultimo?.estado==='DELIVERY_ACK'?'ENTREGUE':
-              ultimo?.estado==='ERROR'||ultimo?.falha_audit?'FALHA_COMPROVADA':
+              ultimo?.estado==='ERROR'||(dados.resultadoEnvioLink==='falha_comprovada'&&dados.solicitacaoLinkId===ultimo?.id)?'FALHA_COMPROVADA':
               ['ACEITO_API','PENDING','SERVER_ACK'].includes(ultimo?.estado)||
                 ultimo?.aceite_audit?'ACEITO_SEM_ENTREGA':'ENVIO_INCERTO';
             if(acao==='consultar')return vivo
               ? {ok:situacao!=='FALHA_COMPROVADA',motivo:situacao}
-              : {ok:false,motivo:'SEM_LINK_ATIVO'};
+              : {ok:false,motivo:situacao==='FALHA_COMPROVADA'?'FALHA_COMPROVADA':'SEM_LINK_ATIVO'};
             // Reserva por ID da mensagem antes do I/O: crash/replay não reenvia.
             if(mensagemId&&dados.solicitacaoLinkMensagemId===mensagemId)
                 return {ok:false,motivo:'PEDIDO_JA_PROCESSADO'};
@@ -310,7 +309,8 @@ export class LinksCofre {
               "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
               "c.estado#>array['pesquisasRegistro',$2::text]||",
               "jsonb_build_object('estado','link_manual_reservado',",
-              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text),false),atualizado_em=now()",
+              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text,", 
+              "'resultadoEnvioLink','incerto'),false),atualizado_em=now()",
               'where c.conta_id=$1'
             ].join('\n'),[contaId,medicoId,mensagemId??'',linkId]);
             await client.query('commit');
@@ -343,12 +343,13 @@ export class LinksCofre {
                     if(falha.rows.length){
                         await c.query([
                           'insert into public.cofre_links_auditoria(link_id,evento)',
-                          "values($1,'falha_comprovada') on conflict do nothing"
+                          "values($1,'expirado') on conflict do nothing"
                         ].join('\n'),[linkId]);
                         await c.query([
                           'update public.noto_agent_conversas c set',
-                          "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
-                          "'\"manual_pendente\"'::jsonb,false),atualizado_em=now()",
+                          "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+                          "c.estado#>array['pesquisasRegistro',$2::text]||",
+                          "jsonb_build_object('estado','manual_pendente','resultadoEnvioLink','falha_comprovada'),false),atualizado_em=now()",
                           'where c.conta_id=$1 and',
                           "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
                           "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
@@ -366,8 +367,9 @@ export class LinksCofre {
             await this.auditar(linkId,'enviado');
             await this.deps.pool.query([
               'update public.noto_agent_conversas c set',
-              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
-              "'\"aguardando_preenchimento\"'::jsonb,false),atualizado_em=now()",
+              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+              "c.estado#>array['pesquisasRegistro',$2::text]||",
+              "jsonb_build_object('estado','aguardando_preenchimento','resultadoEnvioLink','aceito_api'),false),atualizado_em=now()",
               'where c.conta_id=$1 and',
               "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
               "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
