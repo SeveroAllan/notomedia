@@ -22,6 +22,7 @@ import { cofreIdDaConta } from '../cofre/identidade-conta.js';
 import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operacional.js';
 import type { ResultadoConferencia } from './conferencia-atendimentos.js';
 import type { PedidoTrabalhoNoto, ResultadoEnfileirar, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
+import { registrarVinculoConversa } from './vinculo-conversa.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -65,7 +66,15 @@ export function criarRouterWebhookAgente(deps: {
   solicitarTrabalho?: (pedido: PedidoTrabalhoNoto) => Promise<ResultadoEnfileirar>;
   listarTrabalhos?: (contaId: string, telefone: string, instancia: string) => Promise<SituacaoTrabalhoNoto[]>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
-  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{
+    ok:boolean;nomes?:string[];motivo?:string;medicos?:{id:string;nome:string}[]
+  }>;
+  agendarPesquisa?: (contaId:string,medicoId:string,nome:string) => Promise<'agendada'|'ja_existe'|'indisponivel'>;
+  solicitarLinkRegistro?: (contaId:string,medicoId:string,telefone:string,
+    acao:'solicitar'|'consultar'|'substituir',mensagemId:string)=>Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
+  aprovarRegistroProfissional?: (contaId:string,medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
+  proporCorrecaoPesquisa?: (contaId:string,medicoId:string,dados:{crm:string;rqe?:string})=>Promise<boolean>;
+  concluirRevisaoPesquisa?: (contaId:string,medicoId:string)=>Promise<boolean>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
@@ -229,6 +238,9 @@ export function criarRouterWebhookAgente(deps: {
       const comprovantes: ComprovanteTarefa[] = [];
       const panoramaDaMensagem: { atual?: { foco: string | null; resultado: PanoramaFiscal } } = {};
       const conferenciaDaMensagem: { atual?: ResultadoConferencia } = {};
+      const vinculoDaMensagem: { atual?: {
+        agenda:AgendaEscolhida;id:string;nome:string;restantes:string[]
+      } } = {};
       const aoDiagnostico = (resultado: DiagnosticoAgente) => { diagnostico = resultado; };
       // Link antigo é contexto, não substitui resposta a um pedido novo.
       // O agente consulta recibo pela ferramenta se houver necessidade.
@@ -262,8 +274,41 @@ export function criarRouterWebhookAgente(deps: {
           if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.filter(nomeProfissionalValido).slice(0,20) };
           return r;
         } } : {}),
-        ...(deps.confirmarProfissionais ? { confirmarProfissionais: deps.confirmarProfissionais } : {}),
+        ...(deps.confirmarProfissionais ? {
+          confirmarProfissionais: deps.confirmarProfissionais,
+          ...(contaId ? {
+            aoVinculo: async (fonte:AgendaEscolhida,medico:{id:string;nome:string}) => {
+              // O vínculo foi persistido em medicos pela ferramenta. Este marco
+              // conversacional precisa existir antes do balão e da busca.
+              const feito=await registrarVinculoConversa(deps.pool,contaId!,fonte,medico);
+              if(!feito.ok)return {registrado:false,pesquisa:'indisponivel' as const};
+              vinculoDaMensagem.atual={
+                agenda:fonte,id:medico.id,nome:medico.nome,restantes:feito.restantes
+              };
+              const pesquisa=deps.agendarPesquisa
+                ? await deps.agendarPesquisa(contaId!,medico.id,medico.nome)
+                : 'indisponivel';
+              return {registrado:true,pesquisa};
+            }
+          }: {})
+        } : {}),
         ...(deps.salvarDadosProfissionais ? { salvarDadosProfissionais: deps.salvarDadosProfissionais } : {}),
+        ...(contaId&&deps.solicitarLinkRegistro?{
+          solicitarLinkRegistro:(medicoId:string,acao:'solicitar'|'consultar'|'substituir'='solicitar')=>
+            deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
+        }:{}),
+        ...(contaId&&deps.aprovarRegistroProfissional?{
+          aprovarRegistroProfissional:(medicoId:string)=>
+            deps.aprovarRegistroProfissional!(contaId!,medicoId)
+        }:{}),
+        ...(contaId && deps.proporCorrecaoPesquisa ? {
+          proporCorrecaoPesquisa:(medicoId:string,dados:{crm:string;rqe?:string})=>
+            deps.proporCorrecaoPesquisa!(contaId!,medicoId,dados)
+        } : {}),
+        ...(contaId && deps.concluirRevisaoPesquisa ? {
+          concluirRevisaoPesquisa:(medicoId:string)=>
+            deps.concluirRevisaoPesquisa!(contaId!,medicoId)
+        } : {}),
         ...(deps.solicitarLinkAgenda ? { solicitarLinkAgenda: (medicoId: string, agenda: AgendaEscolhida) => deps.solicitarLinkAgenda!(medicoId, agenda, telefone) } : {}),
         ...(deps.consultarEntregaLink ? { consultarEntregaLink: (ref:string,agenda:AgendaEscolhida) =>
           deps.consultarEntregaLink!(ref,agenda) } : {}),
@@ -300,6 +345,14 @@ export function criarRouterWebhookAgente(deps: {
       if (enviado) {
         const baseEstado = descobertaVerificada ? { ...estado, descoberta: descobertaVerificada } : estado;
         const novo = evoluirEstadoConversa(baseEstado, texto, resposta, profissionais);
+        if(vinculoDaMensagem.atual){
+          const v=vinculoDaMensagem.atual;
+          novo.profissionalConfirmadoId=v.id;
+          novo.faseAgenda=v.restantes.length?'CONFIRMACAO_PENDENTE':'VINCULO_CONFIRMADO';
+          novo.descoberta={agenda:v.agenda,nomes:v.restantes};
+          novo.perguntaPendente=null;
+          delete novo.nomeProfissionalPerguntado;
+        }
         if (conferenciaDaMensagem.atual?.ok) {
           novo.ultimaConsultaFiscal = {
             escopo:'profissional', profissionalNome:conferenciaDaMensagem.atual.profissional,

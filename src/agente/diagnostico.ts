@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 
-export type FerramentaNoto = 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas';
+export type FerramentaNoto = 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'revisar_registro_profissional' | 'solicitar_link_seguro_registro' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas';
 export type CodigoFerramenta =
   | 'CONTA_AUTORIZADA' | 'CONTA_NAO_ENCONTRADA'
   | 'STATUS_CONECTADO' | 'STATUS_NAO_CONECTADO' | 'STATUS_PARCIAL'

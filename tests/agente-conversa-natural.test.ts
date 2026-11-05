@@ -52,10 +52,10 @@ describe('memória mínima do onboarding', () => {
   it('salva escolha e identidade explícitas sem confundir com lista cadastrada', () => {
     const escolhido = evoluirEstadoConversa({}, 'É Amplimed da Alice', 'Certo. Vou verificar a conexão.', profissionais);
     expect(escolhido.agendaEscolhida).toBe('amplimed');
-    expect(escolhido.profissionalConfirmadoId).toBe('m-1');
+    expect(escolhido.profissionalConfirmadoId).toBeUndefined();
     const retomado = evoluirEstadoConversa(escolhido, 'Aliás, e minhas notas?', 'Ainda não consultei notas.', profissionais);
     expect(retomado.agendaEscolhida).toBe('amplimed');
-    expect(retomado.profissionalConfirmadoId).toBe('m-1');
+    expect(retomado.profissionalConfirmadoId).toBeUndefined();
     expect(evoluirEstadoConversa(retomado,'Não, é TribeMD','Vou conferir.',profissionais).agendaEscolhida).toBe('tribemd');
   });
   it('um sim genérico não escolhe nem autoriza profissional', () => {
@@ -64,7 +64,7 @@ describe('memória mínima do onboarding', () => {
   });
   it('mantém resposta curta vinculada somente a pergunta de identidade determinada', () => {
     const anterior = {perguntaPendente:'profissional' as const, profissionalPerguntadoId:'m-1'};
-    expect(evoluirEstadoConversa(anterior,'isso','Vamos seguir.',profissionais).profissionalConfirmadoId).toBe('m-1');
+    expect(evoluirEstadoConversa(anterior,'isso','Vamos seguir.',profissionais).profissionalConfirmadoId).toBeUndefined();
   });
   it('grava apenas tipos limitados, não textos, nomes ou credenciais', async () => {
     const query=vi.fn().mockResolvedValue({rows:[{estado:{

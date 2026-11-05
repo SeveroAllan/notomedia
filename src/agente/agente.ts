@@ -10,6 +10,7 @@ import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
 import { contaDoCofreId } from '../cofre/identidade-conta.js';
+import { decidirVinculo, explicarVinculoNaoExecutado } from './confirmacao-contextual.js';
 import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
@@ -40,7 +41,19 @@ export interface DependenciasAgente {
   /** Referência técnica existente do Cofre da conta autenticada, NÃO representa um médico escolhido. */
   referenciaContaAgenda?: () => Promise<string | null>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
-  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
+  confirmarProfissionais?: (medicoBaseId: string, nomes: string[]) => Promise<{
+    ok:boolean; nomes?:string[]; motivo?:string; medicos?: {id:string;nome:string}[]
+  }>;
+  aoVinculoResultado?: (resultado: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}) => void;
+  aoVinculo?: (agenda:AgendaEscolhida,medico:{id:string;nome:string}) => Promise<{
+    registrado:boolean; pesquisa:'agendada'|'ja_existe'|'indisponivel'
+  }>;
+  proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
+  concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
+  solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
+  aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
+  aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean})=>void;
+  aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}) => void;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
     estado:string; comId:boolean; segundosDesdeAceite:number
@@ -436,72 +449,81 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
     }
   }));
-  if (deps.confirmarProfissionais && deps.descobrirProfissionais) extras.push(tool({
+  // Consentimento interpretado pelo mesmo agente conversacional, com alvo
+  // limitado pela descoberta autenticada. Nenhuma regex de "sim" é permissão.
+  let vinculoNesteTurno=false;
+  if (deps.confirmarProfissionais) extras.push(tool({
     name:'confirmar_profissionais_descobertos',
-    description:'Após nomes vistos na agenda real e confirmação explícita, vincula à conta. profissionalBase=null usa referência técnica da conta. Nunca herda fiscal ou certificado.',
+    description:'Interprete a resposta natural à proposta de vínculo já registrada. Decisão sem ambiguidade: confirmar/negar/corrigir/esclarecer. Nomes só podem vir da descoberta autenticada; não confirme médico só porque foi mencionado. Sem nova leitura do portal no turno de confirmação.',
     parameters:z.object({
       agenda:z.enum(['tribemd','amplimed']),
       profissionalBase:z.string().nullable(),
-      nomes:z.array(z.string().trim().min(2).max(150)).min(1).max(10)
+      decisao:z.enum(['confirmar','negar','corrigir','esclarecer']),
+      nomes:z.array(z.string().trim().min(2).max(150)).max(10).default([])
     }),
-    async execute({agenda,profissionalBase,nomes}) {
+    async execute({agenda,profissionalBase,decisao,nomes}){
       const inicio=Date.now();
-      // A primeira vinculação exige descoberta verificada em turno anterior
-      // nesta mesma conta/conversa, seguida de confirmação explícita.
-      if (profissionalBase === null && (
-        entrada.estadoConversa?.descoberta?.agenda !== agenda ||
-        !nomes.every(nome => entrada.estadoConversa!.descoberta!.nomes.some(
-          visto => normalizarNomeMedico(visto) === normalizarNomeMedico(nome))))) {
+      if(vinculoNesteTurno){
         registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
-        return {ok:false,motivo:'DESCOBERTA_PREVIA_NECESSARIA'};
+        return {ok:false,motivo:'VINCULO_JA_PROCESSADO_NO_TURNO'};
       }
-      const base=profissionalBase === null ? null : identificar(profissionalBase,profissionais);
-      const baseId=base ? base.encontrados.length===1 ? base.encontrados[0]!.id : null
-        : await ancoraDaConta().catch(()=>null);
-      if(!baseId) {
+      const decisaoValidada=decidirVinculo(entrada.estadoConversa,{
+        agenda,decisao,nomes,mensagem:entrada.texto
+      });
+      if(!decisaoValidada.ok){
+        registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoVinculoResultado?.({ok:false,motivo:decisaoValidada.motivo});
+        return {ok:false,motivo:decisaoValidada.motivo,proximaEtapa:explicarVinculoNaoExecutado(decisaoValidada.motivo)};
+      }
+      // Uma escolha por turno permite que cada confirmação tenha uma prova
+      // e uma pesquisa identificável; não inferir autorização em lote.
+      if(decisaoValidada.nomes.length!==1){
+        registrar('confirmar_profissionais_descobertos','PROFISSIONAL_AMBIGUO',inicio);
+        return {ok:false,motivo:'ALVO_AMBIGUO'};
+      }
+      const base=profissionalBase===null?null:identificar(profissionalBase,profissionais);
+      const baseId=base?base.encontrados.length===1?base.encontrados[0]!.id:null:
+        await ancoraDaConta().catch(()=>null);
+      if(!baseId){
         registrar('confirmar_profissionais_descobertos','PROFISSIONAL_NAO_ENCONTRADO',inicio);
+        deps.aoVinculoResultado?.({ok:false,motivo:'CONTA_NAO_IDENTIFICADA'});
         return {ok:false,motivo:'CONTA_NAO_IDENTIFICADA'};
       }
-      try {
-        const estado=(await deps.consultarStatus(baseId))[agenda];
-        if(estado.indisponivel || !estado.conectada) {
-          registrar('confirmar_profissionais_descobertos',estado.indisponivel?'STATUS_INDISPONIVEL':'CONEXAO_PENDENTE',inicio);
-          return {ok:false,motivo:estado.indisponivel?'CONSULTA_INDISPONIVEL':'AGENDA_SEM_CONEXAO'};
+      vinculoNesteTurno=true;
+      try{
+        // Status é barato; NÃO reabrir a agenda de 62s. Nomes são o snapshot
+        // autenticado e persistido quando a conexão foi comprovada.
+        const status=(await deps.consultarStatus(baseId))[agenda];
+        if(status.indisponivel||!status.conectada){
+          const motivo=status.indisponivel?'STATUS_INDISPONIVEL':'CONEXAO_PENDENTE';
+          registrar('confirmar_profissionais_descobertos',motivo,inicio);
+          deps.aoVinculoResultado?.({ok:false,motivo});
+          return {ok:false,motivo,observacao:'Vínculo não executado. CRM/RQE não foram consultados nem validados.'};
         }
-        const atual=await deps.descobrirProfissionais!(baseId,agenda);
-        if(!atual.ok || !atual.nomes?.length) {
-          registrar('confirmar_profissionais_descobertos','STATUS_INDISPONIVEL',inicio);
-          return {ok:false,motivo:'IDENTIDADES_NAO_VERIFICADAS'};
-        }
-        const comprovados=nomes.map(n=>atual.nomes!.filter(c=>nomeProfissionalValido(c) && normalizarNomeMedico(c)===normalizarNomeMedico(n)));
-        if(comprovados.some(c=>c.length!==1)) {
+        const r=await deps.confirmarProfissionais!(baseId,decisaoValidada.nomes);
+        if(!r.ok){
           registrar('confirmar_profissionais_descobertos','PROFISSIONAL_AMBIGUO',inicio);
-          return {ok:false,motivo:'NOME_NAO_CONFERIDO_NA_FONTE'};
+          deps.aoVinculoResultado?.({ok:false,motivo:r.motivo??'VINCULO_INDISPONIVEL'});
+          return {ok:false,motivo:r.motivo??'VINCULO_INDISPONIVEL',observacao:'Não fiz pesquisa ou cadastro de CRM/RQE.'};
         }
-        const dito=normalizarNomeMedico(entrada.texto);
-        const confirmacao=/^(sim|isso|correto|confirmo|exatamente|pode ser)[.! ]*$/i.test(entrada.texto.trim());
-        const umaDescobertaConfirmada=confirmacao && nomes.length===1 &&
-          entrada.estadoConversa?.perguntaPendente==='confirmar_profissional' &&
-          entrada.estadoConversa.descoberta?.agenda===agenda &&
-          normalizarNomeMedico(entrada.estadoConversa.nomeProfissionalPerguntado??'')===normalizarNomeMedico(nomes[0]!) &&
-          entrada.estadoConversa.descoberta.nomes.some(n=>normalizarNomeMedico(n)===normalizarNomeMedico(nomes[0]!));
-        // Menção de um nome ("quem é Bruno?") NÃO é consentimento para
-        // cadastrar/vincular. A autorização precisa se referir à ação.
-        const intencaoExplicita = /\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular|sao meus medicos|sao os profissionais)\b/.test(dito);
-        const negouCadastro = /\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,70}\b(?:confirmo|confirmar|adicione|adicionar|cadastre|cadastrar|vincule|vincular)\b/.test(dito);
-        const confirmouNomes = nomes.every(n=>dito.includes(normalizarNomeMedico(n)));
-        if(negouCadastro || (!umaDescobertaConfirmada && !(intencaoExplicita && confirmouNomes))) {
-          registrar('confirmar_profissionais_descobertos','DEPENDENCIA_PROFISSIONAL',inicio);
-          return {ok:false,motivo:'CONFIRMACAO_EXPLICITA_NECESSARIA'};
+        const medico=r.medicos?.[0];
+        let pesquisa:'agendada'|'ja_existe'|'indisponivel'='indisponivel';
+        let registrado=Boolean(medico);
+        if(medico&&deps.aoVinculo){
+          const acompanhamento=await deps.aoVinculo(agenda,medico);
+          pesquisa=acompanhamento.pesquisa;
+          registrado=acompanhamento.registrado;
         }
-        const resultado=await deps.confirmarProfissionais!(baseId,comprovados.map(c=>c[0]!));
-        registrar('confirmar_profissionais_descobertos',resultado.ok?'PROFISSIONAIS_CONFIRMADOS':'PROFISSIONAL_AMBIGUO',inicio);
-        if (resultado.ok) deps.aoComprovante?.({ tipo: 'vincular_profissionais', profissionalId: baseId, agenda });
-        return resultado.ok ? {ok:true,nomes:resultado.nomes??[],fiscalConfirmado:false,certificadosHerdados:false}
-          : {ok:false,motivo:resultado.motivo??'FALHA_CONFIRMAR'};
-      }catch {
+        registrar('confirmar_profissionais_descobertos','PROFISSIONAIS_CONFIRMADOS',inicio);
+        deps.aoVinculoResultado?.({ok:true,nome:decisaoValidada.nomes[0]!,registrado,pesquisa});
+        deps.aoComprovante?.({tipo:'vincular_profissionais',profissionalId:baseId,agenda});
+        return {ok:true,vinculoRegistrado:registrado,nome:decisaoValidada.nomes[0],
+          pesquisaPublica:pesquisa==='agendada'?'iniciada':pesquisa==='ja_existe'?'ja_em_andamento':'indisponivel',
+          observacao:'CRM/RQE ainda não foram pesquisados nem validados. Nenhum dado profissional foi gravado.'};
+      }catch{
         registrar('confirmar_profissionais_descobertos','FERRAMENTA_INDISPONIVEL',inicio);
-        return {ok:false,motivo:'CONFIRMACAO_INDISPONIVEL'};
+        deps.aoVinculoResultado?.({ok:false,motivo:'OPERACAO_INDISPONIVEL'});
+        return {ok:false,motivo:'OPERACAO_INDISPONIVEL',observacao:'Não afirmar falha de validação de CRM/RQE; a operação de vínculo não terminou com evidência.'};
       }
     }
   }));
@@ -603,55 +625,103 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   }));
 
-  if (deps.salvarDadosProfissionais) extras.push(tool({
-    name:'confirmar_dados_profissionais',
-    description:'Registra nome completo, CRM ou RQE informados e explicitamente confirmados pelo operador na própria mensagem. Nunca altera dados fiscais, assinatura, certificado ou autorizações.',
+  // O formulário seguro é o único caminho para digitação/correção de números.
+  // Confirmação de sugestão já exibida é decisão tipada, não frase fixa.
+  if(deps.solicitarLinkRegistro)extras.push(tool({
+    name:'solicitar_link_seguro_registro',
+    description:'CRM/RQE no Cofre: autorizar solicita link quando não há ativo ou falhou comprovadamente; consultar verifica recibo sem envio; substituir exige novo consentimento explícito para invalidar link incerto/aceito sem entrega e só então criar outro. Não inferir falha pela falta de ACK.',
     parameters:z.object({
       profissional:z.string(),
-      nomeCompleto:z.string().min(2).max(200).optional(),
-      crm:z.string().min(1).max(60).optional(),
-      rqe:z.string().min(1).max(60).optional()
+      decisao:z.enum(['autorizar','recusar','esclarecer','consultar','substituir'])
     }),
-    async execute({profissional,nomeCompleto,crm,rqe}) {
+    async execute({profissional,decisao}){
       const inicio=Date.now();
-      const resolucao=identificar(profissional,profissionais);
-      const medico=resolucao.encontrados[0];
-      if(!medico || resolucao.encontrados.length!==1 ||
-          entrada.estadoConversa?.profissionalConfirmadoId!==medico.id) {
-        registrar('confirmar_dados_profissionais','DEPENDENCIA_PROFISSIONAL',inicio);
-        return {ok:false,motivo:'PROFISSIONAL_NAO_CONFIRMADO'};
+      const alvo=identificar(profissional,profissionais);
+      const medico=alvo.encontrados.length===1?alvo.encontrados[0]:undefined;
+      const estado=medico?entrada.estadoConversa?.pesquisasRegistro?.[medico.id]:undefined;
+      if(!medico||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id ||
+         !estado||!['manual_pendente','aguardando_confirmacao','aguardando_preenchimento','link_manual_reservado'].includes(estado.estado)){
+        registrar('solicitar_link_seguro_registro','DEPENDENCIA_PROFISSIONAL',inicio);
+        deps.aoLinkRegistro?.({ok:false,nome:medico?.nome??'',motivo:'REVISAO_NAO_DISPONIVEL'});
+        return {ok:false,motivo:'REVISAO_NAO_DISPONIVEL'};
       }
-      const texto=entrada.texto.trim();
-      const autorizou=/\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar|pode registrar|pode atualizar)\b/i.test(texto);
-      const negouAlteracao=/\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,70}\b(?:confirmo|atualize|atualizar|registre|registrar|salve|salvar)\b/i.test(
-        texto.normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-      );
-      const especiais=new Set(['.','*','+','?','^','$','{','}','(',')','|','[',']','\\']);
-      const escape=(valor:string) => [...valor].map(ch=>especiais.has(ch)?'\\'+ch:ch).join('');
-      const informado=(rotulo:string,valor:string) =>
-        new RegExp('\\b'+rotulo+'\\b\\s*(?:(?:n(?:umero|º|o)?)\\s*)?(?::|=|e|eh)?\\s*'+escape(valor)+'(?=$|[\\s,;.!?])','i').test(texto);
-      const campos=[
-        ...(nomeCompleto?[{rotulo:'(?:nome completo|me chamo)',valor:nomeCompleto}]:[]),
-        ...(crm?[{rotulo:'crm',valor:crm}]:[]),
-        ...(rqe?[{rotulo:'rqe',valor:rqe}]:[])
-      ];
-      if(!autorizou || negouAlteracao || !campos.length || !campos.every(c=>informado(c.rotulo,c.valor))) {
-        registrar('confirmar_dados_profissionais','DEPENDENCIA_CONFIRMACAO',inicio);
-        return {ok:false,motivo:'VALORES_E_CONFIRMACAO_EXPLICITOS_NECESSARIOS'};
+      if(!['autorizar','consultar','substituir'].includes(decisao)){
+        registrar('solicitar_link_seguro_registro','DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoLinkRegistro?.({ok:false,nome:medico.nome,motivo:'SEM_AUTORIZACAO'});
+        return {ok:false,motivo:'SEM_AUTORIZACAO'};
+      }
+      const pendencias=Object.entries(entrada.estadoConversa?.pesquisasRegistro??{})
+        .filter(([_,r])=>['manual_pendente','aguardando_confirmacao','aguardando_preenchimento','link_manual_reservado'].includes(r.estado));
+      if(pendencias.length>1){
+        const dito=normalizarNomeMedico(entrada.texto);
+        const exato=normalizarNomeMedico(medico.nome);
+        const tokens=exato.split(' ').filter(t=>t.length>=4);
+        const explicito=dito.includes(exato)||tokens.some(t=>dito.split(' ').includes(t)&&
+          pendencias.filter(([_,p])=>normalizarNomeMedico(p.nome).split(' ').includes(t)).length===1);
+        if(!explicito){
+          registrar('solicitar_link_seguro_registro','PROFISSIONAL_AMBIGUO',inicio);
+          deps.aoLinkRegistro?.({ok:false,nome:medico.nome,motivo:'ALVO_AMBIGUO'});
+          return {ok:false,motivo:'ALVO_AMBIGUO'};
+        }
       }
       try{
-        const r=await deps.salvarDadosProfissionais!(medico.id,{
-          ...(nomeCompleto?{nome:nomeCompleto}:{}),
-          ...(crm?{crm}:{}),...(rqe?{rqe}:{})
-        });
-        registrar('confirmar_dados_profissionais',r.ok?'DADOS_PROFISSIONAIS_SALVOS':'FERRAMENTA_INDISPONIVEL',inicio);
-        if (r.ok) deps.aoComprovante?.({ tipo: 'salvar_dados_profissionais', profissionalId: medico.id });
-        return r.ok?{ok:true,nome:r.nome,crm:r.crm,rqe:r.rqe,
-          dadosFiscaisConfirmados:false,emissaoAutorizada:false}: {ok:false,motivo:r.motivo??'NAO_SALVO'};
+        const r=await deps.solicitarLinkRegistro!(medico.id,decisao==='substituir'?'substituir':decisao==='consultar'?'consultar':'solicitar');
+        registrar('solicitar_link_seguro_registro',r.motivo==='ACEITO_API'?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoLinkRegistro?.({ok:r.ok,nome:medico.nome,motivo:r.motivo,anteriorInvalidado:r.anteriorInvalidado});
+        return {ok:r.ok,estado:r.motivo,preenchido:false,confirmado:false,
+          proximaAcao:r.motivo==='FALHA_COMPROVADA'?'solicitar_novo_com_autorizacao':
+            ['ENVIO_INCERTO','ACEITO_SEM_ENTREGA'].includes(r.motivo??'')?
+             'consultar_recibo_ou_substituir_com_autorizacao':'verificar_estado',
+          observacao:'O estado é de envio, não de preenchimento ou aprovação.'};
       }catch{
-        registrar('confirmar_dados_profissionais','FERRAMENTA_INDISPONIVEL',inicio);
-        return {ok:false,motivo:'DADOS_PROFISSIONAIS_NAO_VERIFICADOS'};
+        registrar('solicitar_link_seguro_registro','FERRAMENTA_INDISPONIVEL',inicio);
+        deps.aoLinkRegistro?.({ok:false,nome:medico.nome,motivo:'ENVIO_INCERTO'});
+        return {ok:false,motivo:'ENVIO_INCERTO'};
       }
+    }
+  }));
+
+  if(deps.aprovarRegistroProfissional || deps.solicitarLinkRegistro)extras.push(tool({
+    name:'revisar_registro_profissional',
+    description:'Interprete a autorização natural para aprovar uma sugestão que o Noto JÁ apresentou. Correção exige cofre seguro, jamais números enviados por WhatsApp. A resposta da ferramenta determina o relato, não o texto livre da IA.',
+    parameters:z.object({
+      profissional:z.string(),
+      decisao:z.enum(['aprovar','corrigir','recusar','esclarecer'])
+    }),
+    async execute({profissional,decisao}){
+      const inicio=Date.now();
+      const resolucao=identificar(profissional,profissionais);
+      const medico=resolucao.encontrados.length===1?resolucao.encontrados[0]:undefined;
+      const estado=medico?entrada.estadoConversa?.pesquisasRegistro?.[medico.id]:undefined;
+      const falhar=(motivo:string)=>{
+        registrar('revisar_registro_profissional','DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoRevisaoRegistro?.({ok:false,motivo});
+        return {ok:false,motivo};
+      };
+      if(!medico||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id ||
+        estado?.estado!=='aguardando_confirmacao')
+        return falhar('PESQUISA_OU_VINCULO_AINDA_PENDENTE');
+      if(decisao==='esclarecer')return falhar('PRECISA_ESCLARECER');
+      if(decisao==='recusar')return falhar('NAO_APROVADO');
+      if(decisao==='corrigir'){
+        if(!deps.solicitarLinkRegistro)return falhar('COFRE_INDISPONIVEL');
+        const r=await deps.solicitarLinkRegistro(medico.id,'solicitar').catch(()=>({ok:false,motivo:'ENVIO_INCERTO'}));
+        registrar('revisar_registro_profissional',r.motivo==='ACEITO_API'?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
+        if(!r.ok)return falhar(r.motivo??'ENVIO_INCERTO');
+        deps.aoRevisaoRegistro?.({ok:true,tipo:'correcao',nome:medico.nome,motivo:r.motivo});
+        return {ok:r.ok,gravado:false,
+          observacao:r.ok?'Link para correção aceito pela API; aguardar preenchimento e nova aprovação.':
+            'Não confirmei o envio de um link. Não alterei dados profissionais.'};
+      }
+      if(!estado.proposta && (estado.razao!=='ENCONTRADO' || (estado.candidatos?.length??0)!==1))
+        return falhar('REGISTRO_AMBIGUO');
+      if(!deps.aprovarRegistroProfissional)return falhar('GRAVACAO_INDISPONIVEL');
+      const r=await deps.aprovarRegistroProfissional(medico.id).catch(()=>({ok:false as const,motivo:'GRAVACAO_INDISPONIVEL'}));
+      if(!r.ok)return falhar(r.motivo);
+      registrar('revisar_registro_profissional','DADOS_PROFISSIONAIS_SALVOS',inicio);
+      deps.aoRevisaoRegistro?.({ok:true,tipo:'aprovacao',nome:r.nome,crm:r.crm,rqe:r.rqe});
+      deps.aoComprovante?.({tipo:'salvar_dados_profissionais',profissionalId:medico.id});
+      return {ok:true,gravado:true,crm:r.crm,rqe:r.rqe};
     }
   }));
 
@@ -801,6 +871,40 @@ export function acompanhamentoVerificado(
   return null;
 }
 
+/** Relato coerente com o resultado do Cofre e os ACKs, não com regex do modelo. */
+function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidado=false):string{
+  const alvo=nome?' de '+nome:'';
+  const troca=anteriorInvalidado?'Invalidei o link anterior para que apenas o novo possa ser usado. ':'';
+  switch(motivo){
+    case 'ACEITO_API':
+    case 'ACEITO_SEM_ENTREGA':
+      return troca+'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
+    case 'ENVIO_INCERTO':
+      return troca+'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
+    case 'FALHA_COMPROVADA':
+      return troca+'O envio do link seguro'+alvo+' falhou de forma comprovada. Posso solicitar outro agora, com sua autorização, sem manter o link anterior utilizável.';
+    case 'ENTREGUE':
+      return 'O WhatsApp confirmou a entrega do link seguro'+alvo+'. Isso ainda não significa que o formulário foi preenchido.';
+    case 'LIDO':
+      return 'O WhatsApp confirmou a leitura da mensagem com o link seguro'+alvo+'. Ainda aguardo o preenchimento.';
+    case 'LINK_ENTREGUE':
+      return 'O link seguro'+alvo+' já teve a entrega confirmada. Não gerei outro; posso ajudar se a página não abriu.';
+    case 'PEDIDO_JA_PROCESSADO':
+      return 'Esse pedido de link seguro'+alvo+' já foi processado. Não reenviei nada. Posso verificar o estado atual.';
+    case 'SEM_LINK_ATIVO':
+      return 'Não existe um link seguro ativo'+alvo+'. Se você autorizar, posso solicitar um novo.';
+    case 'LIMITE_LINKS':
+      return 'O limite de criação de links seguros foi atingido. Não fiz outro envio; precisamos respeitar esse limite.';
+    case 'SEM_AUTORIZACAO':
+      return 'Não solicitei outro link. Preciso da sua autorização para realizar essa ação.';
+    case 'REVISAO_NAO_AUTORIZADA':
+    case 'REVISAO_NAO_DISPONIVEL':
+      return 'A revisão dos dados'+alvo+' ainda não está confirmada. Não gerei outro link nem alterei o cadastro.';
+    default:
+      return 'Ainda não tenho um estado verificável para o link seguro'+alvo+'. Não repeti o envio. Podemos verificar o que ficou pendente.';
+  }
+}
+
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
@@ -823,6 +927,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
+  const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
+  const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}}={};
+  const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
@@ -844,6 +951,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         deps.aoTrabalho?.(trabalho);
       },
       aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
+      aoVinculoResultado:r=>{vinculoTurno.atual=r;},
+      aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
+      aoLinkRegistro:r=>{linkRegistroTurno.atual=r;},
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
@@ -859,10 +969,15 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         // IDs de mensagens e referências de tarefas ficam no orquestrador,
         // nunca no contexto enviado ao modelo externo.
         estadoConversacionalVerificado: Object.fromEntries(
-          Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) => campo !== 'tarefasPendentes')
+          Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) =>
+            campo !== 'tarefasPendentes' && campo !== 'pesquisasRegistro')
         ),
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
-        trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4)
+        trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4),
+        registrosPublicosEmRevisao: Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).slice(0,8)
+          .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,
+            candidatos:r.candidatos?.map(c=>({crm:c.crm,rqes:c.rqes,origem:c.origem})),
+            proposta:r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
@@ -870,6 +985,37 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    if(vinculoTurno.atual){
+      const v=vinculoTurno.atual;
+      registrar('RESPOSTA',uso);
+      if(!v.ok) return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
+        ? 'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
+        : explicarVinculoNaoExecutado(v.motivo);
+      if(!v.registrado) return 'O cadastro aceitou o vínculo de '+v.nome+', mas ainda não consegui salvar a etapa na conversa. Vou verificar antes de consultar CRM/RQE.';
+      const confirmacao='Vinculei '+v.nome+' à sua conta.';
+      if(v.pesquisa==='agendada') return confirmacao+' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
+      if(v.pesquisa==='ja_existe') return confirmacao+' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
+      return confirmacao+' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
+    }
+    if(linkRegistroTurno.atual){
+      const l=linkRegistroTurno.atual;
+      registrar('RESPOSTA',uso);
+      return falaEnvioRegistro(l.motivo,l.nome,l.anteriorInvalidado);
+    }
+    if(revisaoTurno.atual){
+      const r=revisaoTurno.atual;
+      registrar('RESPOSTA',uso);
+      if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
+      if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
+        ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
+        : ['FALHA_COMPROVADA','ENVIO_INCERTO','ACEITO_SEM_ENTREGA','ENTREGUE','LIDO',
+          'PEDIDO_JA_PROCESSADO','LINK_ENTREGUE','LIMITE_LINKS'].includes(r.motivo)
+          ? falaEnvioRegistro(r.motivo,'')
+          : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
+      if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
+      return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
+        (r.rqe?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
+    }
     // Recibo deste turno, não lembrança de um link antigo.
     if (linkConsultado.atual) {
       const {agenda,estado}=linkConsultado.atual;

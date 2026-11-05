@@ -2,6 +2,7 @@ import type pg from 'pg';
 import type { CausaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { validarTarefas, type TarefaPendente } from './tarefas.js';
+import { leituraPesquisaEstado, type PesquisaRegistroConversa } from './pesquisa-profissional-conversa.js';
 
 export type AgendaEscolhida = 'tribemd' | 'amplimed';
 export type PerguntaPendente = 'agenda' | 'profissional' | 'confirmar_profissional' | 'periodo' | null;
@@ -13,9 +14,11 @@ export interface EstadoConversa {
   nomeProfissionalPerguntado?: string;
   descoberta?: { agenda: AgendaEscolhida; nomes: string[] };
   /** Fase sem nomes ou dados clínicos. Permite retomar após callback autenticado. */
-  faseAgenda?: 'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE';
+  faseAgenda?: 'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE'|'VINCULO_CONFIRMADO';
   causaDescoberta?: CausaLeitura;
   tarefasPendentes?: TarefaPendente[];
+  /** Sugestões públicas em revisão, por profissional; nunca são aprovação fiscal. */
+  pesquisasRegistro?: Record<string,PesquisaRegistroConversa>;
   /** Última consulta comprovada, sem texto livre nem dados fiscais de pacientes. */
   ultimaConsultaFiscal?: { escopo: 'conta' | 'profissional'; profissionalNome?: string; verificadaEm: string };
 }
@@ -38,6 +41,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
+    ...(e.pesquisasRegistro ? {pesquisasRegistro:leituraPesquisaEstado(e.pesquisasRegistro)} : {}),
     ...(e.ultimaConsultaFiscal && ['conta','profissional'].includes(e.ultimaConsultaFiscal.escopo) &&
       typeof e.ultimaConsultaFiscal.verificadaEm === 'string' &&
       e.ultimaConsultaFiscal.verificadaEm.length <= 40 &&
@@ -52,7 +56,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
             { profissionalNome: e.ultimaConsultaFiscal.profissionalNome as string } : {})
         }
       } : {}),
-    ...(['DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE'].includes(e.faseAgenda) ?
+    ...(['DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE','VINCULO_CONFIRMADO'].includes(e.faseAgenda) ?
       {faseAgenda:e.faseAgenda as EstadoConversa['faseAgenda']} : {}),
     ...(typeof e.causaDescoberta==='string' && causasLeituraValidas.includes(e.causaDescoberta as CausaLeitura) ?
       {causaDescoberta:e.causaDescoberta as CausaLeitura}:{}),
@@ -99,19 +103,8 @@ export function evoluirEstadoConversa(
     atual.agendaEscolhida = fonteTribe ? 'tribemd' : 'amplimed';
   }
 
-  const confirmacao = /^(sim|isso|correto|confirmo|exatamente|pode ser)[.! ]*$/i.test(entrada.trim());
-  const identificados = profissionais.filter(p =>
-    normalizarNomeMedico(p.nome).split(' ').filter(t => t.length >= 4)
-      .some(t => nome.split(' ').includes(t)));
-  // Mencionar Alice numa pergunta não equivale a escolher a identidade.
-  // Somente atribuição declarativa ou resposta à confirmação pendente atualiza foco.
-  const atribuiu = !/[?]/.test(entrada) && !/\b(?:nao sei|talvez|quem|qual)\b/.test(nome) &&
-    /\b(?:sou|e|para|da|do|pertence|confirmo)\b/.test(nome);
-  if (identificados.length === 1 && atribuiu) atual.profissionalConfirmadoId = identificados[0]!.id;
-  else if (confirmacao && anterior.perguntaPendente === 'profissional' && anterior.profissionalPerguntadoId &&
-      profissionais.some(p => p.id === anterior.profissionalPerguntadoId)) {
-    atual.profissionalConfirmadoId = anterior.profissionalPerguntadoId;
-  }
+  // Autorização/vínculo são efeitos EXCLUSIVOS da ferramenta tipada e do banco.
+  // Nunca transformar fala, menção de nome ou 'sim' em identidade confirmada.
 
   // A última pergunta passa a ser uma categoria fechada; nunca persistimos o balão.
   const perguntas = resposta.split(/[.!?\n]+/).filter(Boolean);
@@ -161,7 +154,7 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
     permitido.ultimaConsultaFiscal = estado.ultimaConsultaFiscal;
   }
   await pool.query(
-    'insert into noto_agent_conversas(conta_id,estado) values($1,$2::jsonb) on conflict(conta_id) do update set estado=excluded.estado,atualizado_em=now()',
+    'insert into noto_agent_conversas(conta_id,estado) values($1,$2::jsonb) on conflict(conta_id) do update set estado=noto_agent_conversas.estado || excluded.estado,atualizado_em=now()',
     [contaId, JSON.stringify(permitido)]
   );
 }
