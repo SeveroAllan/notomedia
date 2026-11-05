@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {expect,it,vi} from 'vitest';
 import {LinksCofre} from '../src/cofre/links.js';
+import {registrarAceiteLink,diagnosticarRegistroEstadoEvolution} from '../src/whatsapp/repositorio-entrega-link.js';
 
 const testar=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']?it:it.skip;
 const CONTA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -28,8 +29,8 @@ testar('link CRM/RQE: falha comprovada, incerteza, reinício, reposição explí
       'create table public.usuarios(id uuid primary key,conta_id uuid,auth_user_id uuid,telefone text,ativo boolean);',
       "create table public.noto_agent_conversas(conta_id uuid primary key,estado jsonb not null default '{}'::jsonb,atualizado_em timestamptz default now());",
       'create table public.cofre_links(id uuid primary key default gen_random_uuid(), medico_id uuid references public.medicos(id),agenda text not null, token_hash text unique not null, expira_em timestamptz not null, usado_em timestamptz, criado_em timestamptz not null default now(), destino_telefone text);',
-      'create table public.cofre_links_auditoria(link_id uuid references public.cofre_links(id),evento text,primary key(link_id,evento));',
-      'create table public.cofre_links_entregas(link_id uuid primary key references public.cofre_links(id),instancia text,mensagem_id text,destino_hash text,estado text,aceito_em timestamptz default now());',
+      "create table public.cofre_links_auditoria(link_id uuid references public.cofre_links(id),evento text check(evento in ('criado','aberto','enviado','expirado','concluido')),primary key(link_id,evento));",
+      'create table public.cofre_links_entregas(link_id uuid primary key references public.cofre_links(id),instancia text,mensagem_id text,destino_hash text,estado text,aceito_em timestamptz default now(),atualizado_em timestamptz default now());',
       "insert into public.contas(id) values('"+CONTA+"'),('"+OUTRA+"');",
       "insert into public.medicos(id,conta_id,nome_completo) values('"+ANA+"','"+CONTA+"','"+NOME+"'),('"+BRUNO+"','"+OUTRA+"','Dr. Bruno Lima');",
       "insert into public.usuarios(id,conta_id,auth_user_id,telefone,ativo) values('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee','"+CONTA+"','ffffffff-ffff-4fff-8fff-ffffffffffff','"+TEL+"',true);",
@@ -74,6 +75,11 @@ testar('link CRM/RQE: falha comprovada, incerteza, reinício, reposição explí
     expect(await links.solicitarLinkRegistro(CONTA,ANA,TEL,'solicitar','msg_00001'))
       .toMatchObject({ok:false,motivo:'FALHA_COMPROVADA'});
     expect(await ativos()).toBe(0);
+    const primeiroEstado=(await pool.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+    expect(primeiroEstado.pesquisasRegistro[ANA].resultadoEnvioLink).toBe('falha_comprovada');
+    expect((await pool.query(
+      "select evento from public.cofre_links_auditoria where evento not in ('criado','aberto','enviado','expirado','concluido')"
+    )).rows).toHaveLength(0);
     expect(await links.solicitarLinkRegistro(CONTA,ANA,TEL,'solicitar','msg_00001'))
       .toMatchObject({ok:false,motivo:'PEDIDO_JA_PROCESSADO'});
     expect(enviados).toHaveLength(1);
@@ -129,10 +135,15 @@ testar('link CRM/RQE: falha comprovada, incerteza, reinício, reposição explí
 
     // Webhook ERROR correlacionado ao último link torna a falha comprovada.
     const ultimo=(await linksRegistro())[0]!;
-    await pool.query([
-      "insert into public.cofre_links_entregas(link_id,instancia,mensagem_id,destino_hash,estado)",
-      "values($1,'noto','MSG_001','hash','ERROR') on conflict(link_id) do nothing"
-    ].join('\n'),[ultimo.id]);
+    await registrarAceiteLink(pool,{
+      linkId:ultimo.id,instancia:'noto',mensagemId:'MSG_001',telefone:TEL,segredo:'test-secret'
+    });
+    const eventoErro={event:'messages.update',instance:'noto',
+      data:{keyId:'MSG_001',fromMe:true,status:'ERROR',remoteJid:TEL+'@s.whatsapp.net'}};
+    expect(await diagnosticarRegistroEstadoEvolution(pool,eventoErro,'noto','test-secret'))
+      .toBe('ATUALIZADO');
+    expect(await diagnosticarRegistroEstadoEvolution(pool,eventoErro,'noto','test-secret'))
+      .toBe('DUPLICADO_OU_SEM_AVANCO');
     expect(await reiniciado.solicitarLinkRegistro(CONTA,ANA,TEL,'consultar','msg_00011'))
       .toMatchObject({ok:false,motivo:'FALHA_COMPROVADA'});
     // Dois eventos/turnos em paralelo após erro: apenas UM novo token e envio.
@@ -153,10 +164,15 @@ testar('link CRM/RQE: falha comprovada, incerteza, reinício, reposição explí
 
     // DELIVERY_ACK é prova positiva; substituição não prossegue, nem com consentimento.
     const atual=(await linksRegistro())[0]!;
-    await pool.query([
-      "insert into public.cofre_links_entregas(link_id,instancia,mensagem_id,destino_hash,estado)",
-      "values($1,'noto','MSG_002','hash','DELIVERY_ACK')"
-    ].join('\n'),[atual.id]);
+    await registrarAceiteLink(pool,{
+      linkId:atual.id,instancia:'noto',mensagemId:'MSG_002',telefone:TEL,segredo:'test-secret'
+    });
+    const eventoEntregue={event:'messages.update',instance:'noto',
+      data:{keyId:'MSG_002',fromMe:true,status:'DELIVERY_ACK',remoteJid:TEL+'@s.whatsapp.net'}};
+    expect(await diagnosticarRegistroEstadoEvolution(pool,eventoEntregue,'noto','test-secret'))
+      .toBe('ATUALIZADO');
+    expect(await diagnosticarRegistroEstadoEvolution(pool,eventoEntregue,'noto','test-secret'))
+      .toBe('DUPLICADO_OU_SEM_AVANCO');
     expect(await reiniciado.solicitarLinkRegistro(CONTA,ANA,TEL,'consultar','msg_00014'))
       .toMatchObject({ok:true,motivo:'ENTREGUE'});
     expect(await reiniciado.solicitarLinkRegistro(CONTA,ANA,TEL,'substituir','msg_00015'))
