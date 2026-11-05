@@ -122,6 +122,7 @@ export class LinksCofre {
                 const envio = texto === url && this.deps.enviarUrlComRecibo
                     ? await this.deps.enviarUrlComRecibo({referenciaCofre:medicoId,url,linkId:link.id,telefone:telefoneMedico})
                     : await this.deps.enviar(medicoId, texto, telefoneMedico);
+                if (envio === 'incerto') return {ok:false,motivo:'ENVIO_INCERTO'};
                 if (envio === 'erro' || motivo && motivo !== envio) return { ok: false, motivo: 'erro' };
                 motivo = envio;
                 if (envio === 'enviado') {
