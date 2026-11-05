@@ -78,3 +78,18 @@ export function hashDestinatario(segredo: string, telefone: string): string {
   if (!/^\d{10,15}$/.test(numeros) || !segredo) throw new Error('DESTINO_INVALIDO');
   return createHmac('sha256',segredo).update('cofre-entrega-v1:'+numeros).digest('hex');
 }
+
+/** Para token de CRM/RQE: falha de transporte não comprova rejeição.
+ * HTTP 4xx definitivo é rejeição; timeout, 5xx, 429 e conexão perdida são incertos.
+ */
+export function classificarEnvioLinkEvolution(
+  resposta:{sucesso:boolean;erro?:string}
+):'enviado'|'erro'|'incerto'{
+  if(resposta.sucesso)return 'enviado';
+  if(resposta.erro==='CANAL_OFICIAL_SOMENTE_OTP'||resposta.erro==='DESTINO_INVALIDO')
+    return 'erro';
+  const match=/^HTTP\s+(\d{3})\b/.exec(resposta.erro??'');
+  const status=match?Number(match[1]):null;
+  return status!==null && status>=400 && status<500 &&
+    ![408,409,425,429].includes(status) ? 'erro':'incerto';
+}
