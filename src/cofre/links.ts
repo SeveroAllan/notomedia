@@ -257,7 +257,7 @@ export class LinksCofre {
             if(!operadores.some(u=>gerarVariantesTelefoneBrasileiro(String(u.telefone??'')).some(v=>variantes.includes(v))))
                 return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
             const ultimo=(await client.query([
-              'select l.id,l.usado_em,l.expira_em,e.estado,',
+              'select l.id,l.usado_em,l.expira_em, (l.usado_em is null and l.expira_em>clock_timestamp()) as ativo,e.estado,',
               "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado') as aceite_audit,",
               "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='falha_comprovada') as falha_audit",
               'from public.cofre_links l',
@@ -265,7 +265,7 @@ export class LinksCofre {
               "where l.medico_id=$1::uuid and l.agenda='registro_profissional'",
               'order by l.criado_em desc,l.id desc limit 1'
             ].join('\n'),[medicoId])).rows[0];
-            const vivo=ultimo&&!ultimo.usado_em&&new Date(ultimo.expira_em).getTime()>Date.now();
+            const vivo=Boolean(ultimo?.ativo);
             const situacao=ultimo?.estado==='READ'?'LIDO':
               ultimo?.estado==='DELIVERY_ACK'?'ENTREGUE':
               ultimo?.estado==='ERROR'||ultimo?.falha_audit?'FALHA_COMPROVADA':
@@ -310,9 +310,9 @@ export class LinksCofre {
               "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
               "c.estado#>array['pesquisasRegistro',$2::text]||",
               "jsonb_build_object('estado','link_manual_reservado',",
-              "'solicitacaoLinkMensagemId',$3::text),false),atualizado_em=now()",
+              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text),false),atualizado_em=now()"
               'where c.conta_id=$1'
-            ].join('\n'),[contaId,medicoId,mensagemId??'']);
+            ].join('\n'),[contaId,medicoId,mensagemId??'',linkId]);
             await client.query('commit');
             confirmado=true;
         }catch{return {ok:false,motivo:'LINK_INDISPONIVEL'};}
@@ -350,8 +350,9 @@ export class LinksCofre {
                           "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
                           "'\"manual_pendente\"'::jsonb,false),atualizado_em=now()",
                           'where c.conta_id=$1 and',
-                          "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'"
-                        ].join('\n'),[contaId,medicoId]);
+                          "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
+                          "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
+                        ].join('\n'),[contaId,medicoId,linkId]);
                     }
                     await c.query('commit');concluiu=true;
                     if(falha.rows.length)return {ok:false,motivo:'FALHA_COMPROVADA'};
@@ -368,8 +369,9 @@ export class LinksCofre {
               "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
               "'\"aguardando_preenchimento\"'::jsonb,false),atualizado_em=now()",
               'where c.conta_id=$1 and',
-              "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'"
-            ].join('\n'),[contaId,medicoId]);
+              "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
+              "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
+            ].join('\n'),[contaId,medicoId,linkId]);
             return {ok:true,motivo:'ACEITO_API'};
         }catch{return {ok:false,motivo:'ENVIO_INCERTO'};}
         finally{token='';}
