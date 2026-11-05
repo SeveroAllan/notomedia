@@ -50,9 +50,9 @@ export interface DependenciasAgente {
   }>;
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
-  solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string}>;
+  solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
   aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
-  aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string})=>void;
+  aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean})=>void;
   aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}) => void;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
@@ -667,7 +667,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       try{
         const r=await deps.solicitarLinkRegistro!(medico.id,decisao==='substituir'?'substituir':decisao==='consultar'?'consultar':'solicitar');
         registrar('solicitar_link_seguro_registro',r.motivo==='ACEITO_API'?'LINK_ACEITO_PARA_ENVIO':'DEPENDENCIA_CONFIRMACAO',inicio);
-        deps.aoLinkRegistro?.({ok:r.ok,nome:medico.nome,motivo:r.motivo});
+        deps.aoLinkRegistro?.({ok:r.ok,nome:medico.nome,motivo:r.motivo,anteriorInvalidado:r.anteriorInvalidado});
         return {ok:r.ok,estado:r.motivo,preenchido:false,confirmado:false,
           proximaAcao:r.motivo==='FALHA_COMPROVADA'?'solicitar_novo_com_autorizacao':
             ['ENVIO_INCERTO','ACEITO_SEM_ENTREGA'].includes(r.motivo??'')?
@@ -872,16 +872,17 @@ export function acompanhamentoVerificado(
 }
 
 /** Relato coerente com o resultado do Cofre e os ACKs, não com regex do modelo. */
-function falaEnvioRegistro(motivo:string|undefined,nome:string):string{
+function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidado=false):string{
   const alvo=nome?' de '+nome:'';
+  const troca=anteriorInvalidado?'Invalidei o link anterior para que apenas o novo possa ser usado. ':'';
   switch(motivo){
     case 'ACEITO_API':
     case 'ACEITO_SEM_ENTREGA':
-      return 'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
+      return troca+'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
     case 'ENVIO_INCERTO':
-      return 'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
+      return troca+'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
     case 'FALHA_COMPROVADA':
-      return 'O envio do link seguro'+alvo+' falhou de forma comprovada. Posso solicitar outro agora, com sua autorização, sem manter o link anterior utilizável.';
+      return troca+'O envio do link seguro'+alvo+' falhou de forma comprovada. Posso solicitar outro agora, com sua autorização, sem manter o link anterior utilizável.';
     case 'ENTREGUE':
       return 'O WhatsApp confirmou a entrega do link seguro'+alvo+'. Isso ainda não significa que o formulário foi preenchido.';
     case 'LIDO':
@@ -928,7 +929,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
   const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
   const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}}={};
-  const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string}}={};
+  const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
@@ -999,7 +1000,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;
       registrar('RESPOSTA',uso);
-      return falaEnvioRegistro(l.motivo,l.nome);
+      return falaEnvioRegistro(l.motivo,l.nome,l.anteriorInvalidado);
     }
     if(revisaoTurno.atual){
       const r=revisaoTurno.atual;
