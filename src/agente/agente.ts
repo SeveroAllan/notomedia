@@ -119,7 +119,15 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         profissionais: entrada.semConta ? [] : profissionais.map(p => p.nome),
         painel: painelSeguro(entrada.painelUrl),
         etapasPossiveis: ['identificar conta', 'escolher agenda', 'conexão em página segura', 'descobrir profissionais na agenda', 'confirmar nomes descobertos'],
-        escolhasJaResolvidas: entrada.estadoConversa ?? {},
+        escolhasJaResolvidas: {
+          agendaEscolhida:entrada.estadoConversa?.agendaEscolhida??null,
+          faseAgenda:entrada.estadoConversa?.faseAgenda??null,
+          descoberta:entrada.estadoConversa?.descoberta??null
+        },
+        objetivosEmAcompanhamento:planejarObjetivos(
+          entrada.estadoConversa?.objetivos??{},profissionais,
+          entrada.estadoConversa?.pesquisasRegistro??{},
+          entrada.trabalhos??[],entrada.estadoConversa?.agendaEscolhida),
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
