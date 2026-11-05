@@ -23,6 +23,7 @@ import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operaci
 import type { ResultadoConferencia } from './conferencia-atendimentos.js';
 import type { PedidoTrabalhoNoto, ResultadoEnfileirar, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 import { registrarVinculoConversa } from './vinculo-conversa.js';
+import type {TipoObjetivoNoto,AcaoObjetivoNoto,OrigemObjetivoNoto,ResultadoObjetivoNoto} from './objetivos.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -62,6 +63,8 @@ export function criarRouterWebhookAgente(deps: {
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
+  alterarObjetivo?: (contaId:string,medicoId:string,tipo:TipoObjetivoNoto,acao:AcaoObjetivoNoto,
+    telefone:string,origem:OrigemObjetivoNoto)=>Promise<ResultadoObjetivoNoto>;
   consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
   solicitarTrabalho?: (pedido: PedidoTrabalhoNoto) => Promise<ResultadoEnfileirar>;
   listarTrabalhos?: (contaId: string, telefone: string, instancia: string) => Promise<SituacaoTrabalhoNoto[]>;
@@ -284,6 +287,10 @@ export function criarRouterWebhookAgente(deps: {
               vinculoDaMensagem.atual={
                 agenda:fonte,id:medico.id,nome:medico.nome,restantes:feito.restantes
               };
+              // Persistência de objetivo independe do balão e nunca executa
+              // operação fiscal. Uma falha aqui não desfaz o vínculo.
+              await deps.alterarObjetivo?.(contaId!,medico.id,'concluir_cadastro',
+                'acompanhar',telefone,'vinculo_confirmado').catch(()=>undefined);
               const pesquisa=deps.agendarPesquisa
                 ? await deps.agendarPesquisa(contaId!,medico.id,medico.nome)
                 : 'indisponivel';
@@ -292,6 +299,10 @@ export function criarRouterWebhookAgente(deps: {
           }: {})
         } : {}),
         ...(deps.salvarDadosProfissionais ? { salvarDadosProfissionais: deps.salvarDadosProfissionais } : {}),
+        ...(contaId&&deps.alterarObjetivo ? {
+          alterarObjetivo:(medicoId: string,tipo:TipoObjetivoNoto,acao:AcaoObjetivoNoto)=>
+            deps.alterarObjetivo!(contaId!,medicoId,tipo,acao,telefone,'solicitacao_operador')
+        }: {}),
         ...(contaId&&deps.solicitarLinkRegistro?{
           solicitarLinkRegistro:(medicoId:string)=>deps.solicitarLinkRegistro!(contaId!,medicoId,telefone)
         }:{}),
@@ -318,9 +329,14 @@ export function criarRouterWebhookAgente(deps: {
           }
         } : {}),
         ...(contaId && deps.solicitarTrabalho ? {
-          solicitarTrabalho: (tipo, fonte, medicoId) =>
-            deps.solicitarTrabalho!({contaId:contaId!,instancia:evento.instance,
-              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId})
+          solicitarTrabalho: async (tipo, fonte, medicoId) => {
+            const r=await deps.solicitarTrabalho!({contaId:contaId!,instancia:evento.instance,
+              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId});
+            if(r.ok&&tipo==='conferencia_fiscal'&&medicoId&&deps.alterarObjetivo)
+              await deps.alterarObjetivo(contaId!,medicoId,'acompanhar_fiscal','acompanhar',
+                telefone,'trabalho_autorizado').catch(()=>undefined);
+            return r;
+          }
         } : {}),
         ...(contaId && deps.consultarConferencia ? {
           consultarConferencia: (medicoId: string, fonte: AgendaEscolhida) =>

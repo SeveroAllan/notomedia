@@ -12,6 +12,7 @@ import { descreverConferencia, type ResultadoConferencia } from './conferencia-a
 import { contaDoCofreId } from '../cofre/identidade-conta.js';
 import { decidirVinculo, explicarVinculoNaoExecutado } from './confirmacao-contextual.js';
 import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
+import { planejarObjetivos,type TipoObjetivoNoto,type AcaoObjetivoNoto,type ResultadoObjetivoNoto } from './objetivos.js';
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
@@ -69,6 +70,9 @@ export interface DependenciasAgente {
   registrarFerramenta?: (evento: EventoFerramenta) => void;
   /** Evidência de ferramenta real, privada ao turno; nunca exposta no diagnóstico. */
   aoComprovante?: (comprovante: ComprovanteTarefa) => void;
+  /** Armazena somente intenção persistente, nunca autorização de operação fiscal. */
+  alterarObjetivo?: (medicoId:string,tipo:TipoObjetivoNoto,acao:AcaoObjetivoNoto)=>Promise<ResultadoObjetivoNoto>;
+  aoObjetivo?: (resultado:{profissional:string;tipo:TipoObjetivoNoto;acao:AcaoObjetivoNoto;resultado:ResultadoObjetivoNoto})=>void;
 }
 
 function painelSeguro(origem?: string): string {
@@ -115,7 +119,15 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         profissionais: entrada.semConta ? [] : profissionais.map(p => p.nome),
         painel: painelSeguro(entrada.painelUrl),
         etapasPossiveis: ['identificar conta', 'escolher agenda', 'conexão em página segura', 'descobrir profissionais na agenda', 'confirmar nomes descobertos'],
-        escolhasJaResolvidas: entrada.estadoConversa ?? {},
+        escolhasJaResolvidas: {
+          agendaEscolhida:entrada.estadoConversa?.agendaEscolhida??null,
+          faseAgenda:entrada.estadoConversa?.faseAgenda??null,
+          descoberta:entrada.estadoConversa?.descoberta??null
+        },
+        objetivosEmAcompanhamento:planejarObjetivos(
+          entrada.estadoConversa?.objetivos??{},profissionais,
+          entrada.estadoConversa?.pesquisasRegistro??{},
+          entrada.trabalhos??[],entrada.estadoConversa?.agendaEscolhida),
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         agendasSuportadas: ['TribeMD', 'Amplimed']
       };
@@ -301,6 +313,34 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   });
 
   const extras: ReturnType<typeof tool>[] = [];
+  if(deps.alterarObjetivo)extras.push(tool({
+    name:'acompanhar_objetivo',
+    description:'Registra, pausa ou retoma objetivo permanente de um médico autorizado. Tipos: concluir cadastro ou acompanhar fiscal. Não emite notas, não agenda automaticamente e não concede permissão fiscal. Interpretar intenção contextual, não frases exatas.',
+    parameters:z.object({
+      profissional:z.string(),
+      tipo:z.enum(['concluir_cadastro','acompanhar_fiscal']),
+      decisao:z.enum(['acompanhar','pausar','retomar','esclarecer'])
+    }),
+    async execute({profissional,tipo,decisao}){
+      const inicio=Date.now();
+      const alvo=identificar(profissional,profissionais);
+      const medico=alvo.encontrados.length===1?alvo.encontrados[0]:undefined;
+      if(!medico||decisao==='esclarecer'){
+        registrar('acompanhar_objetivo','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:!medico?'PROFISSIONAL_AMBIGUO':'PRECISA_ESCLARECER',
+          execucaoFiscalAutorizada:false};
+      }
+      let r:ResultadoObjetivoNoto;
+      try{r=await deps.alterarObjetivo!(medico.id,tipo,decisao);}
+      catch{r={ok:false,motivo:'PERSISTENCIA_INDISPONIVEL'};}
+      registrar('acompanhar_objetivo',r.ok?'OBJETIVO_REGISTRADO':'FERRAMENTA_INDISPONIVEL',inicio);
+      deps.aoObjetivo?.({profissional:medico.nome,tipo,acao:decisao,resultado:r});
+      return {...r,profissional:medico.nome,tipo,execucaoFiscalAutorizada:false,
+        observacao:r.ok?'Objetivo registrado. Não foram autorizadas nem executadas operações fiscais.':
+          'Objetivo não alterado; não presumir sucesso.'};
+    }
+  }));
+
   if (deps.consultarPanorama) extras.push(tool({
     name: 'consultar_panorama_operacional',
     description: 'Consulta registros fiscais reais dos últimos 30 dias dos médicos da conta. profissional=null consulta todos os médicos confirmados. Não infere atendimento sem nota, nem emite.',
@@ -893,6 +933,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
   const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}}={};
   const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string}}={};
+  const objetivoTurno:{atual?:{profissional:string;tipo:TipoObjetivoNoto;acao:AcaoObjetivoNoto;resultado:ResultadoObjetivoNoto}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
   const relogio = setTimeout(() => abort.abort(), 20_000);
@@ -917,6 +958,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoVinculoResultado:r=>{vinculoTurno.atual=r;},
       aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
       aoLinkRegistro:r=>{linkRegistroTurno.atual=r;},
+      aoObjetivo:r=>{objetivoTurno.atual=r;},
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
@@ -933,8 +975,12 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         // nunca no contexto enviado ao modelo externo.
         estadoConversacionalVerificado: Object.fromEntries(
           Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) =>
-            campo !== 'tarefasPendentes' && campo !== 'pesquisasRegistro')
+            campo !== 'tarefasPendentes' && campo !== 'pesquisasRegistro' && campo !== 'objetivos')
         ),
+        objetivosPermanentes:planejarObjetivos(
+          entrada.estadoConversa?.objetivos??{},entrada.profissionais,
+          entrada.estadoConversa?.pesquisasRegistro??{},
+          entrada.trabalhos??[],entrada.estadoConversa?.agendaEscolhida),
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4),
         registrosPublicosEmRevisao: Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).slice(0,8)
@@ -959,6 +1005,18 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(v.pesquisa==='agendada') return confirmacao+' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
       if(v.pesquisa==='ja_existe') return confirmacao+' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
       return confirmacao+' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
+    }
+    if(objetivoTurno.atual){
+      const o=objetivoTurno.atual;
+      registrar('RESPOSTA',uso);
+      if(!o.resultado.ok)return o.resultado.motivo==='SEM_OBJETIVO'
+        ?'Não encontrei esse objetivo para '+o.profissional+'. Não alterei seu acompanhamento.'
+        :'Não consegui registrar a mudança do objetivo de '+o.profissional+'. Nenhuma ação fiscal foi executada.';
+      const assunto=o.tipo==='concluir_cadastro'?'cadastro profissional':'acompanhamento fiscal';
+      if(o.resultado.estado==='pausado')return 'Pausei o objetivo de '+assunto+' de '+o.profissional+'. Nenhuma operação fiscal foi executada.';
+      if(o.resultado.estado==='retomado')return 'Retomei o objetivo de '+assunto+' de '+o.profissional+'. Vou verificar o estado real antes de definir o próximo passo.';
+      if(o.resultado.estado==='ja_existente')return 'O objetivo de '+assunto+' de '+o.profissional+' já está registrado. Não criei outro nem executei ações fiscais.';
+      return 'Registrei o objetivo de '+assunto+' de '+o.profissional+'. Vou acompanhar os eventos comprovados para retomar o que faltar. Isso não autoriza emissão.';
     }
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;

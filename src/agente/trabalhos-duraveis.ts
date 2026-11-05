@@ -13,12 +13,15 @@ export interface TrabalhoNoto extends PedidoTrabalhoNoto {
 }
 export interface SituacaoTrabalhoNoto {
   tipo: TipoTrabalhoNoto; agenda: AgendaEscolhida; estado: EstadoTrabalhoNoto;
+  /** Só estado de trabalho identificado pode fundamentar plano por médico. */
+  medicoId?:string;
 }
 export type ResultadoEnfileirar = { ok: true; estado: 'iniciado'|'ja_em_andamento' } |
   { ok: false; motivo: 'SEM_AUTORIZACAO'|'FILA_INDISPONIVEL'|'PEDIDO_INVALIDO' };
 
 type Banco = Pick<pg.Pool, 'query'>;
 const tipos = ['descoberta_agenda','conferencia_fiscal'];
+const uuidValido=(v:string)=>/^[0-9a-f-]{36}$/i.test(v);
 const estados: EstadoTrabalhoNoto[] = ['pendente','executando','resultado_pronto','notificando','aceito_api','falhou','envio_incerto'];
 const idSeguro = (s: unknown, min: number, max: number) =>
   typeof s === 'string' && s.length >= min && s.length <= max && !/[\u0000-\u001f]/.test(s);
@@ -69,7 +72,7 @@ export async function listarTrabalhosNoto(
   if (!idSeguro(contaId,10,80) || !/^55\d{10,11}$/.test(telefone) || !idSeguro(instancia,1,128)) return [];
   try {
     const r=await pool.query([
-      'select tipo,agenda,estado from public.noto_agent_trabalhos',
+      'select tipo,agenda,estado,medico_id from public.noto_agent_trabalhos',
       'where conta_id=$1 and telefone_destino=$2 and instancia=$3',
       "and estado in ('pendente','executando','resultado_pronto','notificando','envio_incerto')",
       'order by criado_em desc limit 4'
@@ -78,7 +81,8 @@ export async function listarTrabalhosNoto(
       ['tribemd','amplimed'].includes(String(x.agenda)) &&
       estados.includes(x.estado as EstadoTrabalhoNoto))
       .map((x:Record<string,unknown>)=>({
-        tipo:x.tipo as TipoTrabalhoNoto,agenda:x.agenda as AgendaEscolhida,estado:x.estado as EstadoTrabalhoNoto
+        tipo:x.tipo as TipoTrabalhoNoto,agenda:x.agenda as AgendaEscolhida,estado:x.estado as EstadoTrabalhoNoto,
+        ...(typeof x.medico_id==='string'&&uuidValido(x.medico_id)?{medicoId:x.medico_id}:{})
       }));
   } catch { return []; }
 }

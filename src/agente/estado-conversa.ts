@@ -3,6 +3,7 @@ import type { CausaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { validarTarefas, type TarefaPendente } from './tarefas.js';
 import { leituraPesquisaEstado, type PesquisaRegistroConversa } from './pesquisa-profissional-conversa.js';
+import {lerObjetivos,type ObjetivosNoto} from './objetivos.js';
 
 export type AgendaEscolhida = 'tribemd' | 'amplimed';
 export type PerguntaPendente = 'agenda' | 'profissional' | 'confirmar_profissional' | 'periodo' | null;
@@ -19,6 +20,8 @@ export interface EstadoConversa {
   tarefasPendentes?: TarefaPendente[];
   /** Sugestões públicas em revisão, por profissional; nunca são aprovação fiscal. */
   pesquisasRegistro?: Record<string,PesquisaRegistroConversa>;
+  /** Intenções duradouras, sem atribuir permissão fiscal. Persistidas por CAS. */
+  objetivos?:ObjetivosNoto;
   /** Última consulta comprovada, sem texto livre nem dados fiscais de pacientes. */
   ultimaConsultaFiscal?: { escopo: 'conta' | 'profissional'; profissionalNome?: string; verificadaEm: string };
 }
@@ -42,6 +45,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
     ...(e.pesquisasRegistro ? {pesquisasRegistro:leituraPesquisaEstado(e.pesquisasRegistro)} : {}),
+    ...(e.objetivos ? {objetivos:lerObjetivos(e.objetivos)} : {}),
     ...(e.ultimaConsultaFiscal && ['conta','profissional'].includes(e.ultimaConsultaFiscal.escopo) &&
       typeof e.ultimaConsultaFiscal.verificadaEm === 'string' &&
       e.ultimaConsultaFiscal.verificadaEm.length <= 40 &&
@@ -153,6 +157,8 @@ export async function salvarEstadoConversa(pool: Banco, contaId: string, estado:
          !!estado.ultimaConsultaFiscal.profissionalNome && estado.ultimaConsultaFiscal.profissionalNome.length <= 150))) {
     permitido.ultimaConsultaFiscal = estado.ultimaConsultaFiscal;
   }
+  // NUNCA copiar objetivos ou pesquisasRegistro no save genérico: o worker e
+  // comandos autorizados os atualizam com guarda atômica no banco.
   await pool.query(
     'insert into noto_agent_conversas(conta_id,estado) values($1,$2::jsonb) on conflict(conta_id) do update set estado=noto_agent_conversas.estado || excluded.estado,atualizado_em=now()',
     [contaId, JSON.stringify(permitido)]
