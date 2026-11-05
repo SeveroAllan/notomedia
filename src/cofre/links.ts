@@ -224,21 +224,29 @@ export class LinksCofre {
      * o mesmo mecanismo de recibo e a mesma proteção de origem. Finalidade
      * isolada de credenciais das agendas. O link não confirma nem salva CRM.
      */
-    async solicitarLinkRegistro(contaId:string,medicoId:string,telefone:string){
+    /** Estado do link seguro baseado em transporte e recibo, nunca em timeout. */
+    async solicitarLinkRegistro(
+        contaId:string,medicoId:string,telefone:string,
+        acao:'solicitar'|'consultar'|'substituir'='solicitar',mensagemId?:string
+    ):Promise<{ok:boolean;motivo:string}>{
         const variantes=gerarVariantesTelefoneBrasileiro(telefone);
-        if(!variantes.length)return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
+        if(!variantes.length||!['solicitar','consultar','substituir'].includes(acao))
+            return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
+        if(mensagemId!==undefined&&!/^[A-Za-z0-9_-]{5,150}$/.test(mensagemId))
+            return {ok:false,motivo:'PEDIDO_INVALIDO'};
         const client=await this.deps.pool.connect();
-        let token='',linkId='',criado=false;
+        let token='',linkId='',confirmado=false;
         try{
             await client.query('begin');
             const registro=(await client.query([
               'select m.nome_completo,c.estado',
               'from public.medicos m join public.noto_agent_conversas c on c.conta_id=m.conta_id',
-              'where m.id=$1::uuid and m.conta_id=$2 for update of c',
+              'where m.id=$1::uuid and m.conta_id=$2 for update of c'
             ].join('\n'),[medicoId,contaId])).rows[0];
             const dados=registro?.estado?.pesquisasRegistro?.[medicoId];
             if(!dados||!nomeProfissionalValido(registro.nome_completo)||
-                registro.nome_completo!==dados.nome ||
+                registro.nome_completo!==dados.nome||
+                registro.estado.profissionalConfirmadoId!==medicoId||
                 !['manual_pendente','aguardando_confirmacao','aguardando_preenchimento',
                   'link_manual_reservado'].includes(dados.estado))
                 return {ok:false,motivo:'REVISAO_NAO_AUTORIZADA'};
@@ -248,22 +256,45 @@ export class LinksCofre {
             if(!operadores.some(u=>gerarVariantesTelefoneBrasileiro(String(u.telefone??'')).some(v=>variantes.includes(v))))
                 return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
             const ultimo=(await client.query([
-              "select id,usado_em,expira_em from public.cofre_links",
-              "where medico_id=$1::uuid and agenda='registro_profissional'",
-              'order by criado_em desc,id desc limit 1'
+              'select l.id,l.usado_em,l.expira_em,e.estado,',
+              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado') as aceite_audit,",
+              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='falha_comprovada') as falha_audit",
+              'from public.cofre_links l',
+              'left join public.cofre_links_entregas e on e.link_id=l.id',
+              "where l.medico_id=$1::uuid and l.agenda='registro_profissional'",
+              'order by l.criado_em desc,l.id desc limit 1'
             ].join('\n'),[medicoId])).rows[0];
-            if(ultimo && !ultimo.usado_em && new Date(ultimo.expira_em).getTime()>Date.now())
-                return {ok:false,motivo:'LINK_JA_EXISTENTE'};
-            if(!['manual_pendente','aguardando_confirmacao','aguardando_preenchimento',
-                  'link_manual_reservado'].includes(dados.estado))
-                return {ok:false,motivo:'REVISAO_NAO_AUTORIZADA'};
-            // Limite compartilhado com o link seguro da agenda: não criar
-            // ininterruptamente nem enviar dois tokens vivos para o mesmo médico.
+            const vivo=ultimo&&!ultimo.usado_em&&new Date(ultimo.expira_em).getTime()>Date.now();
+            const situacao=ultimo?.estado==='READ'?'LIDO':
+              ultimo?.estado==='DELIVERY_ACK'?'ENTREGUE':
+              ultimo?.estado==='ERROR'||ultimo?.falha_audit?'FALHA_COMPROVADA':
+              ['ACEITO_API','PENDING','SERVER_ACK'].includes(ultimo?.estado)||
+                ultimo?.aceite_audit?'ACEITO_SEM_ENTREGA':'ENVIO_INCERTO';
+            if(acao==='consultar')return vivo
+              ? {ok:situacao!=='FALHA_COMPROVADA',motivo:situacao}
+              : {ok:false,motivo:'SEM_LINK_ATIVO'};
+            // Reserva por ID da mensagem antes do I/O: crash/replay não reenvia.
+            if(mensagemId&&dados.solicitacaoLinkMensagemId===mensagemId)
+                return {ok:false,motivo:'PEDIDO_JA_PROCESSADO'};
+            if(vivo&&situacao!=='FALHA_COMPROVADA'){
+                if(acao!=='substituir')return {ok:false,motivo:situacao};
+                if(!['ENVIO_INCERTO','ACEITO_SEM_ENTREGA'].includes(situacao))
+                    return {ok:false,motivo:'LINK_ENTREGUE'};
+            }else if(acao==='substituir')return {ok:false,motivo:'SEM_LINK_ATIVO'};
             const limite=(await client.query([
               'select count(*)::int as total from public.cofre_links',
-              'where medico_id=$1::uuid and criado_em>now()-interval \'1 hour\''
+              "where medico_id=$1::uuid and criado_em>now()-interval '1 hour'"
             ].join('\n'),[medicoId])).rows[0];
             if(Number(limite?.total??0)>=3)return {ok:false,motivo:'LIMITE_LINKS'};
+            // Antigo revogado + novo inserido na MESMA transação e só nesta finalidade.
+            await client.query([
+              'with antigos as (update public.cofre_links',
+              'set expira_em=least(expira_em,clock_timestamp())',
+              "where medico_id=$1::uuid and agenda='registro_profissional'",
+              'and usado_em is null and expira_em>clock_timestamp() returning id)',
+              'insert into public.cofre_links_auditoria(link_id,evento)',
+              "select id,'expirado' from antigos on conflict do nothing"
+            ].join('\n'),[medicoId]);
             token=randomBytes(32).toString('base64url');
             const criadoLink=await client.query([
               'insert into public.cofre_links',
@@ -275,23 +306,60 @@ export class LinksCofre {
             await client.query("insert into public.cofre_links_auditoria(link_id,evento) values($1,'criado') on conflict do nothing",[linkId]);
             await client.query([
               'update public.noto_agent_conversas c set',
-              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
-              "'\"link_manual_reservado\"'::jsonb,false),atualizado_em=now()",
+              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+              "c.estado#>array['pesquisasRegistro',$2::text]||",
+              "jsonb_build_object('estado','link_manual_reservado',",
+              "'solicitacaoLinkMensagemId',$3::text),false),atualizado_em=now()",
               'where c.conta_id=$1'
-            ].join('\n'),[contaId,medicoId]);
+            ].join('\n'),[contaId,medicoId,mensagemId??'']);
             await client.query('commit');
-            criado=true;
-        }catch{
-            return {ok:false,motivo:'LINK_INDISPONIVEL'};
-        }finally{
-            if(!criado)await client.query('rollback').catch(()=>undefined);
+            confirmado=true;
+        }catch{return {ok:false,motivo:'LINK_INDISPONIVEL'};}
+        finally{
+            if(!confirmado)await client.query('rollback').catch(()=>undefined);
             client.release();
         }
+        // Erro ou crash após COMMIT não permite repetir URL automaticamente.
         try{
-            const url=`${this.deps.origem}/c/registro/${token}`;
+            const url=this.deps.origem+'/c/registro/'+token;
             const envio=this.deps.enviarUrlComRecibo
                 ? await this.deps.enviarUrlComRecibo({referenciaCofre:medicoId,url,linkId,telefone})
                 : await this.deps.enviar(medicoId,url,telefone);
+            if(envio==='erro'&&this.deps.enviarUrlComRecibo){
+                // Rejeição explícita. Se já houve ACK, não podemos revogar
+                // sob uma falsa certeza de falha.
+                const c=await this.deps.pool.connect();let concluiu=false;
+                try{
+                    await c.query('begin');
+                    const falha=await c.query([
+                      'update public.cofre_links l',
+                      'set expira_em=least(l.expira_em,clock_timestamp())',
+                      'where l.id=$1 and l.usado_em is null',
+                      'and not exists(select 1 from public.cofre_links_entregas e',
+                      "where e.link_id=l.id and e.estado in ('ACEITO_API','PENDING','SERVER_ACK','DELIVERY_ACK','READ'))",
+                      'returning l.id'
+                    ].join('\n'),[linkId]);
+                    if(falha.rows.length){
+                        await c.query([
+                          'insert into public.cofre_links_auditoria(link_id,evento)',
+                          "values($1,'falha_comprovada') on conflict do nothing"
+                        ].join('\n'),[linkId]);
+                        await c.query([
+                          'update public.noto_agent_conversas c set',
+                          "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text,'estado'],",
+                          "'\"manual_pendente\"'::jsonb,false),atualizado_em=now()",
+                          'where c.conta_id=$1 and',
+                          "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'"
+                        ].join('\n'),[contaId,medicoId]);
+                    }
+                    await c.query('commit');concluiu=true;
+                    if(falha.rows.length)return {ok:false,motivo:'FALHA_COMPROVADA'};
+                }finally{
+                    if(!concluiu)await c.query('rollback').catch(()=>undefined);
+                    c.release();
+                }
+                return {ok:false,motivo:'ENVIO_INCERTO'};
+            }
             if(envio!=='enviado')return {ok:false,motivo:'ENVIO_INCERTO'};
             await this.auditar(linkId,'enviado');
             await this.deps.pool.query([
