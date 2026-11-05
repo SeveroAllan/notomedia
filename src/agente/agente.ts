@@ -871,6 +871,39 @@ export function acompanhamentoVerificado(
   return null;
 }
 
+/** Relato coerente com o resultado do Cofre e os ACKs, não com regex do modelo. */
+function falaEnvioRegistro(motivo:string|undefined,nome:string):string{
+  const alvo=nome?' de '+nome:'';
+  switch(motivo){
+    case 'ACEITO_API':
+    case 'ACEITO_SEM_ENTREGA':
+      return 'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
+    case 'ENVIO_INCERTO':
+      return 'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
+    case 'FALHA_COMPROVADA':
+      return 'O envio do link seguro'+alvo+' falhou de forma comprovada, e essa tentativa foi invalidada. Se você quiser, posso solicitar um novo agora.';
+    case 'ENTREGUE':
+      return 'O WhatsApp confirmou a entrega do link seguro'+alvo+'. Isso ainda não significa que o formulário foi preenchido.';
+    case 'LIDO':
+      return 'O WhatsApp confirmou a leitura da mensagem com o link seguro'+alvo+'. Ainda aguardo o preenchimento.';
+    case 'LINK_ENTREGUE':
+      return 'O link seguro'+alvo+' já teve a entrega confirmada. Não gerei outro; posso ajudar se a página não abriu.';
+    case 'PEDIDO_JA_PROCESSADO':
+      return 'Esse pedido de link seguro'+alvo+' já foi processado. Não reenviei nada. Posso verificar o estado atual.';
+    case 'SEM_LINK_ATIVO':
+      return 'Não existe um link seguro ativo'+alvo+'. Se você autorizar, posso solicitar um novo.';
+    case 'LIMITE_LINKS':
+      return 'O limite de criação de links seguros foi atingido. Não fiz outro envio; precisamos respeitar esse limite.';
+    case 'SEM_AUTORIZACAO':
+      return 'Não solicitei outro link. Preciso da sua autorização para realizar essa ação.';
+    case 'REVISAO_NAO_AUTORIZADA':
+    case 'REVISAO_NAO_DISPONIVEL':
+      return 'A revisão dos dados'+alvo+' ainda não está confirmada. Não gerei outro link nem alterei o cadastro.';
+    default:
+      return 'Ainda não tenho um estado verificável para o link seguro'+alvo+'. Não repeti o envio. Podemos verificar o que ficou pendente.';
+  }
+}
+
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
@@ -966,11 +999,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;
       registrar('RESPOSTA',uso);
-      if(!l.ok)return l.motivo==='LINK_JA_EXISTENTE'
-        ?'Já existe um link seguro válido para o preenchimento. Não vou gerar outro sem necessidade.'
-        :'Ainda não tenho comprovante de aceite do link seguro para '+l.nome+'. Não presumi entrega nem preenchimento.';
-      return 'O serviço de mensagens aceitou o link seguro para '+l.nome+
-        '. Isso não confirma que chegou ou foi preenchido. Depois do preenchimento, retomarei os dados para sua aprovação.';
+      return falaEnvioRegistro(l.motivo,l.nome);
     }
     if(revisaoTurno.atual){
       const r=revisaoTurno.atual;
@@ -978,10 +1007,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
       if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
         ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
-        : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
-      if(r.tipo==='correcao')return r.motivo==='ACEITO_API'?
-        'O serviço aceitou o link seguro para corrigir os dados de '+r.nome+'. Ainda não houve preenchimento ou aprovação.':
-        'Não consegui confirmar o envio do link para correção. Não alterei CRM ou RQE.';
+        : ['FALHA_COMPROVADA','ENVIO_INCERTO','ACEITO_SEM_ENTREGA','ENTREGUE','LIDO',
+          'PEDIDO_JA_PROCESSADO','LINK_ENTREGUE','LIMITE_LINKS'].includes(r.motivo)
+          ? falaEnvioRegistro(r.motivo,'')
+          : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
+      if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
       return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
         (r.rqe?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
     }
