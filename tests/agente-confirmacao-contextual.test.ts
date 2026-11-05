@@ -147,7 +147,7 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
   });
   it('correção pede página segura, não exige que se digite CRM no WhatsApp',async()=>{
     const r=await revisar('Não, quero corrigir esses dados','corrigir');
-    expect(r.solicitarLinkRegistro).toHaveBeenCalledExactlyOnceWith(ANA);
+    expect(r.solicitarLinkRegistro).toHaveBeenCalledExactlyOnceWith(ANA,'solicitar');
     expect(r.aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(r.salvarDadosProfissionais).not.toHaveBeenCalled();
     expect(r.resposta).toMatch(/link seguro/i);
