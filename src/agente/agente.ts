@@ -881,7 +881,7 @@ function falaEnvioRegistro(motivo:string|undefined,nome:string):string{
     case 'ENVIO_INCERTO':
       return 'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
     case 'FALHA_COMPROVADA':
-      return 'O envio do link seguro'+alvo+' falhou de forma comprovada, e essa tentativa foi invalidada. Se você quiser, posso solicitar um novo agora.';
+      return 'O envio do link seguro'+alvo+' falhou de forma comprovada. Posso solicitar outro agora, com sua autorização, sem manter o link anterior utilizável.';
     case 'ENTREGUE':
       return 'O WhatsApp confirmou a entrega do link seguro'+alvo+'. Isso ainda não significa que o formulário foi preenchido.';
     case 'LIDO':
