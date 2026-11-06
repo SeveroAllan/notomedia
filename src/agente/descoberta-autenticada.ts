@@ -97,7 +97,9 @@ async function completarFaseDeSnapshotLegado(
     "'origemDescoberta',coalesce(c.estado->>'origemDescoberta','legado_validado')),",
     'atualizado_em=now()',
     'where c.conta_id=$1',
-    "and c.estado->>'faseAgenda' is null",
+    // Somente chave realmente AUSENTE; JSON null e valores ilegais
+    // não são equivalentes à falta de uma fase nunca gravada.
+    "and not (c.estado ? 'faseAgenda')",
     "and c.estado->'descoberta'=$2::jsonb",
     "and (c.estado->>'agendaEscolhida' is null or c.estado->>'agendaEscolhida'=$3)",
     "and (c.estado->>'origemDescoberta' is null or",
