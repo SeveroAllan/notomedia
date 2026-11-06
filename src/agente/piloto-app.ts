@@ -40,6 +40,7 @@ export function criarAppPilotoLeitura(deps: {
       segredo: deps.segredo, instancia: deps.instancia, allowlist: [deps.telefoneAutorizado],
       apiKey: deps.apiKey, modeloNome: deps.modeloNome, painelUrl: deps.painelUrl,
       modeloTeste: deps.modeloTeste,
+      exigirControleCusto:true, // DSN read-only não consegue reservar: fail closed
       tracesAtivos: deps.tracesAtivos, diagnosticoAtivo: deps.diagnosticoAtivo,
       registrarDiagnostico: deps.registrarDiagnostico,
       consultarStatus: deps.consultarStatus, enviar: deps.enviar,
