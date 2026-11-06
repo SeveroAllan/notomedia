@@ -23,6 +23,7 @@ import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operaci
 import type { ResultadoConferencia } from './conferencia-atendimentos.js';
 import type { PedidoTrabalhoNoto, ResultadoEnfileirar, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 import { registrarVinculoConversa } from './vinculo-conversa.js';
+import {recuperarDescobertaComprovada} from './descoberta-autenticada.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -188,12 +189,28 @@ export function criarRouterWebhookAgente(deps: {
       const profissionais = medicos.rows.map((m: { id: string; nome_completo: string | null }) => ({
         id: m.id, nome: String(m.nome_completo ?? '')
       })).filter(p => nomeProfissionalValido(p.nome));
-      const estado: EstadoConversa = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
+      let estado: EstadoConversa = deps.persistirConversa && contaId ? await lerEstadoConversa(deps.pool, contaId) : {};
       if (deps.persistirConversa && contaId) {
         if (!await reservarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id)) {
           res.sendStatus(200); return;
         }
         reservada = true;
+        // Reconciliar resultados REAIS da fila antiga (pré-correção)
+        // somente da mesma conta/instância, sem usar texto anterior como
+        // prova e sem consultar portal ou IA. Estado concluído não reabre.
+        if(deps.listarTrabalhos){
+          try{
+            const recuperacao=await recuperarDescobertaComprovada(
+              deps.pool,contaId!,evento.instance,estado);
+            if(recuperacao==='RECUPERADA')estado=await lerEstadoConversa(deps.pool,contaId!);
+            if(recuperacao!=='JA_COMPROVADA'&&recuperacao!=='SEM_PROVA')
+              console.info('NOTO_DESCOBERTA_RECONCILIACAO',recuperacao);
+          }catch{
+            // Problema de banco não cria evidência. A ferramenta falha
+            // fechada se a descoberta continuar ausente.
+            console.warn('NOTO_DESCOBERTA_RECONCILIACAO','INISPONIVEL');
+          }
+        }
       }
       const chaveContexto = JSON.stringify([contaId ?? 'sem_cadastro', telefone]);
       // Guarda somente referência e tipo fechado, nunca o conteúdo da solicitação.
@@ -386,7 +403,20 @@ export function criarRouterWebhookAgente(deps: {
           } catch { /* Falha de reação não apaga a pendência nem impede o atendimento. */ }
         }
         if (reservada && contaId) {
-          await salvarEstadoConversa(deps.pool, contaId, { ...novo, tarefasPendentes });
+          // Resposta genérica NÃO é autoridade para regravar um snapshot
+          // antigo de descoberta/vínculo. O worker ou a ferramenta gravam
+          // o fato diretamente; saves tardios não podem desfazer o progresso.
+          const delta:EstadoConversa={...novo,tarefasPendentes};
+          if(!vinculoDaMensagem.atual){
+            delete delta.profissionalConfirmadoId;
+            if(!descobertaVerificada){
+              delete delta.faseAgenda;
+              delete delta.descoberta;
+            }else{
+              delta.faseAgenda='CONFIRMACAO_PENDENTE';
+            }
+          }
+          await salvarEstadoConversa(deps.pool, contaId, delta);
         } else {
           tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
           contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
