@@ -107,6 +107,15 @@ function identificar(nome: string | null, profissionais: ProfissionalAgente[]): 
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
   const profissionais = entrada.profissionais.filter(p => p.id && nomeProfissionalValido(p.nome)).slice(0, 21);
+  // Descoberta já comprovada e pendente é a única condição que ativa
+  // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
+  // ou esclarecer); o código nunca converte um "sim" em autorização por regex.
+  // Sem essa evidência, nenhum toolChoice de escrita é imposto.
+  const confirmacaoPendente=Boolean(!entrada.semConta&&deps.confirmarProfissionais&&
+    entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE'&&
+    entrada.estadoConversa.descoberta&&
+    ['tribemd','amplimed'].includes(entrada.estadoConversa.descoberta.agenda)&&
+    entrada.estadoConversa.descoberta.nomes.length>0);
   // Nunca expor o ID técnico ao modelo, nem usá-lo como nome de profissional.
   const ancoraDaConta = async () => entrada.semConta ? null : await deps.referenciaContaAgenda?.() ?? null;
   const registrar = (nome: FerramentaNoto, codigo: CodigoFerramenta, inicio: number) =>
@@ -462,7 +471,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   let vinculoNesteTurno=false;
   if (deps.confirmarProfissionais) extras.push(tool({
     name:'confirmar_profissionais_descobertos',
-    description:'Interprete a resposta natural à proposta de vínculo já registrada. Decisão sem ambiguidade: confirmar/negar/corrigir/esclarecer. Nomes só podem vir da descoberta autenticada; não confirme médico só porque foi mencionado. Sem nova leitura do portal no turno de confirmação.',
+    description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Classifique a intenção da mensagem atual: confirmar somente com autorização explícita; negar quando recusar; corrigir quando contestar o nome; esclarecer quando for pergunta ou outro assunto. NÃO trate toda mensagem como confirmação. Só vincule alvo comprovado; com vários nomes, não suponha qual é o profissional. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
     parameters:z.object({
       agenda:z.enum(['tribemd','amplimed']),
       profissionalBase:z.string().nullable(),
@@ -776,7 +785,15 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
-    modelSettings:{maxTokens:1024},
+    modelSettings:{
+      maxTokens:1024,
+      ...(confirmacaoPendente ? {
+        // 'required' deixaria a IA escolher qualquer ferramenta ou texto.
+        // O SDK exige exatamente esta ferramenta no PRIMEIRO turno do modelo.
+        toolChoice:'confirmar_profissionais_descobertos',
+        parallelToolCalls:false
+      } : {})
+    },
     tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
