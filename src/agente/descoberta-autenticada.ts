@@ -5,8 +5,9 @@ import type {AgendaEscolhida,EstadoConversa} from './estado-conversa.js';
 
 type Banco=Pick<pg.Pool,'query'>;
 type Descoberta={agenda:AgendaEscolhida;nomes:string[]};
-export type EstadoRecuperacaoDescoberta='JA_COMPROVADA'|'RECUPERADA'|'SEM_PROVA'|
-  'CONFLITO_ESTADO'|'CONFLITO_PROVAS';
+export type OrigemDescoberta='cofre_sessao'|'trabalho_agenda';
+export type EstadoRecuperacaoDescoberta='JA_COMPROVADA'|'RECUPERADA'|
+  'RECUPERADA_ESTADO'|'SEM_PROVA'|'CONFLITO_ESTADO'|'CONFLITO_PROVAS';
 
 function conferirDescoberta(agenda:unknown,nomes:unknown):Descoberta|null{
   if(agenda!=='tribemd'&&agenda!=='amplimed'||!Array.isArray(nomes))return null;
@@ -17,36 +18,98 @@ function conferirDescoberta(agenda:unknown,nomes:unknown):Descoberta|null{
   return {agenda,nomes:validos};
 }
 
-/** Garantia fundamental: NENHUM balão pedindo confirmação se a prova não
- * entrou no estado da conta. A escrita usa CAS na fase/agenda e não ressuscita
- * convite já concluído nem substitui uma descoberta concorrente diferente.
- *
- * A origem deste método deve ser o resultado autenticado do worker ou um
- * registro autenticado em noto_agent_trabalhos, NUNCA o texto do WhatsApp/IA.
+/** Fonte exclusivamente interna: callback autenticado do Cofre ou resultado
+ * autenticado do worker. Prova e fase são gravadas numa única operação;
+ * nunca aceitar nome informado pelo modelo/usuário como origem.
  */
 export async function persistirDescobertaComprovada(
-  pool:Banco,contaId:string,agenda:AgendaEscolhida,nomes:unknown
+  pool:Banco,contaId:string,agenda:AgendaEscolhida,nomes:unknown,
+  origem:OrigemDescoberta='trabalho_agenda'
 ):Promise<boolean>{
   const fonte=conferirDescoberta(agenda,nomes);
-  if(!fonte)return false;
+  if(!fonte||!['cofre_sessao','trabalho_agenda'].includes(origem))return false;
   const r=await pool.query([
-    'insert into public.noto_agent_conversas (conta_id,estado)',
+    'insert into public.noto_agent_conversas as c (conta_id,estado)',
     "values ($1,jsonb_build_object('agendaEscolhida',$3::text,",
-    "'faseAgenda','CONFIRMACAO_PENDENTE','descoberta',$2::jsonb))",
+    "'faseAgenda','CONFIRMACAO_PENDENTE','descoberta',$2::jsonb,",
+    "'origemDescoberta',$4::text,'perguntaPendente',",
+    "case when jsonb_array_length($2::jsonb->'nomes')=1 then",
+    "'confirmar_profissional' else null end))",
     'on conflict (conta_id) do update set',
-    "estado=public.noto_agent_conversas.estado ||",
-    "jsonb_build_object('faseAgenda','CONFIRMACAO_PENDENTE','descoberta',$2::jsonb),",
+    "estado=c.estado || jsonb_build_object('agendaEscolhida',$3::text,",
+    "'faseAgenda','CONFIRMACAO_PENDENTE','descoberta',$2::jsonb,",
+    "'origemDescoberta',$4::text,'perguntaPendente',",
+    "case when jsonb_array_length($2::jsonb->'nomes')=1 then",
+    "'confirmar_profissional' else null end),",
     'atualizado_em=now()',
-    'where (public.noto_agent_conversas.estado->>\'agendaEscolhida\' is null',
-    'or public.noto_agent_conversas.estado->>\'agendaEscolhida\'=$3)',
-    "and coalesce(public.noto_agent_conversas.estado->>'faseAgenda','')",
-    "not in ('VINCULO_CONFIRMADO')",
-    "and (public.noto_agent_conversas.estado->>'faseAgenda'",
-    "is distinct from 'CONFIRMACAO_PENDENTE' or",
-    "public.noto_agent_conversas.estado->'descoberta'=$2::jsonb)",
+    "where (c.estado->>'agendaEscolhida' is null or c.estado->>'agendaEscolhida'=$3)",
+    "and (c.estado->>'faseAgenda' is null or c.estado->>'faseAgenda'",
+    "in ('DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE'))",
+    "and (c.estado->'descoberta' is null or c.estado->'descoberta'=$2::jsonb)",
+    "and (c.estado->>'profissionalConfirmadoId' is null or",
+    "c.estado->>'faseAgenda'='CONFIRMACAO_PENDENTE')",
     'returning conta_id'
-  ].join('\n'),[contaId,JSON.stringify(fonte),agenda]);
+  ].join('\n'),[contaId,JSON.stringify(fonte),agenda,origem]);
   return r.rows.length===1;
+}
+
+/** Quando o navegador conecta, mas não encontra nomes, não rebaixar uma
+ * confirmação ou vínculo que outro evento possa ter persistido.
+ */
+export async function persistirDescobertaAindaPendente(
+  pool:Banco,contaId:string,agenda:AgendaEscolhida
+):Promise<boolean>{
+  const r=await pool.query([
+    'insert into public.noto_agent_conversas as c (conta_id,estado)',
+    "values($1,jsonb_build_object('agendaEscolhida',$2::text,",
+    "'faseAgenda','DESCOBERTA_PENDENTE'))",
+    'on conflict(conta_id) do update set',
+    "estado=c.estado||jsonb_build_object('agendaEscolhida',$2::text,",
+    "'faseAgenda','DESCOBERTA_PENDENTE'),atualizado_em=now()",
+    "where (c.estado->>'agendaEscolhida' is null or c.estado->>'agendaEscolhida'=$2)",
+    "and (c.estado->>'faseAgenda' is null or",
+    "c.estado->>'faseAgenda'='DESCOBERTA_PENDENTE')",
+    "and c.estado->'descoberta' is null",
+    'returning conta_id'
+  ].join('\n'),[contaId,agenda]);
+  return r.rows.length===1;
+}
+
+/** Legado: descoberta persistida em tabela controlada pelo servidor a partir
+ * de leitura autenticada, mas com fase ausente. Não cria prova a partir da
+ * conversa. CAS compara o JSON bruto para evitar reconstruir a partir de
+ * nomes filtrados ou de um estado mudado em paralelo.
+ */
+async function completarFaseDeSnapshotLegado(
+  pool:Banco,contaId:string,atual:EstadoConversa
+):Promise<'RECUPERADA_ESTADO'|'CONFLITO_ESTADO'|'SEM_PROVA'>{
+  if(atual.faseAgenda!==undefined)return 'CONFLITO_ESTADO';
+  const fonte=conferirDescoberta(atual.descoberta?.agenda,atual.descoberta?.nomes);
+  if(!fonte)return 'SEM_PROVA';
+  if(atual.agendaEscolhida&&atual.agendaEscolhida!==fonte.agenda)
+    return 'CONFLITO_ESTADO';
+  const r=await pool.query([
+    'update public.noto_agent_conversas as c',
+    "set estado=c.estado||jsonb_build_object(",
+    "'agendaEscolhida',$3::text,'faseAgenda','CONFIRMACAO_PENDENTE',",
+    "'perguntaPendente',case when jsonb_array_length($2::jsonb->'nomes')=1",
+    "then 'confirmar_profissional' else null end,",
+    "'origemDescoberta',coalesce(c.estado->>'origemDescoberta','legado_validado')),",
+    'atualizado_em=now()',
+    'where c.conta_id=$1',
+    // Somente chave realmente AUSENTE; JSON null e valores ilegais
+    // não são equivalentes à falta de uma fase nunca gravada.
+    "and not (c.estado ? 'faseAgenda')",
+    "and c.estado->'descoberta'=$2::jsonb",
+    "and (c.estado->>'agendaEscolhida' is null or c.estado->>'agendaEscolhida'=$3)",
+    "and (c.estado->>'origemDescoberta' is null or",
+    "c.estado->>'origemDescoberta' in ('cofre_sessao','trabalho_agenda',",
+    "'ferramenta_agenda','legado_validado'))",
+    // Já vinculado é uma transição potencialmente concluída: não reabrir.
+    "and c.estado->>'profissionalConfirmadoId' is null",
+    'returning conta_id'
+  ].join('\n'),[contaId,JSON.stringify(fonte),fonte.agenda]);
+  return r.rows.length===1?'RECUPERADA_ESTADO':'CONFLITO_ESTADO';
 }
 
 /** Reparo pontual de um resultado autenticado já registrado antes da correção
@@ -63,6 +126,13 @@ export async function recuperarDescobertaComprovada(
     return 'JA_COMPROVADA';
   if(atual.faseAgenda==='CONFIRMACAO_PENDENTE'&&atual.descoberta?.nomes.length)
     return 'CONFLITO_ESTADO';
+  if(!atual.faseAgenda&&atual.descoberta){
+    // Cobrir o callback do navegador, que não cria noto_agent_trabalhos.
+    // A fonte é o snapshot estruturado persistido pela aplicação, nunca
+    // o nome repetido em um balão. Fase malformada no JSON bruto falha no CAS.
+    const legado=await completarFaseDeSnapshotLegado(pool,contaId,atual);
+    if(legado!=='SEM_PROVA')return legado;
+  }
   const r=await pool.query([
     'select agenda,resultado from public.noto_agent_trabalhos',
     "where conta_id=$1 and instancia=$2 and tipo='descoberta_agenda'",

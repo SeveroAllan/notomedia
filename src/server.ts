@@ -15,7 +15,7 @@ import { localizarContaExistentePorTelefone } from './agente/conta-existente.js'
 import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { separarBaloes } from './agente/baloes.js';
-import { lerEstadoConversa, salvarEstadoConversa } from './agente/estado-conversa.js';
+import {persistirDescobertaComprovada,persistirDescobertaAindaPendente} from './agente/descoberta-autenticada.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
 import { nomeProfissionalValido } from './conta/validar-dados-emissao.js';
@@ -161,18 +161,21 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const plataforma=evento.agenda==='tribemd'?'TribeMD':'Amplimed';
       const nomes=evento.conectado
         ? evento.nomesDescobertos.filter(nomeProfissionalValido).slice(0,20) : [];
-      // Persista o estágio da conta ANTES de notificar o WhatsApp. Mesmo
-      // se uma bolha não for aceita, a próxima mensagem retoma do estado real.
+      // Navegador autenticado da CONTA: uma única operação atômica grava
+      // nomes comprovados + CONFIRMACAO_PENDENTE, antes de qualquer balão.
+      // Não copiar estado antigo nem usar merge genérico para autorizar vínculo.
       if (evento.conectado) {
-        const anterior=await lerEstadoConversa(pool,contaId);
-        await salvarEstadoConversa(pool,contaId,{
-          ...anterior,agendaEscolhida:evento.agenda,
-          faseAgenda:nomes.length?'CONFIRMACAO_PENDENTE':'DESCOBERTA_PENDENTE',
-          causaDescoberta:nomes.length?undefined:evento.diagnosticoLeitura?.causas[0],
-          descoberta:nomes.length?{agenda:evento.agenda,nomes}:undefined,
-          perguntaPendente:nomes.length===1?'confirmar_profissional':null,
-          nomeProfissionalPerguntado:nomes.length===1?nomes[0]:undefined
-        });
+        const persistido=nomes.length
+          ? await persistirDescobertaComprovada(pool,contaId,evento.agenda,nomes,'cofre_sessao')
+          : await persistirDescobertaAindaPendente(pool,contaId,evento.agenda);
+        if(!persistido){
+          console.warn('NOTO_COFRE_DESCOBERTA','CONFLITO_ESTADO');
+          // Falha fechada: se mudou a agenda, houve vínculo ou concorrência,
+          // não anunciar nomes como prontos sem prova persistida.
+          return;
+        }
+        console.info('NOTO_COFRE_DESCOBERTA',
+          nomes.length?'CONFIRMACAO_PERSISTIDA':'DESCOBERTA_PENDENTE');
       }
       if (!config.notoAgentEnvioAtivo) return;
       const diagnostico=evento.diagnosticoLeitura;
