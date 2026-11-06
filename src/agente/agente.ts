@@ -1,4 +1,5 @@
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
+import OpenAI from 'openai';
 import type pg from 'pg';
 import {ProvedorAgenteComOrcamento} from './modelo-com-limite.js';
 import {PausaCustoPiloto,FALA_LIMITE_TESTE} from './limite-gasto-rodada.js';
@@ -964,7 +965,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     });
     const runner = new Runner({
       ...(deps.modeloTeste ? {} : { modelProvider: deps.controleCusto?
-        new ProvedorAgenteComOrcamento(new OpenAIProvider({apiKey:deps.apiKey!,useResponses:true}),deps.controleCusto):
+        new ProvedorAgenteComOrcamento(new OpenAIProvider({openAIClient:new OpenAI({apiKey:deps.apiKey!,maxRetries:0}),useResponses:true}),deps.controleCusto):
         new OpenAIProvider({apiKey:deps.apiKey!,useResponses:true}) }),
       tracingDisabled: !deps.tracesAtivos,
       traceIncludeSensitiveData: false,
