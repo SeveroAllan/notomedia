@@ -1,7 +1,6 @@
 name: Noto Agent - validação do PR
 on:
   pull_request:
-    branches: [main]
     paths:
       - 'src/agente/**'
       - 'src/server.ts'
@@ -34,7 +33,7 @@ on:
       - 'Dockerfile.piloto-agente'
       - '.github/workflows/noto-agent-tests.yml'
   push:
-    branches: [feat/noto-agent-entrega-a]
+    branches: [feat/noto-agent-entrega-a, 'fix/noto-**']
 permissions:
   contents: read
 jobs:

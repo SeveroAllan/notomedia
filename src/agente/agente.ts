@@ -55,9 +55,10 @@ export interface DependenciasAgente {
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
+  adiarConfirmacaoRegistro?: (medicoId:string)=>Promise<boolean>;
   aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean})=>void;
-  aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}) => void;
+  aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}) => void;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
     estado:string; comId:boolean; segundosDesdeAceite:number
@@ -112,6 +113,15 @@ function exigeDecisaoVinculo(entrada:EntradaAgente,deps:DependenciasAgente):bool
     entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE'&&fonte&&
     ['tribemd','amplimed'].includes(fonte.agenda)&&
     Array.isArray(fonte.nomes)&&fonte.nomes.length>0);
+}
+
+function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
+  const id=entrada.estadoConversa?.profissionalConfirmadoId;
+  const pesquisa=id?entrada.estadoConversa?.pesquisasRegistro?.[id]:undefined;
+  return Boolean(!entrada.semConta&&deps.adiarConfirmacaoRegistro&&
+    (deps.aprovarRegistroProfissional||deps.solicitarLinkRegistro)&&id&&
+    entrada.profissionais.some(p=>p.id===id&&p.nome===pesquisa?.nome)&&
+    pesquisa?.estado==='aguardando_confirmacao'&&!pesquisa.confirmacaoAdiada);
 }
 
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
@@ -712,10 +722,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
 
   if(deps.aprovarRegistroProfissional || deps.solicitarLinkRegistro)extras.push(tool({
     name:'revisar_registro_profissional',
-    description:'Interprete a autorização natural para aprovar uma sugestão que o Noto JÁ apresentou. Correção exige cofre seguro, jamais números enviados por WhatsApp. A resposta da ferramenta determina o relato, não o texto livre da IA.',
+    description:'Classifique a intenção sobre a sugestão já apresentada: aprovar somente com confirmação explícita; adiar se não sabe ou não pode confirmar agora (isso não é recusa); recusar se declara que não aprova; corrigir se quer corrigir; esclarecer para perguntas ou mudança de assunto. Adiar preserva proposta e vínculo e permite continuar etapas independentes. Nunca invente autorização.',
     parameters:z.object({
       profissional:z.string(),
-      decisao:z.enum(['aprovar','corrigir','recusar','esclarecer'])
+      decisao:z.enum(['aprovar','corrigir','recusar','esclarecer','adiar'])
     }),
     async execute({profissional,decisao}){
       const inicio=Date.now();
@@ -730,6 +740,14 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(!medico||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id ||
         estado?.estado!=='aguardando_confirmacao')
         return falhar('PESQUISA_OU_VINCULO_AINDA_PENDENTE');
+      if(decisao==='adiar'){
+        const adiada=await deps.adiarConfirmacaoRegistro?.(medico.id).catch(()=>false);
+        if(!adiada)return falhar('ADIAMENTO_NAO_REGISTRADO');
+        registrar('revisar_registro_profissional','DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoRevisaoRegistro?.({ok:true,tipo:'adiamento',nome:medico.nome});
+        return {ok:true,gravado:false,confirmacaoAdiada:true,vinculoPreservado:true,
+          proximaEtapa:'Continue com certificado pela ferramenta existente ou pergunte desde quando conferir os atendimentos. Não repita pesquisa, não peça aprovação de novo, não emita.'};
+      }
       if(decisao==='esclarecer')return falhar('PRECISA_ESCLARECER');
       if(decisao==='recusar')return falhar('NAO_APROVADO');
       if(decisao==='corrigir'){
@@ -799,6 +817,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         // O SDK exige exatamente esta ferramenta no PRIMEIRO turno do modelo.
         toolChoice:'confirmar_profissionais_descobertos',
         parallelToolCalls:false
+      } : exigeRevisaoRegistro(entrada,deps)?{
+        toolChoice:'revisar_registro_profissional',parallelToolCalls:false
       } : {})
     },
     tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
@@ -1009,7 +1029,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   }
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
   const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
-  const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:false;motivo:string}}={};
+  const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}}={};
   const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
@@ -1058,7 +1078,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4),
         registrosPublicosEmRevisao: Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).slice(0,8)
-          .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,
+          .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,confirmacaoAdiada:r.confirmacaoAdiada===true,
             candidatos:r.candidatos?.map(c=>({crm:c.crm,rqes:c.rqes,origem:c.origem})),
             proposta:r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
       }) }
@@ -1084,9 +1104,20 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA',uso);
       return falaEnvioRegistro(l.motivo,l.nome,l.anteriorInvalidado);
     }
+    if(exigeRevisaoRegistro(entrada,deps)&&!revisaoTurno.atual){
+      registrar('RESPOSTA');
+      return 'A sugestão de CRM/RQE continua pendente. Ainda não processei sua decisão e não alterei o cadastro.';
+    }
     if(revisaoTurno.atual){
       const r=revisaoTurno.atual;
       registrar('RESPOSTA',uso);
+      if(r.ok&&r.tipo==='adiamento'){
+        const contexto='Deixei a confirmação do CRM/RQE pendente para você conferir depois. '+r.nome+' continua vinculada à sua conta.';
+        const etapaConsultada=ferramentas.some(e=>['CERTIFICADO_EXISTENTE','CERTIFICADO_PENDENTE','PRONTIDAO_VERIFICADA'].includes(e.codigo));
+        const continuacao=etapaConsultada&&resposta&&respostaCompativelComFerramentas(resposta,ferramentas)
+          ?resposta:'Desde quando você quer conferir os atendimentos de '+r.nome+'?';
+        return contexto+'\n'+continuacao;
+      }
       if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
       if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
         ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'

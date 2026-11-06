@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import pg from 'pg';
 import {it,expect,vi} from 'vitest';
 import {
-  agendarPesquisaRegistro,executarPesquisaRegistro,reservarAvisoPesquisa,
+  adiarConfirmacaoRegistro,leituraPesquisaEstado,agendarPesquisaRegistro,executarPesquisaRegistro,reservarAvisoPesquisa,
   marcarAvisoPesquisa,proporCorrecaoPesquisa,concluirRevisaoPesquisa,
   recuperarPesquisaInterrompida
 } from '../src/agente/pesquisa-profissional-conversa.js';
@@ -75,6 +75,22 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       pesquisa:{razao:'ENCONTRADO',candidatos:[{crm:'12345/RS',rqes:['980']}]}});
     expect(await marcarAvisoPesquisa(db as unknown as pg.Pool,aviso!,true)).toBe(true);
     expect(await reservarAvisoPesquisa(db as unknown as pg.Pool)).toBe(null);
+
+    const antesAdiamento=(await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+    expect(await adiarConfirmacaoRegistro(db as unknown as pg.Pool,OUTRA,ANA)).toBe(false);
+    expect(await adiarConfirmacaoRegistro(db as unknown as pg.Pool,CONTA,ANA)).toBe(true);
+    const depoisAdiamento=(await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+    expect(depoisAdiamento).toEqual({...antesAdiamento,pesquisasRegistro:{
+      ...antesAdiamento.pesquisasRegistro,
+      [ANA]:{...antesAdiamento.pesquisasRegistro[ANA],confirmacaoAdiada:true}
+    }});
+    expect(leituraPesquisaEstado(depoisAdiamento.pesquisasRegistro)[ANA]).toMatchObject({
+      confirmacaoAdiada:true,estado:'aguardando_confirmacao',tentativas:1
+    });
+    expect((await db.query('select crm,rqe from public.medicos where id=$1',[ANA])).rows[0])
+      .toEqual({crm:null,rqe:null});
+    expect(await executarPesquisaRegistro(db as unknown as pg.Pool,consulta)).toBe(false);
+    expect(consulta.buscar).toHaveBeenCalledTimes(1);
 
     expect(await proporCorrecaoPesquisa(db as unknown as pg.Pool,CONTA,ANA,{
       crm:'66666/RS',rqe:'777'

@@ -104,6 +104,44 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     modeloTeste.assertComplete();
   });
 
+  it('adiamento preserva sugestão e vínculo após o save tardio do webhook',async()=>{
+    const id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const pesquisa={nome:'Alice Souza',estado:'aguardando_confirmacao',razao:'ENCONTRADO',
+      candidatos:[{crm:'12345/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]};
+    let estado:Record<string,unknown>={faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmadoId:id,
+      pesquisasRegistro:{[id]:pesquisa}};
+    const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-a'}]};
+      if(sql.startsWith('select id,nome_completo from medicos'))return {rows:[{id,nome_completo:'Alice Souza'}]};
+      if(sql.startsWith('select estado from noto_agent_conversas'))return {rows:[{estado:structuredClone(estado)}]};
+      if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
+      if(sql.startsWith('insert into noto_agent_conversas')){
+        const delta=JSON.parse(String(params[1]));
+        expect(delta).not.toHaveProperty('pesquisasRegistro');
+        estado={...estado,...delta};return {rows:[]};
+      }
+      if(sql.startsWith('update noto_agent_mensagens'))return {rows:[]};
+      throw Error('SQL não previsto');
+    });
+    const adiarConfirmacaoRegistro=vi.fn(async()=>{
+      estado={...estado,pesquisasRegistro:{[id]:{...pesquisa,confirmacaoAdiada:true}}};return true;
+    });
+    const aprovarRegistroProfissional=vi.fn();
+    const modeloTeste=new ScriptedModel([
+      [functionCall('revisar_registro_profissional',{profissional:'Alice',decisao:'adiar'},{callId:'duvida'})],
+      [assistantMessage('Podemos continuar.')]
+    ]);
+    const {app,enviar}=preparar({pool:{query} as unknown as pg.Pool,persistirConversa:true,
+      modeloTeste,adiarConfirmacaoRegistro,aprovarRegistroProfissional});
+    await comServidor(app,async postar=>expect((await postar({...evento,data:{...evento.data,
+      message:{conversation:'Não sei confirmar esses dados agora.'}}})).status).toBe(200));
+    expect(estado).toMatchObject({profissionalConfirmadoId:id,faseAgenda:'VINCULO_CONFIRMADO',
+      pesquisasRegistro:{[id]:{...pesquisa,confirmacaoAdiada:true}}});
+    expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(enviar.mock.calls.map(c=>c[1]).join(' ')).toContain('Desde quando');
+    modeloTeste.assertComplete();
+  });
+
   it('rejeita segredo inválido antes de consultar banco ou modelo', async () => {
     const { app, query, modeloTeste, enviar } = preparar();
     await comServidor(app, async postar => expect((await postar(evento, 'errado')).status).toBe(401));
