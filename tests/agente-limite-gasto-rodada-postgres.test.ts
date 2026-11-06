@@ -105,7 +105,7 @@ testar('US$1 por rodada: pré-reserva atômica, falha fechada, recomeço explíc
     const resposta=vi.fn(async()=>({
       output:[],usage:{inputTokens:100,outputTokens:20}
     }));
-    const modeloFalso={getResponse:resposta,getStreamedResponse:()=>{throw Error('stream');}}
+    const modeloFalso=({getResponse:resposta,getStreamedResponse:()=>{throw Error('stream');}})
       as unknown as Model;
     const provedorFalso={getModel:()=>modeloFalso} as ModelProvider;
     const protegido=await new ProvedorAgenteComOrcamento(provedorFalso,pool).getModel('gpt-4o-mini');
