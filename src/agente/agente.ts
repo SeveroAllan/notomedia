@@ -1,4 +1,7 @@
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
+import type pg from 'pg';
+import {ProvedorAgenteComOrcamento} from './modelo-com-limite.js';
+import {PausaCustoPiloto,FALA_LIMITE_TESTE} from './limite-gasto-rodada.js';
 import { z } from 'zod';
 import { normalizarNomeMedico, linkCertificadoMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
@@ -64,6 +67,8 @@ export interface DependenciasAgente {
   modeloNome?: string;
   /** Modelo determinístico para os testes do próprio loop do SDK. */
   modeloTeste?: Model;
+  /** Obrigatório nos testes pagos do piloto; se o banco falhar, não chamar IA. */
+  controleCusto?:pg.Pool;
   tracesAtivos?: boolean;
   aoDiagnostico?: (registro: DiagnosticoAgente) => void;
   registrarFerramenta?: (evento: EventoFerramenta) => void;
@@ -763,6 +768,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
+    modelSettings:{maxTokens:1024},
     tools: [consultarConta, consultarAgendas, orientarConexao, ...extras]
   });
 }
@@ -957,7 +963,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
-      ...(deps.modeloTeste ? {} : { modelProvider: new OpenAIProvider({ apiKey: deps.apiKey!, useResponses: true }) }),
+      ...(deps.modeloTeste ? {} : { modelProvider: deps.controleCusto?
+        new ProvedorAgenteComOrcamento(new OpenAIProvider({apiKey:deps.apiKey!,useResponses:true}),deps.controleCusto):
+        new OpenAIProvider({apiKey:deps.apiKey!,useResponses:true}) }),
       tracingDisabled: !deps.tracesAtivos,
       traceIncludeSensitiveData: false,
       workflowName: 'Noto Assistente - Entrega A'
@@ -1071,6 +1079,13 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch (erro) {
+    if(erro instanceof PausaCustoPiloto){
+      registrar('RESPOSTA');
+      return erro.motivo==='LIMITE_TESTE'?FALA_LIMITE_TESTE:
+        erro.motivo==='SEM_RODADA'?
+          'Os testes com IA estão pausados porque não há uma rodada ativa. Não fiz nova chamada. Uma nova rodada deve ser aberta pelo responsável pela homologação.':
+        'Pausei a chamada de IA porque não consegui verificar o orçamento ou o preço do modelo. Não fiz essa chamada e não vou ultrapassar o limite por suposição.';
+    }
     if (trabalhoTurno.atual?.estado.ok) {
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
       registrar('RESPOSTA');
