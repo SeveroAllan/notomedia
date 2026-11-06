@@ -70,6 +70,8 @@ export interface DependenciasAgente {
   modeloTeste?: Model;
   /** Obrigatório nos testes pagos do piloto; se o banco falhar, não chamar IA. */
   controleCusto?:pg.Pool;
+  /** Garante que processo de piloto read-only não contorne o ledger. */
+  exigirControleCusto?:boolean;
   tracesAtivos?: boolean;
   aoDiagnostico?: (registro: DiagnosticoAgente) => void;
   registrarFerramenta?: (evento: EventoFerramenta) => void;
@@ -928,6 +930,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   if (entrada.profissionais.length > 20) {
     registrar('LIMITE_PROFISSIONAIS');
     return 'Há muitos profissionais nesta conta. Qual profissional você deseja atender primeiro?';
+  }
+  if(!deps.modeloTeste&&deps.exigirControleCusto&&!deps.controleCusto){
+    registrar('SEM_MODELO');
+    return 'Os testes com IA estão pausados: este processo não possui acesso ao controle de gastos da rodada. Não fiz chamadas pagas.';
   }
   if (!deps.modeloTeste && !deps.apiKey) {
     registrar('SEM_MODELO');
