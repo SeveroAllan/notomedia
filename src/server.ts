@@ -30,7 +30,7 @@ import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
-import { reservarCustoPiloto,liquidarCustoPiloto,exigirRodadaAtiva } from './agente/limite-gasto-rodada.js';
+import { reservarCustoPiloto,liquidarCustoPiloto } from './agente/limite-gasto-rodada.js';
 import { classificarEnvioLinkEvolution } from './whatsapp/status-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
