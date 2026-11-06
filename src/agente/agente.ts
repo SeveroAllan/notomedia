@@ -33,6 +33,10 @@ export interface EntradaAgente {
   situacaoUltimoLink?: {agenda:AgendaEscolhida;estado:string};
   trabalhos?: SituacaoTrabalhoNoto[];
 }
+type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?:string}|
+  {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
+type DecisaoPeriodo = {ok:true;nome:string;inicio:string}|{ok:false;motivo:string};
+
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
@@ -55,6 +59,9 @@ export interface DependenciasAgente {
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
+  registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
+  aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
+  aoCertificadoSeguro?: (r:OrientacaoCertificado)=>void;
   adiarConfirmacaoRegistro?: (medicoId:string)=>Promise<boolean>;
   aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean})=>void;
@@ -113,6 +120,11 @@ function exigeDecisaoVinculo(entrada:EntradaAgente,deps:DependenciasAgente):bool
     entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE'&&fonte&&
     ['tribemd','amplimed'].includes(fonte.agenda)&&
     Array.isArray(fonte.nomes)&&fonte.nomes.length>0);
+}
+
+function exigeRegistroPeriodo(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
+  return Boolean(deps.registrarPeriodoConferencia&&entrada.estadoConversa?.perguntaPendente==='periodo'&&
+    entrada.profissionais.some(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId));
 }
 
 function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
@@ -772,37 +784,74 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   }));
 
-  if (deps.consultarProntidao && entrada.painelUrl) extras.push(tool({
-    name: 'orientar_certificado_seguro',
-    description: 'Com profissional explicitamente identificado, verifica se certificado já existe; se faltar, retorna somente a página autenticada para cadastro do A1. Nunca recebe arquivo ou senha pela conversa.',
-    parameters: z.object({ profissional:z.string() }),
-    async execute({profissional}) {
-      const inicio=Date.now();
-      const r=identificar(profissional,profissionais);
-      const medico=r.encontrados[0];
-      if (!medico || r.encontrados.length!==1 ||
-          entrada.estadoConversa?.profissionalConfirmadoId!==medico.id) {
-        registrar('orientar_certificado_seguro','DEPENDENCIA_PROFISSIONAL',inicio);
-        return {ok:false,motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'};
+  let periodoFinalizado=false;
+  async function orientarCertificado(profissional:string):Promise<OrientacaoCertificado>{
+    const inicio=Date.now();
+    const encontrados=identificar(profissional,profissionais).encontrados;
+    const medico=encontrados[0];
+    const concluir=(r:OrientacaoCertificado)=>{deps.aoCertificadoSeguro?.(r);return r;};
+    if(!medico||encontrados.length!==1||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id){
+      registrar('orientar_certificado_seguro','DEPENDENCIA_PROFISSIONAL',inicio);
+      return concluir({ok:false,nome:'',motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'});
+    }
+    let certificadoValido:boolean;
+    try{certificadoValido=(await deps.consultarProntidao!(medico.id)).certificadoValido;}
+    catch(erro){
+      const codigo=(erro as {code?:unknown})?.code;
+      console.warn('NOTO_CERTIFICADO_SEGURO',JSON.stringify({causa:'PRONTIDAO_INDISPONIVEL',
+        codigo:typeof codigo==='string'&&/^[0-9A-Z]{5}$/.test(codigo)?codigo:'INDEFINIDO'}));
+      registrar('orientar_certificado_seguro','FERRAMENTA_INDISPONIVEL',inicio);
+      return concluir({ok:false,nome:medico.nome,motivo:'PRONTIDAO_INDISPONIVEL'});
+    }
+    if(certificadoValido){
+      registrar('orientar_certificado_seguro','CERTIFICADO_EXISTENTE',inicio);
+      deps.aoComprovante?.({tipo:'verificar_certificado',profissionalId:medico.id});
+      return concluir({ok:true,nome:medico.nome,certificadoValido:true});
+    }
+    try{
+      const origem=new URL(entrada.painelUrl??'');
+      if(origem.protocol!=='https:'||origem.username||origem.password||origem.pathname!=='/'||origem.search||origem.hash)
+        throw new Error('ORIGEM_NAO_CONFIAVEL');
+      const url=linkCertificadoMedico(origem.origin,medico.id);
+      registrar('orientar_certificado_seguro','CERTIFICADO_PENDENTE',inicio);
+      deps.aoComprovante?.({tipo:'verificar_certificado',profissionalId:medico.id});
+      return concluir({ok:true,nome:medico.nome,certificadoValido:false,url});
+    }catch{
+      console.warn('NOTO_CERTIFICADO_SEGURO',JSON.stringify({causa:'ORIGEM_NAO_CONFIAVEL'}));
+      registrar('orientar_certificado_seguro','FERRAMENTA_INDISPONIVEL',inicio);
+      return concluir({ok:false,nome:medico.nome,motivo:'ORIGEM_NAO_CONFIAVEL'});
+    }
+  }
+  if(deps.consultarProntidao)extras.push(tool({
+    name:'orientar_certificado_seguro',
+    description:'Verifica o certificado do médico confirmado e retorna a página autenticada se faltar. Não recebe arquivo ou senha pela conversa. Uma falha de prontidão não prova indisponibilidade da página.',
+    parameters:z.object({profissional:z.string()}),
+    execute:async({profissional})=>orientarCertificado(profissional)
+  }));
+  if(deps.registrarPeriodoConferencia)extras.push(tool({
+    name:'registrar_periodo_conferencia',
+    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Ao registrar, continue com certificado sem voltar ao CRM adiado.',
+    parameters:z.object({decisao:z.enum(['definir','esclarecer','outro_assunto']),inicio:z.string().nullable()}),
+    async execute({decisao,inicio}){
+      const comeco=Date.now();
+      if(decisao!=='definir'){
+        deps.aoPeriodoConferencia?.({ok:false,motivo:decisao});
+        return {ok:false,motivo:decisao,orientacao:'Converse sobre a dúvida ou o assunto atual. Não conclua nada sobre emissão.'};
       }
-      try {
-        const status=await deps.consultarProntidao!(medico.id);
-        if(status.certificadoValido) {
-          registrar('orientar_certificado_seguro','CERTIFICADO_EXISTENTE',inicio);
-          deps.aoComprovante?.({ tipo: 'verificar_certificado', profissionalId: medico.id });
-          return {ok:true,certificadoValido:true,orientacao:'Certificado válido; não pedir novo envio.'};
-        }
-        const origem=new URL(entrada.painelUrl!);
-        if(origem.protocol!=='https:'||origem.username||origem.password||origem.pathname!=='/'||origem.search||origem.hash)
-          throw new Error('ORIGEM_NAO_CONFIAVEL');
-        const url=linkCertificadoMedico(origem.origin,medico.id);
-        registrar('orientar_certificado_seguro','CERTIFICADO_PENDENTE',inicio);
-        deps.aoComprovante?.({ tipo: 'verificar_certificado', profissionalId: medico.id });
-        return {ok:true,certificadoValido:false,orientacao:'Abrir página autenticada, nunca enviar senha ou A1 pela conversa.',url};
-      }catch {
-        registrar('orientar_certificado_seguro','FERRAMENTA_INDISPONIVEL',inicio);
-        return {ok:false,motivo:'PAGINA_SEGURA_INDISPONIVEL'};
+      periodoFinalizado=true;
+      const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
+      const gravado=medico&&inicio&&exigeRegistroPeriodo(entrada,deps)&&
+        await deps.registrarPeriodoConferencia!(medico.id,inicio).catch(()=>false);
+      if(!gravado){
+        registrar('registrar_periodo_conferencia','DEPENDENCIA_CONFIRMACAO',comeco);
+        deps.aoPeriodoConferencia?.({ok:false,motivo:'PERIODO_NAO_REGISTRADO'});
+        return {ok:false,motivo:'PERIODO_NAO_REGISTRADO'};
       }
+      registrar('registrar_periodo_conferencia','PERIODO_REGISTRADO',comeco);
+      deps.aoPeriodoConferencia?.({ok:true,nome:medico!.nome,inicio:inicio!});
+      if(deps.consultarProntidao)await orientarCertificado(medico!.nome);
+      return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:false,
+        orientacao:'Só o período solicitado foi guardado. Nenhuma conclusão sobre notas ou emissão. CRM adiado permanece pendente.'};
     }
   }));
 
@@ -817,6 +866,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         // O SDK exige exatamente esta ferramenta no PRIMEIRO turno do modelo.
         toolChoice:'confirmar_profissionais_descobertos',
         parallelToolCalls:false
+      } : exigeRegistroPeriodo(entrada,deps)?{
+        toolChoice:'registrar_periodo_conferencia',parallelToolCalls:false
       } : exigeRevisaoRegistro(entrada,deps)?{
         toolChoice:'revisar_registro_profissional',parallelToolCalls:false
       } : {})
@@ -825,7 +876,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
-    toolUseBehavior:{stopAtToolNames:['confirmar_profissionais_descobertos']}
+    toolUseBehavior:async(_contexto,resultados)=>periodoFinalizado||resultados.some(r=>r.tool.name==='confirmar_profissionais_descobertos')
+      ?{isFinalOutput:true,isInterrupted:undefined,finalOutput:''}
+      :{isFinalOutput:false,isInterrupted:undefined}
   });
 }
 
@@ -933,6 +986,16 @@ export function acompanhamentoVerificado(
   return null;
 }
 
+function descreverCertificado(r:OrientacaoCertificado):string{
+  if(!r.ok){
+    if(r.motivo==='IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA')return 'Preciso identificar o médico confirmado antes de orientar o certificado. Qual profissional você quer configurar?';
+    if(r.motivo==='PRONTIDAO_INDISPONIVEL')return 'Não consegui consultar a situação do certificado. Isso não comprova que a página esteja indisponível. O próximo passo é recuperar essa consulta e retomar o certificado; o vínculo e o CRM pendente ficam preservados.';
+    return 'O endereço da página segura precisa ser corrigido na configuração do Noto. O próximo passo é conferir a origem HTTPS e retomar o certificado por essa página. O vínculo e o CRM pendente ficam preservados; não envie o A1 ou a senha pela conversa.';
+  }
+  if(r.certificadoValido)return 'O certificado está válido para '+r.nome+'. Podemos seguir com as demais pendências do onboarding, mantendo o CRM pendente.';
+  return 'Para cadastrar o certificado de '+r.nome+', abra esta página autenticada. O A1 e a senha entram somente nela. O CRM pode continuar pendente.\n'+r.url;
+}
+
 /** Traduz apenas evidência da ferramenta, mesmo quando o Runner é interrompido.
  * Não declara vínculo executado se só houve decisão ou erro de dependência. */
 function explicarResultadoVinculo(
@@ -1027,6 +1090,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar('SEM_MODELO');
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
+  const periodoTurno:{atual?:DecisaoPeriodo}={};
+  const certificadoTurno:{atual?:OrientacaoCertificado}={};
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
   const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
   const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}}={};
@@ -1054,6 +1119,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
       aoVinculoResultado:r=>{vinculoTurno.atual=r;},
       aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
+      aoPeriodoConferencia:r=>{periodoTurno.atual=r;},
+      aoCertificadoSeguro:r=>{certificadoTurno.atual=r;},
       aoLinkRegistro:r=>{linkRegistroTurno.atual=r;},
       registrarFerramenta: e => ferramentas.push(e)
     });
@@ -1079,8 +1146,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4),
         registrosPublicosEmRevisao: Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).slice(0,8)
           .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,confirmacaoAdiada:r.confirmacaoAdiada===true,
-            candidatos:r.candidatos?.map(c=>({crm:c.crm,rqes:c.rqes,origem:c.origem})),
-            proposta:r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
+            candidatos:r.confirmacaoAdiada?undefined:r.candidatos?.map(c=>({crm:c.crm,rqes:c.rqes,origem:c.origem})),
+            proposta:!r.confirmacaoAdiada&&r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
       }) }
     ], { maxTurns: 6, signal: abort.signal });
     const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
@@ -1094,6 +1161,27 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(exigeDecisaoVinculo(entrada,deps)&&!vinculoTurno.atual){
       registrar('CONFIRMACAO_SEM_FERRAMENTA',uso);
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
+    }
+    if(exigeRegistroPeriodo(entrada,deps)&&!periodoTurno.atual){
+      registrar('RESPOSTA');
+      return 'Ainda não registrei o período solicitado. A data não permite concluir nada sobre suas notas. Qual é a data inicial da conferência?';
+    }
+    if(periodoTurno.atual?.ok){
+      const p=periodoTurno.atual;
+      registrar('RESPOSTA',uso);
+      const data=p.inicio.split('-').reverse().join('/');
+      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. Ainda não consultei atendimentos ou notas.'+
+        '\n'+(certificadoTurno.atual?descreverCertificado(certificadoTurno.atual):'Podemos continuar com o certificado, mantendo o CRM pendente.');
+    }
+    if(certificadoTurno.atual&&!revisaoTurno.atual){
+      registrar('RESPOSTA',uso);
+      return descreverCertificado(certificadoTurno.atual);
+    }
+    if(periodoTurno.atual&&!periodoTurno.atual.ok){
+      registrar('RESPOSTA',uso);
+      return periodoTurno.atual.motivo==='outro_assunto'
+        ?resposta&&respostaCompativelComFerramentas(resposta,ferramentas)?resposta:'O período continua pendente. Podemos seguir com o certificado; você quer conferir essa etapa agora?'
+        :'Ainda não registrei o período. Qual é a data inicial que você quer usar para conferir os atendimentos?';
     }
     if(vinculoTurno.atual){
       registrar('RESPOSTA',uso);

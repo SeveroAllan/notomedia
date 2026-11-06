@@ -142,6 +142,47 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     modeloTeste.assertComplete();
   });
 
+  it('período da conferência persiste no webhook sem virar histórico de emissão ou reabrir CRM',async()=>{
+    const id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const pesquisa={nome:'Alice Souza',estado:'aguardando_confirmacao',confirmacaoAdiada:true,
+      candidatos:[{crm:'36948/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]};
+    let estado:Record<string,unknown>={profissionalConfirmadoId:id,faseAgenda:'VINCULO_CONFIRMADO',
+      perguntaPendente:'periodo',pesquisasRegistro:{[id]:pesquisa}};
+    const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-a'}]};
+      if(sql.startsWith('select id,nome_completo from medicos'))return {rows:[{id,nome_completo:'Alice Souza'}]};
+      if(sql.startsWith('select estado from noto_agent_conversas'))return {rows:[{estado:structuredClone(estado)}]};
+      if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
+      if(sql.startsWith('update public.noto_agent_conversas c set')){
+        estado={...estado,periodoConferencia:{profissionalId:params[1],inicio:params[2]},perguntaPendente:null};
+        return {rows:[{conta_id:'conta-a'}]};
+      }
+      if(sql.startsWith('insert into noto_agent_conversas')){
+        const delta=JSON.parse(String(params[1]));
+        expect(delta).not.toHaveProperty('periodoConferencia');
+        expect(delta).not.toHaveProperty('perguntaPendente');
+        expect(delta).not.toHaveProperty('pesquisasRegistro');
+        estado={...estado,...delta};return {rows:[]};
+      }
+      if(sql.startsWith('update noto_agent_mensagens'))return {rows:[]};
+      throw Error('SQL não previsto');
+    });
+    const modeloTeste=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
+      decisao:'definir',inicio:'2026-11-01'
+    },{callId:'periodo'})]]);
+    const {app,enviar}=preparar({pool:{query} as unknown as pg.Pool,persistirConversa:true,
+      modeloTeste,painelUrl:'https://homologacao.example.test',consultarProntidao:async()=>({
+        certificadoValido:false,dadosProfissionaisCompletos:false,dadosFiscaisConfirmados:false,liberadoParaEmitir:false})});
+    await comServidor(app,async postar=>expect((await postar({...evento,data:{...evento.data,
+      message:{conversation:'Desde 1 de novembro de 2026.'}}})).status).toBe(200));
+    expect(estado).toMatchObject({periodoConferencia:{profissionalId:id,inicio:'2026-11-01'},
+      perguntaPendente:null,pesquisasRegistro:{[id]:pesquisa}});
+    const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
+    expect(texto).toContain('etapa=certificado');
+    expect(texto).not.toMatch(/não emite|36948/);
+    modeloTeste.assertComplete();
+  });
+
   it('rejeita segredo inválido antes de consultar banco ou modelo', async () => {
     const { app, query, modeloTeste, enviar } = preparar();
     await comServidor(app, async postar => expect((await postar(evento, 'errado')).status).toBe(401));

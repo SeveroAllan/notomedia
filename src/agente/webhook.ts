@@ -12,7 +12,7 @@ import {
 } from './tarefas.js';
 import { separarBaloes, reacaoContextual } from './baloes.js';
 import {
-  lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
+  registrarPeriodoConferencia,lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
   finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa
 } from './estado-conversa.js';
 import type { Model } from '@openai/agents';
@@ -323,6 +323,10 @@ export function criarRouterWebhookAgente(deps: {
           solicitarLinkRegistro:(medicoId:string,acao:'solicitar'|'consultar'|'substituir'='solicitar')=>
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
+        ...(contaId&&deps.persistirConversa?{
+          registrarPeriodoConferencia:(profissionalId:string,inicio:string)=>
+            registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio)
+        }:{}),
         ...(contaId&&deps.adiarConfirmacaoRegistro?{
           adiarConfirmacaoRegistro:(medicoId:string)=>deps.adiarConfirmacaoRegistro!(contaId!,medicoId)
         }:{}),
@@ -416,6 +420,8 @@ export function criarRouterWebhookAgente(deps: {
           const delta:EstadoConversa={...novo,tarefasPendentes};
           // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
           delete delta.pesquisasRegistro;
+          delete delta.periodoConferencia;
+          if(estado.perguntaPendente==='periodo')delete delta.perguntaPendente;
           if(!vinculoDaMensagem.atual){
             delete delta.profissionalConfirmadoId;
             if(!descobertaVerificada){
