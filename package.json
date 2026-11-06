@@ -16,7 +16,8 @@
     "migrate:cadastro": "node scripts/migrar-cadastro-certificado.mjs",
     "retry:nota": "node scripts/reprocessar-nota.mjs",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
-    "start:piloto-agente": "node --import tsx src/agente/piloto-start.ts"
+    "start:piloto-agente": "node --import tsx src/agente/piloto-start.ts",
+    "piloto:rodada": "node scripts/rodada-ia-noto.mjs"
   },
   "keywords": [
     "nfse",
