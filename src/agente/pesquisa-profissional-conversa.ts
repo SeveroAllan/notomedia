@@ -16,6 +16,7 @@ export interface PesquisaRegistroConversa {
   candidatos?:SugestaoRegistro[];
   proposta?:{crm:string;rqe?:string;origem:'correcao'|'manual'};
   tentativas?:number;
+  confirmacaoAdiada?:boolean;
   proximaTentativaEm?:string;
   reservadoEm?:string;
   envio?:'aceito_api'|'incerto';
@@ -58,6 +59,7 @@ export function leituraPesquisaEstado(obj:unknown):Record<string,PesquisaRegistr
       ?e['proposta'] as Record<string,unknown>:null;
     resultado[id]={
       nome:String(e['nome']),estado:e['estado'] as StatusPesquisa,
+      ...(e['confirmacaoAdiada']===true?{confirmacaoAdiada:true}:{}),
       ...(razoes.includes(String(e['razao']))?{razao:e['razao'] as RazaoPesquisa}:{}),
       ...(candidatos.length?{candidatos}:{}),
       ...((proposta?.['origem']==='correcao'||proposta?.['origem']==='manual')&&typeof proposta['crm']==='string'&&
@@ -295,6 +297,24 @@ export async function notificarPesquisaRegistro(
   finally{await marcarAvisoPesquisa(pool,tarefa,aceito);}
   return true;
 }
+/** Adiar não aprova nem recusa: mantém proposta, tentativas e vínculo. */
+export async function adiarConfirmacaoRegistro(
+  pool:Banco,contaId:string,medicoId:string
+):Promise<boolean>{
+  const r=await pool.query([
+    'update public.noto_agent_conversas c set',
+    "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2,'confirmacaoAdiada'],",
+    "'true'::jsonb,true),atualizado_em=now()",
+    'where c.conta_id=$1',
+    "and c.estado#>>array['pesquisasRegistro',$2,'estado']='aguardando_confirmacao'",
+    "and c.estado->>'profissionalConfirmadoId'=$2",
+    'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1',
+    "and m.nome_completo=c.estado#>>array['pesquisasRegistro',$2,'nome'])",
+    'returning conta_id'
+  ].join('\n'),[contaId,medicoId]);
+  return r.rows.length===1;
+}
+
 export async function proporCorrecaoPesquisa(
   pool:Banco,contaId:string,medicoId:string,campos:{crm:string;rqe?:string}
 ):Promise<boolean>{

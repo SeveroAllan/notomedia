@@ -1,7 +1,7 @@
 import {describe,expect,it,vi} from 'vitest';
 import {ScriptedModel,assistantMessage,functionCall} from '@openai/agents/testing';
 import {decidirVinculo} from '../src/agente/confirmacao-contextual.js';
-import {responderAgente} from '../src/agente/agente.js';
+import {criarAgenteNoto,responderAgente} from '../src/agente/agente.js';
 import type {EstadoConversa} from '../src/agente/estado-conversa.js';
 
 const ANA='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
@@ -162,6 +162,70 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     modelo.assertComplete();
     return {resposta,aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais,modelo};
   }
+  it('dúvida exige classificação, adia sem aprovar ou recusar e continua pelo período',async()=>{
+    const anterior=structuredClone(sugestao);
+    const adiarConfirmacaoRegistro=vi.fn().mockResolvedValue(true);
+    const aprovarRegistroProfissional=vi.fn();
+    const solicitarLinkRegistro=vi.fn();
+    const salvarDadosProfissionais=vi.fn();
+    const modelo=new ScriptedModel([
+      [functionCall('revisar_registro_profissional',{profissional:'Ana',decisao:'adiar'},{callId:'duvida'})],
+      [assistantMessage('Vinculei e salvei o CRM pesquisado.')]
+    ]);
+    const resposta=await responderAgente({texto:'Não sei confirmar esses dados agora.',
+      profissionais,estadoConversa:sugestao},{modeloTeste:modelo,consultarStatus:status,
+      adiarConfirmacaoRegistro,aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais});
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('revisar_registro_profissional');
+    expect(adiarConfirmacaoRegistro).toHaveBeenCalledExactlyOnceWith(ANA);
+    expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(solicitarLinkRegistro).not.toHaveBeenCalled();
+    expect(salvarDadosProfissionais).not.toHaveBeenCalled();
+    expect(sugestao).toEqual(anterior);
+    expect(resposta).toContain('confirmação do CRM/RQE pendente');
+    expect(resposta).toContain('Dra. Ana Souza continua vinculada');
+    expect(resposta).toContain('Desde quando você quer conferir os atendimentos');
+    expect(resposta).not.toContain('Não consegui confirmar isso');
+    expect(resposta).not.toContain('salvei o CRM');
+    modelo.assertComplete();
+  });
+  it('adiar permite conferir certificado no mesmo atendimento sem CRM',async()=>{
+    const consultarProntidao=vi.fn().mockResolvedValue({certificadoValido:true,
+      dadosProfissionaisCompletos:false,dadosFiscaisConfirmados:false,liberadoParaEmitir:false});
+    const modelo=new ScriptedModel([
+      [functionCall('revisar_registro_profissional',{profissional:'Ana',decisao:'adiar'},{callId:'adiar'})],
+      [functionCall('orientar_certificado_seguro',{profissional:'Ana'},{callId:'certificado'})],
+      [assistantMessage('Seu certificado está válido. Desde quando você quer conferir os atendimentos?')]
+    ]);
+    const aprovarRegistroProfissional=vi.fn();
+    const resposta=await responderAgente({texto:'Não consigo confirmar por enquanto.',profissionais,
+      estadoConversa:sugestao,painelUrl:'https://noto.example.test'},{modeloTeste:modelo,consultarStatus:status,
+      adiarConfirmacaoRegistro:async()=>true,aprovarRegistroProfissional,consultarProntidao});
+    expect(consultarProntidao).toHaveBeenCalledExactlyOnceWith(ANA);
+    expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(resposta).toContain('pendente');
+    expect(resposta).toContain('certificado está válido');
+    expect(resposta).toContain('Desde quando');
+    modelo.assertComplete();
+  });
+  it('adiamento já registrado libera os próximos assuntos sem forçar revisão',()=>{
+    const estado=structuredClone(sugestao);
+    estado.pesquisasRegistro![ANA]!.confirmacaoAdiada=true;
+    const agente=criarAgenteNoto({texto:'Vamos ver o certificado.',profissionais,estadoConversa:estado},
+      {consultarStatus:status,adiarConfirmacaoRegistro:async()=>true,aprovarRegistroProfissional:vi.fn()});
+    expect(agente.modelSettings.toolChoice).toBeUndefined();
+  });
+  it('falha ao registrar adiamento não anuncia persistência nem aprova',async()=>{
+    const aprovarRegistroProfissional=vi.fn();
+    const modelo=new ScriptedModel([
+      [functionCall('revisar_registro_profissional',{profissional:'Ana',decisao:'adiar'},{callId:'falha'})],
+      [assistantMessage('Deixei tudo salvo.')]
+    ]);
+    const resposta=await responderAgente({texto:'Vou conferir depois.',profissionais,estadoConversa:sugestao},
+      {modeloTeste:modelo,consultarStatus:status,adiarConfirmacaoRegistro:async()=>false,aprovarRegistroProfissional});
+    expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(resposta).not.toContain('Deixei a confirmação');
+    modelo.assertComplete();
+  });
   it('aprovação natural grava apenas proposta persistida, não valores do modelo',async()=>{
     const r=await revisar('Sim, são esses os dados que eu confirmei','aprovar');
     expect(r.aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith(ANA);

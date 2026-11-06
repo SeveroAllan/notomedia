@@ -76,6 +76,7 @@ export function criarRouterWebhookAgente(deps: {
   agendarPesquisa?: (contaId:string,medicoId:string,nome:string) => Promise<'agendada'|'ja_existe'|'indisponivel'>;
   solicitarLinkRegistro?: (contaId:string,medicoId:string,telefone:string,
     acao:'solicitar'|'consultar'|'substituir',mensagemId:string)=>Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
+  adiarConfirmacaoRegistro?: (contaId:string,medicoId:string)=>Promise<boolean>;
   aprovarRegistroProfissional?: (contaId:string,medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   proporCorrecaoPesquisa?: (contaId:string,medicoId:string,dados:{crm:string;rqe?:string})=>Promise<boolean>;
   concluirRevisaoPesquisa?: (contaId:string,medicoId:string)=>Promise<boolean>;
@@ -322,6 +323,9 @@ export function criarRouterWebhookAgente(deps: {
           solicitarLinkRegistro:(medicoId:string,acao:'solicitar'|'consultar'|'substituir'='solicitar')=>
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
+        ...(contaId&&deps.adiarConfirmacaoRegistro?{
+          adiarConfirmacaoRegistro:(medicoId:string)=>deps.adiarConfirmacaoRegistro!(contaId!,medicoId)
+        }:{}),
         ...(contaId&&deps.aprovarRegistroProfissional?{
           aprovarRegistroProfissional:(medicoId:string)=>
             deps.aprovarRegistroProfissional!(contaId!,medicoId)
@@ -410,6 +414,8 @@ export function criarRouterWebhookAgente(deps: {
           // antigo de descoberta/vínculo. O worker ou a ferramenta gravam
           // o fato diretamente; saves tardios não podem desfazer o progresso.
           const delta:EstadoConversa={...novo,tarefasPendentes};
+          // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
+          delete delta.pesquisasRegistro;
           if(!vinculoDaMensagem.atual){
             delete delta.profissionalConfirmadoId;
             if(!descobertaVerificada){

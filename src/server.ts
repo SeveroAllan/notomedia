@@ -28,7 +28,7 @@ import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
 import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
-import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
+import { adiarConfirmacaoRegistro,agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
 import { reservarCustoPiloto,liquidarCustoPiloto } from './agente/limite-gasto-rodada.js';
@@ -387,6 +387,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(!permitido||!cofres.links)return {ok:false,motivo:'ENVIO_INDISPONIVEL'};
         return cofres.links.solicitarLinkRegistro(contaId,medicoId,telefone,acao,mensagemId);
       },
+      adiarConfirmacaoRegistro:(contaId:string,medicoId:string)=>
+        adiarConfirmacaoRegistro(pool,contaId,medicoId),
       aprovarRegistroProfissional:(contaId:string,medicoId:string)=>
         aprovarRegistroProfissional(pool,contaId,medicoId),
       proporCorrecaoPesquisa:(contaId:string,medicoId:string,dados:{crm:string;rqe?:string}) =>
