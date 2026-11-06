@@ -896,7 +896,7 @@ function explicarResultadoVinculo(
     {ok:false;motivo:string}
 ):string{
   if(!v.ok)return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
-    ?'Ainda não confirmei a conexão necessária para vincular o profissional. Não consultei nem validei CRM ou RQE.'
+    ?'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
     :v.motivo==='VINCULO_JA_PROCESSADO_NO_TURNO'
       ?'A solicitação de vínculo já foi processada neste turno. Não repeti o cadastro nem a pesquisa.'
       :explicarVinculoNaoExecutado(v.motivo);
