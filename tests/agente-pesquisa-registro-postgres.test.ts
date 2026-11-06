@@ -102,6 +102,32 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       pesquisasRegistro:{[ANA]:{confirmacaoAdiada:true,estado:'aguardando_confirmacao'}}});
     expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-02')).toBe(false);
 
+    // Mesmo snapshot observado em homolog: vínculo e CRM adiado, pergunta perdida.
+    for(const pergunta of [undefined,null]){
+      const legado=structuredClone(depoisAdiamento);
+      delete legado.periodoConferencia;
+      if(pergunta===undefined)delete legado.perguntaPendente;
+      else legado.perguntaPendente=null;
+      await db.query('update public.noto_agent_conversas set estado=$2 where conta_id=$1',[CONTA,legado]);
+      expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-01')).toBe(true);
+      const salvo=(await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+      expect(salvo).toEqual({...legado,perguntaPendente:null,
+        periodoConferencia:{profissionalId:ANA,inicio:'2026-11-01'}});
+    }
+    for(const alteracao of [
+      {faseAgenda:'DESCOBERTA_PENDENTE'},
+      {perguntaPendente:'agenda'},
+      {pesquisasRegistro:{[ANA]:{...depoisAdiamento.pesquisasRegistro[ANA],confirmacaoAdiada:false}}},
+      {pesquisasRegistro:{[ANA]:{...depoisAdiamento.pesquisasRegistro[ANA],nome:'Outro Profissional'}}},
+      {periodoConferencia:{profissionalId:ANA,inicio:'2026-10-01'}}
+    ]){
+      const conflito={...depoisAdiamento,perguntaPendente:null,...alteracao};
+      await db.query('update public.noto_agent_conversas set estado=$2 where conta_id=$1',[CONTA,conflito]);
+      expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-01')).toBe(false);
+      expect((await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado).toEqual(conflito);
+    }
+    await db.query('update public.noto_agent_conversas set estado=$2 where conta_id=$1',[CONTA,periodoSalvo]);
+
     expect(await proporCorrecaoPesquisa(db as unknown as pg.Pool,CONTA,ANA,{
       crm:'66666/RS',rqe:'777'
     })).toBe(true);

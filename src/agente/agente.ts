@@ -122,9 +122,20 @@ function exigeDecisaoVinculo(entrada:EntradaAgente,deps:DependenciasAgente):bool
     Array.isArray(fonte.nomes)&&fonte.nomes.length>0);
 }
 
+function profissionalComVinculoConfirmado(entrada:EntradaAgente){
+  if(entrada.semConta||entrada.estadoConversa?.faseAgenda!=='VINCULO_CONFIRMADO')return undefined;
+  return entrada.profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId&&nomeProfissionalValido(p.nome));
+}
+
 function exigeRegistroPeriodo(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
-  return Boolean(deps.registrarPeriodoConferencia&&entrada.estadoConversa?.perguntaPendente==='periodo'&&
-    entrada.profissionais.some(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId));
+  const e=entrada.estadoConversa;
+  const medico=entrada.profissionais.find(p=>p.id===e?.profissionalConfirmadoId);
+  const pesquisa=medico?e?.pesquisasRegistro?.[medico.id]:undefined;
+  const legadoSemPergunta=profissionalComVinculoConfirmado(entrada)&&e?.perguntaPendente==null&&
+    !e?.periodoConferencia&&pesquisa?.nome===medico?.nome&&
+    pesquisa?.estado==='aguardando_confirmacao'&&pesquisa.confirmacaoAdiada===true;
+  return Boolean(deps.registrarPeriodoConferencia&&medico&&
+    (e?.perguntaPendente==='periodo'||legadoSemPergunta));
 }
 
 function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
@@ -835,6 +846,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     async execute({decisao,inicio}){
       const comeco=Date.now();
       if(decisao!=='definir'){
+        registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
         deps.aoPeriodoConferencia?.({ok:false,motivo:decisao});
         return {ok:false,motivo:decisao,orientacao:'Converse sobre a dúvida ou o assunto atual. Não conclua nada sobre emissão.'};
       }
@@ -1060,7 +1072,15 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
     deps.aoDiagnostico?.({
       codigo,ferramentas:[...ferramentas],uso,duracaoMs:Math.max(0,Date.now()-inicio),
-      ...(temFerramenta||temPendencia||codigo==='CONFIRMACAO_SEM_FERRAMENTA'?{
+      estadoOnboarding:{
+        vinculoConfirmadoNaConta:Boolean(profissionalComVinculoConfirmado(entrada)),
+        perguntaPendente:entrada.estadoConversa?.perguntaPendente===undefined?'AUSENTE':entrada.estadoConversa.perguntaPendente,
+        periodoRegistrado:Boolean(entrada.estadoConversa?.periodoConferencia&&
+          entrada.estadoConversa.periodoConferencia.profissionalId===entrada.estadoConversa.profissionalConfirmadoId),
+        crmAdiado:Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true),
+        ferramentaPeriodoObrigatoria:exigeRegistroPeriodo(entrada,deps)
+      },
+      ...(temFerramenta||temPendencia||entrada.estadoConversa?.faseAgenda==='VINCULO_CONFIRMADO'||codigo==='CONFIRMACAO_SEM_FERRAMENTA'?{
         estadoVinculo:{
           fase:entrada.estadoConversa?.faseAgenda??'AUSENTE',
           fonte:entrada.estadoConversa?.descoberta?.agenda??'AUSENTE',
@@ -1142,10 +1162,16 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
           Object.entries(entrada.estadoConversa ?? {}).filter(([campo]) =>
             campo !== 'tarefasPendentes' && campo !== 'pesquisasRegistro')
         ),
+        vinculoProfissionalVerificado:profissionalComVinculoConfirmado(entrada)
+          ?{nome:profissionalComVinculoConfirmado(entrada)!.nome,estado:'CONFIRMADO',
+            novaConfirmacaoNecessaria:false}:null,
+        periodoSolicitado:entrada.estadoConversa?.periodoConferencia
+          ?{inicio:entrada.estadoConversa.periodoConferencia.inicio,significado:'ESCOPO_DE_CONFERENCIA_PEDIDO',
+            comprovaAusenciaDeNotas:false}:null,
         situacaoUltimoLink: entrada.situacaoUltimoLink??null,
         trabalhosEmAndamento: (entrada.trabalhos??[]).slice(0,4),
         registrosPublicosEmRevisao: Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).slice(0,8)
-          .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,confirmacaoAdiada:r.confirmacaoAdiada===true,
+          .map(r=>({profissional:r.nome,etapa:r.estado,resultado:r.razao,confirmacaoAdiada:r.estado==='aguardando_confirmacao'&&r.confirmacaoAdiada===true,
             candidatos:r.confirmacaoAdiada?undefined:r.candidatos?.map(c=>({crm:c.crm,rqes:c.rqes,origem:c.origem})),
             proposta:!r.confirmacaoAdiada&&r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
       }) }
@@ -1163,7 +1189,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
     }
     if(exigeRegistroPeriodo(entrada,deps)&&!periodoTurno.atual){
-      registrar('RESPOSTA');
+      registrar('PERIODO_SEM_FERRAMENTA',uso);
       return 'Ainda não registrei o período solicitado. A data não permite concluir nada sobre suas notas. Qual é a data inicial da conferência?';
     }
     if(periodoTurno.atual?.ok){
@@ -1177,12 +1203,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA',uso);
       return descreverCertificado(certificadoTurno.atual);
     }
-    if(periodoTurno.atual&&!periodoTurno.atual.ok){
+    if(periodoTurno.atual&&!periodoTurno.atual.ok&&periodoTurno.atual.motivo!=='outro_assunto'){
       registrar('RESPOSTA',uso);
-      return periodoTurno.atual.motivo==='outro_assunto'
-        ?resposta&&respostaCompativelComFerramentas(resposta,ferramentas)?resposta:'O período continua pendente. Podemos seguir com o certificado; você quer conferir essa etapa agora?'
-        :'Ainda não registrei o período. Qual é a data inicial que você quer usar para conferir os atendimentos?';
+      return 'Ainda não registrei o período. Qual é a data inicial que você quer usar para conferir os atendimentos?';
     }
+
     if(vinculoTurno.atual){
       registrar('RESPOSTA',uso);
       return explicarResultadoVinculo(vinculoTurno.atual);
@@ -1262,6 +1287,25 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);
       return narracao;
+    }
+    // Sem ferramenta, a fala livre não pode reescrever vínculo ou histórico fiscal.
+    // Os fatos abaixo são do estado da conta; nenhuma data é prova de emissão.
+    const confirmado=profissionalComVinculoConfirmado(entrada);
+    const crmAdiado=Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true);
+    const apenasClassificacao=ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO');
+    if(apenasClassificacao&&(confirmado||crmAdiado||entrada.estadoConversa?.perguntaPendente==='periodo')){
+      registrar('RESPOSTA_POR_ESTADO',uso);
+      if(!confirmado)return 'Não consegui conferir o vínculo do profissional no estado atual. Antes de avançar, precisamos verificar esse vínculo na conta. A data informada não permite concluir nada sobre emissão de notas.';
+      const e=entrada.estadoConversa!;
+      const periodo=e.periodoConferencia?.profissionalId===confirmado.id?e.periodoConferencia:null;
+      const vinculo=confirmado.nome+' já está vinculada à sua conta.';
+      const pesquisa=e.pesquisasRegistro?.[confirmado.id];
+      const crm=pesquisa?.estado==='aguardando_confirmacao'&&pesquisa.confirmacaoAdiada
+        ?' A confirmação do CRM/RQE continua adiada.':'';
+      return vinculo+crm+' Ainda não consultei atendimentos ou notas neste turno.\n'+
+        (periodo?'O início do período solicitado é '+periodo.inicio.split('-').reverse().join('/')+
+          '. Podemos seguir com a verificação do certificado?'
+          :'Qual é a data inicial do período que você quer conferir nos atendimentos?');
     }
     if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);

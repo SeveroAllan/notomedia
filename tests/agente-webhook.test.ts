@@ -142,12 +142,12 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     modeloTeste.assertComplete();
   });
 
-  it('período da conferência persiste no webhook sem virar histórico de emissão ou reabrir CRM',async()=>{
+  it.each(['periodo',null,undefined] as const)('período persiste sem histórico de emissão ou reabrir CRM (pergunta=%s)',async(pergunta)=>{
     const id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const pesquisa={nome:'Alice Souza',estado:'aguardando_confirmacao',confirmacaoAdiada:true,
       candidatos:[{crm:'36948/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]};
     let estado:Record<string,unknown>={profissionalConfirmadoId:id,faseAgenda:'VINCULO_CONFIRMADO',
-      perguntaPendente:'periodo',pesquisasRegistro:{[id]:pesquisa}};
+      ...(pergunta!==undefined?{perguntaPendente:pergunta}:{}),pesquisasRegistro:{[id]:pesquisa}};
     const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
       if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-a'}]};
       if(sql.startsWith('select id,nome_completo from medicos'))return {rows:[{id,nome_completo:'Alice Souza'}]};
@@ -180,6 +180,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
     expect(texto).toContain('etapa=certificado');
     expect(texto).not.toMatch(/não emite|36948/);
+    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
     modeloTeste.assertComplete();
   });
 
