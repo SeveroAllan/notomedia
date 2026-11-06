@@ -1628,6 +1628,7 @@
       else localStorage.removeItem('notomed_sessao');
     } catch { localStorage.removeItem('notomed_sessao'); }
     const medicoIdAlvoUrl = new URLSearchParams(window.location.search).get('medicoId');
+    const certificadoSolicitadoUrl = new URLSearchParams(window.location.search).get('etapa') === 'certificado';
     const medicoIdSelecionado = () => medicoIdAlvoUrl || sessaoAtual?.usuario?.medicoId || sessaoAtual?.usuario?.usuarioId || null;
     let certArquivoBase64 = '';
     let certNomeArquivo = '';
@@ -1943,7 +1944,8 @@
         : 'Seu WhatsApp está conectado. O Noto poderá orientar a configuração profissional e fiscal pela conversa. A emissão permanece bloqueada até as confirmações necessárias.';
       // Primeira jornada: OTP → pareamento → painel. Nunca exige A1/CRM para conectar.
       // Uma vinculação já feita não volta ao certificado após recarregar ou reconectar.
-      if (!whatsappJaVinculado) mostrarPasso(4);
+      if (medicoIdAlvoUrl && certificadoSolicitadoUrl) mostrarPasso(3);
+      else if (!whatsappJaVinculado) mostrarPasso(4);
       else mostrarPasso(5);
     }
 

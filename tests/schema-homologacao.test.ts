@@ -158,6 +158,13 @@ testarBanco('boas-vindas: aplica migration duas vezes e disputa atomicamente no 
         'medico_000000000000', false, 'conectado', now()
       );
     `);
+    // Mesmo caso do Cofre/agenda: médico da conta sem usuario_id legado.
+    const alice='00000000-0000-4000-8000-000000000099';
+    await pool.query("insert into medicos(id,conta_id,nome_completo) values($1,'00000000-0000-4000-8000-000000000001','Alice Castro Menezes Xavier')",[alice]);
+    const porConta=await consultarStatusOnboarding(pool,alice);
+    expect(porConta).toMatchObject({medicoId:alice,usuarioId:null,nomeUsuario:'Alice Castro Menezes Xavier',
+      crm:null,rqe:null,liberadoParaEmitir:false,passos:{passo3CertificadoValido:false,passoProfissionalAprovado:false}});
+    await pool.query('delete from medicos where id=$1',[alice]);
     await pool.query(sqlBoasVindas);
     await pool.query(sqlBoasVindas);
 

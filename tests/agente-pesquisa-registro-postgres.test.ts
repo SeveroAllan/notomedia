@@ -7,7 +7,7 @@ import {
   recuperarPesquisaInterrompida
 } from '../src/agente/pesquisa-profissional-conversa.js';
 import {registrarVinculoConversa} from '../src/agente/vinculo-conversa.js';
-import {salvarEstadoConversa} from '../src/agente/estado-conversa.js';
+import {registrarPeriodoConferencia,salvarEstadoConversa} from '../src/agente/estado-conversa.js';
 
 const testar=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']?it:it.skip;
 const CONTA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -91,6 +91,16 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       .toEqual({crm:null,rqe:null});
     expect(await executarPesquisaRegistro(db as unknown as pg.Pool,consulta)).toBe(false);
     expect(consulta.buscar).toHaveBeenCalledTimes(1);
+
+    await salvarEstadoConversa(db as unknown as pg.Pool,CONTA,{perguntaPendente:'periodo'});
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,OUTRA,ANA,'2026-11-01')).toBe(false);
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-02-30')).toBe(false);
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-01')).toBe(true);
+    const periodoSalvo=(await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+    expect(periodoSalvo).toMatchObject({periodoConferencia:{profissionalId:ANA,inicio:'2026-11-01'},
+      perguntaPendente:null,profissionalConfirmadoId:ANA,
+      pesquisasRegistro:{[ANA]:{confirmacaoAdiada:true,estado:'aguardando_confirmacao'}}});
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-02')).toBe(false);
 
     expect(await proporCorrecaoPesquisa(db as unknown as pg.Pool,CONTA,ANA,{
       crm:'66666/RS',rqe:'777'

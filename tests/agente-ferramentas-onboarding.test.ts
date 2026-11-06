@@ -120,6 +120,61 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     modelo.assertComplete();
   });
 
+  it('período informado define escopo, não ausência de notas, e continua no certificado sem cobrar CRM',async()=>{
+    const modelo=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
+      decisao:'definir',inicio:'2026-11-01'
+    },{callId:'periodo'})]]);
+    const registrarPeriodoConferencia=vi.fn().mockResolvedValue(true);
+    const consultarProntidao=vi.fn().mockResolvedValue({certificadoValido:false,
+      dadosProfissionaisCompletos:false,dadosFiscaisConfirmados:false,liberadoParaEmitir:false});
+    const resposta=await responderAgente({texto:'Desde 1 de novembro de 2026.',profissionais,
+      painelUrl:'https://homologacao.example.test',estadoConversa:{profissionalConfirmadoId:'m1',
+        perguntaPendente:'periodo',pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',
+          confirmacaoAdiada:true,candidatos:[{crm:'36948/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]}}}},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia,consultarProntidao});
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
+    expect(modelo.calls).toHaveLength(1);
+    expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
+    expect(consultarProntidao).toHaveBeenCalledExactlyOnceWith('m1');
+    expect(resposta).toContain('período solicitado');
+    expect(resposta).toContain('01/11/2026');
+    expect(resposta).toContain('Ainda não consultei atendimentos ou notas');
+    expect(resposta).toContain('etapa=certificado');
+    expect(resposta).not.toMatch(/não emite|não emitiu|parou de emitir|Quer que eu siga com a confirmação|36948/);
+    expect(JSON.stringify(modelo.calls[0]!.request.input)).not.toContain('36948/RS');
+    modelo.assertComplete();
+  });
+  it('modelo sem ferramenta de período não pode transformar a data em conclusão fiscal',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Você não emite notas desde 1 de novembro.')]]);
+    const registrarPeriodoConferencia=vi.fn();
+    const resposta=await responderAgente({texto:'Desde 1 de novembro de 2026.',profissionais,
+      estadoConversa:{profissionalConfirmadoId:'m1',perguntaPendente:'periodo'}},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia});
+    expect(registrarPeriodoConferencia).not.toHaveBeenCalled();
+    expect(resposta).not.toContain('Você não emite');
+    expect(resposta).toContain('data inicial da conferência');
+    modelo.assertComplete();
+  });
+  it('certificado distingue falha de prontidão de URL inválida e mantém recuperação concreta',async()=>{
+    for(const falha of ['prontidao','origem'] as const){
+      const modelo=new ScriptedModel([
+        [functionCall('orientar_certificado_seguro',{profissional:'Alice'},{callId:'cert'})],
+        [assistantMessage('A página está fora do ar. Se precisar de mais informações, é só avisar.')]
+      ]);
+      const consultarProntidao=vi.fn(async()=>{
+        if(falha==='prontidao')throw Object.assign(new Error('segredo-nao-expor'),{code:'42703'});
+        return {certificadoValido:false,dadosProfissionaisCompletos:false,dadosFiscaisConfirmados:false,liberadoParaEmitir:false};
+      });
+      const resposta=await responderAgente({texto:'Podemos seguir com o certificado?',profissionais,
+        painelUrl:falha==='origem'?'http://inseguro.example.test':'https://homologacao.example.test',
+        estadoConversa:{profissionalConfirmadoId:'m1'}},
+        {modeloTeste:modelo,consultarStatus:vi.fn(),consultarProntidao});
+      expect(resposta).toContain('próximo passo');
+      expect(resposta).not.toMatch(/fora do ar|é só avisar|segredo-nao-expor/);
+      expect(resposta).toContain(falha==='prontidao'?'Isso não comprova que a página esteja indisponível':'origem HTTPS');
+      modelo.assertComplete();
+    }
+  });
   it('consultar prontidão fiscal não emite nem grava dados ou assume parâmetros',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('consultar_prontidao_onboarding',{profissional:'Alice'},{callId:'pronto'})],

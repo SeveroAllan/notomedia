@@ -23,6 +23,7 @@ function simularTela(passos: Record<string, boolean>, liberadoParaEmitir = false
   const ctx = createContext({
     sessaoAtual: { tokenAcesso: 'sessao-validada', usuario: { medicoId: 'medico-de-teste' } },
     medicoIdAlvoUrl: null,
+    certificadoSolicitadoUrl:false,
     medicoIdSelecionado: () => 'medico-de-teste',
     cardOnboarding: elemento('cardOnboarding'),
     cardAuth: elemento('cardAuth'),
@@ -62,6 +63,16 @@ describe('primeiro acesso pela web: OTP → WhatsApp → painel', () => {
     expect(tela.elemento('mensagemPainel').textContent).toContain('emissão permanece bloqueada');
   });
 
+  it('link de certificado abre o A1 do médico alvo após status autenticado, sem exigir CRM ou novo pareamento',async()=>{
+    const tela=simularTela({passo1Nome:true,passo3CertificadoValido:false,
+      passoProfissionalAprovado:false,passo2FiscalConfirmado:false,
+      passo4WhatsappConectado:false,passo4WhatsappVinculado:false});
+    runInContext("medicoIdAlvoUrl='medico-de-teste';certificadoSolicitadoUrl=true",tela.ctx);
+    await runInContext('carregarFluxoOnboarding()',tela.ctx);
+    expect(tela.visoes).toEqual([3]);
+    expect(tela.chamadas[0]?.token).toBe('Bearer sessao-validada');
+    expect(tela.elemento('mensagemPainel').textContent).toContain('emissão permanece bloqueada');
+  });
   it('após vincular, abre painel sem exigir A1 ou CRM; não confirma fiscal', async () => {
     const tela = simularTela({
       passo1Nome: true, passo3CertificadoValido: false,

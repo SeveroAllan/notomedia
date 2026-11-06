@@ -10,6 +10,7 @@ export interface EstadoConversa {
   agendaEscolhida?: AgendaEscolhida;
   profissionalConfirmadoId?: string;
   perguntaPendente?: PerguntaPendente;
+  periodoConferencia?: {profissionalId:string;inicio:string};
   profissionalPerguntadoId?: string;
   nomeProfissionalPerguntado?: string;
   descoberta?: { agenda: AgendaEscolhida; nomes: string[] };
@@ -41,6 +42,9 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
     ...(typeof e.profissionalPerguntadoId === 'string' ? { profissionalPerguntadoId: e.profissionalPerguntadoId } : {}),
     ...(typeof e.nomeProfissionalPerguntado === 'string' && e.nomeProfissionalPerguntado.length <= 150 ? { nomeProfissionalPerguntado: e.nomeProfissionalPerguntado } : {}),
     ...(Array.isArray(e.tarefasPendentes) ? { tarefasPendentes: validarTarefas(e.tarefasPendentes) } : {}),
+    ...(typeof e.periodoConferencia?.profissionalId==='string'&&
+      typeof e.periodoConferencia?.inicio==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(e.periodoConferencia.inicio)
+      ?{periodoConferencia:e.periodoConferencia}:{}),
     ...(e.pesquisasRegistro ? {pesquisasRegistro:leituraPesquisaEstado(e.pesquisasRegistro)} : {}),
     ...(e.ultimaConsultaFiscal && ['conta','profissional'].includes(e.ultimaConsultaFiscal.escopo) &&
       typeof e.ultimaConsultaFiscal.verificadaEm === 'string' &&
@@ -64,6 +68,23 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
       descoberta: { agenda: e.descoberta.agenda as AgendaEscolhida, nomes: e.descoberta.nomes.filter((n: unknown) => typeof n === 'string' && n.length <= 150).slice(0,20) as string[] }
     } : {})
   };
+}
+
+/** A data é escopo informado pelo usuário, nunca evidência de ausência de notas. */
+export async function registrarPeriodoConferencia(pool:Banco,contaId:string,profissionalId:string,inicio:string):Promise<boolean>{
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(inicio))return false;
+  const data=new Date(inicio+'T00:00:00Z');
+  if(!Number.isFinite(data.getTime())||data.toISOString().slice(0,10)!==inicio)return false;
+  const r=await pool.query([
+    'update public.noto_agent_conversas c set',
+    "estado=c.estado||jsonb_build_object('periodoConferencia',",
+    "jsonb_build_object('profissionalId',$2::text,'inicio',$3::text),'perguntaPendente',null),atualizado_em=now()",
+    "where c.conta_id=$1 and c.estado->>'profissionalConfirmadoId'=$2",
+    "and c.estado->>'perguntaPendente'='periodo'",
+    'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
+    'returning conta_id'
+  ].join('\n'),[contaId,profissionalId,inicio]);
+  return r.rows.length===1;
 }
 
 export async function reservarMensagemConversa(pool: Banco, contaId: string, instancia: string, mensagemId: string): Promise<boolean> {
