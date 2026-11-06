@@ -120,12 +120,17 @@ describe('roteamento obrigatório de confirmação com descoberta verificada',()
     // Modelo simulado descumpre o toolChoice; o código deve falhar seguro.
     // No provedor real, a API recebe tool_choice com o nome obrigatório.
     const modelo=new ScriptedModel([[assistantMessage('Vinculei a médica sem chamar a ferramenta!')]]);
-    const confirmar=vi.fn(), acompanhar=vi.fn();
+    const confirmar=vi.fn(), acompanhar=vi.fn(), aoDiagnostico=vi.fn();
     const resposta=await responderAgente({
       texto:'Sim, sou eu.',profissionais:[],estadoConversa:estado
-    },{...base,modeloTeste:modelo,confirmarProfissionais:confirmar,aoVinculo:acompanhar});
+    },{...base,modeloTeste:modelo,confirmarProfissionais:confirmar,
+       aoVinculo:acompanhar,aoDiagnostico});
     expect(confirmar).not.toHaveBeenCalled();
     expect(acompanhar).not.toHaveBeenCalled();
+    expect(aoDiagnostico).toHaveBeenCalledWith(expect.objectContaining({
+      codigo:'CONFIRMACAO_SEM_FERRAMENTA',ferramentas:[]
+    }));
+    expect(resposta).toContain('Não vinculei ninguém');
     expect(resposta).not.toContain('Vinculei a médica');
     expect(modelo.calls[0]!.request.modelSettings.toolChoice)
       .toBe('confirmar_profissionais_descobertos');
