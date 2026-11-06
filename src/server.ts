@@ -367,6 +367,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     apiKey: config.openaiApiKey,
     modeloNome: config.openaiTextoModel,
     ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
+    exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
