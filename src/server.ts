@@ -30,6 +30,7 @@ import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
+import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
 import { reservarCustoPiloto,liquidarCustoPiloto } from './agente/limite-gasto-rodada.js';
 import { classificarEnvioLinkEvolution } from './whatsapp/status-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
@@ -409,6 +410,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     atualizarEstadoLink: async entrada => {
       const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
         config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);
+      // Recibos comuns não têm linha em cofre_links_entregas, mas devem ser
+      // observáveis para distinguir API aceita de entrega ao WhatsApp.
+      if(config.notoPilotoRestrito&&config.notoAgentDiagnosticoAtivo){
+        const recibo=diagnosticarReciboSaida(config.evolutionAssistantWebhookSecret,
+          config.evolutionAssistantInstanceName,config.envioRealAllowlist?.[0]??'',entrada);
+        if(recibo)console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(recibo));
+      }
       // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
       console.info('NOTO_RECIBO_LINK',codigo);
       return codigo==='ATUALIZADO';
@@ -468,6 +476,11 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const resultado = await transporteAgente.enviarTexto({
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
       });
+      if(config.notoPilotoRestrito&&config.notoAgentDiagnosticoAtivo){
+        const aceite=diagnosticarAceiteSaida(config.evolutionAssistantWebhookSecret,
+          config.evolutionAssistantInstanceName,resultado);
+        console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(aceite));
+      }
       return resultado.sucesso;
     }
   }));

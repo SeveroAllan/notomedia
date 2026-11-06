@@ -473,13 +473,14 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const inicio=Date.now();
       if(vinculoNesteTurno){
         registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
+        deps.aoVinculoResultado?.({ok:false,motivo:'VINCULO_JA_PROCESSADO_NO_TURNO'});
         return {ok:false,motivo:'VINCULO_JA_PROCESSADO_NO_TURNO'};
       }
       const decisaoValidada=decidirVinculo(entrada.estadoConversa,{
         agenda,decisao,nomes,mensagem:entrada.texto
       });
       if(!decisaoValidada.ok){
-        registrar('confirmar_profissionais_descobertos','DEPENDENCIA_CONFIRMACAO',inicio);
+        registrar('confirmar_profissionais_descobertos',decisaoValidada.motivo,inicio);
         deps.aoVinculoResultado?.({ok:false,motivo:decisaoValidada.motivo});
         return {ok:false,motivo:decisaoValidada.motivo,proximaEtapa:explicarVinculoNaoExecutado(decisaoValidada.motivo)};
       }
@@ -487,6 +488,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       // e uma pesquisa identificável; não inferir autorização em lote.
       if(decisaoValidada.nomes.length!==1){
         registrar('confirmar_profissionais_descobertos','PROFISSIONAL_AMBIGUO',inicio);
+        deps.aoVinculoResultado?.({ok:false,motivo:'ALVO_AMBIGUO'});
         return {ok:false,motivo:'ALVO_AMBIGUO'};
       }
       const base=profissionalBase===null?null:identificar(profissionalBase,profissionais);
@@ -515,6 +517,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           return {ok:false,motivo:r.motivo??'VINCULO_INDISPONIVEL',observacao:'Não fiz pesquisa ou cadastro de CRM/RQE.'};
         }
         const medico=r.medicos?.[0];
+        // A conta já confirmou a operação. Conservar o marco mesmo se a
+        // gravação da etapa ou o agendamento CRM levar mais que o turno.
+        deps.aoVinculoResultado?.({ok:true,nome:decisaoValidada.nomes[0]!,registrado:false,pesquisa:'indisponivel'});
         let pesquisa:'agendada'|'ja_existe'|'indisponivel'='indisponivel';
         let registrado=Boolean(medico);
         if(medico&&deps.aoVinculo){
@@ -772,7 +777,11 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
     modelSettings:{maxTokens:1024},
-    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras]
+    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
+    // Vincular é um marco transacional: o resultado da ferramenta já é
+    // narrado com base na evidência. Evita segunda inferência cara/lenta,
+    // que estava abortando o turno de confirmação após 20 segundos.
+    toolUseBehavior:{stopAtToolNames:['confirmar_profissionais_descobertos']}
   });
 }
 
@@ -878,6 +887,28 @@ export function acompanhamentoVerificado(
   ].join(' ');
   // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
   return null;
+}
+
+/** Traduz apenas evidência da ferramenta, mesmo quando o Runner é interrompido.
+ * Não declara vínculo executado se só houve decisão ou erro de dependência. */
+function explicarResultadoVinculo(
+  v:{ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|
+    {ok:false;motivo:string}
+):string{
+  if(!v.ok)return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
+    ?'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
+    :v.motivo==='VINCULO_JA_PROCESSADO_NO_TURNO'
+      ?'A solicitação de vínculo já foi processada neste turno. Não repeti o cadastro nem a pesquisa.'
+      :explicarVinculoNaoExecutado(v.motivo);
+  if(!v.registrado)return 'O cadastro aceitou o vínculo de '+v.nome+
+    ', mas ainda não confirmei a gravação da etapa na conversa. Vou conferir essa etapa antes de pesquisar CRM/RQE.';
+  const confirmacao='Vinculei '+v.nome+' à sua conta.';
+  if(v.pesquisa==='agendada')return confirmacao+
+    ' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
+  if(v.pesquisa==='ja_existe')return confirmacao+
+    ' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
+  return confirmacao+
+    ' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
 }
 
 /** Relato coerente com o resultado do Cofre e os ACKs, não com regex do modelo. */
@@ -1001,16 +1032,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
     if(vinculoTurno.atual){
-      const v=vinculoTurno.atual;
       registrar('RESPOSTA',uso);
-      if(!v.ok) return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
-        ? 'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
-        : explicarVinculoNaoExecutado(v.motivo);
-      if(!v.registrado) return 'O cadastro aceitou o vínculo de '+v.nome+', mas ainda não consegui salvar a etapa na conversa. Vou verificar antes de consultar CRM/RQE.';
-      const confirmacao='Vinculei '+v.nome+' à sua conta.';
-      if(v.pesquisa==='agendada') return confirmacao+' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
-      if(v.pesquisa==='ja_existe') return confirmacao+' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
-      return confirmacao+' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
+      return explicarResultadoVinculo(vinculoTurno.atual);
     }
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;
@@ -1092,6 +1115,12 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
         erro.motivo==='SEM_RODADA'?
           'Os testes com IA estão pausados porque não há uma rodada ativa. Não fiz nova chamada. Uma nova rodada deve ser aberta pelo responsável pela homologação.':
         'Pausei a chamada de IA porque não consegui verificar o orçamento ou o preço do modelo. Não fiz essa chamada e não vou ultrapassar o limite por suposição.';
+    }
+    // Uma ferramenta já pode ter respondido ou gravado dados quando a segunda
+    // inferência é interrompida. Esse fato precede o erro do Runner.
+    if(vinculoTurno.atual){
+      registrar('RESPOSTA');
+      return explicarResultadoVinculo(vinculoTurno.atual);
     }
     if (trabalhoTurno.atual?.estado.ok) {
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
