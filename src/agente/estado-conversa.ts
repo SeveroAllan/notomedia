@@ -80,7 +80,13 @@ export async function registrarPeriodoConferencia(pool:Banco,contaId:string,prof
     "estado=c.estado||jsonb_build_object('periodoConferencia',",
     "jsonb_build_object('profissionalId',$2::text,'inicio',$3::text),'perguntaPendente',null),atualizado_em=now()",
     "where c.conta_id=$1 and c.estado->>'profissionalConfirmadoId'=$2",
-    "and c.estado->>'perguntaPendente'='periodo'",
+    "and (c.estado->>'perguntaPendente'='periodo' or (",
+    "c.estado->>'perguntaPendente' is null and c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'",
+    "and (c.estado->'periodoConferencia' is null or c.estado->'periodoConferencia'='null'::jsonb)",
+    "and c.estado#>>array['pesquisasRegistro',$2,'estado']='aguardando_confirmacao'",
+    "and c.estado#>>array['pesquisasRegistro',$2,'confirmacaoAdiada']='true'",
+    "and exists(select 1 from public.medicos alvo where alvo.id=$2::uuid and alvo.conta_id=$1",
+    "and alvo.nome_completo=c.estado#>>array['pesquisasRegistro',$2,'nome'])))",
     'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
     'returning conta_id'
   ].join('\n'),[contaId,profissionalId,inicio]);

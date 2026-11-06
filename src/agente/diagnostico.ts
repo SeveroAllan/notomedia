@@ -10,7 +10,7 @@ export type CodigoFerramenta =
   | 'CONEXAO_PENDENTE' | 'FERRAMENTA_INDISPONIVEL' | 'PROFISSIONAIS_ENCONTRADOS'
   | 'SEM_DESCOBERTA' | 'OUTRA_AGENDA' | 'ALVO_AMBIGUO' | 'NOME_NAO_COMPROVADO'
   | 'NAO_AUTORIZOU' | 'ESCLARECIMENTO' | 'LINK_ACEITO_PARA_ENVIO' | 'ENTREGA_CONSULTADA' | 'LINK_ENTREGUE' | 'LINK_LIDO' | 'PRONTIDAO_VERIFICADA' | 'CERTIFICADO_EXISTENTE' | 'CERTIFICADO_PENDENTE' | 'PROFISSIONAIS_CONFIRMADOS' | 'DEPENDENCIA_CONFIRMACAO' | 'DADOS_PROFISSIONAIS_SALVOS' | 'PANORAMA_FISCAL_CONSULTADO' | 'PANORAMA_FISCAL_INDISPONIVEL' | 'CONFERENCIA_REALIZADA' | 'CONFERENCIA_PENDENTE' | 'TRABALHO_REGISTRADO' | 'TRABALHO_INDISPONIVEL';
-export type CodigoExecucao = 'RESPOSTA' | 'CREDENCIAL_BLOQUEADA'
+export type CodigoExecucao = 'PERIODO_SEM_FERRAMENTA' | 'RESPOSTA_POR_ESTADO' | 'RESPOSTA' | 'CREDENCIAL_BLOQUEADA'
   | 'SEM_MODELO' | 'LIMITE_PROFISSIONAIS' | 'FALLBACK_MODELO' | 'SEM_RESPOSTA' | 'ENTRADA_VAZIA' | 'RESPOSTA_BLOQUEADA' | 'CONFIRMACAO_SEM_FERRAMENTA';
 
 export interface EventoFerramenta {
@@ -29,6 +29,14 @@ export interface DiagnosticoAgente {
   };
   duracaoMs: number;
   falha?: { natureza: 'ABORT_SIGNAL'|'MAX_TURNS'|'FALHA_RUNNER' };
+  /** Snapshot de entrada usado pelo agente, sem nomes, datas, IDs ou conteúdo livre. */
+  estadoOnboarding?:{
+    vinculoConfirmadoNaConta:boolean;
+    perguntaPendente:'AUSENTE'|'agenda'|'profissional'|'confirmar_profissional'|'periodo'|null;
+    periodoRegistrado:boolean;
+    crmAdiado:boolean;
+    ferramentaPeriodoObrigatoria:boolean;
+  };
   /** Apenas forma verificada da pendência: sem nomes, telefone ou IDs. */
   estadoVinculo?: {
     fase:'AUSENTE'|'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE'|'VINCULO_CONFIRMADO';

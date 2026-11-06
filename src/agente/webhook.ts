@@ -257,6 +257,7 @@ export function criarRouterWebhookAgente(deps: {
         intervalo = setInterval(() => { void renovarPresenca(); }, 1500);
       }
 
+      let periodoDaMensagem=false;
       let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
       let diagnostico: DiagnosticoAgente | undefined;
       const comprovantes: ComprovanteTarefa[] = [];
@@ -324,8 +325,11 @@ export function criarRouterWebhookAgente(deps: {
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
         ...(contaId&&deps.persistirConversa?{
-          registrarPeriodoConferencia:(profissionalId:string,inicio:string)=>
-            registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio)
+          registrarPeriodoConferencia:async(profissionalId:string,inicio:string)=>{
+            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio);
+            if(gravado)periodoDaMensagem=true;
+            return gravado;
+          }
         }:{}),
         ...(contaId&&deps.adiarConfirmacaoRegistro?{
           adiarConfirmacaoRegistro:(medicoId:string)=>deps.adiarConfirmacaoRegistro!(contaId!,medicoId)
@@ -421,7 +425,7 @@ export function criarRouterWebhookAgente(deps: {
           // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
           delete delta.pesquisasRegistro;
           delete delta.periodoConferencia;
-          if(estado.perguntaPendente==='periodo')delete delta.perguntaPendente;
+          if(periodoDaMensagem||estado.perguntaPendente==='periodo')delete delta.perguntaPendente;
           if(!vinculoDaMensagem.atual){
             delete delta.profissionalConfirmadoId;
             if(!descobertaVerificada){

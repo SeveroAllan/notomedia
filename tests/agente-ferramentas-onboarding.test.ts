@@ -144,6 +144,77 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     expect(JSON.stringify(modelo.calls[0]!.request.input)).not.toContain('36948/RS');
     modelo.assertComplete();
   });
+  it('snapshot real da #60 com pergunta nula ou ausente ainda exige classificação do período',async()=>{
+    for(const pergunta of [null,undefined]){
+      const modelo=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
+        decisao:'definir',inicio:'2026-11-01'
+      },{callId:'periodo-legado'})]]);
+      const registrarPeriodoConferencia=vi.fn().mockResolvedValue(true);
+      const diagnostico=vi.fn();
+      const resposta=await responderAgente({texto:'Desde 1 de novembro de 2026.',profissionais,
+        estadoConversa:{faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmadoId:'m1',
+          ...(pergunta===null?{perguntaPendente:null}:{}),
+          pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',confirmacaoAdiada:true}}}},
+        {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia,aoDiagnostico:diagnostico});
+      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
+      expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
+      expect(resposta).toContain('período solicitado');
+      expect(resposta).not.toMatch(/não emite|não emitiu|confirmar.*vincul/);
+      expect(diagnostico.mock.calls.at(-1)?.[0]).toMatchObject({
+        estadoVinculo:{fase:'VINCULO_CONFIRMADO'},
+        estadoOnboarding:{vinculoConfirmadoNaConta:true,perguntaPendente:pergunta===null?null:'AUSENTE',
+          crmAdiado:true,ferramentaPeriodoObrigatoria:true}
+      });
+      const primeiraEntrada=modelo.calls[0]!.request.input[0];
+      if(!primeiraEntrada||typeof primeiraEntrada==='string'||!('content' in primeiraEntrada))throw Error('Contexto não enviado');
+      const contexto=JSON.parse(String(primeiraEntrada.content));
+      expect(contexto.vinculoProfissionalVerificado).toEqual({nome:'Dra. Alice Silva',estado:'CONFIRMADO',novaConfirmacaoNecessaria:false});
+      modelo.assertComplete();
+    }
+  });
+  it('texto livre sem ferramenta não muda sentido da data nem reabre vínculo confirmado',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Como você não emite notas desde 1 de novembro, a confirmação dela está pendente. Você confirma que deseja vincular Alice?')]]);
+    const estado={faseAgenda:'VINCULO_CONFIRMADO' as const,profissionalConfirmadoId:'m1',
+      perguntaPendente:null,pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao' as const,confirmacaoAdiada:true}}};
+    const antes=structuredClone(estado);
+    const diagnostico=vi.fn();
+    const resposta=await responderAgente({texto:'Desde 1 de novembro de 2026.',profissionais,estadoConversa:estado},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),aoDiagnostico:diagnostico});
+    expect(resposta).toContain('Dra. Alice Silva já está vinculada');
+    expect(resposta).toContain('confirmação do CRM/RQE continua adiada');
+    expect(resposta).not.toMatch(/não emite|a confirmação dela está pendente|Você confirma que deseja vincular/);
+    expect(resposta).toContain('data inicial do período');
+    expect(estado).toEqual(antes);
+    expect(diagnostico.mock.calls.at(-1)?.[0]).toMatchObject({codigo:'RESPOSTA_POR_ESTADO',
+      estadoOnboarding:{vinculoConfirmadoNaConta:true,ferramentaPeriodoObrigatoria:false}});
+    modelo.assertComplete();
+  });
+  it('classificação outro_assunto não libera conclusões fiscais ou regressão do vínculo no texto livre',async()=>{
+    const modelo=new ScriptedModel([
+      [functionCall('registrar_periodo_conferencia',{decisao:'outro_assunto',inicio:null},{callId:'assunto'})],
+      [assistantMessage('Alice ainda aguarda vínculo e você não emite desde novembro.')]
+    ]);
+    const registrarPeriodoConferencia=vi.fn();
+    const resposta=await responderAgente({texto:'Podemos continuar?',profissionais,
+      estadoConversa:{faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmadoId:'m1',
+        pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',confirmacaoAdiada:true}}}},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia});
+    expect(registrarPeriodoConferencia).not.toHaveBeenCalled();
+    expect(resposta).toContain('Dra. Alice Silva já está vinculada');
+    expect(resposta).not.toMatch(/ainda aguarda vínculo|não emite desde/);
+    modelo.assertComplete();
+  });
+  it('período já guardado também não permite texto livre inventar ausência de notas',async()=>{
+    const modelo=new ScriptedModel([[assistantMessage('Você parou de emitir nessa data e Alice precisa ser vinculada.')]]);
+    const resposta=await responderAgente({texto:'Sobre 1 de novembro...',profissionais,
+      estadoConversa:{faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmadoId:'m1',
+        periodoConferencia:{profissionalId:'m1',inicio:'2026-11-01'}}},
+      {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia:vi.fn()});
+    expect(resposta).not.toMatch(/parou de emitir|precisa ser vinculada/);
+    expect(resposta).toContain('período solicitado é 01/11/2026');
+    expect(resposta).toContain('verificação do certificado');
+    modelo.assertComplete();
+  });
   it('modelo sem ferramenta de período não pode transformar a data em conclusão fiscal',async()=>{
     const modelo=new ScriptedModel([[assistantMessage('Você não emite notas desde 1 de novembro.')]]);
     const registrarPeriodoConferencia=vi.fn();
