@@ -235,7 +235,9 @@ export function criarRouterWebhookAgente(deps: {
           : validarTarefas(anteriores);
       // O pedido deve sobreviver ao processamento e a uma falha posterior de envio.
       if (deps.persistirConversa && contaId && (pedidoTipo || cancelouTarefas(texto))) {
-        await salvarEstadoConversa(deps.pool, contaId, { ...estado, tarefasPendentes });
+        // Somente a fila de tarefas mudou: não regravar descoberta/fase
+        // de um estado lido antes da conclusão concorrente do worker.
+        await salvarEstadoConversa(deps.pool, contaId, { tarefasPendentes });
       } else if (!deps.persistirConversa) {
         tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
       }
