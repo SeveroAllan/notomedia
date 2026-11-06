@@ -972,8 +972,21 @@ function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidad
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
-  const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) =>
-    deps.aoDiagnostico?.({ codigo, ferramentas: [...ferramentas], uso, duracaoMs: Math.max(0, Date.now() - inicio) });
+  const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) => {
+    const temFerramenta=ferramentas.some(f=>f.nome==='confirmar_profissionais_descobertos');
+    const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
+    deps.aoDiagnostico?.({
+      codigo,ferramentas:[...ferramentas],uso,duracaoMs:Math.max(0,Date.now()-inicio),
+      ...(temFerramenta||temPendencia||codigo==='CONFIRMACAO_SEM_FERRAMENTA'?{
+        estadoVinculo:{
+          fase:entrada.estadoConversa?.faseAgenda??'AUSENTE',
+          fonte:entrada.estadoConversa?.descoberta?.agenda??'AUSENTE',
+          quantidadeNomes:entrada.estadoConversa?.descoberta?.nomes.length??0,
+          ferramentaObrigatoria:exigeDecisaoVinculo(entrada,deps)
+        }
+      }: {})
+    });
+  };
   if (contemCredencialAgenda(entrada.texto)) {
     registrar('CREDENCIAL_BLOQUEADA');
     return 'Por segurança, não envie senhas, tokens ou credenciais por aqui. Quando chegar a hora, vou te orientar a usar a página segura do Noto.';

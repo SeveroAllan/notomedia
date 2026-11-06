@@ -151,7 +151,7 @@ describe('worker retoma o resultado sem resposta genérica ou envio duplicado',(
         ok:true,nomes:['Dra. Alice Silva','Dr. Bruno Lima'],agenda:'tribemd'
       }}]})
       .mockResolvedValueOnce({rows:[{1:1}]})
-      .mockResolvedValueOnce({rows:[],rowCount:1})
+      .mockResolvedValueOnce({rows:[{conta_id:CONTA}],rowCount:1})
       .mockResolvedValueOnce({rows:[],rowCount:1});
     const enviar=vi.fn().mockResolvedValue(true);
     const deps={
@@ -163,7 +163,8 @@ describe('worker retoma o resultado sem resposta genérica ou envio duplicado',(
     expect(String(enviar.mock.calls[0]![1])).toContain('Dra. Alice Silva');
     expect(String(enviar.mock.calls[0]![1])).toContain('Quais desses médicos');
     expect(query.mock.calls[1]![0]).toContain('u.conta_id=$1');
-    expect(query.mock.calls[2]![0]).toContain('jsonb_set');
+    expect(query.mock.calls[2]![0]).toContain('on conflict (conta_id) do update');
+    expect(query.mock.calls[2]![0]).toContain('returning conta_id');
     expect(query.mock.calls[3]![1]).toEqual([trabalho.id,'aceito_api']);
   });
   it('envio com resultado incerto não entra em retry automático',async()=>{
@@ -178,4 +179,25 @@ describe('worker retoma o resultado sem resposta genérica ou envio duplicado',(
     expect(await notificarResultadoPendente(deps)).toBe(true);
     expect(query.mock.calls.at(-1)![1]).toEqual([trabalho.id,'envio_incerto']);
   });
+  it('não convida a confirmar quando a conta não aceitou a gravação da descoberta',async()=>{
+    const query=vi.fn()
+      .mockResolvedValueOnce({rows:[{...trabalho,estado:'notificando',resultado:{
+        ok:true,nomes:['Dra. Alice Silva'],agenda:'tribemd'
+      }}]})
+      .mockResolvedValueOnce({rows:[{1:1}]})
+      .mockResolvedValueOnce({rows:[],rowCount:0})
+      .mockResolvedValueOnce({rows:[],rowCount:1});
+    const enviar=vi.fn().mockResolvedValue(true),relatar=vi.fn();
+    const deps={pool:db(query),instancia:'notomed_assistente',
+      descobrir:vi.fn(),conferir:vi.fn(),enviar,relatar};
+    expect(await notificarResultadoPendente(deps)).toBe(true);
+    expect(enviar).toHaveBeenCalledOnce();
+    const balao=String(enviar.mock.calls[0]![1]);
+    expect(balao).not.toContain('Quais desses médicos');
+    expect(balao).not.toContain('Dra. Alice Silva');
+    expect(balao).toContain('ainda não consegui registrar');
+    expect(relatar).toHaveBeenCalledWith('DESCOBERTA_ESTADO_NAO_PERSISTIDO',
+      expect.any(Number),'descoberta_agenda');
+  });
+
 });
