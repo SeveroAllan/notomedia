@@ -76,7 +76,7 @@ testar('descoberta autenticada: caso da confirmação anunciada mas não persist
     ].join('\n'),[CONTA]);
     expect(await persistirDescobertaComprovada(pool,CONTA,'tribemd',[nome])).toBe(false);
     expect(await recuperarDescobertaComprovada(pool,CONTA,INSTANCIA,
-      await lerEstadoConversa(pool,CONTA))).toBe('CONFLITO_ESTADO');
+      await lerEstadoConversa(pool,CONTA))).toBe('VINCULO_PRESERVADO');
     expect((await lerEstadoConversa(pool,CONTA)).faseAgenda).toBe('VINCULO_CONFIRMADO');
 
     // A fila de outra conta e outro processo jamais reconstitui uma prova.

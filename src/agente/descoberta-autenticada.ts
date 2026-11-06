@@ -6,7 +6,7 @@ import type {AgendaEscolhida,EstadoConversa} from './estado-conversa.js';
 type Banco=Pick<pg.Pool,'query'>;
 type Descoberta={agenda:AgendaEscolhida;nomes:string[]};
 export type OrigemDescoberta='cofre_sessao'|'trabalho_agenda';
-export type EstadoRecuperacaoDescoberta='JA_COMPROVADA'|'RECUPERADA'|
+export type EstadoRecuperacaoDescoberta='VINCULO_PRESERVADO'|'JA_COMPROVADA'|'RECUPERADA'|
   'RECUPERADA_ESTADO'|'SEM_PROVA'|'CONFLITO_ESTADO'|'CONFLITO_PROVAS';
 
 function conferirDescoberta(agenda:unknown,nomes:unknown):Descoberta|null{
@@ -120,7 +120,7 @@ async function completarFaseDeSnapshotLegado(
 export async function recuperarDescobertaComprovada(
   pool:Banco,contaId:string,instancia:string,atual:EstadoConversa
 ):Promise<EstadoRecuperacaoDescoberta>{
-  if(atual.faseAgenda==='VINCULO_CONFIRMADO')return 'CONFLITO_ESTADO';
+  if(atual.faseAgenda==='VINCULO_CONFIRMADO')return 'VINCULO_PRESERVADO';
   if(atual.faseAgenda==='CONFIRMACAO_PENDENTE'&&
      conferirDescoberta(atual.descoberta?.agenda,atual.descoberta?.nomes))
     return 'JA_COMPROVADA';
