@@ -29,6 +29,13 @@ export interface DiagnosticoAgente {
   };
   duracaoMs: number;
   falha?: { natureza: 'ABORT_SIGNAL'|'MAX_TURNS'|'FALHA_RUNNER' };
+  /** Apenas forma verificada da pendência: sem nomes, telefone ou IDs. */
+  estadoVinculo?: {
+    fase:'AUSENTE'|'DESCOBERTA_PENDENTE'|'CONFIRMACAO_PENDENTE'|'VINCULO_CONFIRMADO';
+    fonte:'AUSENTE'|'tribemd'|'amplimed';
+    quantidadeNomes:number;
+    ferramentaObrigatoria:boolean;
+  };
 }
 export interface DiagnosticoMensagem {
   tipo: 'noto_agent_execucao';
