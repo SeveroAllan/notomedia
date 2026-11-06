@@ -147,8 +147,7 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
   it('uma pergunta não autoriza vincular Bruno',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{agenda:'tribemd',profissionalBase:'Alice',
-        decisao:'esclarecer',nomes:['Bruno Costa']},{callId:'duvida'})],
-      [assistantMessage('Quer vincular Bruno?')]
+        decisao:'esclarecer',nomes:['Bruno Costa']},{callId:'duvida'})]
     ]);
     const confirmarProfissionais=vi.fn(),aoDiagnostico=vi.fn();
     const resposta=await responderAgente({texto:'Quem é o Bruno Costa?',profissionais,estadoConversa:estado},{
@@ -156,14 +155,13 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
     });
     expect(confirmarProfissionais).not.toHaveBeenCalled();
     expect(resposta).not.toContain('Vinculei');
-    expect(aoDiagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
+    expect(aoDiagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('ESCLARECIMENTO');
     modelo.assertComplete();
   });
   it('confirma um único alvo comprovado sem consultar novamente o portal',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{agenda:'tribemd',profissionalBase:'Alice',
-        decisao:'confirmar',nomes:['Bruno Costa']},{callId:'vincular'})],
-      [assistantMessage('O CRM falhou; digite seus registros.')]
+        decisao:'confirmar',nomes:['Bruno Costa']},{callId:'vincular'})]
     ]);
     const confirmarProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Bruno Costa'],
       medicos:[{id:'m2',nome:'Bruno Costa'}]});
@@ -183,8 +181,7 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
   it('um sim com vários profissionais não escolhe um nome arbitrariamente',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{agenda:'tribemd',profissionalBase:'Alice',
-        decisao:'confirmar',nomes:['Bruno Costa']},{callId:'ambigua'})],
-      [assistantMessage('Bruno foi adicionado.')]
+        decisao:'confirmar',nomes:['Bruno Costa']},{callId:'ambigua'})]
     ]);
     const confirmarProfissionais=vi.fn();
     const resposta=await responderAgente({texto:'sim',profissionais,
@@ -197,8 +194,7 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
   it('não vincula um nome fora da lista autenticada',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{agenda:'tribemd',profissionalBase:'Alice',
-        decisao:'confirmar',nomes:['Carla Dias']},{callId:'fora-lista'})],
-      [assistantMessage('Cadastrei Carla.')]
+        decisao:'confirmar',nomes:['Carla Dias']},{callId:'fora-lista'})]
     ]);
     const confirmarProfissionais=vi.fn();
     await responderAgente({texto:'Vincula Carla Dias',profissionais,estadoConversa:estado},{
@@ -210,8 +206,7 @@ describe('confirmação contextual de médicos descobertos com evidência',()=>{
   it('negação não cadastra nem pesquisa',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{agenda:'tribemd',profissionalBase:'Alice',
-        decisao:'negar',nomes:['Bruno Costa']},{callId:'nao'})],
-      [assistantMessage('Tudo bem, não vou vincular.')]
+        decisao:'negar',nomes:['Bruno Costa']},{callId:'nao'})]
     ]);
     const confirmarProfissionais=vi.fn();
     const resposta=await responderAgente({texto:'Não é ele',profissionais,estadoConversa:estado},{
@@ -261,8 +256,7 @@ describe('negações não são autorizações de escrita',()=>{
     const modelo=new ScriptedModel([
       [functionCall('confirmar_profissionais_descobertos',{
         agenda:'tribemd',profissionalBase:'Alice',decisao:'negar',nomes:['Bruno Costa']
-      },{callId:'negou-cadastro'})],
-      [assistantMessage('Entendi, não vou adicionar Bruno. Podemos continuar sem alterar sua conta.')]
+      },{callId:'negou-cadastro'})]
     ]);
     const confirmarProfissionais=vi.fn();
     const diagnostico=vi.fn();
@@ -276,7 +270,7 @@ describe('negações não são autorizações de escrita',()=>{
       confirmarProfissionais,aoDiagnostico:diagnostico});
     expect(confirmarProfissionais).not.toHaveBeenCalled();
     expect(resposta).toContain('não vinculei');
-    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('DEPENDENCIA_CONFIRMACAO');
+    expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('NAO_AUTORIZOU');
     modelo.assertComplete();
   });
 
