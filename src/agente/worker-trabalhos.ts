@@ -7,6 +7,7 @@ import type { AgendaEscolhida } from './estado-conversa.js';
 import type { ConsultaRegistro } from '../cadastro/consultas.js';
 import { executarPesquisaRegistro,notificarPesquisaRegistro,recuperarPesquisaInterrompida } from './pesquisa-profissional-conversa.js';
 import {lerOrcamentoNoto,notificarPausaPorCusto} from './limite-gasto-rodada.js';
+import {persistirDescobertaComprovada} from './descoberta-autenticada.js';
 import {
   reservarTrabalhoNoto,reservarNotificacaoNoto,concluirLeituraNoto,
   falharLeituraNoto,terminarNotificacaoNoto,recuperarTrabalhosInterrompidos,type TrabalhoParaNotificar
@@ -111,24 +112,24 @@ export async function notificarResultadoPendente(deps:DependenciasTrabalhos):Pro
   let aceitoApi=false;
   try{
     if(await destinatarioAutorizado(deps,job)){
-      // Escrita atômica de evidência: nunca sobrescrever a conversa de outra
-      // mensagem ou confirmar profissionais no lugar do usuário.
+      // A confirmação só pode ser oferecida SE o banco confirmou a gravação
+      // do snapshot autenticado. UPDATE com zero linhas afetadas era ignorado
+      // e originava convite impossível de confirmar depois.
+      let aviso=textoResultado(job);
       if(job.tipo==='descoberta_agenda' && job.resultado &&
          typeof job.resultado==='object' && !Array.isArray(job.resultado)){
         const r=job.resultado as Record<string,unknown>;
-        const nomes=r['ok']===true && Array.isArray(r['nomes'])
-          ?r['nomes'].filter((n:unknown):n is string=>typeof n==='string'&&nomeProfissionalValido(n)).slice(0,20):[];
-        if(nomes.length){
-          await deps.pool.query([
-            'update public.noto_agent_conversas',
-            "set estado=jsonb_set(estado,'{descoberta}',$2::jsonb,true) ||",
-            "jsonb_build_object('faseAgenda','CONFIRMACAO_PENDENTE'),atualizado_em=now()",
-            'where conta_id=$1',
-            "and (estado->>'agendaEscolhida' is null or estado->>'agendaEscolhida'=$3)"
-          ].join('\n'),[job.contaId,JSON.stringify({agenda:job.agenda,nomes}),job.agenda]);
+        if(r['ok']===true&&Array.isArray(r['nomes'])&&r['nomes'].length){
+          const registrado=await persistirDescobertaComprovada(
+            deps.pool,job.contaId,job.agenda,r['nomes']);
+          if(!registrado){
+            deps.relatar?.('DESCOBERTA_ESTADO_NAO_PERSISTIDO',Date.now()-inicio,job.tipo);
+            // Nenhum nome/identidade é afirmado neste balão.
+            aviso='A leitura da agenda terminou, mas ainda não consegui registrar a etapa de confirmação na sua conta. Não vinculei nenhum profissional. Vou preservar o resultado para uma conferência segura.';
+          }
         }
       }
-      aceitoApi=await deps.enviar(job.telefone,textoResultado(job));
+      aceitoApi=await deps.enviar(job.telefone,aviso);
     }
   }catch{ aceitoApi=false; }
   finally {
