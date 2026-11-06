@@ -6,6 +6,7 @@ import { descreverConferencia, type ResultadoConferencia } from './conferencia-a
 import type { AgendaEscolhida } from './estado-conversa.js';
 import type { ConsultaRegistro } from '../cadastro/consultas.js';
 import { executarPesquisaRegistro,notificarPesquisaRegistro,recuperarPesquisaInterrompida } from './pesquisa-profissional-conversa.js';
+import {lerOrcamentoNoto,notificarPausaPorCusto} from './limite-gasto-rodada.js';
 import {
   reservarTrabalhoNoto,reservarNotificacaoNoto,concluirLeituraNoto,
   falharLeituraNoto,terminarNotificacaoNoto,recuperarTrabalhosInterrompidos,type TrabalhoParaNotificar
@@ -22,6 +23,7 @@ export interface DependenciasTrabalhos {
   relatar?:(codigo:string, duracaoMs:number, tipo:string)=>void;
   pesquisarRegistro?:ConsultaRegistro;
   destinatarioPesquisa?:string;
+  controleCusto?:pg.Pool;
 }
 const causaSegura=(motivo:string|undefined) =>
   ['LEITURA_INCOMPLETA','ACESSO_EXPIRADO','PROFISSIONAL_NAO_IDENTIFICADO',
@@ -146,13 +148,22 @@ export function iniciarTrabalhosNoto(deps:DependenciasTrabalhos,intervaloMs=2500
     if(!ativo||execucao)return;
     execucao=(async()=>{
       await recuperarTrabalhosInterrompidos(deps.pool);
+      if(deps.controleCusto&&deps.destinatarioPesquisa){
+        await notificarPausaPorCusto(deps.controleCusto,
+          texto=>deps.enviar(deps.destinatarioPesquisa!,texto));
+      }
       if(deps.pesquisarRegistro&&deps.destinatarioPesquisa){
         await recuperarPesquisaInterrompida(deps.pool);
         if(await notificarPesquisaRegistro(deps.pool,deps.destinatarioPesquisa,deps.enviar))return;
       }
       const notificou=await notificarResultadoPendente(deps);
       if(notificou)return;
-      if(deps.pesquisarRegistro&&await executarPesquisaRegistro(deps.pool,deps.pesquisarRegistro))return;
+      if(deps.pesquisarRegistro){
+        // Não reservar tentativa CRM quando não existe rodada paga ativa.
+        // O gate atômico antes da chamada permanece obrigatório também.
+        if(deps.controleCusto&&(await lerOrcamentoNoto(deps.controleCusto)).estado!=='ativa')return;
+        if(await executarPesquisaRegistro(deps.pool,deps.pesquisarRegistro))return;
+      }
       await executarLeituraPendente(deps,executor);
     })().catch(()=>deps.relatar?.('ERRO_CICLO',0,'worker')).finally(()=>{execucao=null});
   };
