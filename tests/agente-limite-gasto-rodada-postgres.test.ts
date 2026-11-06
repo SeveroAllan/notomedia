@@ -8,6 +8,8 @@ import {
   consumoVerificado,TETO_RODADA_NANO_USD
 } from '../src/agente/limite-gasto-rodada.js';
 import {executarPesquisaRegistro} from '../src/agente/pesquisa-profissional-conversa.js';
+import {ProvedorAgenteComOrcamento} from '../src/agente/modelo-com-limite.js';
+import type {Model,ModelProvider} from '@openai/agents';
 
 const testar=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']?it:it.skip;
 const CONTA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -98,6 +100,23 @@ testar('US$1 por rodada: pré-reserva atômica, falha fechada, recomeço explíc
     expect(await lerOrcamentoNoto(pool)).toMatchObject({
       estado:'ativa',reservadoNanoUsd:0,utilizadoNanoUsd:0
     });
+    // Decorador real do SDK intercepta CADA getResponse, inclusive após
+    // uma tool call que força novo turno. Nenhuma chamada externa neste teste.
+    const resposta=vi.fn(async()=>({
+      output:[],usage:{inputTokens:100,outputTokens:20}
+    }));
+    const modeloFalso={getResponse:resposta,getStreamedResponse:()=>{throw Error('stream');}}
+      as unknown as Model;
+    const provedorFalso={getModel:()=>modeloFalso} as ModelProvider;
+    const protegido=await new ProvedorAgenteComOrcamento(provedorFalso,pool).getModel('gpt-4o-mini');
+    await protegido.getResponse({} as Parameters<Model['getResponse']>[0]);
+    await protegido.getResponse({} as Parameters<Model['getResponse']>[0]);
+    expect(resposta).toHaveBeenCalledTimes(2);
+    expect(await lerOrcamentoNoto(pool)).toMatchObject({
+      estado:'ativa',reservadoNanoUsd:0,utilizadoNanoUsd:54_000
+    });
+    await expect(new ProvedorAgenteComOrcamento(provedorFalso,pool)
+      .getModel('modelo-nao-precificado')).rejects.toMatchObject({motivo:'MODELO_SEM_PRECO'});
     const antiga=await pool.query([
       'select utilizado_nano_usd,reservado_nano_usd from public.noto_piloto_rodadas_ia where id=$1'
     ].join('\n'),[id1]);
