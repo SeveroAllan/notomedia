@@ -27,8 +27,7 @@ async function simular(texto:string,decisao:string,nomes:string[],estado:EstadoC
   overrides:Record<string,unknown>={}){
   const modelo=new ScriptedModel([
     [functionCall('confirmar_profissionais_descobertos',
-      {agenda:'tribemd',profissionalBase:null,decisao,nomes},{callId:'vinculo'})],
-    [assistantMessage('O CRM 999 não foi validado; tente digitar tudo de novo.')]
+      {agenda:'tribemd',profissionalBase:null,decisao,nomes},{callId:'vinculo'})]
   ]);
   const deps=port();
   const resposta=await responderAgente({texto,profissionais:[],estadoConversa:estado},{
@@ -50,6 +49,32 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       expect(r.resposta).not.toMatch(/999|não foi validado|digitar tudo/);
     });
   }
+  it('confirma sem segunda inferência, sem reler CRM e sem depender do tempo de resposta humana',async()=>{
+    const diagnosticos:import('../src/agente/diagnostico.js').DiagnosticoAgente[]=[];
+    const confirmado=await simular('Sim, sou eu!','confirmar',[],{
+      ...unico,perguntaPendente:null
+    },{
+      aoDiagnostico:(x:import('../src/agente/diagnostico.js').DiagnosticoAgente)=>diagnosticos.push(x)
+    });
+    expect(confirmado.resposta).toContain('Vinculei Dra. Ana Souza');
+    expect(confirmado.resposta).not.toContain('A resposta demorou');
+    expect(diagnosticos.at(-1)?.codigo).toBe('RESPOSTA');
+    expect(confirmado.confirmarProfissionais).toHaveBeenCalledOnce();
+  });
+  it('a dependência exata fica identificada; ausência de descoberta não vira timeout nem vínculo',async()=>{
+    const diagnosticos:import('../src/agente/diagnostico.js').DiagnosticoAgente[]=[];
+    const resultado=await simular('Sim, sou eu','confirmar',['Dra. Ana Souza'],{},{
+      aoDiagnostico:(x:import('../src/agente/diagnostico.js').DiagnosticoAgente)=>diagnosticos.push(x)
+    });
+    expect(resultado.resposta).toContain('descoberta comprovada');
+    expect(resultado.resposta).not.toContain('A resposta demorou');
+    expect(diagnosticos.at(-1)?.ferramentas).toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        nome:'confirmar_profissionais_descobertos',codigo:'SEM_DESCOBERTA'
+      })])
+    );
+    expect(resultado.confirmarProfissionais).not.toHaveBeenCalled();
+  });
   it('confirma pelo contexto também sem nome técnico no tool call se só houver uma descoberta',()=>{
     expect(decidirVinculo(unico,{agenda:'tribemd',decisao:'confirmar',nomes:[],mensagem:'Sim, sou eu!'}))
       .toEqual({ok:true,agenda:'tribemd',nomes:['Dra. Ana Souza']});
