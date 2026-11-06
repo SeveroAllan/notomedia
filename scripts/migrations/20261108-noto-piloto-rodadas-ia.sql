@@ -38,8 +38,16 @@ CREATE INDEX noto_piloto_chamadas_ia_rodada
 
 ALTER TABLE public.noto_piloto_rodadas_ia ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.noto_piloto_chamadas_ia ENABLE ROW LEVEL SECURITY;
-REVOKE ALL ON public.noto_piloto_rodadas_ia,public.noto_piloto_chamadas_ia
- FROM PUBLIC,anon,authenticated;
+REVOKE ALL ON public.noto_piloto_rodadas_ia,public.noto_piloto_chamadas_ia FROM PUBLIC;
+DO $do$
+BEGIN
+  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
+    REVOKE ALL ON public.noto_piloto_rodadas_ia,public.noto_piloto_chamadas_ia FROM anon;
+  END IF;
+  IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
+    REVOKE ALL ON public.noto_piloto_rodadas_ia,public.noto_piloto_chamadas_ia FROM authenticated;
+  END IF;
+END $do$;
 DO $$
 BEGIN
   IF EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
