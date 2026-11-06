@@ -91,8 +91,13 @@ export async function reservarCustoPiloto(pool:Banco,finalidade:FinalidadeChamad
     ].join('\n'));
     const atual=r.rows[0];
     if(!atual){
+      const ultima=await client.query([
+        "select estado from public.noto_piloto_rodadas_ia",
+        'order by criada_em desc limit 1'
+      ].join('\n'));
       await client.query('rollback');concluiu=true;
-      throw new PausaCustoPiloto('SEM_RODADA');
+      throw new PausaCustoPiloto(
+        ultima.rows[0]?.estado==='pausada'?'LIMITE_TESTE':'SEM_RODADA');
     }
     const total=Number(atual.reservado_nano_usd)+Number(atual.utilizado_nano_usd);
     if(total+maximo>Number(atual.limite_nano_usd)){
