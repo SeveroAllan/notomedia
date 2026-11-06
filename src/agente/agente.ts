@@ -1,4 +1,8 @@
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
+import OpenAI from 'openai';
+import type pg from 'pg';
+import {ProvedorAgenteComOrcamento} from './modelo-com-limite.js';
+import {PausaCustoPiloto,FALA_LIMITE_TESTE} from './limite-gasto-rodada.js';
 import { z } from 'zod';
 import { normalizarNomeMedico, linkCertificadoMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
@@ -64,6 +68,10 @@ export interface DependenciasAgente {
   modeloNome?: string;
   /** Modelo determinístico para os testes do próprio loop do SDK. */
   modeloTeste?: Model;
+  /** Obrigatório nos testes pagos do piloto; se o banco falhar, não chamar IA. */
+  controleCusto?:pg.Pool;
+  /** Garante que processo de piloto read-only não contorne o ledger. */
+  exigirControleCusto?:boolean;
   tracesAtivos?: boolean;
   aoDiagnostico?: (registro: DiagnosticoAgente) => void;
   registrarFerramenta?: (evento: EventoFerramenta) => void;
@@ -763,6 +771,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
+    modelSettings:{maxTokens:1024},
     tools: [consultarConta, consultarAgendas, orientarConexao, ...extras]
   });
 }
@@ -922,6 +931,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar('LIMITE_PROFISSIONAIS');
     return 'Há muitos profissionais nesta conta. Qual profissional você deseja atender primeiro?';
   }
+  if(!deps.modeloTeste&&deps.exigirControleCusto&&!deps.controleCusto){
+    registrar('SEM_MODELO');
+    return 'Os testes com IA estão pausados: este processo não possui acesso ao controle de gastos da rodada. Não fiz chamadas pagas.';
+  }
   if (!deps.modeloTeste && !deps.apiKey) {
     registrar('SEM_MODELO');
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
@@ -957,7 +970,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrarFerramenta: e => ferramentas.push(e)
     });
     const runner = new Runner({
-      ...(deps.modeloTeste ? {} : { modelProvider: new OpenAIProvider({ apiKey: deps.apiKey!, useResponses: true }) }),
+      ...(deps.modeloTeste ? {} : { modelProvider: deps.controleCusto?
+        new ProvedorAgenteComOrcamento(new OpenAIProvider({openAIClient:new OpenAI({apiKey:deps.apiKey!,maxRetries:0}),useResponses:true}),deps.controleCusto):
+        new OpenAIProvider({apiKey:deps.apiKey!,useResponses:true}) }),
       tracingDisabled: !deps.tracesAtivos,
       traceIncludeSensitiveData: false,
       workflowName: 'Noto Assistente - Entrega A'
@@ -1071,6 +1086,13 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch (erro) {
+    if(erro instanceof PausaCustoPiloto){
+      registrar('RESPOSTA');
+      return erro.motivo==='LIMITE_TESTE'?FALA_LIMITE_TESTE:
+        erro.motivo==='SEM_RODADA'?
+          'Os testes com IA estão pausados porque não há uma rodada ativa. Não fiz nova chamada. Uma nova rodada deve ser aberta pelo responsável pela homologação.':
+        'Pausei a chamada de IA porque não consegui verificar o orçamento ou o preço do modelo. Não fiz essa chamada e não vou ultrapassar o limite por suposição.';
+    }
     if (trabalhoTurno.atual?.estado.ok) {
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
       registrar('RESPOSTA');

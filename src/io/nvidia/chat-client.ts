@@ -12,6 +12,8 @@ export interface OpcoesCompletarNvidia {
   formatoJson?: boolean;
   maxTokens?: number;
   tentativasMax?: 1 | 2;
+  /** Observabilidade de IA para a trava, sem armazenar prompts ou conteúdos. */
+  aoUso?: (uso:{entrada:number;saida:number}|null)=>void;
 }
 
 const tempoEsgotado = (erro: unknown): boolean => erro instanceof Error && ['TimeoutError', 'AbortError'].includes(erro.name);
@@ -66,7 +68,14 @@ export async function completarChatCompativel(
     throw new ErroNvidiaChat('IA_HTTP_ERRO', response?.status);
   }
   try {
-    const data = await response.json() as { choices?: Array<{ finish_reason?: string; message?: { content?: unknown } }> };
+    const data = await response.json() as {
+      usage?:{prompt_tokens?:number;completion_tokens?:number};
+      choices?: Array<{ finish_reason?: string; message?: { content?: unknown } }>
+    };
+    const uso=data.usage;
+    const callback=typeof opcoesOuTimeout==='object'?opcoesOuTimeout.aoUso:undefined;
+    callback?.(typeof uso?.prompt_tokens==='number'&&typeof uso?.completion_tokens==='number'
+      ?{entrada:uso.prompt_tokens,saida:uso.completion_tokens}:null);
     const choice = data.choices?.[0];
     if (choice?.finish_reason && choice.finish_reason !== 'stop') throw Error('incompleta');
     const content = choice?.message?.content;
