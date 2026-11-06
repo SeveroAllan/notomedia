@@ -4,6 +4,7 @@
  */
 import { nomeProfissionalValido, normalizarCrm } from '../conta/validar-dados-emissao.js';
 import { completarNvidia, ErroNvidiaChat, type MensagemNvidia } from '../io/nvidia/chat-client.js';
+import {PausaCustoPiloto} from '../agente/limite-gasto-rodada.js';
 import type { ConsultaRegistro, ResultadoConsulta, ResultadoConsultaRegistro } from './consultas.js';
 import type { DiagnosticoPesquisaRegistro } from './diagnostico-pesquisa-registro.js';
 export type { DiagnosticoPesquisaRegistro } from './diagnostico-pesquisa-registro.js';
@@ -317,6 +318,8 @@ export class PesquisaRegistroProfissional implements ConsultaRegistro {
     let extracao: string;
     try { extracao = await this.completar(mensagensExtracao(nome.trim(), fontes)); }
     catch (erro) {
+      // Bloqueio antes da IA não é falha de pesquisa nem tentativa consumida.
+      if(erro instanceof PausaCustoPiloto)throw erro;
       if (erro instanceof ErroNvidiaChat && erro.statusHttp !== undefined) diagnosticar({ etapa: 'nvidia_http', status: erro.statusHttp });
       return falha(erro instanceof ErroNvidiaChat ? erro.codigo : 'NVIDIA_CONSULTA_INDISPONIVEL');
     }
