@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import {PausaCustoPiloto} from './limite-gasto-rodada.js';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { normalizarCrm, nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import type { ConsultaRegistro, ResultadoConsultaRegistro } from '../cadastro/consultas.js';
@@ -187,7 +188,18 @@ export async function executarPesquisaRegistro(pool:Banco,consulta:ConsultaRegis
       [trabalho.medicoId,trabalho.contaId,trabalho.nome]
     );
     if(r.rows.length===1)pesquisa=extrairSugestoes(trabalho.nome,await consulta.buscar(trabalho.nome));
-  }catch{/* Nem a falha nem um timeout confirmam ausência de CRM/RQE. */}
+  }catch(erro){
+    if(erro instanceof PausaCustoPiloto){
+      // Nenhum token de IA foi gasto; a reserva da pesquisa NÃO pode contar
+      // como uma das quatro tentativas. Transição CAS sob a mesma tentativa.
+      await atualizarPesquisa(pool,trabalho,'executando',{
+        estado:'pendente',tentativas:Math.max(0,(trabalho.tentativas??1)-1),
+        reservadoEm:null,proximaTentativaEm:null
+      });
+      return false;
+    }
+    // Nem a falha nem um timeout confirmam ausência de CRM/RQE.
+  }
   const confiavel=pesquisa.razao==='ENCONTRADO'&&pesquisa.candidatos.length===1;
   const esgotou=(trabalho.tentativas??MAX_TENTATIVAS_REGISTRO)>=MAX_TENTATIVAS_REGISTRO;
   const espera=ESPERA_MINUTOS[Math.min((trabalho.tentativas??1)-1,ESPERA_MINUTOS.length-1)]!;
