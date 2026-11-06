@@ -58,6 +58,8 @@ export function criarRouterWebhookAgente(deps: {
   modeloNome?: string;
   tracesAtivos?: boolean;
   modeloTeste?: Model;
+  /** Banco de orçamento do piloto, com fail closed se indisponível. */
+  controleCusto?:pg.Pool;
   diagnosticoAtivo?: boolean;
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
@@ -253,7 +255,8 @@ export function criarRouterWebhookAgente(deps: {
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
-        modeloTeste: deps.modeloTeste, consultarStatus: deps.consultarStatus, aoDiagnostico,
+        modeloTeste: deps.modeloTeste,controleCusto:deps.controleCusto,
+        consultarStatus: deps.consultarStatus, aoDiagnostico,
         ...(contaId ? { referenciaContaAgenda: async () => {
           // Novo acesso sempre pertence à conta. Para quem já tinha agenda
           // conectada sob médico, reutilizar a conexão antiga sem migrá-la.
