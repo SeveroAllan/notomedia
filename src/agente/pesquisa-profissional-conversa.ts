@@ -219,6 +219,11 @@ export async function reservarAvisoPesquisa(pool:Banco):Promise<PesquisaNotifica
     'from public.noto_agent_conversas c',
     "cross join lateral jsonb_each(coalesce(c.estado->'pesquisasRegistro','{}'::jsonb)) p",
     "where p.value->>'estado'='resultado_pronto'",
+    // O resultado não ultrapassa as bolhas do turno que agendou a pesquisa.
+    // Reservas abandonadas não bloqueiam a notificação indefinidamente.
+    'and not exists(select 1 from public.noto_agent_mensagens m',
+    "where m.conta_id=c.conta_id and m.estado='reservada'",
+    "and m.atualizado_em>now()-interval '4 minutes')",
     'order by c.atualizado_em,c.conta_id,p.key for update of c skip locked limit 1)',
     'update public.noto_agent_conversas c',
     "set estado=jsonb_set(c.estado,array['pesquisasRegistro',proxima.medico_id],",

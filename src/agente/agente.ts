@@ -928,9 +928,9 @@ function explicarResultadoVinculo(
     ', mas ainda não confirmei a gravação da etapa na conversa. Vou conferir essa etapa antes de pesquisar CRM/RQE.';
   const confirmacao='Vinculei '+v.nome+' à sua conta.';
   if(v.pesquisa==='agendada')return confirmacao+
-    ' Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
+    ' A pesquisa pública de CRM e RQE foi solicitada. Os dados precisam da sua confirmação antes de salvar.';
   if(v.pesquisa==='ja_existe')return confirmacao+
-    ' A pesquisa pública já está registrada. Vou aproveitar o resultado existente, sem repeti-la.';
+    ' A pesquisa pública já está registrada; não solicitei outra consulta.';
   return confirmacao+
     ' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
 }

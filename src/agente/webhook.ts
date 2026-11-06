@@ -202,7 +202,8 @@ export function criarRouterWebhookAgente(deps: {
           try{
             const recuperacao=await recuperarDescobertaComprovada(
               deps.pool,contaId!,evento.instance,estado);
-            if(recuperacao==='RECUPERADA')estado=await lerEstadoConversa(deps.pool,contaId!);
+            if(recuperacao==='RECUPERADA'||recuperacao==='RECUPERADA_ESTADO')
+              estado=await lerEstadoConversa(deps.pool,contaId!);
             if(recuperacao!=='JA_COMPROVADA'&&recuperacao!=='SEM_PROVA')
               console.info('NOTO_DESCOBERTA_RECONCILIACAO',recuperacao);
           }catch{
