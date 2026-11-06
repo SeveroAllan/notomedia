@@ -26,6 +26,7 @@ testar('PostgreSQL descartável: 4 tentativas totais, backoff e reinício não d
       'create table public.contas (id uuid primary key);',
       'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id), nome_completo text not null, crm text, rqe text);',
       "create table public.noto_agent_conversas (conta_id uuid primary key references public.contas(id), estado jsonb not null default '{}'::jsonb, atualizado_em timestamptz not null default now());",
+      "create table public.noto_agent_mensagens(conta_id uuid,estado text,atualizado_em timestamptz default now());",
       'create table public.usuarios (id uuid primary key,conta_id uuid,auth_user_id uuid,telefone text,ativo boolean);',
       "insert into public.contas(id) values ('"+CONTA+"');",
       "insert into public.medicos(id,conta_id,nome_completo) values('"+ANA+"','"+CONTA+"','"+NOME+"');",

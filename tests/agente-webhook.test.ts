@@ -62,6 +62,48 @@ async function comServidor(
 }
 
 describe('Noto SDK — webhook autenticado e isolado', () => {
+  it('usa o estado recuperado do Cofre no primeiro turno e exige a ferramenta', async () => {
+    let estado:Record<string,unknown>={agendaEscolhida:'tribemd',
+      descoberta:{agenda:'tribemd',nomes:['Alice Souza']}};
+    let leituras=0;
+    const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}]};
+      if(sql.startsWith('select id,nome_completo from medicos'))return {rows:[]};
+      if(sql.startsWith('select estado from noto_agent_conversas')){
+        leituras++;return {rows:[{estado:structuredClone(estado)}]};
+      }
+      if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
+      if(sql.startsWith('update public.noto_agent_conversas as c')){
+        estado={...estado,faseAgenda:'CONFIRMACAO_PENDENTE',origemDescoberta:'legado_validado'};
+        return {rows:[{conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}]};
+      }
+      if(sql.startsWith('update public.noto_agent_conversas c set')){
+        estado={...estado,faseAgenda:'VINCULO_CONFIRMADO',
+          profissionalConfirmadoId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',descoberta:{agenda:'tribemd',nomes:[]}};
+        return {rows:[{conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}]};
+      }
+      if(sql.startsWith('update noto_agent_mensagens')||sql.startsWith('insert into noto_agent_conversas'))return {rows:[]};
+      throw Error('SQL não previsto: '+sql);
+    });
+    const modeloTeste=new ScriptedModel([[functionCall('confirmar_profissionais_descobertos',{
+      agenda:'tribemd',profissionalBase:null,decisao:'confirmar',nomes:[]
+    },{callId:'confirmar'})]]);
+    const confirmarProfissionais=vi.fn().mockResolvedValue({ok:true,medicos:[{id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',nome:'Alice Souza'}]});
+    const agendarPesquisa=vi.fn().mockResolvedValue('agendada');
+    const {app,enviar}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,
+      persistirConversa:true,listarTrabalhos:async()=>[],
+      referenciaContaAgenda:async()=> 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',confirmarProfissionais,agendarPesquisa});
+    await comServidor(app,async postar=>expect((await postar({...evento,data:{...evento.data,
+      message:{conversation:'Sim, sou eu.'}}})).status).toBe(200));
+    expect(leituras).toBeGreaterThanOrEqual(3);
+    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('confirmar_profissionais_descobertos');
+    expect(confirmarProfissionais).toHaveBeenCalledOnce();
+    expect(agendarPesquisa).toHaveBeenCalledExactlyOnceWith('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','Alice Souza');
+    expect(enviar.mock.calls.map(c=>c[1]).join(' ')).toContain('Vinculei Alice Souza à sua conta.');
+    expect(enviar.mock.calls.map(c=>c[1]).join(' ')).not.toContain('Vou pesquisar');
+    modeloTeste.assertComplete();
+  });
+
   it('rejeita segredo inválido antes de consultar banco ou modelo', async () => {
     const { app, query, modeloTeste, enviar } = preparar();
     await comServidor(app, async postar => expect((await postar(evento, 'errado')).status).toBe(401));

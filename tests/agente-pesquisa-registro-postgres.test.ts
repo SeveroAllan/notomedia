@@ -32,6 +32,7 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       'create table public.contas (id uuid primary key);',
       'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id), nome_completo text not null, crm text, rqe text);',
       "create table public.noto_agent_conversas (conta_id uuid primary key references public.contas(id), estado jsonb not null default '{}'::jsonb, atualizado_em timestamptz not null default now());",
+      "create table public.noto_agent_mensagens(conta_id uuid,estado text,atualizado_em timestamptz default now());",
       "insert into public.contas (id) values ('"+CONTA+"'),('"+OUTRA+"');",
       "insert into public.medicos(id,conta_id,nome_completo) values ('"+ANA+"','"+CONTA+"','"+NOME+"'),('"+BRUNO+"','"+OUTRA+"','Dr. Bruno Lima');"
     ].join('\n'));
@@ -62,6 +63,13 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
     expect(await executarPesquisaRegistro(db as unknown as pg.Pool,consulta)).toBe(false);
     expect(consulta.buscar).toHaveBeenCalledExactlyOnceWith(NOME);
 
+    // Mesmo com resultado pronto, o worker aguarda as bolhas do webhook.
+    await db.query("insert into public.noto_agent_mensagens(conta_id,estado) values($1,'reservada')",[CONTA]);
+    expect(await reservarAvisoPesquisa(db as unknown as pg.Pool)).toBe(null);
+    await db.query("update public.noto_agent_mensagens set estado='concluida' where conta_id=$1",[CONTA]);
+    // Turno de outra conta não bloqueia Alice. Reserva abandonada tem limite.
+    await db.query("insert into public.noto_agent_mensagens(conta_id,estado) values($1,'reservada')",[OUTRA]);
+    await db.query("insert into public.noto_agent_mensagens(conta_id,estado,atualizado_em) values($1,'reservada',now()-interval '5 minutes')",[CONTA]);
     const aviso=await reservarAvisoPesquisa(db as unknown as pg.Pool);
     expect(aviso).toMatchObject({contaId:CONTA,medicoId:ANA,
       pesquisa:{razao:'ENCONTRADO',candidatos:[{crm:'12345/RS',rqes:['980']}]}});

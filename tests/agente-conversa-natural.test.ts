@@ -13,12 +13,15 @@ describe('balões de WhatsApp como mensagens reais', () => {
     expect(separarBaloes('Vou te enviar o acesso. Abra este link:\nhttps://noto.example.test/c/abc123'))
       .toEqual(['Vou te enviar o acesso.', 'Abra este link:', 'https://noto.example.test/c/abc123']);
   });
-  it('separa texto longo em unidades menores, sem perder conteúdo', () => {
+  it('preserva uma frase longa sem pontuação intermediária como unidade de pensamento', () => {
     const texto = 'Vou verificar o estado dessa integração para entender o que já foi conectado e o que falta fazer antes de seguir com o cadastro.';
     const partes = separarBaloes(texto);
-    expect(partes.length).toBeGreaterThan(1);
-    expect(partes.every(x => x.split(/\s+/).length <= 15)).toBe(true);
+    expect(partes).toEqual([texto]);
     expect(partes.join(' ')).toBe(texto);
+  });
+  it('não deixa o complemento salvar isolado em outro balão', () => {
+    const frase='Vou pesquisar CRM e RQE nas fontes públicas e te mostrar os dados antes de salvar.';
+    expect(separarBaloes(frase)).toEqual([frase]);
   });
   it('classifica gestos por intenção, sem transformar cada frase em emoji', () => {
     expect(reacaoContextual('Sim, é isso')).toBe('👍');

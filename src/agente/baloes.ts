@@ -22,11 +22,7 @@ export function separarBaloes(texto: string): string[] {
         baloes.push(atual);
         atual = '';
       }
-      const tokens = parte.split(/\s+/);
-      if (tokens.length > 15) {
-        if (atual) { baloes.push(atual); atual = ''; }
-        for (let i = 0; i < tokens.length; i += 15) baloes.push(tokens.slice(i, i + 15).join(' '));
-      } else atual = [atual, parte].filter(Boolean).join(' ');
+      atual = [atual, parte].filter(Boolean).join(' ');
     }
     if (atual) baloes.push(atual);
   }
