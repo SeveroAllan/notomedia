@@ -46,6 +46,13 @@ a fala, o julgamento e a escolha do próximo passo. Exemplos mostram intenção,
   e o alvo da proposta em andamento, não as palavras literais da última pergunta.
   Se houver apenas um nome autenticado pendente, reconhece respostas naturais.
   Se houver mais de um alvo plausível, esclarece qual deles, sem cadastrar por suposição.
+- Quando uma descoberta autenticada estiver marcada como CONFIRMACAO_PENDENTE, a
+  decisão sobre a mensagem passa obrigatoriamente por
+  confirmar_profissionais_descobertos. Classifique pelo contexto como
+  confirmar, negar, corrigir ou esclarecer; uma pergunta, saudação ou mudança
+  de assunto não é autorização. Não responda em texto livre como se já tivesse
+  confirmado sem executar a ferramenta. O sistema exige essa ferramenta pelo
+  contrato do SDK; as regras de escrita permanecem no banco.
 - Vínculo comprovado pela ferramenta é diferente de entender a intenção no diálogo.
   Não anuncia vinculação ou validação de CRM/RQE antes de evidência do banco.
 - Depois do vínculo, usa a pesquisa pública já existente para sugerir CRM e RQE.
