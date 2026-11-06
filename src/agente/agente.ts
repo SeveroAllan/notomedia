@@ -103,6 +103,17 @@ function identificar(nome: string | null, profissionais: ProfissionalAgente[]): 
   return { encontrados };
 }
 
+/** Roteamento somente pela descoberta autenticada persistida.
+ * Não tenta inferir "sim" com regex: a ferramenta interpreta a fala.
+ */
+function exigeDecisaoVinculo(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
+  const fonte=entrada.estadoConversa?.descoberta;
+  return Boolean(!entrada.semConta&&deps.confirmarProfissionais&&
+    entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE'&&fonte&&
+    ['tribemd','amplimed'].includes(fonte.agenda)&&
+    Array.isArray(fonte.nomes)&&fonte.nomes.length>0);
+}
+
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
@@ -111,11 +122,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
   // ou esclarecer); o código nunca converte um "sim" em autorização por regex.
   // Sem essa evidência, nenhum toolChoice de escrita é imposto.
-  const confirmacaoPendente=Boolean(!entrada.semConta&&deps.confirmarProfissionais&&
-    entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE'&&
-    entrada.estadoConversa.descoberta&&
-    ['tribemd','amplimed'].includes(entrada.estadoConversa.descoberta.agenda)&&
-    entrada.estadoConversa.descoberta.nomes.length>0);
+  const confirmacaoPendente=exigeDecisaoVinculo(entrada,deps);
   // Nunca expor o ID técnico ao modelo, nem usá-lo como nome de profissional.
   const ancoraDaConta = async () => entrada.semConta ? null : await deps.referenciaContaAgenda?.() ?? null;
   const registrar = (nome: FerramentaNoto, codigo: CodigoFerramenta, inicio: number) =>
@@ -1048,6 +1055,13 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    // O provedor deve honrar toolChoice. Se não honrar (ou um modelo de
+    // teste emitir texto livre), não aceitar nenhuma afirmação de vínculo.
+    // Não repetir a IA: manter pendência e evidenciar a falha de contrato.
+    if(exigeDecisaoVinculo(entrada,deps)&&!vinculoTurno.atual){
+      registrar('CONFIRMACAO_SEM_FERRAMENTA',uso);
+      return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
+    }
     if(vinculoTurno.atual){
       registrar('RESPOSTA',uso);
       return explicarResultadoVinculo(vinculoTurno.atual);
