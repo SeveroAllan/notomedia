@@ -23,6 +23,36 @@ const base={
   aoVinculo:vi.fn().mockResolvedValue({registrado:true,pesquisa:'agendada' as const})
 };
 
+describe('diagnóstico de confirmação sem snapshot autenticado',()=>{
+  it('chamada espontânea à ferramenta NÃO implica toolChoice forçado nem descoberta salva',async()=>{
+    const modelo=new ScriptedModel([[
+      functionCall('confirmar_profissionais_descobertos',{
+        agenda:'tribemd',profissionalBase:null,decisao:'confirmar',nomes:['Dra. Ana Souza']
+      },{callId:'sem-prova'})
+    ]]);
+    const diagnosticos:import('../src/agente/diagnostico.js').DiagnosticoAgente[]=[];
+    const confirmar=vi.fn();
+    const resposta=await responderAgente({texto:'Sim, sou eu.',
+      profissionais:[],estadoConversa:{}},{
+      ...base,modeloTeste:modelo,confirmarProfissionais:confirmar,
+      aoDiagnostico:x=>diagnosticos.push(x)
+    });
+    expect(confirmar).not.toHaveBeenCalled();
+    expect(resposta).toContain('descoberta comprovada');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(diagnosticos.at(-1)?.estadoVinculo).toEqual({
+      fase:'AUSENTE',fonte:'AUSENTE',
+      quantidadeNomes:0,ferramentaObrigatoria:false
+    });
+    expect(diagnosticos.at(-1)?.ferramentas).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        nome:'confirmar_profissionais_descobertos',codigo:'SEM_DESCOBERTA'
+      })
+    ]));
+    modelo.assertComplete();
+  });
+});
+
 describe('roteamento obrigatório de confirmação com descoberta verificada',()=>{
   it('Sim sou eu seleciona forçadamente a ferramenta por NOME e só faz uma inferência',async()=>{
     const modelo=new ScriptedModel([[
