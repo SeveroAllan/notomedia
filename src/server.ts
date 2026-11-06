@@ -30,6 +30,7 @@ import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
+import { reservarCustoPiloto,liquidarCustoPiloto,exigirRodadaAtiva } from './agente/limite-gasto-rodada.js';
 import { classificarEnvioLinkEvolution } from './whatsapp/status-entrega-link.js';
 import { PostgresEmissaoApiRepositorio } from './io/postgres/postgres-emissao-api-repositorio.js';
 /**
@@ -229,9 +230,29 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const completarIa=iaOpenAiAtiva?completarOpenAi:completarNvidia;
   const iaModeloTexto=(iaOpenAiAtiva?config.openaiTextoModel:config.nvidiaRegistroModel) ?? '';
   const pesquisaCrmConfigurada=!!config.openserpBaseUrl&&!!iaApiKey;
+  // Uma rodada não nasce implicitamente; a migração e abertura administrativa
+  // precisam existir antes da PRIMEIRA chamada paga em homologação.
+  const orcamentoPiloto=config.notoPilotoRestrito?pool:undefined;
+  const completarRegistroComOrcamento=async(mensagens:import('./io/nvidia/chat-client.js').MensagemNvidia[])=>{
+    const opcoes={temperature:0.1,formatoJson:true,timeoutMs:180_000,
+      maxTokens:2048,tentativasMax:1 as const};
+    if(!orcamentoPiloto)return completarIa(iaApiKey??'',iaModeloTexto,mensagens,opcoes);
+    const reserva=await reservarCustoPiloto(orcamentoPiloto,'crm_rqe',iaModeloTexto);
+    let uso:{entrada:number;saida:number}|null=null;
+    try{
+      const texto=await completarIa(iaApiKey??'',iaModeloTexto,mensagens,{
+        ...opcoes,aoUso:(registro:{entrada:number;saida:number}|null)=>{uso=registro;}
+      });
+      await liquidarCustoPiloto(orcamentoPiloto,reserva,uso);
+      return texto;
+    }catch(erro){
+      await liquidarCustoPiloto(orcamentoPiloto,reserva,null);
+      throw erro;
+    }
+  };
   const consultaRegistro = pesquisaCrmConfigurada
     ? new OpenSerpConsultaRegistro({baseUrl:config.openserpBaseUrl,nvidiaApiKey:iaApiKey,modelo:iaModeloTexto,incluirDiagnostico:true,
-        completar:(mensagens)=>completarIa(iaApiKey ?? '', iaModeloTexto, mensagens, { temperature: 0.1, formatoJson: true, timeoutMs: 180_000, maxTokens: 2048, tentativasMax: 1 })})
+        completar:completarRegistroComOrcamento})
     : new PesquisaRegistroIndisponivel();
   // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
   // A instância de emissão/pacientes não é encaminhada para o agente.
@@ -315,6 +336,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.locals.iniciarTrabalhos = () => trabalhosHabilitados ?
     iniciarTrabalhosNoto({
       pool,instancia:config.evolutionAssistantInstanceName,
+      ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
       descobrir:(contaId,medicoId,agenda) =>
         descobrirProfissionaisConta(medicoId??cofreIdDaConta(contaId),agenda),
       conferir:consultarConferenciaConta,
@@ -344,6 +366,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     painelUrl: config.appPublicOrigin,
     apiKey: config.openaiApiKey,
     modeloNome: config.openaiTextoModel,
+    ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
