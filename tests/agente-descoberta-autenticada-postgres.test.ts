@@ -10,7 +10,7 @@ const testar=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']?it:it.skip;
 const CONTA='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OUTRA='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const INSTANCIA='notomed_assistente';
-const nome='Alice Castro Menezes Xavier';
+const nome='Dra. Ana Souza';
 const fonte={agenda:'tribemd',nomes:[nome]};
 
 testar('descoberta autenticada: caso da confirmação anunciada mas não persistida, recuperação sem novo acesso ou IA',async()=>{
