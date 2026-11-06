@@ -8,9 +8,11 @@ const vazio={tribemd:{salvo:false,conectada:false},amplimed:{salvo:false,conecta
 const conectado={tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}};
 const origem={agendaEscolhida:'tribemd' as const};
 const nomes=['Dra. Alice Silva','Dr. Bruno Costa'];
-const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>new ScriptedModel([
-  [functionCall(ferramenta,args,{callId:'agenda-conta'})],[assistantMessage(resposta)]
-]);
+const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>new ScriptedModel(
+  ferramenta==='confirmar_profissionais_descobertos'
+    ?[[functionCall(ferramenta,args,{callId:'agenda-conta'})]]
+    :[[functionCall(ferramenta,args,{callId:'agenda-conta'})],[assistantMessage(resposta)]]
+);
 
 describe('primeira conexão por conta sem médico confirmado',()=>{
   it('orienta Cofre seguro sem escolher cadastro provisório nem perguntar qual médico',async()=>{
@@ -146,8 +148,7 @@ it('sem descoberta real comprovada em turno anterior, não cadastra mesmo com no
   const modeloTeste=new ScriptedModel([
     [functionCall('confirmar_profissionais_descobertos',{
       agenda:'tribemd',profissionalBase:null,decisao:'confirmar',nomes:['Alice Silva']
-    },{callId:'sem-descoberta-previa'})],
-    [assistantMessage('Preciso primeiro consultar os nomes na sua agenda.')] 
+    },{callId:'sem-descoberta-previa'})]
   ]);
   const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Alice Silva']});
   const confirmarProfissionais=vi.fn();
