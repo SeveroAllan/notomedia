@@ -106,10 +106,11 @@ testar('descoberta autenticada: caso da confirmação anunciada mas não persist
     // a descoberta verificada, sem fase; a recuperação não deve depender
     // da fila nem da resposta anterior do WhatsApp.
     const CONTA_COFRE='ffffffff-ffff-4fff-8fff-ffffffffffff';
-    await pool.query([
-      'insert into public.noto_agent_conversas(conta_id,estado)',
-      "values($1,jsonb_build_object('agendaEscolhida','tribemd','descoberta',$2::jsonb))"
-    ].join('\n'),[CONTA_COFRE,JSON.stringify(fonte)]);
+    // Reproduz a escrita de snapshots antigos pelo caminho genérico:
+    // salvarEstadoConversa podia salvar somente descoberta, sem fase.
+    await salvarEstadoConversa(pool,CONTA_COFRE,{
+      agendaEscolhida:'tribemd',descoberta:fonte
+    });
     const antigoCofre=await lerEstadoConversa(pool,CONTA_COFRE);
     expect(antigoCofre.faseAgenda).toBeUndefined();
     expect(await recuperarDescobertaComprovada(
