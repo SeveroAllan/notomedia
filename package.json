@@ -40,6 +40,7 @@
   "dependencies": {
     "@nfewizard/types": "^1.0.11",
     "@openai/agents": "0.21.0",
+    "openai": "7.47.0",
     "@supabase/supabase-js": "^2.117.2",
     "compression": "^1.8.2",
     "dotenv": "^18.0.4",
