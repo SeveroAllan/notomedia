@@ -341,8 +341,8 @@ export function criarRouterWebhookAgente(deps: {
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
         ...(contaId&&deps.persistirConversa?{
-          registrarPeriodoConferencia:async(profissionalId:string,inicio:string)=>{
-            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio);
+          registrarPeriodoConferencia:async(profissionalId:string,inicio:string,substituirInicio?:string)=>{
+            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio,substituirInicio);
             if(gravado)periodoDaMensagem=true;
             return gravado;
           }

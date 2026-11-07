@@ -72,7 +72,7 @@ export interface DependenciasAgente {
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
-  registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
+  registrarPeriodoConferencia?: (profissionalId:string,inicio:string,substituirInicio?:string)=>Promise<boolean>;
   aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
   aoContinuidadeOnboarding?: (r:ResultadoContinuidade)=>void;
   aoDiagnosticoContinuidade?: (r:NonNullable<DiagnosticoAgente['continuidade']>)=>void;
@@ -924,8 +924,11 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       periodoFinalizado=true;
       const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
+      const anterior=entrada.estadoConversa?.periodoConferencia;
+      const substituir=anos.length===1&&anterior&&anterior.profissionalId===medico?.id
+        ? anterior.inicio : undefined;
       const gravado=medico&&inicio&&deps.registrarPeriodoConferencia&&(exigeRegistroPeriodo(entrada,deps)||continuidadeExecutada&&Boolean(profissionalComVinculoConfirmado(entrada)))&&
-        await deps.registrarPeriodoConferencia!(medico.id,inicio).catch(()=>false);
+        await deps.registrarPeriodoConferencia!(medico.id,inicio,...(substituir?[substituir] as const:[])).catch(()=>false);
       if(!gravado){
         registrar('registrar_periodo_conferencia','DEPENDENCIA_CONFIRMACAO',comeco);
         deps.aoPeriodoConferencia?.({ok:false,motivo:'PERIODO_NAO_REGISTRADO'});
