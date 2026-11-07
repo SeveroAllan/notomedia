@@ -386,9 +386,11 @@ export function criarRouterWebhookAgente(deps: {
         } : {})
       });
 
-      const baloes = separarBaloes(resposta).filter((b,i,todos)=>!urlsCertificado.has(b)||todos.indexOf(b)===i);
-      // O link real não depende da redação do modelo nem do resultado de outra ação.
-      for(const url of urlsCertificado)if(!baloes.includes(url))baloes.push(url);
+      // Envie o link antes da fala que pode orientar o usuário a abri-lo.
+      const baloes = [
+        ...urlsCertificado,
+        ...separarBaloes(resposta).filter(balao => !urlsCertificado.has(balao))
+      ];
       enviado = baloes.length > 0;
       for (const balao of baloes) {
         if (deps.presenca) await renovarPresenca();
