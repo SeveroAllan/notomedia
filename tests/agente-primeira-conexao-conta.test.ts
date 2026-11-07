@@ -15,7 +15,7 @@ const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>ne
 );
 
 describe('primeira conexão por conta sem médico confirmado',()=>{
-  it.each(['Não, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD', 'Podemos usar a TribeMD?', 'Pode trocar para a TribeMD?'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
+  it.each(['Não, é a TribeMD', 'não é a Amplimed, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD', 'Podemos usar a TribeMD?', 'Pode trocar para a TribeMD?'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
     const scripted=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'amplimed',profissional:null},{callId:'antigo'})],
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'atual'})],
