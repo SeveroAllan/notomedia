@@ -1469,7 +1469,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       // A abertura natural é livre, mas o relato da ação provém do
       // estado comprovado. Saída fora do contrato usa só o relato seguro.
       const partes=resposta.split('[[RESULTADO_ACAO]]');
-      const introducao=partes.length===2 ? partes[0]!.trim() : '';
+      const envioLinkAgenda = ferramentas.some(e =>
+        e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
+      const introducao = !envioLinkAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);

@@ -87,10 +87,10 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
 });
 
 describe('estado de ação controla o relato, não uma lista de frases proibidas',()=>{
-  it('mantém abertura natural enquanto só o código narra o marco',async()=>{
+  it('após pedido de link, usa a orientação sem a abertura livre',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'resultado-estruturado'})],
-      [assistantMessage('Certo, entendi a agenda que você quer conectar. [[RESULTADO_ACAO]]')]
+      [assistantMessage('Enviei novamente o link da Amplimed, mas ainda não tenho confirmação de entrega. [[RESULTADO_ACAO]]')]
     ]);
     const resposta=await responderAgente({
       texto:'Quero conectar a TribeMD',profissionais:[],
@@ -100,7 +100,7 @@ describe('estado de ação controla o relato, não uma lista de frases proibidas
       referenciaContaAgenda:ancora(),
       solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true})
     });
-    expect(resposta).toContain('Certo, entendi a agenda que você quer conectar.');
+    expect(resposta).not.toMatch(/Enviei novamente|Amplimed|confirmação de entrega/i);
     expect(resposta).not.toMatch(/aceit|confirm.*entrega/i);
     expect(resposta).toContain('Depois de preencher a página segura');
     expect(resposta).not.toContain('[[RESULTADO_ACAO]]');
