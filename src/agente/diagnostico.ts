@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 
 export type FerramentaNoto = 'continuar_onboarding' | 'registrar_periodo_conferencia' | 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'revisar_registro_profissional' | 'solicitar_link_seguro_registro' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas';
 export type CodigoFerramenta =
-  | 'CONTINUIDADE_PROCESSADA' | 'PERIODO_REGISTRADO' | 'CONTA_AUTORIZADA' | 'CONTA_NAO_ENCONTRADA'
+  | 'CONTINUIDADE_SEM_ACAO' | 'CONTINUIDADE_PROCESSADA' | 'PERIODO_REGISTRADO' | 'CONTA_AUTORIZADA' | 'CONTA_NAO_ENCONTRADA'
   | 'STATUS_CONECTADO' | 'STATUS_NAO_CONECTADO' | 'STATUS_PARCIAL'
   | 'STATUS_INDISPONIVEL' | 'INTEGRACAO_NAO_CONFIGURADA' | 'PROFISSIONAL_AMBIGUO'
   | 'PROFISSIONAL_NAO_ENCONTRADO' | 'PROFISSIONAIS_NAO_IDENTIFICADOS' | 'DEPENDENCIA_CONTA'
@@ -29,6 +29,17 @@ export interface DiagnosticoAgente {
   };
   duracaoMs: number;
   contratoFala?:'VALIDO'|'INVALIDO';
+  rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO';
+  continuidade?:{
+    intencoes:string[];
+    camposConfirmados:('crm'|'rqe')[];
+    alvoValido:boolean;
+    comparacaoCrm:'NAO_INFORMADO'|'NAO_AVALIADO'|'COINCIDE'|'DIVERGE';
+    comparacaoRqe:'NAO_INFORMADO'|'NAO_AVALIADO'|'COINCIDE'|'DIVERGE';
+    revisao:'NAO_SOLICITADA'|'ALVO_INVALIDO'|'INTENCOES_CONFLITANTES'|'CRM_NAO_AUTORIZADO'|'REGISTRO_DIVERGENTE'|'JA_CONFIRMADO'|'EXECUTADA_SUCESSO'|'EXECUTADA_FALHA';
+    certificado:'NAO_SOLICITADO'|'ALVO_INVALIDO'|'PREPARADO'|'VALIDO'|'RECUSADO';
+    acoesConcluidas:string[];
+  };
   falha?: { natureza: 'ABORT_SIGNAL'|'MAX_TURNS'|'FALHA_RUNNER' };
   /** Snapshot de entrada usado pelo agente, sem nomes, datas, IDs ou conteúdo livre. */
   estadoOnboarding?:{
