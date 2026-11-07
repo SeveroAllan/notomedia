@@ -6,8 +6,8 @@ export type ResultadoDecisaoVinculo =
   | {ok:true;nomes:string[];agenda:AgendaEscolhida}
   | {ok:false;motivo:'SEM_DESCOBERTA'|'OUTRA_AGENDA'|'ALVO_AMBIGUO'|'NOME_NAO_COMPROVADO'|'NAO_AUTORIZOU'|'ESCLARECIMENTO'};
 
-/** O modelo classifica a intenção. A gravação também exige evidência
- * na mensagem atual, ancorada no alvo descoberto ou na pergunta pendente. */
+/** A descoberta autenticada permite antecipar o vínculo de um único alvo.
+ * A decisão contextual pode vetar o vínculo e nunca resolve ambiguidade sozinha. */
 export function decidirVinculo(
   estado:EstadoConversa|undefined,
   entrada:{agenda:AgendaEscolhida;decisao:DecisaoVinculo;nomes:string[];mensagem:string}
@@ -15,7 +15,8 @@ export function decidirVinculo(
   const descoberta=estado?.descoberta;
   if (!descoberta || estado?.faseAgenda!=='CONFIRMACAO_PENDENTE')
     return {ok:false,motivo:'SEM_DESCOBERTA'};
-  if (descoberta.agenda!==entrada.agenda)
+  if (descoberta.agenda!==entrada.agenda ||
+      (estado.agendaEscolhida && estado.agendaEscolhida!==entrada.agenda))
     return {ok:false,motivo:'OUTRA_AGENDA'};
   if (entrada.decisao==='negar') return {ok:false,motivo:'NAO_AUTORIZOU'};
   if (entrada.decisao!=='confirmar') return {ok:false,motivo:'ESCLARECIMENTO'};
@@ -47,11 +48,8 @@ export function decidirVinculo(
   const pedido = /^(?:(?:sim )?(?:confirmo|autorizo|quero|pode) )?vincul(?:a|ar|e) (?:a |o )?(.+?)(?: a (?:minha|sua) conta| a conta)?$/.exec(mensagem);
   const pedidoNomeado = alvo && pedido &&
     (pedido[1] === alvo || pedido[1] === alvo.replace(/^(?:dra|dr) /, ''));
-  const perguntaDoAlvo = disponiveis.length === 1 &&
-    estado.perguntaPendente === 'confirmar_profissional' &&
-    (!estado.nomeProfissionalPerguntado || normalizarNomeMedico(estado.nomeProfissionalPerguntado) === alvo);
-  const respostaAfirmativa = /^(?:(?:perfeito )?sim(?: sou eu| e ela| e ele| e a minha conta)?|confirmo|confirmado essa profissional sou eu|sou eu|e essa medica pode vincular|pode (?:vincular|seguir com essa))(?: por favor)?$/.test(mensagem);
-  if (entrada.mensagem.includes('?') || (!pedidoNomeado && !(perguntaDoAlvo && respostaAfirmativa)))
+  const contraponto = /\b(?:nao|nem|talvez|duvida|incerteza|errad[oa]|outro (?:medico|profissional)|outra (?:medica|profissional))\b/.test(mensagem);
+  if (entrada.mensagem.includes('?') || contraponto || (disponiveis.length > 1 && !pedidoNomeado))
     return {ok:false,motivo:'ESCLARECIMENTO'};
   return {ok:true,nomes:confirmados.map(c=>c[0]!),agenda:entrada.agenda};
 }

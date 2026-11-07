@@ -93,10 +93,15 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       nomes:['Dra. Ana Souza','Dr. Bruno Lima'],mensagem:'Pode vincular os dois'}))
       .toEqual({ok:false,motivo:'ALVO_AMBIGUO'});
   });
-  it.each(['a minha agenda é a TribeMD', 'Não quero vincular', 'Sim, mas ainda tenho dúvida', 'Pode vincular?', 'Sim, sou eu!'])(
-    'tool call confirmatório sem autorização suficiente não grava: %s', async texto => {
-      const estado = texto === 'Sim, sou eu!' ? {...unico, perguntaPendente:null} : unico;
-      const r = await simular(texto, 'confirmar', [], estado);
+  it('antecipa o vínculo único ao escolher a agenda, sem pergunta pendente', async () => {
+    const r = await simular('a minha agenda é a TribeMD', 'confirmar', [], {...unico, perguntaPendente:null});
+    expect(r.confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(base,['Dra. Ana Souza']);
+    expect(r.resposta).toContain('Vinculei Dra. Ana Souza');
+    expect(r.resposta).not.toContain('pesquisa pública');
+  });
+  it.each(['Não quero vincular', 'Sim, mas ainda tenho dúvida', 'Pode vincular?', 'Esse nome está errado'])(
+    'uma decisão confirmatória não prevalece sobre: %s', async texto => {
+      const r = await simular(texto, 'confirmar', []);
       expect(r.confirmarProfissionais).not.toHaveBeenCalled();
       expect(r.aoVinculo).not.toHaveBeenCalled();
     }
