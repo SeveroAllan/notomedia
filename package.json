@@ -17,6 +17,8 @@
     "retry:nota": "node scripts/reprocessar-nota.mjs",
     "test": "tsc --noEmit -p tsconfig.test.json && vitest run",
     "start:piloto-agente": "node --import tsx src/agente/piloto-start.ts",
+    "start:worker-emissao-whatsapp": "node --import tsx src/worker/emissao-whatsapp-homologacao-start.ts",
+    "piloto:registrar-atendimento-teste": "node --import tsx scripts/registrar-atendimento-teste.ts",
     "piloto:rodada": "node scripts/rodada-ia-noto.mjs"
   },
   "keywords": [

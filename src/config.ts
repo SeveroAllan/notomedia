@@ -53,6 +53,7 @@ export interface AppConfig {
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
   notoPilotoRestrito?: boolean;
+  atendimentoTesteWhatsApp?: EscopoEmissaoWhatsApp;
   emissaoWhatsAppPropostaAtiva?: boolean;
   emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
   emissaoWhatsAppWorker?: EscopoEmissaoWhatsApp;
@@ -65,12 +66,13 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
   const propostaWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PROPOSTA_ATIVA'] === 'true';
   if (propostaWhatsApp && !produtorWhatsApp) throw new Error('PROPOSTA_WHATSAPP_EXIGE_PRODUTOR');
   const workerWhatsApp = env['NOTO_EMISSAO_WHATSAPP_WORKER_ATIVO'] === 'true';
+  const atendimentoTesteAtivo = env['NOTO_EMISSAO_WHATSAPP_ATENDIMENTO_TESTE_ATIVO'] === 'true';
   const escopoWhatsApp = {
     contaId: env['NOTO_EMISSAO_WHATSAPP_CONTA_ID'] ?? '',
     medicoId: env['NOTO_EMISSAO_WHATSAPP_MEDICO_ID'] ?? '',
     agendamentoId: env['NOTO_EMISSAO_WHATSAPP_AGENDAMENTO_ID'] ?? ''
   };
-  if (produtorWhatsApp || workerWhatsApp) {
+  if (produtorWhatsApp || workerWhatsApp || atendimentoTesteAtivo) {
     const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
     const destino = (env['ENVIO_REAL_ALLOWLIST'] ?? '').trim();
     if (env['NOTO_PILOTO_RESTRITO'] !== 'true' || !/^55\d{10,11}$/.test(destino) ||
@@ -160,8 +162,9 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
     emissaoWhatsAppPropostaAtiva:propostaWhatsApp,
-    ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:escopoWhatsApp} : {}),
-    ...(workerWhatsApp ? {emissaoWhatsAppWorker:escopoWhatsApp} : {}),
+    ...(atendimentoTesteAtivo ? {atendimentoTesteWhatsApp:{...escopoWhatsApp,atendimentoTesteAtivo:true}} : {}),
+    ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
+    ...(workerWhatsApp ? {emissaoWhatsAppWorker:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',
