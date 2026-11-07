@@ -20,6 +20,7 @@ export function criarRouterWebhookPareamento(deps: {
   segredo: string;
   /** Consulta o estado REAL na Evolution, não confia no evento isoladamente. */
   confirmarConexao?: (instancia: string) => Promise<boolean>;
+  aoAtualizarCodigo?: (instancia: string, codigo: string) => void;
   aoConectar?: (instancia: string) => Promise<void>;
 }) {
   const router = Router();
@@ -30,12 +31,22 @@ export function criarRouterWebhookPareamento(deps: {
       return;
     }
 
-    // Eventos de mensagens/contatos são reconhecidos, mas não processados.
-    if (String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.') !== 'connection.update') {
+    const evento = String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.');
+    const instancia = req.body?.instance;
+    if (evento === 'qrcode.updated') {
+      const qr = req.body?.data?.qrcode;
+      if (typeof instancia === 'string' && /^medico_[a-f0-9]{12}$/i.test(instancia) &&
+          qr?.instance === instancia && typeof qr.pairingCode === 'string' &&
+          /^[A-Z0-9-]{8,12}$/i.test(qr.pairingCode)) {
+        deps.aoAtualizarCodigo?.(instancia, qr.pairingCode);
+      }
       res.sendStatus(204);
       return;
     }
-    const instancia = req.body?.instance;
+    if (evento !== 'connection.update') {
+      res.sendStatus(204);
+      return;
+    }
     const estado = req.body?.data?.state ?? req.body?.data?.instance?.state;
     if (typeof instancia !== 'string' || !instancia || (estado !== 'open' && estado !== 'close')) {
       res.sendStatus(204);

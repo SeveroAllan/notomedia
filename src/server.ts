@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
@@ -279,6 +280,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
     });
   };
+  // O polling expõe só a revisão opaca do último evento da própria instância.
+  const chaveRevisaoPareamento = randomBytes(32);
+  const revisoesPareamento = new Map<string, string>();
+  const revisaoPareamento = (instancia: string, codigo: string) =>
+    createHmac('sha256', chaveRevisaoPareamento).update(instancia + ':' + codigo.replace(/-/g, '').toUpperCase()).digest('hex');
+
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
     pool, segredo: config.evolutionWebhookSecret,
@@ -292,6 +299,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const corpo = await resultado.json();
         return corpo?.instance?.state === 'open';
       } catch { return false; }
+    },
+    aoAtualizarCodigo: (instancia, codigo) => {
+      revisoesPareamento.delete(instancia);
+      revisoesPareamento.set(instancia, revisaoPareamento(instancia, codigo));
+      if (revisoesPareamento.size > 256) {
+        const maisAntiga = revisoesPareamento.keys().next().value;
+        if (maisAntiga) revisoesPareamento.delete(maisAntiga);
+      }
     },
     aoConectar: boasVindasInstancia
   }));
@@ -1026,6 +1041,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
       }
 
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
         telefoneConsultorio,
@@ -1042,7 +1059,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           medicoId, modoConexao: modoConexao || 'codigo', diagnostico: resultado.diagnostico
         });
       }
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ ...resultado, medicoId, revisaoAntesDaConsulta, revisaoCodigo: resultado.pairingCode
+        ? revisaoPareamento(resultado.nomeInstancia, resultado.pairingCode) : undefined });
     } catch (err: any) {
       console.error('Erro ao iniciar conexão WhatsApp:', err);
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao conectar WhatsApp' });
@@ -1057,14 +1076,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const { medicoId } = medicoAutorizado(res);
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await consultarStatusInstanciaWhatsapp(pool, {
+        consultarCodigo: req.query['consultarCodigo'] === '1',
         medicoId,
         evolutionUrl: config.evolutionApiUrl,
         evolutionApiKey: config.evolutionGlobalApiKey,
         aoConectar: aoConectarWhatsapp
       });
 
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      const revisaoCodigo = resultado.pairingCode
+        ? revisaoPareamento(nomeInstancia, resultado.pairingCode)
+        : resultado.state === 'connecting' ? revisoesPareamento.get(nomeInstancia) : undefined;
+      return res.json({ ...resultado, medicoId, revisaoCodigo,
+        revisaoAntesDaConsulta: resultado.pairingCode ? revisaoAntesDaConsulta : undefined });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }
