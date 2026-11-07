@@ -6,10 +6,8 @@ export type ResultadoDecisaoVinculo =
   | {ok:true;nomes:string[];agenda:AgendaEscolhida}
   | {ok:false;motivo:'SEM_DESCOBERTA'|'OUTRA_AGENDA'|'ALVO_AMBIGUO'|'NOME_NAO_COMPROVADO'|'NAO_AUTORIZOU'|'ESCLARECIMENTO'};
 
-/** A IA interpreta a intenção; o código delimita o alvo e autorizações.
- * Nunca se usa uma regex de "sim" ou a redação da pergunta anterior.
- * Uma resposta sem nome só é direcionável se houver exatamente UM nome pendente.
- */
+/** O modelo classifica a intenção. A gravação também exige evidência
+ * na mensagem atual, ancorada no alvo descoberto ou na pergunta pendente. */
 export function decidirVinculo(
   estado:EstadoConversa|undefined,
   entrada:{agenda:AgendaEscolhida;decisao:DecisaoVinculo;nomes:string[];mensagem:string}
@@ -44,6 +42,17 @@ export function decidirVinculo(
     return !tokens.some(t=>mensagem.split(' ').includes(t) &&
       disponiveis.filter(n=>normalizarNomeMedico(n).split(' ').includes(t)).length===1);
   }))return {ok:false,motivo:'ALVO_AMBIGUO'};
+  const mensagem = normalizarNomeMedico(entrada.mensagem);
+  const alvo = confirmados.length === 1 ? normalizarNomeMedico(confirmados[0]![0]!) : '';
+  const pedido = /^(?:(?:sim )?(?:confirmo|autorizo|quero|pode) )?vincul(?:a|ar|e) (?:a |o )?(.+?)(?: a (?:minha|sua) conta| a conta)?$/.exec(mensagem);
+  const pedidoNomeado = alvo && pedido &&
+    (pedido[1] === alvo || pedido[1] === alvo.replace(/^(?:dra|dr) /, ''));
+  const perguntaDoAlvo = disponiveis.length === 1 &&
+    estado.perguntaPendente === 'confirmar_profissional' &&
+    (!estado.nomeProfissionalPerguntado || normalizarNomeMedico(estado.nomeProfissionalPerguntado) === alvo);
+  const respostaAfirmativa = /^(?:(?:perfeito )?sim(?: sou eu| e ela| e ele| e a minha conta)?|confirmo|confirmado essa profissional sou eu|sou eu|e essa medica pode vincular|pode (?:vincular|seguir com essa))(?: por favor)?$/.test(mensagem);
+  if (entrada.mensagem.includes('?') || (!pedidoNomeado && !(perguntaDoAlvo && respostaAfirmativa)))
+    return {ok:false,motivo:'ESCLARECIMENTO'};
   return {ok:true,nomes:confirmados.map(c=>c[0]!),agenda:entrada.agenda};
 }
 
