@@ -4,7 +4,7 @@ import {it,expect,vi} from 'vitest';
 import {
   adiarConfirmacaoRegistro,leituraPesquisaEstado,agendarPesquisaRegistro,executarPesquisaRegistro,reservarAvisoPesquisa,
   marcarAvisoPesquisa,proporCorrecaoPesquisa,concluirRevisaoPesquisa,
-  recuperarPesquisaInterrompida
+  recuperarPesquisaInterrompida,aprovarRegistroProfissional
 } from '../src/agente/pesquisa-profissional-conversa.js';
 import {registrarVinculoConversa} from '../src/agente/vinculo-conversa.js';
 import {registrarPeriodoConferencia,salvarEstadoConversa} from '../src/agente/estado-conversa.js';
@@ -24,13 +24,14 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
   await admin.connect();
   const isolada=new URL(url);isolada.pathname='/'+dbName;
   let db:pg.Client|undefined;
+  let aprovacao:pg.Pool|undefined;
   try{
     await admin.query('create database '+dbName);
     db=new pg.Client({connectionString:isolada.toString()});
     await db.connect();
     await db.query([
       'create table public.contas (id uuid primary key);',
-      'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id), nome_completo text not null, crm text, rqe text);',
+      'create table public.medicos (id uuid primary key, conta_id uuid not null references public.contas(id), nome_completo text not null, crm text, rqe text, atualizado_em timestamptz default now());',
       "create table public.noto_agent_conversas (conta_id uuid primary key references public.contas(id), estado jsonb not null default '{}'::jsonb, atualizado_em timestamptz not null default now());",
       "create table public.noto_agent_mensagens(conta_id uuid,estado text,atualizado_em timestamptz default now());",
       "insert into public.contas (id) values ('"+CONTA+"'),('"+OUTRA+"');",
@@ -116,9 +117,6 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
     }
     for(const alteracao of [
       {faseAgenda:'DESCOBERTA_PENDENTE'},
-      {perguntaPendente:'agenda'},
-      {pesquisasRegistro:{[ANA]:{...depoisAdiamento.pesquisasRegistro[ANA],confirmacaoAdiada:false}}},
-      {pesquisasRegistro:{[ANA]:{...depoisAdiamento.pesquisasRegistro[ANA],nome:'Outro Profissional'}}},
       {periodoConferencia:{profissionalId:ANA,inicio:'2026-10-01'}}
     ]){
       const conflito={...depoisAdiamento,perguntaPendente:null,...alteracao};
@@ -126,6 +124,13 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-01')).toBe(false);
       expect((await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado).toEqual(conflito);
     }
+    // Um escopo explicitamente pedido pode ser guardado depois da revisão do CRM;
+    // não é autorização de emissão nem depende da pergunta anterior.
+    const semPergunta={...depoisAdiamento,perguntaPendente:'agenda',
+      pesquisasRegistro:{[ANA]:{...depoisAdiamento.pesquisasRegistro[ANA],confirmacaoAdiada:false,estado:'confirmada'}}};
+    await db.query('update public.noto_agent_conversas set estado=$2 where conta_id=$1',[CONTA,semPergunta]);
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-01')).toBe(true);
+    expect((await db.query('select crm,rqe from public.medicos where id=$1',[ANA])).rows[0]).toEqual({crm:null,rqe:null});
     await db.query('update public.noto_agent_conversas set estado=$2 where conta_id=$1',[CONTA,periodoSalvo]);
 
     expect(await proporCorrecaoPesquisa(db as unknown as pg.Pool,CONTA,ANA,{
@@ -155,7 +160,18 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
     // isso exige a ferramenta de gravação com consentimento em outro passo.
     const medicos=await db.query('select crm,rqe from public.medicos where id=$1',[ANA]);
     expect(medicos.rows[0]).toEqual({crm:null,rqe:null});
+    // Confirmação só de CRM retoma a proposta adiada sem alterar RQE existente.
+    await db.query("update public.noto_agent_conversas set estado=jsonb_set(estado,array['pesquisasRegistro',$2,'estado'],'\"aguardando_confirmacao\"'::jsonb,false) where conta_id=$1",[CONTA,ANA]);
+    await db.query("update public.medicos set rqe='555' where id=$1",[ANA]);
+    aprovacao=new pg.Pool({connectionString:isolada.toString()});
+    expect(await aprovarRegistroProfissional(aprovacao,CONTA,ANA,{confirmarRqe:false}))
+      .toEqual({ok:true,nome:NOME,crm:'66666/RS',rqe:'555'});
+    expect((await db.query('select crm,rqe from public.medicos where id=$1',[ANA])).rows[0])
+      .toEqual({crm:'66666/RS',rqe:'555'});
+    expect(await aprovarRegistroProfissional(aprovacao,CONTA,ANA,{confirmarRqe:false}))
+      .toEqual({ok:false,motivo:'PROPOSTA_NAO_PENDENTE'});
   }finally{
+    await aprovacao?.end().catch(()=>{});
     await db?.end().catch(()=>{});
     await admin.query('drop database if exists '+dbName).catch(()=>{});
     await admin.end();

@@ -180,7 +180,57 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
     expect(texto).toContain('etapa=certificado');
     expect(texto).not.toMatch(/não emite|36948/);
-    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
+    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    modeloTeste.assertComplete();
+  });
+
+  it.each([true,false])('CRM e certificado: URL única sem preview, independente da fala, aceite=%s',async(aceiteLink)=>{
+    const id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const pesquisa={nome:'Alice Souza',estado:'aguardando_confirmacao',confirmacaoAdiada:true,razao:'ENCONTRADO',
+      candidatos:[{crm:'36948/RS',uf:'RS',rqes:[],origem:'OpenSerp'}]};
+    let estado:Record<string,unknown>={profissionalConfirmadoId:id,faseAgenda:'VINCULO_CONFIRMADO',
+      perguntaPendente:null,pesquisasRegistro:{[id]:pesquisa}};
+    const query=vi.fn(async(sql:string,params:unknown[]=[])=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:'conta-a'}]};
+      if(sql.startsWith('select id,nome_completo from medicos'))return {rows:[{id,nome_completo:'Alice Souza'}]};
+      if(sql.startsWith('select estado from noto_agent_conversas'))return {rows:[{estado:structuredClone(estado)}]};
+      if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
+      if(sql.startsWith('insert into noto_agent_conversas')){
+        const delta=JSON.parse(String(params[1]));expect(delta).not.toHaveProperty('pesquisasRegistro');
+        estado={...estado,...delta};return {rows:[]};
+      }
+      if(sql.startsWith('update noto_agent_mensagens'))return {rows:[]};
+      throw Error('SQL não previsto');
+    });
+    const aprovarRegistroProfissional=vi.fn(async()=>{
+      estado={...estado,pesquisasRegistro:{[id]:{...pesquisa,estado:'confirmada'}}};
+      return {ok:true,nome:'Alice Souza',crm:'36948/RS',rqe:null};
+    });
+    const modeloTeste=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:'Alice',intencoes:['aprovar_registro','consultar_certificado'],
+        inicioPeriodo:null,crmConfirmado:'36948/RS',rqeConfirmado:null,camposConfirmados:['crm']},{callId:'composto'})],
+      [assistantMessage(JSON.stringify({texto:'Pronto, o CRM ficou salvo. O acesso do certificado está abaixo.',
+        fatos:{vinculo:'confirmado',crm:'confirmado',crmValor:'36948/RS',periodo:'pendente',inicioPeriodo:null,emitiuNota:false,consultouNotas:false},
+        acoesConcluidas:['crm_salvo','pagina_certificado_preparada']}))]
+    ]);
+    const url='https://homologacao.example.test/?medicoId='+id+'&etapa=certificado';
+    const enviar=vi.fn(async(_telefone:string,texto:string)=>texto===url?aceiteLink:true);
+    const registrarDiagnostico=vi.fn();
+    const {app}=preparar({pool:{query} as unknown as pg.Pool,persistirConversa:true,modeloTeste,enviar,
+      diagnosticoAtivo:true,registrarDiagnostico,aprovarRegistroProfissional,painelUrl:'https://homologacao.example.test',
+      consultarProntidao:async()=>({certificadoValido:false,dadosProfissionaisCompletos:true,dadosFiscaisConfirmados:false,liberadoParaEmitir:false})});
+    const pedido={...evento,data:{...evento.data,message:{conversation:'O CRM 36948/RS está certo, pode confirmar e salvar. E me manda o link da página do certificado, que não veio.'}}};
+    await comServidor(app,async postar=>{
+      expect((await postar(pedido)).status).toBe(aceiteLink?200:503);
+      expect((await postar(pedido)).status).toBe(200);
+    });
+    expect(aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith('conta-a',id,{confirmarRqe:false});
+    expect(enviar.mock.calls.filter(c=>c[1]===url)).toHaveLength(1);
+    expect(enviar).toHaveBeenCalledWith('5551999998888',url,{linkPreview:false});
+    expect(enviar.mock.calls.slice(0,2).map(c=>c[1])).toEqual(['Pronto, o CRM ficou salvo.','O acesso do certificado está abaixo.']);
+    expect(estado).toMatchObject({faseAgenda:'VINCULO_CONFIRMADO',pesquisasRegistro:{[id]:{estado:'confirmada'}}});
+    expect(registrarDiagnostico.mock.calls[0]?.[0]).toMatchObject({
+      linkCertificado:{produzidos:1,nosBaloes:1,aceitosApi:aceiteLink?1:0},envio:aceiteLink?'ENVIADO':'FALHOU'});
     modeloTeste.assertComplete();
   });
 

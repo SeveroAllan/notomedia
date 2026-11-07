@@ -6,7 +6,7 @@ import {PausaCustoPiloto,FALA_LIMITE_TESTE} from './limite-gasto-rodada.js';
 import { z } from 'zod';
 import { normalizarNomeMedico, linkCertificadoMedico } from '../conta/medicos-conta.js';
 import { contemCredencialAgenda } from '../cofre/links.js';
-import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
+import { normalizarCrm,nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
 import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
@@ -37,6 +37,18 @@ type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?
   {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
 type DecisaoPeriodo = {ok:true;nome:string;inicio:string}|{ok:false;motivo:string};
 
+type ResultadoContinuidade={
+  fatos:{vinculo:'confirmado';crm:'pendente'|'adiado'|'confirmado';crmValor:string|null;periodo:'pendente'|'registrado';inicioPeriodo:string|null;emitiuNota:false;consultouNotas:boolean};
+  acoesConcluidas:string[];
+  resultados:unknown[];
+};
+const falaContinuidadeSchema=z.object({
+  texto:z.string().trim().min(1).max(1200),
+  fatos:z.object({vinculo:z.literal('confirmado'),crm:z.enum(['pendente','adiado','confirmado']),crmValor:z.string().nullable(),
+    periodo:z.enum(['pendente','registrado']),inicioPeriodo:z.string().nullable(),emitiuNota:z.literal(false),consultouNotas:z.boolean()}).strict(),
+  acoesConcluidas:z.array(z.string()).max(5)
+}).strict();
+
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
@@ -61,11 +73,12 @@ export interface DependenciasAgente {
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
   registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
   aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
+  aoContinuidadeOnboarding?: (r:ResultadoContinuidade)=>void;
   aoCertificadoSeguro?: (r:OrientacaoCertificado)=>void;
   adiarConfirmacaoRegistro?: (medicoId:string)=>Promise<boolean>;
-  aprovarRegistroProfissional?: (medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
+  aprovarRegistroProfissional?: (medicoId:string,opcoes?:{confirmarRqe:boolean})=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   aoLinkRegistro?: (r:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean})=>void;
-  aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}) => void;
+  aoRevisaoRegistro?: (resultado:{ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null;rqeConfirmado?:boolean}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}) => void;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{
     estado:string; comId:boolean; segundosDesdeAceite:number
@@ -357,6 +370,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   });
 
+  function incluirLeituraVerificada<T extends {ok:boolean}>(resultado:T,acao:'panorama_consultado'|'conferencia_realizada'){
+    if(!resultado.ok||!continuidadeResultado)return resultado;
+    continuidadeResultado.fatos.consultouNotas=true;
+    if(!continuidadeResultado.acoesConcluidas.includes(acao))continuidadeResultado.acoesConcluidas.push(acao);
+    deps.aoContinuidadeOnboarding?.(continuidadeResultado);
+    return {...resultado,continuidadeAtualizada:{fatos:continuidadeResultado.fatos,acoesConcluidas:continuidadeResultado.acoesConcluidas}};
+  }
   const extras: ReturnType<typeof tool>[] = [];
   if (deps.consultarPanorama) extras.push(tool({
     name: 'consultar_panorama_operacional',
@@ -376,7 +396,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         if (!resultado.ok) {
           deps.aoPanorama?.(profissional, resultado);
           registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_INDISPONIVEL', inicio);
-          return resultado;
+          return incluirLeituraVerificada(resultado,'panorama_consultado');
         }
         deps.aoPanorama?.(profissional === null ? null : r.encontrados[0]!.nome, resultado);
         registrar('consultar_panorama_operacional', 'PANORAMA_FISCAL_CONSULTADO', inicio);
@@ -401,7 +421,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const entregar = (resultado: ResultadoConferencia) => {
         deps.aoConferencia?.(resultado);
         registrar('conferir_atendimentos_e_notas', resultado.ok ? 'CONFERENCIA_REALIZADA' : 'CONFERENCIA_PENDENTE', inicio);
-        return resultado;
+        return incluirLeituraVerificada(resultado,'conferencia_realizada');
       };
       const r = identificar(profissional, profissionais);
       if (r.erro || r.encontrados.length !== 1) return entregar({ok:false,motivo:'ESCOPO_NAO_CONFERIDO'});
@@ -509,7 +529,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // Consentimento interpretado pelo mesmo agente conversacional, com alvo
   // limitado pela descoberta autenticada. Nenhuma regex de "sim" é permissão.
   let vinculoNesteTurno=false;
-  if (deps.confirmarProfissionais) extras.push(tool({
+  if (deps.confirmarProfissionais&&entrada.estadoConversa?.faseAgenda!=='VINCULO_CONFIRMADO') extras.push(tool({
     name:'confirmar_profissionais_descobertos',
     description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Classifique a intenção da mensagem atual: confirmar somente com autorização explícita; negar quando recusar; corrigir quando contestar o nome; esclarecer quando for pergunta ou outro assunto. NÃO trate toda mensagem como confirmação. Só vincule alvo comprovado; com vários nomes, não suponha qual é o profissional. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
     parameters:z.object({
@@ -743,14 +763,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   }));
 
-  if(deps.aprovarRegistroProfissional || deps.solicitarLinkRegistro)extras.push(tool({
-    name:'revisar_registro_profissional',
-    description:'Classifique a intenção sobre a sugestão já apresentada: aprovar somente com confirmação explícita; adiar se não sabe ou não pode confirmar agora (isso não é recusa); recusar se declara que não aprova; corrigir se quer corrigir; esclarecer para perguntas ou mudança de assunto. Adiar preserva proposta e vínculo e permite continuar etapas independentes. Nunca invente autorização.',
-    parameters:z.object({
-      profissional:z.string(),
-      decisao:z.enum(['aprovar','corrigir','recusar','esclarecer','adiar'])
-    }),
-    async execute({profissional,decisao}){
+  async function executarRevisao({profissional,decisao}:{profissional:string;decisao:'aprovar'|'corrigir'|'recusar'|'esclarecer'|'adiar'},opcoes?:{confirmarRqe:boolean}){
+      if(continuidadeResultado)return {ok:false,motivo:'SOLICITACAO_JA_PROCESSADA'};
       const inicio=Date.now();
       const resolucao=identificar(profissional,profissionais);
       const medico=resolucao.encontrados.length===1?resolucao.encontrados[0]:undefined;
@@ -786,25 +800,37 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(!estado.proposta && (estado.razao!=='ENCONTRADO' || (estado.candidatos?.length??0)!==1))
         return falhar('REGISTRO_AMBIGUO');
       if(!deps.aprovarRegistroProfissional)return falhar('GRAVACAO_INDISPONIVEL');
-      const r=await deps.aprovarRegistroProfissional(medico.id).catch(()=>({ok:false as const,motivo:'GRAVACAO_INDISPONIVEL'}));
+      const r=await (opcoes?deps.aprovarRegistroProfissional(medico.id,opcoes):deps.aprovarRegistroProfissional(medico.id)).catch(()=>({ok:false as const,motivo:'GRAVACAO_INDISPONIVEL'}));
       if(!r.ok)return falhar(r.motivo);
       registrar('revisar_registro_profissional','DADOS_PROFISSIONAIS_SALVOS',inicio);
-      deps.aoRevisaoRegistro?.({ok:true,tipo:'aprovacao',nome:r.nome,crm:r.crm,rqe:r.rqe});
+      deps.aoRevisaoRegistro?.({ok:true,tipo:'aprovacao',nome:r.nome,crm:r.crm,rqe:r.rqe,...(opcoes?{rqeConfirmado:opcoes.confirmarRqe}:{})});
       deps.aoComprovante?.({tipo:'salvar_dados_profissionais',profissionalId:medico.id});
       return {ok:true,gravado:true,crm:r.crm,rqe:r.rqe};
-    }
+  }
+  if(deps.aprovarRegistroProfissional || deps.solicitarLinkRegistro)extras.push(tool({
+    name:'revisar_registro_profissional',
+    description:'Classifique a intenção sobre a sugestão já apresentada: aprovar somente com confirmação explícita; adiar se não sabe ou não pode confirmar agora (isso não é recusa); recusar se declara que não aprova; corrigir se quer corrigir; esclarecer para perguntas ou mudança de assunto. Adiar preserva proposta e vínculo e permite continuar etapas independentes. Nunca invente autorização.',
+    parameters:z.object({
+      profissional:z.string(),
+      decisao:z.enum(['aprovar','corrigir','recusar','esclarecer','adiar'])
+    }),
+    execute:async(args)=>executarRevisao(args)
   }));
 
   let periodoFinalizado=false;
+  let continuidadeExecutada=false;
+  let continuidadeResultado:ResultadoContinuidade|undefined;
+  let certificadoResultado:OrientacaoCertificado|undefined;
   async function orientarCertificado(profissional:string):Promise<OrientacaoCertificado>{
     const inicio=Date.now();
     const encontrados=identificar(profissional,profissionais).encontrados;
     const medico=encontrados[0];
-    const concluir=(r:OrientacaoCertificado)=>{deps.aoCertificadoSeguro?.(r);return r;};
+    const concluir=(r:OrientacaoCertificado)=>{if(r.nome)certificadoResultado=r;deps.aoCertificadoSeguro?.(r);return r;};
     if(!medico||encontrados.length!==1||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id){
       registrar('orientar_certificado_seguro','DEPENDENCIA_PROFISSIONAL',inicio);
       return concluir({ok:false,nome:'',motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'});
     }
+    if(certificadoResultado?.nome===medico.nome)return certificadoResultado;
     let certificadoValido:boolean;
     try{certificadoValido=(await deps.consultarProntidao!(medico.id)).certificadoValido;}
     catch(erro){
@@ -839,11 +865,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters:z.object({profissional:z.string()}),
     execute:async({profissional})=>orientarCertificado(profissional)
   }));
-  if(deps.registrarPeriodoConferencia)extras.push(tool({
-    name:'registrar_periodo_conferencia',
-    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Ao registrar, continue com certificado sem voltar ao CRM adiado.',
-    parameters:z.object({decisao:z.enum(['definir','esclarecer','outro_assunto']),inicio:z.string().nullable()}),
-    async execute({decisao,inicio}){
+  async function executarPeriodo({decisao,inicio}:{decisao:'definir'|'esclarecer'|'outro_assunto';inicio:string|null}){
+      if(continuidadeResultado)return {ok:false,motivo:'SOLICITACAO_JA_PROCESSADA'};
       const comeco=Date.now();
       if(decisao!=='definir'){
         registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
@@ -852,7 +875,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
       periodoFinalizado=true;
       const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
-      const gravado=medico&&inicio&&exigeRegistroPeriodo(entrada,deps)&&
+      const gravado=medico&&inicio&&deps.registrarPeriodoConferencia&&(exigeRegistroPeriodo(entrada,deps)||continuidadeExecutada&&Boolean(profissionalComVinculoConfirmado(entrada)))&&
         await deps.registrarPeriodoConferencia!(medico.id,inicio).catch(()=>false);
       if(!gravado){
         registrar('registrar_periodo_conferencia','DEPENDENCIA_CONFIRMACAO',comeco);
@@ -864,13 +887,88 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(deps.consultarProntidao)await orientarCertificado(medico!.nome);
       return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:false,
         orientacao:'Só o período solicitado foi guardado. Nenhuma conclusão sobre notas ou emissão. CRM adiado permanece pendente.'};
+  }
+  if(deps.registrarPeriodoConferencia)extras.push(tool({
+    name:'registrar_periodo_conferencia',
+    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Ao registrar, continue com certificado sem voltar ao CRM adiado.',
+    parameters:z.object({decisao:z.enum(['definir','esclarecer','outro_assunto']),inicio:z.string().nullable()}),
+    execute:async(args)=>executarPeriodo(args)
+  }));
+
+  if(profissionalComVinculoConfirmado(entrada))extras.push(tool({
+    name:'continuar_onboarding',
+    description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use conversar para dúvidas/outro assunto, sem executar ações.',
+    parameters:z.object({
+      profissional:z.string().nullable(),
+      intencoes:z.array(z.enum(['definir_periodo','aprovar_registro','adiar_registro','corrigir_registro','recusar_registro','consultar_certificado','conversar'])).min(1).max(4),
+      inicioPeriodo:z.string().nullable(),crmConfirmado:z.string().nullable(),rqeConfirmado:z.string().nullable(),
+      camposConfirmados:z.array(z.enum(['crm','rqe'])).max(2)
+    }),
+    async execute({profissional,intencoes,inicioPeriodo,crmConfirmado,rqeConfirmado,camposConfirmados}){
+      if(continuidadeResultado)return continuidadeResultado;
+      continuidadeExecutada=true;
+      const inicio=Date.now();
+      const medico=profissionalComVinculoConfirmado(entrada)!;
+      const revisao=entrada.estadoConversa?.pesquisasRegistro?.[medico.id];
+      const saida:ResultadoContinuidade={fatos:{vinculo:'confirmado',
+        crm:revisao?.estado==='confirmada'?'confirmado':revisao?.confirmacaoAdiada?'adiado':'pendente',crmValor:null,
+        periodo:entrada.estadoConversa?.periodoConferencia?.profissionalId===medico.id?'registrado':'pendente',
+        inicioPeriodo:entrada.estadoConversa?.periodoConferencia?.profissionalId===medico.id?entrada.estadoConversa.periodoConferencia.inicio:null,
+        emitiuNota:false,consultouNotas:false},acoesConcluidas:[],resultados:[]};
+      const alvos=profissional===null?[medico]:identificar(profissional,profissionais).encontrados;
+      const alvoValido=alvos.length===1&&alvos[0]!.id===medico.id;
+      const pretendidas=new Set(intencoes);
+      if(!alvoValido)saida.resultados.push({ok:false,motivo:'ALVO_NAO_CONFIRMADO'});
+      if(alvoValido&&pretendidas.has('definir_periodo')){
+        const r=await executarPeriodo({decisao:'definir',inicio:inicioPeriodo});saida.resultados.push(r);
+        if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=inicioPeriodo;saida.acoesConcluidas.push('periodo_registrado');}
+      }
+      const decisoes=intencoes.filter(i=>['aprovar_registro','adiar_registro','corrigir_registro','recusar_registro'].includes(i));
+      if(alvoValido&&new Set(decisoes).size>1)saida.resultados.push({ok:false,motivo:'INTENCOES_CONFLITANTES'});
+      if(alvoValido&&new Set(decisoes).size===1){
+        const decisao=decisoes[0]!;
+        const candidato=revisao?.proposta??(revisao?.razao==='ENCONTRADO'&&revisao.candidatos?.length===1?revisao.candidatos[0]:undefined);
+        const rqes=candidato&&'rqes' in candidato?candidato.rqes:candidato&&'rqe' in candidato&&candidato.rqe?[candidato.rqe]:[];
+        const divergente=crmConfirmado!==null&&normalizarCrm(crmConfirmado)!==normalizarCrm(candidato?.crm)||
+          rqeConfirmado!==null&&(rqes.length!==1||rqeConfirmado!==rqes[0]);
+        if(decisao==='aprovar_registro'&&(!camposConfirmados.includes('crm')||divergente))
+          saida.resultados.push({ok:false,motivo:'REGISTRO_NAO_CONFIRMADO'});
+        else if(decisao==='aprovar_registro'&&revisao?.estado==='confirmada')
+          saida.resultados.push({ok:true,gravado:false,registroJaConfirmado:true});
+        else{
+          const mapa={aprovar_registro:'aprovar',adiar_registro:'adiar',corrigir_registro:'corrigir',recusar_registro:'recusar'} as const;
+          const confirmarRqe=camposConfirmados.includes('rqe')&&rqes.length===1;
+          const r=await executarRevisao({profissional:medico.nome,decisao:mapa[decisao as keyof typeof mapa]},
+            decisao==='aprovar_registro'?{confirmarRqe}:undefined);
+          const gravado=r.ok&&'gravado' in r&&r.gravado;
+          saida.resultados.push(gravado?{ok:true,gravado:true,crm:'crm' in r?r.crm:null,
+            ...(confirmarRqe&&'rqe' in r?{rqe:r.rqe}:{}),camposGravados:confirmarRqe?['crm','rqe']:['crm']}:r);
+          if(r.ok&&'gravado' in r&&r.gravado){
+            saida.fatos.crm='confirmado';saida.fatos.crmValor='crm' in r&&typeof r.crm==='string'?r.crm:null;
+            saida.acoesConcluidas.push('crm_salvo');
+            if(confirmarRqe)saida.acoesConcluidas.push('rqe_salvo');
+          }
+          if(r.ok&&'confirmacaoAdiada' in r&&r.confirmacaoAdiada){saida.fatos.crm='adiado';saida.acoesConcluidas.push('registro_adiado');}
+          if(r.ok&&decisao==='corrigir_registro')saida.acoesConcluidas.push('correcao_solicitada');
+        }
+      }
+      if(alvoValido&&pretendidas.has('consultar_certificado'))
+        saida.resultados.push(deps.consultarProntidao?await orientarCertificado(medico.nome):{ok:false,motivo:'PRONTIDAO_NAO_CONFIGURADA'});
+      if(certificadoResultado?.ok)saida.acoesConcluidas.push(certificadoResultado.certificadoValido?'certificado_verificado':'pagina_certificado_preparada');
+      registrar('continuar_onboarding','CONTINUIDADE_PROCESSADA',inicio);
+      continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
+      return {...saida,contratoResposta:{
+        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos e não recite o processo. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. A URL do certificado é anexada pelo transporte; não precisa copiá-la no texto.',
+        formato:{texto:'Sua resposta natural ao usuário',fatos:saida.fatos,acoesConcluidas:saida.acoesConcluidas}
+      }};
     }
   }));
 
-  return new Agent({
+  return new Agent<unknown,typeof falaContinuidadeSchema|'text'>({
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
+    outputType:profissionalComVinculoConfirmado(entrada)?falaContinuidadeSchema:'text',
     modelSettings:{
       maxTokens:1024,
       ...(confirmacaoPendente ? {
@@ -878,6 +976,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         // O SDK exige exatamente esta ferramenta no PRIMEIRO turno do modelo.
         toolChoice:'confirmar_profissionais_descobertos',
         parallelToolCalls:false
+      } : profissionalComVinculoConfirmado(entrada)?{
+        toolChoice:'continuar_onboarding',parallelToolCalls:false
       } : exigeRegistroPeriodo(entrada,deps)?{
         toolChoice:'registrar_periodo_conferencia',parallelToolCalls:false
       } : exigeRevisaoRegistro(entrada,deps)?{
@@ -888,7 +988,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
-    toolUseBehavior:async(_contexto,resultados)=>periodoFinalizado||resultados.some(r=>r.tool.name==='confirmar_profissionais_descobertos')
+    toolUseBehavior:async(_contexto,resultados)=>(periodoFinalizado&&!continuidadeExecutada)||resultados.some(r=>r.tool.name==='confirmar_profissionais_descobertos')
       ?{isFinalOutput:true,isInterrupted:undefined,finalOutput:''}
       :{isFinalOutput:false,isInterrupted:undefined}
   });
@@ -998,6 +1098,47 @@ export function acompanhamentoVerificado(
   return null;
 }
 
+function descreverRevisaoRegistro(r:Parameters<NonNullable<DependenciasAgente['aoRevisaoRegistro']>>[0],entrada:EntradaAgente,ferramentas:readonly EventoFerramenta[],resposta:string,certificado?:OrientacaoCertificado):string{
+      if(r.ok&&r.tipo==='adiamento'){
+        const contexto='Deixei a confirmação do CRM/RQE pendente para você conferir depois. '+r.nome+' continua vinculada à sua conta.';
+        const etapaConsultada=ferramentas.some(e=>['CERTIFICADO_EXISTENTE','CERTIFICADO_PENDENTE','PRONTIDAO_VERIFICADA'].includes(e.codigo));
+        const continuacao=etapaConsultada&&resposta&&respostaCompativelComFerramentas(resposta,ferramentas)
+          ?resposta:(certificado?descreverCertificado(certificado)+'\n':'')+'Desde quando você quer conferir os atendimentos de '+r.nome+'?';
+        return contexto+'\n'+continuacao;
+      }
+      if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
+      if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
+        ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
+        : ['FALHA_COMPROVADA','ENVIO_INCERTO','ACEITO_SEM_ENTREGA','ENTREGUE','LIDO',
+          'PEDIDO_JA_PROCESSADO','LINK_ENTREGUE','LIMITE_LINKS'].includes(r.motivo)
+          ? falaEnvioRegistro(r.motivo,'')
+          : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
+      if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
+      return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
+        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
+}
+
+function descreverEstadoSemAcao(entrada:EntradaAgente):string{
+  const confirmado=profissionalComVinculoConfirmado(entrada);
+      if(!confirmado)return 'Não consegui conferir o vínculo do profissional no estado atual. Antes de avançar, precisamos verificar esse vínculo na conta. A data informada não permite concluir nada sobre emissão de notas.';
+      const e=entrada.estadoConversa!;
+      const periodo=e.periodoConferencia?.profissionalId===confirmado.id?e.periodoConferencia:null;
+      const vinculo=confirmado.nome+' já está vinculada à sua conta.';
+      const pesquisa=e.pesquisasRegistro?.[confirmado.id];
+      const crm=pesquisa?.estado==='aguardando_confirmacao'&&pesquisa.confirmacaoAdiada
+        ?' A confirmação do CRM/RQE continua adiada.':'';
+      return vinculo+crm+' Ainda não consultei atendimentos ou notas neste turno.\n'+
+        (periodo?'O início do período solicitado é '+periodo.inicio.split('-').reverse().join('/')+
+          '. Podemos seguir com a verificação do certificado?'
+          :'Qual é a data inicial do período que você quer conferir nos atendimentos?');
+}
+
+function descreverPeriodoRegistrado(p:Extract<DecisaoPeriodo,{ok:true}>,certificado?:OrientacaoCertificado):string{
+      const data=p.inicio.split('-').reverse().join('/');
+      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. Ainda não consultei atendimentos ou notas.'+
+        '\n'+(certificado?descreverCertificado(certificado):'Podemos continuar com o certificado, mantendo o CRM pendente.');
+}
+
 function descreverCertificado(r:OrientacaoCertificado):string{
   if(!r.ok){
     if(r.motivo==='IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA')return 'Preciso identificar o médico confirmado antes de orientar o certificado. Qual profissional você quer configurar?';
@@ -1067,18 +1208,21 @@ function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidad
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
+  let contratoFala:'VALIDO'|'INVALIDO'|undefined;
   const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) => {
     const temFerramenta=ferramentas.some(f=>f.nome==='confirmar_profissionais_descobertos');
     const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
     deps.aoDiagnostico?.({
       codigo,ferramentas:[...ferramentas],uso,duracaoMs:Math.max(0,Date.now()-inicio),
+      ...(contratoFala?{contratoFala}:{}),
       estadoOnboarding:{
         vinculoConfirmadoNaConta:Boolean(profissionalComVinculoConfirmado(entrada)),
         perguntaPendente:entrada.estadoConversa?.perguntaPendente===undefined?'AUSENTE':entrada.estadoConversa.perguntaPendente,
         periodoRegistrado:Boolean(entrada.estadoConversa?.periodoConferencia&&
           entrada.estadoConversa.periodoConferencia.profissionalId===entrada.estadoConversa.profissionalConfirmadoId),
         crmAdiado:Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true),
-        ferramentaPeriodoObrigatoria:exigeRegistroPeriodo(entrada,deps)
+        ferramentaPeriodoObrigatoria:!profissionalComVinculoConfirmado(entrada)&&exigeRegistroPeriodo(entrada,deps),
+        ferramentaContinuidadeObrigatoria:Boolean(profissionalComVinculoConfirmado(entrada))
       },
       ...(temFerramenta||temPendencia||entrada.estadoConversa?.faseAgenda==='VINCULO_CONFIRMADO'||codigo==='CONFIRMACAO_SEM_FERRAMENTA'?{
         estadoVinculo:{
@@ -1110,11 +1254,12 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar('SEM_MODELO');
     return 'Sou o Noto! Posso te orientar a conectar uma agenda e organizar o trabalho fiscal. O atendimento inteligente está temporariamente indisponível. Quer verificar sua conexão pelo painel?';
   }
+  const continuidadeTurno:{atual?:ResultadoContinuidade}={};
   const periodoTurno:{atual?:DecisaoPeriodo}={};
   const certificadoTurno:{atual?:OrientacaoCertificado}={};
   const trabalhoTurno: { atual?: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar } } = {};
   const vinculoTurno:{atual?: {ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|{ok:false;motivo:string}}={};
-  const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}}={};
+  const revisaoTurno:{atual?: {ok:true;tipo:'aprovacao';nome:string;crm:string;rqe:string|null;rqeConfirmado?:boolean}|{ok:true;tipo:'correcao';nome:string;motivo?:string}|{ok:true;tipo:'adiamento';nome:string}|{ok:false;motivo:string}}={};
   const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
@@ -1140,7 +1285,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoVinculoResultado:r=>{vinculoTurno.atual=r;},
       aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
       aoPeriodoConferencia:r=>{periodoTurno.atual=r;},
-      aoCertificadoSeguro:r=>{certificadoTurno.atual=r;},
+      aoCertificadoSeguro:r=>{certificadoTurno.atual=r;deps.aoCertificadoSeguro?.(r);},
+      aoContinuidadeOnboarding:r=>{continuidadeTurno.atual=r;},
       aoLinkRegistro:r=>{linkRegistroTurno.atual=r;},
       registrarFerramenta: e => ferramentas.push(e)
     });
@@ -1176,7 +1322,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
             proposta:!r.confirmacaoAdiada&&r.proposta?{crm:r.proposta.crm,rqe:r.proposta.rqe??null}:null}))
       }) }
     ], { maxTurns: 6, signal: abort.signal });
-    const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() : '';
+    const resposta = typeof resultado.finalOutput === 'string' ? resultado.finalOutput.trim() :
+      resultado.finalOutput?JSON.stringify(resultado.finalOutput):'';
     const u = resultado.state.usage;
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
@@ -1188,16 +1335,27 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('CONFIRMACAO_SEM_FERRAMENTA',uso);
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
     }
-    if(exigeRegistroPeriodo(entrada,deps)&&!periodoTurno.atual){
+    if(continuidadeTurno.atual){
+      try{
+        const json=resposta.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
+        const fala=falaContinuidadeSchema.parse(JSON.parse(json));
+        const r=continuidadeTurno.atual;
+        const fatosIguais=Object.entries(r.fatos).every(([chave,valor])=>fala.fatos[chave as keyof typeof fala.fatos]===valor);
+        const acoesIguais=[...fala.acoesConcluidas].sort().join('|')===[...r.acoesConcluidas].sort().join('|');
+        // Valida o contrato de fatos e efeitos; não escolhe frases nem inspeciona vocabulário.
+        if(fatosIguais&&acoesIguais){
+          contratoFala='VALIDO';registrar('RESPOSTA',uso);return fala.texto;
+        }
+      }catch{/* Contrato inválido: usar somente os recibos verificados abaixo. */}
+      contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO',uso);
+    }
+    if(!profissionalComVinculoConfirmado(entrada)&&exigeRegistroPeriodo(entrada,deps)&&!periodoTurno.atual&&!continuidadeTurno.atual){
       registrar('PERIODO_SEM_FERRAMENTA',uso);
       return 'Ainda não registrei o período solicitado. A data não permite concluir nada sobre suas notas. Qual é a data inicial da conferência?';
     }
     if(periodoTurno.atual?.ok){
-      const p=periodoTurno.atual;
       registrar('RESPOSTA',uso);
-      const data=p.inicio.split('-').reverse().join('/');
-      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. Ainda não consultei atendimentos ou notas.'+
-        '\n'+(certificadoTurno.atual?descreverCertificado(certificadoTurno.atual):'Podemos continuar com o certificado, mantendo o CRM pendente.');
+      return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
     }
     if(certificadoTurno.atual&&!revisaoTurno.atual){
       registrar('RESPOSTA',uso);
@@ -1217,30 +1375,13 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA',uso);
       return falaEnvioRegistro(l.motivo,l.nome,l.anteriorInvalidado);
     }
-    if(exigeRevisaoRegistro(entrada,deps)&&!revisaoTurno.atual){
+    if(exigeRevisaoRegistro(entrada,deps)&&!revisaoTurno.atual&&!continuidadeTurno.atual){
       registrar('RESPOSTA');
       return 'A sugestão de CRM/RQE continua pendente. Ainda não processei sua decisão e não alterei o cadastro.';
     }
     if(revisaoTurno.atual){
-      const r=revisaoTurno.atual;
       registrar('RESPOSTA',uso);
-      if(r.ok&&r.tipo==='adiamento'){
-        const contexto='Deixei a confirmação do CRM/RQE pendente para você conferir depois. '+r.nome+' continua vinculada à sua conta.';
-        const etapaConsultada=ferramentas.some(e=>['CERTIFICADO_EXISTENTE','CERTIFICADO_PENDENTE','PRONTIDAO_VERIFICADA'].includes(e.codigo));
-        const continuacao=etapaConsultada&&resposta&&respostaCompativelComFerramentas(resposta,ferramentas)
-          ?resposta:'Desde quando você quer conferir os atendimentos de '+r.nome+'?';
-        return contexto+'\n'+continuacao;
-      }
-      if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
-      if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
-        ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
-        : ['FALHA_COMPROVADA','ENVIO_INCERTO','ACEITO_SEM_ENTREGA','ENTREGUE','LIDO',
-          'PEDIDO_JA_PROCESSADO','LINK_ENTREGUE','LIMITE_LINKS'].includes(r.motivo)
-          ? falaEnvioRegistro(r.motivo,'')
-          : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
-      if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
-      return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
-        (r.rqe?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
+      return descreverRevisaoRegistro(revisaoTurno.atual,entrada,ferramentas,profissionalComVinculoConfirmado(entrada)?'':resposta,certificadoTurno.atual);
     }
     // Recibo deste turno, não lembrança de um link antigo.
     if (linkConsultado.atual) {
@@ -1292,20 +1433,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // Os fatos abaixo são do estado da conta; nenhuma data é prova de emissão.
     const confirmado=profissionalComVinculoConfirmado(entrada);
     const crmAdiado=Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true);
-    const apenasClassificacao=ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO');
+    const apenasClassificacao=Boolean(continuidadeTurno.atual)||ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO');
     if(apenasClassificacao&&(confirmado||crmAdiado||entrada.estadoConversa?.perguntaPendente==='periodo')){
       registrar('RESPOSTA_POR_ESTADO',uso);
-      if(!confirmado)return 'Não consegui conferir o vínculo do profissional no estado atual. Antes de avançar, precisamos verificar esse vínculo na conta. A data informada não permite concluir nada sobre emissão de notas.';
-      const e=entrada.estadoConversa!;
-      const periodo=e.periodoConferencia?.profissionalId===confirmado.id?e.periodoConferencia:null;
-      const vinculo=confirmado.nome+' já está vinculada à sua conta.';
-      const pesquisa=e.pesquisasRegistro?.[confirmado.id];
-      const crm=pesquisa?.estado==='aguardando_confirmacao'&&pesquisa.confirmacaoAdiada
-        ?' A confirmação do CRM/RQE continua adiada.':'';
-      return vinculo+crm+' Ainda não consultei atendimentos ou notas neste turno.\n'+
-        (periodo?'O início do período solicitado é '+periodo.inicio.split('-').reverse().join('/')+
-          '. Podemos seguir com a verificação do certificado?'
-          :'Qual é a data inicial do período que você quer conferir nos atendimentos?');
+      return descreverEstadoSemAcao(entrada);
     }
     if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
@@ -1333,6 +1464,14 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
       registrar('RESPOSTA');
       return 'A leitura da '+fonte+' foi registrada. Vou continuar a conferência fora desta conversa e volto com os dados verificados.';
+    }
+    if(profissionalComVinculoConfirmado(entrada)){
+      contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO');
+      if(periodoTurno.atual?.ok)return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
+      if(revisaoTurno.atual)return descreverRevisaoRegistro(revisaoTurno.atual,entrada,ferramentas,'',certificadoTurno.atual);
+      if(certificadoTurno.atual)return descreverCertificado(certificadoTurno.atual);
+      registrar('RESPOSTA_POR_ESTADO');
+      return descreverEstadoSemAcao(entrada);
     }
     const natureza=abort.signal.aborted?'ABORT_SIGNAL':
       erro instanceof Error && erro.name==='MaxTurnsExceededError'?'MAX_TURNS':'FALHA_RUNNER';

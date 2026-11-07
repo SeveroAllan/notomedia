@@ -354,7 +354,7 @@ export async function concluirRevisaoPesquisa(
  * Não requer RQE; se houver mais de um RQE, salva apenas o CRM.
  */
 export async function aprovarRegistroProfissional(
-  pool:pg.Pool,contaId:string,medicoId:string
+  pool:pg.Pool,contaId:string,medicoId:string,opcoes:{confirmarRqe:boolean}={confirmarRqe:true}
 ):Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>{
   const client=await pool.connect();
   let commit=false;
@@ -386,7 +386,7 @@ export async function aprovarRegistroProfissional(
       'rqe=case when $4::boolean then $5 else rqe end,',
       'atualizado_em=now()',
       'where id=$1::uuid and conta_id=$2 returning nome_completo,crm,rqe'
-    ].join('\n'),[medicoId,contaId,crm,rqe!==null,rqe]);
+    ].join('\n'),[medicoId,contaId,crm,opcoes.confirmarRqe&&rqe!==null,rqe]);
     if(salvo.rows.length!==1)return {ok:false,motivo:'CADASTRO_NAO_GRAVADO'};
     await client.query([
       'update public.noto_agent_conversas c set',

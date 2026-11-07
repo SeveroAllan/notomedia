@@ -144,7 +144,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     expect(JSON.stringify(modelo.calls[0]!.request.input)).not.toContain('36948/RS');
     modelo.assertComplete();
   });
-  it('snapshot real da #60 com pergunta nula ou ausente ainda exige classificação do período',async()=>{
+  it('snapshot real da #60 com pergunta nula ou ausente exige classificação da intenção completa',async()=>{
     for(const pergunta of [null,undefined]){
       const modelo=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
         decisao:'definir',inicio:'2026-11-01'
@@ -156,14 +156,14 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
           ...(pergunta===null?{perguntaPendente:null}:{}),
           pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',confirmacaoAdiada:true}}}},
         {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia,aoDiagnostico:diagnostico});
-      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
+      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
       expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
       expect(resposta).toContain('período solicitado');
       expect(resposta).not.toMatch(/não emite|não emitiu|confirmar.*vincul/);
       expect(diagnostico.mock.calls.at(-1)?.[0]).toMatchObject({
         estadoVinculo:{fase:'VINCULO_CONFIRMADO'},
         estadoOnboarding:{vinculoConfirmadoNaConta:true,perguntaPendente:pergunta===null?null:'AUSENTE',
-          crmAdiado:true,ferramentaPeriodoObrigatoria:true}
+          crmAdiado:true,ferramentaPeriodoObrigatoria:false,ferramentaContinuidadeObrigatoria:true}
       });
       const primeiraEntrada=modelo.calls[0]!.request.input[0];
       if(!primeiraEntrada||typeof primeiraEntrada==='string'||!('content' in primeiraEntrada))throw Error('Contexto não enviado');
