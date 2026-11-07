@@ -163,8 +163,17 @@ function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boo
 
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
+function agendaDaPergunta(texto: string): AgendaEscolhida | undefined {
+  if (!texto.includes('?')) return;
+  const tribe = /\btribe(?:md)?\b/i.test(texto);
+  const amplimed = /\bamplimed\b/i.test(texto);
+  return tribe === amplimed ? undefined : tribe ? 'tribemd' : 'amplimed';
+}
+
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
-  const agendaEmFoco = escolhaAgendaExplicita(entrada.texto) ?? entrada.estadoConversa?.agendaEscolhida;
+  const escolhaAtual = escolhaAgendaExplicita(entrada.texto);
+  const agendaEmFoco = escolhaAtual ?? entrada.estadoConversa?.agendaEscolhida;
+  const agendaConsulta = escolhaAtual ?? agendaDaPergunta(entrada.texto) ?? agendaEmFoco;
   const profissionais = entrada.profissionais.filter(p => p.id && nomeProfissionalValido(p.nome)).slice(0, 21);
   // Descoberta já comprovada e pendente é a única condição que ativa
   // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
@@ -248,7 +257,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           };
         } catch { return { profissional: p.nome, erro: 'consulta indisponível; não presumir ausência de conexão' }; }
       }));
-      const fontes = agendaEmFoco ? [agendaEmFoco] : ['tribemd', 'amplimed'] as const;
+      const fontes = agendaConsulta ? [agendaConsulta] : ['tribemd', 'amplimed'] as const;
       const estados = resultados.flatMap(r => fontes.map(fonte => 'erro' in r ? 'consulta indisponível' : r[fonte]));
       const quantosIndisponiveis = estados.filter(e =>
         e === 'consulta indisponível' || e === 'integração não configurada neste ambiente').length;
@@ -257,9 +266,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         estados.includes('conectada') ? 'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
       const faltaConfig = estados.includes('integração não configurada neste ambiente');
       registrarStatus(faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo);
-      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: agendaEmFoco
-          ? resultados.map(r => 'erro' in r ? r : { profissional: r.profissional, [agendaEmFoco]: r[agendaEmFoco] })
-          : resultados, agendaEmFoco,
+      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: agendaConsulta
+          ? resultados.map(r => 'erro' in r ? r : { profissional: r.profissional, [agendaConsulta]: r[agendaConsulta] })
+          : resultados, agendaConsulta,
         observacao: faltaConfig
           ? 'A integração não está configurada neste ambiente. Não é falha da TribeMD ou Amplimed e repetir a consulta não resolve. É necessária configuração local antes do link seguro. Senhas só na página segura.'
           : 'Estado das conexões somente; nenhuma consulta ou nota foi verificada. Falha de consulta não comprova desconexão.' };
@@ -272,9 +281,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda: z.enum(['tribemd', 'amplimed']), profissional: z.string().nullable() }),
     async execute({ agenda, profissional }) {
       const inicio = Date.now();
-      if (agendaEmFoco && agenda !== agendaEmFoco) {
-        registrar('orientar_conexao_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
-        return {pronto: false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('orientar_conexao_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {pronto: false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaConsulta};
       }
       const log = (codigo: CodigoFerramenta) => registrar('orientar_conexao_agenda', codigo, inicio);
       const plataforma = agenda === 'tribemd' ? 'TribeMD' : 'Amplimed';
@@ -490,7 +499,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     async execute({agenda, profissional}) {
       const inicio=Date.now();
       if (agendaEmFoco && agenda !== agendaEmFoco) {
-        registrar('descobrir_profissionais_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
+        registrar('descobrir_profissionais_agenda','AGENDA_FORA_DO_FOCO',inicio);
         return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
       }
       const r=profissional === null ? null : identificar(profissional,profissionais);
@@ -636,6 +645,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const mencionouAmpli = /\bamplimed\b/i.test(entrada.texto);
       const agendaEscolhida = agendaEmFoco ? agendaEmFoco === agenda :
         mencionouTribe !== mencionouAmpli && (agenda === 'tribemd' ? mencionouTribe : mencionouAmpli);
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('solicitar_link_seguro_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {aceitoParaEnvio:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
         return {aceitoParaEnvio:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
@@ -670,9 +683,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters:z.object({agenda:z.enum(['tribemd','amplimed'])}),
     async execute({agenda}) {
       const inicio=Date.now();
-      if (agendaEmFoco && agenda !== agendaEmFoco) {
-        registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
-        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('consultar_status_entrega_link_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaConsulta};
       }
       const referencia=await ancoraDaConta().catch(()=>null);
       if(!referencia) {
@@ -1112,7 +1125,7 @@ export function acompanhamentoVerificado(
   entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
 ): string | null {
   const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
-  const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
+  const agenda=escolhaAgendaExplicita(entrada.texto)??agendaDaPergunta(entrada.texto)??entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
   if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
   if(tem('CONEXAO_EXISTENTE')) return [
@@ -1125,6 +1138,12 @@ export function acompanhamentoVerificado(
     'Isso não confirma o login na agenda.',
     'A verificação dos médicos começa depois da conexão autenticada.'
   ].join(' ');
+  if (agenda && tem('AGENDA_FORA_DO_FOCO') &&
+      eventos.every(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.nome === 'consultar_contexto_conta')) {
+    return agendaDaPergunta(entrada.texto) && agenda !== entrada.estadoConversa?.agendaEscolhida
+      ? `Posso conferir a conexão da ${nomeAgenda} para continuar.`
+      : `A agenda escolhida é a ${nomeAgenda}. Posso conferir a conexão dela para continuar.`;
+  }
   // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
   return null;
 }
@@ -1471,7 +1490,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       const partes=resposta.split('[[RESULTADO_ACAO]]');
       const envioLinkAgenda = ferramentas.some(e =>
         e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
-      const introducao = !envioLinkAgenda && partes.length === 2 ? partes[0]!.trim() : '';
+      const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO');
+      const introducao = !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);

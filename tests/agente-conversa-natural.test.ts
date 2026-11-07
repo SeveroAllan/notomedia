@@ -152,6 +152,12 @@ describe('decisões de retomada: a última conversa não pode autorizar por men�
     expect(novo.agendaEscolhida).toBe('tribemd');
     expect(novo.profissionalConfirmadoId).toBe('m2');
   });
+  it('preserva a troca pedida em pergunta quando o turno seguinte relata o link errado',()=>{
+    const anterior={agendaEscolhida:'amplimed' as const,profissionalConfirmadoId:'m2'};
+    const escolha=evoluirEstadoConversa(anterior,'Podemos usar a TribeMD?','Certo.',prof);
+    const retomada=evoluirEstadoConversa(escolha,'O link era da Amplimed de novo','Vou conferir.',prof);
+    expect(retomada).toMatchObject({agendaEscolhida:'tribemd',profissionalConfirmadoId:'m2'});
+  });
   it('correção declarativa troca a agenda, sem apagar outros fatos confirmados',()=>{
     const anterior={agendaEscolhida:'amplimed' as const,profissionalConfirmadoId:'m2'};
     const novo=evoluirEstadoConversa(anterior,'Não, é TribeMD','Certo, verificarei.',prof);

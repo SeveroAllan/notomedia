@@ -113,11 +113,11 @@ export async function finalizarMensagemConversa(pool: Banco, contaId: string, in
 
 /** Uma escolha declarada na mensagem, independente do resultado do envio da resposta. */
 export function escolhaAgendaExplicita(entrada: string): AgendaEscolhida | undefined {
-  if (entrada.includes('?')) return;
   const nome = normalizarNomeMedico(entrada.replace(/^\s*n[aã]o\s*,\s*/i, ''));
   const curta = /^(tribe(?:md)?|amplimed)(?: nao (?:e )?(?:a |o )?(?:tribe(?:md)?|amplimed))?$/.exec(nome);
   const declarada = /^(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|(?:a )?minha agenda e|a agenda e|a correta e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar|vamos pela|quis dizer)\s+(?:(?:a|o)\s+)?(tribe(?:md)?|amplimed)\b/.exec(nome);
-  const fonte = (curta ?? declarada)?.[1];
+  const pedido = /^(?:(?:pode|podemos|posso|poderia|d[aá] para|vamos) (?:conectar|usar|trocar para|mudar para|seguir com|seguir pela)|quero usar|quero trocar para)\s+(?:(?:a|o)\s+)?(tribe(?:md)?|amplimed)\b/.exec(nome);
+  const fonte = (pedido ?? (entrada.includes('?') ? null : curta ?? declarada))?.[1];
   if (!fonte) return;
   const outra = fonte === 'amplimed' ? 'tribe(?:md)?' : 'amplimed';
   if (new RegExp('\\b' + outra + '\\b').test(nome) &&

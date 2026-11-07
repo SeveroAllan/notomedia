@@ -15,7 +15,7 @@ const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>ne
 );
 
 describe('primeira conexão por conta sem médico confirmado',()=>{
-  it.each(['Não, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
+  it.each(['Não, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD', 'Podemos usar a TribeMD?', 'Pode trocar para a TribeMD?'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
     const scripted=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'amplimed',profissional:null},{callId:'antigo'})],
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'atual'})],
@@ -28,6 +28,29 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
     scripted.assertComplete();
   });
+  it('consulta a TribeMD quando a pergunta a nomeia, mesmo com Amplimed salva',async()=>{
+    const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},'A TribeMD está conectada.');
+    const consultarStatus=vi.fn().mockResolvedValue(conectado);
+    const resposta=await responderAgente({
+      texto:'e aí, conseguiu confirmar a TribeMD?',profissionais:[],estadoConversa:{agendaEscolhida:'amplimed'}
+    },{modeloTeste:scripted,consultarStatus,referenciaContaAgenda:async()=>referencia});
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith(referencia);
+    expect(resposta).toContain('A agenda TribeMD já está conectada.');
+    scripted.assertComplete();
+  });
+
+  it('divergência de foco não vira indisponibilidade da agenda', async () => {
+    const scripted = modelo('orientar_conexao_agenda', {agenda:'amplimed',profissional:null},
+      'A TribeMD está indisponível. [[RESULTADO_ACAO]]');
+    const consultarStatus = vi.fn();
+    const resposta = await responderAgente({
+      texto:'O link era da Amplimed de novo', profissionais:[], estadoConversa:origem
+    }, {modeloTeste:scripted, consultarStatus, referenciaContaAgenda:async()=>referencia});
+    expect(resposta).toBe('A agenda escolhida é a TribeMD. Posso conferir a conexão dela para continuar.');
+    expect(consultarStatus).not.toHaveBeenCalled();
+    scripted.assertComplete();
+  });
+
   it('orienta Cofre seguro sem escolher cadastro provisório nem perguntar qual médico',async()=>{
     const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},
       'Posso enviar a página segura para conectar sua TribeMD. Lá você informa a senha.');
