@@ -13,15 +13,29 @@ import type {
 } from '../../worker/fila-repositorio.js';
 
 export class PostgresFilaRepositorio implements FilaRepositorio {
-  constructor(private readonly pool: pg.Pool, private readonly modoAgente = false, private readonly emissaoComprovanteAtiva = false) {}
+  constructor(private readonly pool: pg.Pool, private readonly modoAgente = false, private readonly emissaoComprovanteAtiva = false,
+    private readonly escopoWhatsApp?: Readonly<{ contaId: string; medicoId: string }>) {
+    if (escopoWhatsApp && (!emissaoComprovanteAtiva || !escopoWhatsApp.contaId || !escopoWhatsApp.medicoId)) {
+      throw new Error('Escopo de emissão WhatsApp inválido.');
+    }
+  }
 
   async buscarETravarProximoItem(workerId: string): Promise<ItemFilaComTentativas | null> {
+    const escopo = this.escopoWhatsApp;
+    const comprovanteEnfileirado = `origem = 'whatsapp' and exists (
+      select 1 from public.noto_emissoes_comprovantes ec
+      where ec.solicitacao_id = solicitacoes_nota.id and ec.medico_id = solicitacoes_nota.medico_id
+        and ec.estado = 'enfileirada')`;
+    const origem = escopo ? `(${comprovanteEnfileirado}) and medico_id = $3::uuid
+      and exists (select 1 from public.medicos m join public.medico_perfil_fiscal pf on pf.medico_id=m.id
+        where m.id = $3::uuid and m.conta_id = $4::uuid and pf.ambiente='homologacao')`
+      : this.emissaoComprovanteAtiva ? `(origem = 'api' or (${comprovanteEnfileirado}))` : "origem = 'api'";
     const sql = `
       with proximo as (
         select id
         from solicitacoes_nota
         where fila = 'pronta'
-          and ${this.emissaoComprovanteAtiva ? `(origem = 'api' or (origem = 'whatsapp' and exists (select 1 from public.noto_emissoes_comprovantes ec where ec.solicitacao_id = solicitacoes_nota.id and ec.medico_id = solicitacoes_nota.medico_id and ec.estado = 'enfileirada')))` : `origem = 'api'`}
+          and ${origem}
           and not aguardando_dados_profissionais
           and not aguardando_confirmacao_medico
           and not aguardando_cpf_medico
@@ -40,7 +54,7 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
       returning sn.id, sn.medico_id, sn.paciente_id, sn.xdesc_serv, sn.valor_servico_centavos,
                 sn.ctrib_nac, sn.cnbs, sn.cclass_trib, sn.cind_op, sn.tentativas${this.emissaoComprovanteAtiva ? `, (sn.origem = 'whatsapp') as emissao_comprovante` : ''}
     `;
-    const { rows } = await this.pool.query(sql, [workerId, this.modoAgente]);
+    const { rows } = await this.pool.query(sql, [workerId, this.modoAgente, ...(escopo ? [escopo.medicoId, escopo.contaId] : [])]);
     if (rows.length === 0) return null;
 
     const r = rows[0];
@@ -61,6 +75,7 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
 
   async iniciarEmissaoComprovante(solicitacaoId: string): Promise<'iniciada' | 'ocupada' | 'bloqueada'> {
     if (!this.emissaoComprovanteAtiva) return 'bloqueada';
+    const escopo = this.escopoWhatsApp;
     const client = await this.pool.connect();
     try {
       await client.query('begin');
@@ -69,7 +84,8 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
         join solicitacoes_nota sn on sn.id = ec.solicitacao_id and sn.medico_id = ec.medico_id
         left join medico_perfil_fiscal pf on pf.medico_id = ec.medico_id
         where ec.solicitacao_id = $1 and sn.origem = 'whatsapp'
-        for update of ec, sn`, [solicitacaoId]);
+        ${escopo ? 'and sn.medico_id=$2::uuid and exists (select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$3::uuid)' : ''}
+        for update of ec, sn`, [solicitacaoId, ...(escopo ? [escopo.medicoId, escopo.contaId] : [])]);
       if (rows[0]?.estado !== 'enfileirada') {
         await client.query('commit');
         return 'ocupada';
