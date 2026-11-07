@@ -90,7 +90,8 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
       }
       if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
       if(sql.startsWith('update public.noto_agent_conversas as c')){
-        estado={...estado,faseAgenda:'CONFIRMACAO_PENDENTE',origemDescoberta:'legado_validado'};
+        estado={...estado,faseAgenda:'CONFIRMACAO_PENDENTE',origemDescoberta:'legado_validado',
+          perguntaPendente:'confirmar_profissional'};
         return {rows:[{conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}]};
       }
       if(sql.startsWith('update public.noto_agent_conversas c set')){

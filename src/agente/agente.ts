@@ -1210,8 +1210,11 @@ function descreverCertificado(r:OrientacaoCertificado):string{
  * Não declara vínculo executado se só houve decisão ou erro de dependência. */
 function explicarResultadoVinculo(
   v:{ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|
-    {ok:false;motivo:string}
+    {ok:false;motivo:string},
+  descoberta:EstadoConversa['descoberta']
 ):string{
+  if(!v.ok && v.motivo==='ESCLARECIMENTO' && descoberta?.nomes.length===1)
+    return 'Você confirma vincular '+descoberta.nomes[0]+' à sua conta?';
   if(!v.ok)return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
     ?'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
     :v.motivo==='VINCULO_JA_PROCESSADO_NO_TURNO'
@@ -1220,10 +1223,7 @@ function explicarResultadoVinculo(
   if(!v.registrado)return 'O cadastro aceitou o vínculo de '+v.nome+
     ', mas ainda não confirmei a gravação da etapa na conversa. Vou conferir essa etapa antes de pesquisar CRM/RQE.';
   const confirmacao='Vinculei '+v.nome+' à sua conta.';
-  if(v.pesquisa==='agendada')return confirmacao+
-    ' A pesquisa pública de CRM e RQE foi solicitada. Os dados precisam da sua confirmação antes de salvar.';
-  if(v.pesquisa==='ja_existe')return confirmacao+
-    ' A pesquisa pública já está registrada; não solicitei outra consulta.';
+  if(v.pesquisa!=='indisponivel')return confirmacao;
   return confirmacao+
     ' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
 }
@@ -1440,7 +1440,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
 
     if(vinculoTurno.atual){
       registrar('RESPOSTA',uso);
-      return explicarResultadoVinculo(vinculoTurno.atual);
+      return explicarResultadoVinculo(vinculoTurno.atual,entrada.estadoConversa?.descoberta);
     }
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;
@@ -1533,7 +1533,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // inferência é interrompida. Esse fato precede o erro do Runner.
     if(vinculoTurno.atual){
       registrar('RESPOSTA');
-      return explicarResultadoVinculo(vinculoTurno.atual);
+      return explicarResultadoVinculo(vinculoTurno.atual,entrada.estadoConversa?.descoberta);
     }
     if (trabalhoTurno.atual?.estado.ok) {
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';

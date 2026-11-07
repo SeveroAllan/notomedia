@@ -9,7 +9,7 @@ const BRUNO='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const base='conta_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const unico:EstadoConversa={agendaEscolhida:'tribemd',faseAgenda:'CONFIRMACAO_PENDENTE',
   descoberta:{agenda:'tribemd',nomes:['Dra. Ana Souza']},
-  perguntaPendente:null}; // a resposta NÃO depende do texto da pergunta anterior
+  perguntaPendente:'confirmar_profissional'}; // categoria da pergunta, sem guardar o texto anterior
 const multiplo:EstadoConversa={...unico,descoberta:{agenda:'tribemd',
   nomes:['Dra. Ana Souza','Dr. Bruno Lima']}};
 const status=vi.fn().mockResolvedValue({
@@ -45,14 +45,14 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       expect(r.confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(base,['Dra. Ana Souza']);
       expect(r.aoVinculo).toHaveBeenCalledExactlyOnceWith('tribemd',{id:ANA,nome:'Dra. Ana Souza'});
       expect(r.resposta).toContain('Vinculei Dra. Ana Souza');
-      expect(r.resposta).toContain('antes de salvar');
+      expect(r.resposta).not.toContain('pesquisa pública');
       expect(r.resposta).not.toMatch(/999|não foi validado|digitar tudo/);
     });
   }
   it('confirma sem segunda inferência, sem reler CRM e sem depender do tempo de resposta humana',async()=>{
     const diagnosticos:import('../src/agente/diagnostico.js').DiagnosticoAgente[]=[];
     const confirmado=await simular('Sim, sou eu!','confirmar',[],{
-      ...unico,perguntaPendente:null
+      ...unico,perguntaPendente:'confirmar_profissional'
     },{
       aoDiagnostico:(x:import('../src/agente/diagnostico.js').DiagnosticoAgente)=>diagnosticos.push(x)
     });
@@ -93,6 +93,14 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       nomes:['Dra. Ana Souza','Dr. Bruno Lima'],mensagem:'Pode vincular os dois'}))
       .toEqual({ok:false,motivo:'ALVO_AMBIGUO'});
   });
+  it.each(['a minha agenda é a TribeMD', 'Não quero vincular', 'Sim, mas ainda tenho dúvida', 'Pode vincular?', 'Sim, sou eu!'])(
+    'tool call confirmatório sem autorização suficiente não grava: %s', async texto => {
+      const estado = texto === 'Sim, sou eu!' ? {...unico, perguntaPendente:null} : unico;
+      const r = await simular(texto, 'confirmar', [], estado);
+      expect(r.confirmarProfissionais).not.toHaveBeenCalled();
+      expect(r.aoVinculo).not.toHaveBeenCalled();
+    }
+  );
   it('negação, dúvida, correção ou mudança de assunto não criam vínculos',async()=>{
     for(const [texto,decisao] of [
       ['Não, não sou essa pessoa','negar'],
