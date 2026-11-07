@@ -1,3 +1,4 @@
+import type { EscopoEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
 /**
  * Leitura e validação das variáveis de ambiente de infraestrutura e segredos.
  * Este é o único módulo autorizado a interagir com process.env para segredos,
@@ -52,11 +53,27 @@ export interface AppConfig {
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
   notoPilotoRestrito?: boolean;
+  emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
+  emissaoWhatsAppWorker?: EscopoEmissaoWhatsApp;
   meuDanfeApiKey?: string;
   hubDesenvolvedorToken?: string;
 }
 
 export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const produtorWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PRODUTOR_ATIVO'] === 'true';
+  const workerWhatsApp = env['NOTO_EMISSAO_WHATSAPP_WORKER_ATIVO'] === 'true';
+  const escopoWhatsApp = {
+    contaId: env['NOTO_EMISSAO_WHATSAPP_CONTA_ID'] ?? '',
+    medicoId: env['NOTO_EMISSAO_WHATSAPP_MEDICO_ID'] ?? '',
+    agendamentoId: env['NOTO_EMISSAO_WHATSAPP_AGENDAMENTO_ID'] ?? ''
+  };
+  if (produtorWhatsApp || workerWhatsApp) {
+    const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+    const destino = (env['ENVIO_REAL_ALLOWLIST'] ?? '').trim();
+    if (env['NOTO_PILOTO_RESTRITO'] !== 'true' || !/^55\d{10,11}$/.test(destino) ||
+        !Object.values(escopoWhatsApp).every(id => uuid.test(id)) || (produtorWhatsApp && workerWhatsApp))
+      throw new Error('EMISSAO_WHATSAPP_EXIGE_ESCOPO_ISOLADO');
+  }
   if (env['PREPARACAO_FISCAL_ATIVA'] === 'true' && env['AGENTE_FISCAL_ATIVO'] !== 'true') {
     throw new Error('PREPARACAO_FISCAL_ATIVA requer AGENTE_FISCAL_ATIVO para tratar pendências sem retentativas cegas.');
   }
@@ -139,6 +156,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
+    ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:escopoWhatsApp} : {}),
+    ...(workerWhatsApp ? {emissaoWhatsAppWorker:escopoWhatsApp} : {}),
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',

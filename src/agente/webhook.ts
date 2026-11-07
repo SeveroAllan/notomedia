@@ -64,6 +64,7 @@ export function criarRouterWebhookAgente(deps: {
   exigirControleCusto?:boolean;
   diagnosticoAtivo?: boolean;
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  autorizarEmissaoWhatsApp?: (contaId:string, texto:string, mensagemRef:string)=>Promise<string|null>;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
   consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
@@ -204,6 +205,16 @@ export function criarRouterWebhookAgente(deps: {
           res.sendStatus(200); return;
         }
         reservada = true;
+        if (deps.autorizarEmissaoWhatsApp) {
+          const respostaFiscal = await deps.autorizarEmissaoWhatsApp(contaId, texto,
+            referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]));
+          if (respostaFiscal !== null) {
+            enviado = await deps.enviar(telefone, respostaFiscal);
+            await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+            res.sendStatus(enviado ? 200 : 503);
+            return;
+          }
+        }
         const agendaEscolhida = escolhaAgendaExplicita(texto);
         if (agendaEscolhida && agendaEscolhida !== estado.agendaEscolhida) {
           await salvarEstadoConversa(deps.pool, contaId, { agendaEscolhida });
