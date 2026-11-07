@@ -1512,7 +1512,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     console.warn('NOTO_AGENT_EXECUCAO',JSON.stringify({codigo:natureza,duracaoMs:Math.max(0,Date.now()-inicio),
       ferramentas:ferramentas.map(f=>({nome:f.nome,codigo:f.codigo,duracaoMs:f.duracaoMs}))}));
     return natureza==='ABORT_SIGNAL'
-      ? 'A resposta demorou mais que o limite desta conversa. Vou manter o estado verificado; não vou dizer que a consulta falhou sem conferir o trabalho registrado.'
+      ? 'A consulta demorou mais que o esperado. Ainda não tenho o resultado.'
       : 'Não consegui continuar esta etapa da conversa agora. Vou preservar o que já foi confirmado para retomarmos sem recomeçar.';
   } finally {
     clearTimeout(relogio);
