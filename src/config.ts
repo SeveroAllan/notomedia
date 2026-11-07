@@ -53,6 +53,7 @@ export interface AppConfig {
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
   notoPilotoRestrito?: boolean;
+  emissaoWhatsAppPropostaAtiva?: boolean;
   emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
   emissaoWhatsAppWorker?: EscopoEmissaoWhatsApp;
   meuDanfeApiKey?: string;
@@ -61,6 +62,8 @@ export interface AppConfig {
 
 export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const produtorWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PRODUTOR_ATIVO'] === 'true';
+  const propostaWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PROPOSTA_ATIVA'] === 'true';
+  if (propostaWhatsApp && !produtorWhatsApp) throw new Error('PROPOSTA_WHATSAPP_EXIGE_PRODUTOR');
   const workerWhatsApp = env['NOTO_EMISSAO_WHATSAPP_WORKER_ATIVO'] === 'true';
   const escopoWhatsApp = {
     contaId: env['NOTO_EMISSAO_WHATSAPP_CONTA_ID'] ?? '',
@@ -156,6 +159,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
+    emissaoWhatsAppPropostaAtiva:propostaWhatsApp,
     ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:escopoWhatsApp} : {}),
     ...(workerWhatsApp ? {emissaoWhatsAppWorker:escopoWhatsApp} : {}),
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',

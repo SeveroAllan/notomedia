@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
 import { expect, it } from 'vitest';
-import { autorizarEmissaoWhatsApp } from '../src/io/postgres/postgres-emissao-whatsapp-repositorio.js';
+import { autorizarEmissaoWhatsApp, tratarPropostaEmissaoWhatsApp } from '../src/io/postgres/postgres-emissao-whatsapp-repositorio.js';
 import { PostgresFilaRepositorio } from '../src/io/postgres/postgres-fila-repositorio.js';
 
 const url = process.env['NOTO_SCHEMA_TEST_DATABASE_URL'];
@@ -69,6 +69,56 @@ it.runIf(Boolean(url))('duas autorizações geram uma solicitação e só o work
     expect(item).toMatchObject({medicoId:escopo.medicoId,emissaoComprovante:true});
     expect(await fila.iniciarEmissaoComprovante(item!.id)).toBe('iniciada');
     expect(await fila.buscarETravarProximoItem('piloto')).toBeNull();
+    await pool.query(readFileSync(new URL('../scripts/migrations/20261111-noto-proposta-emissao-whatsapp.sql',import.meta.url),'utf8'));
+    await pool.query(`
+      alter table medicos add column nome_completo text;
+      update medicos set nome_completo='Emitente Sintético';
+      alter table medico_perfil_fiscal add column razao_social text, add column dados_reforma_tributaria jsonb;
+      alter table medico_servicos_fiscais add column nome_servico text;
+      update medico_servicos_fiscais set nome_servico='Consulta de teste';
+      create table pacientes(id uuid primary key,medico_id uuid,nome text,nome_validado boolean);
+    `);
+    const escopoProposta={...escopo,agendamentoId:randomUUID()};
+    await pool.query("insert into pacientes values ($1,$2,'Tomador Sintético',true)",[tomador,escopo.medicoId]);
+    await pool.query("insert into agendamentos values ($1,$2,$3,$4,'tribemd','sintetico-2',now(),10000,true,'realizado')",
+      [escopoProposta.agendamentoId,escopo.medicoId,tomador,servico]);
+    const conversaRef='a'.repeat(64);
+    const proposta=async(letra:string, resposta:string)=>{
+      const texto:string[]=[];
+      expect(await tratarPropostaEmissaoWhatsApp(pool!,escopoProposta,{
+        contaId:escopo.contaId,texto:'Quero emitir uma nota',conversaRef,mensagemRef:letra.repeat(64)
+      },async balão=>{texto.push(balão);return resposta.repeat(64);})).toBe('');
+      expect(texto[0]).toContain('Emitente Sintético');
+      expect(texto[0]).toContain('Tomador Sintético');
+      expect(texto[0]).toContain('Consulta de teste');
+      expect(texto[0]).toContain('100,00');
+      expect(texto[0]).toContain('Competência');
+    };
+    const confirmar=async(citadaRef?:string, conversa=conversaRef, texto='Sim, pode emitir') =>
+      tratarPropostaEmissaoWhatsApp(pool!,escopoProposta,{
+        contaId:escopo.contaId,texto,conversaRef:conversa,citadaRef,mensagemRef:'f'.repeat(64)
+      },async()=>{throw new Error('CONFIRMACAO_NAO_PUBLICA_PROPOSTA');});
+    await proposta('b','c');
+    expect(await confirmar()).toBeNull();
+    expect(await confirmar('c'.repeat(64),'e'.repeat(64))).toBeNull();
+    await pool.query("update public.noto_propostas_emissao_whatsapp set expira_em=now()-interval '1 second'");
+    expect(await confirmar('c'.repeat(64))).toContain('não pode mais');
+    await proposta('d','e');
+    expect(await confirmar('e'.repeat(64),conversaRef,'Não')).toContain('encerrada');
+    expect(await confirmar('e'.repeat(64))).toContain('não pode mais');
+    await proposta('1','2');
+    await pool.query("update medico_servicos_fiscais set nome_servico='Outro serviço'");
+    expect(await confirmar('2'.repeat(64))).toContain('não pode mais');
+    await pool.query("update medico_servicos_fiscais set nome_servico='Consulta de teste'");
+    await proposta('3','4');
+    expect(await confirmar('2'.repeat(64))).toContain('não pode mais');
+    const respostas=await Promise.all([confirmar('4'.repeat(64)),confirmar('4'.repeat(64))]);
+    expect(respostas.filter(texto=>texto?.includes('Registrei'))).toHaveLength(1);
+    expect((await pool.query('select count(*)::int n from solicitacoes_nota')).rows[0].n).toBe(2);
+    expect((await pool.query(`
+      select p.pedido_ref,p.resposta_ref,a.mensagem_ref,p.confirmada_em is not null confirmada
+      from noto_auditoria_comprovantes a join noto_propostas_emissao_whatsapp p on p.id=a.proposta_whatsapp_id
+    `)).rows).toEqual([{pedido_ref:'3'.repeat(64),resposta_ref:'4'.repeat(64),mensagem_ref:'f'.repeat(64),confirmada:true}]);
   } finally {
     await pool?.end();
     await admin.query('drop database if exists '+nome);

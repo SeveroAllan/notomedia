@@ -1,4 +1,4 @@
-import { tratarComandoEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
+import { tratarComandoEmissaoWhatsApp, tratarPropostaEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
@@ -404,6 +404,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    ...(config.emissaoWhatsAppPropostaAtiva && config.emissaoWhatsAppProdutor ? {
+      propostaEmissaoWhatsApp: (
+        entrada:Parameters<typeof tratarPropostaEmissaoWhatsApp>[2],
+        publicar:Parameters<typeof tratarPropostaEmissaoWhatsApp>[3]
+      )=>tratarPropostaEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,entrada,publicar),
+      enviarPropostaEmissao: async (telefone:string,texto:string)=>{
+        const resultado = await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto,linkPreview:false
+        });
+        return resultado.sucesso ? resultado.mensagemId ?? null : null;
+      }
+    } : {}),
     ...(config.emissaoWhatsAppProdutor ? {
       autorizarEmissaoWhatsApp: (contaId:string,texto:string,mensagemRef:string) =>
         tratarComandoEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,contaId,texto,mensagemRef)
