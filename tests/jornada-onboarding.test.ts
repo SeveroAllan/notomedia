@@ -68,6 +68,7 @@ beforeEach(async()=>{
       return Response.json({qrcode:{base64:'cXI=',pairingCode:body.number ? '1234-5678' : null}});
     }
     if(url.pathname.startsWith('/instance/connectionState/'))return Response.json({instance:{state:conectado?'open':'connecting'}});
+    if(url.pathname.startsWith('/instance/connect/'))return Response.json({pairingCode:'NEWC0DE2'});
     if(url.pathname.startsWith('/settings/set/')||url.pathname.startsWith('/webhook/set/'))return Response.json({ok:true});
     if(url.pathname.startsWith('/chat/findMessages/'))return Response.json({messages:{records:[],pages:1}});
     throw Error(`EVOLUTION_FORA_DO_CONTRATO: ${url.pathname}`);
@@ -190,7 +191,27 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados 
   expect(JSON.parse(String(criacao?.[1]?.body))).toMatchObject({qrcode:true,
     ...(modoConexao==='codigo'?{number:telefone}:{})});
   expect(rede.mock.calls.some(([url]: any[])=>String(url).includes('/instance/connect/'))).toBe(false);
-  if (modoConexao==='codigo') expect(parear.body.qrcodeBase64).toBeNull();
+  if (modoConexao==='codigo') {
+    expect(parear.body.qrcodeBase64).toBeNull();
+    const webhook=rede.mock.calls.find(([url]: any[])=>String(url).includes('/webhook/set/'));
+    expect(JSON.parse(String(webhook?.[1]?.body)).webhook.events).toContain('QRCODE_UPDATED');
+    const rota=`/api/onboarding/whatsapp/status?medicoId=${medicoId}`;
+    const instancia=parear.body.nomeInstancia;
+    const evento={instance:instancia,event:'qrcode.updated',data:{qrcode:{instance:instancia,pairingCode:'NEWC0DE2'}}};
+    const enviarEvento=(segredo:string)=>fetch(origem+'/webhook/evolution/pareamento',{
+      method:'POST',headers:{'Content-Type':'application/json','x-webhook-secret':segredo},body:JSON.stringify(evento)
+    });
+    expect((await enviarEvento('invalido')).status).toBe(401);
+    expect((await chamar(rota)).body.revisaoCodigo).toBeUndefined();
+    expect((await enviarEvento('ficticio')).status).toBe(204);
+    const rotacao=await chamar(rota);
+    expect(rotacao.body.revisaoCodigo).toMatch(/^[a-f0-9]{64}$/);
+    expect(rotacao.body.revisaoCodigo).not.toBe(parear.body.revisaoCodigo);
+    expect(JSON.stringify(rotacao.body)).not.toContain('NEWC0DE2');
+    expect((await chamar(rota+'&consultarCodigo=1',undefined,'token-outra-conta')).status).toBe(403);
+    expect(rede.mock.calls.some(([url]: any[])=>String(url).includes('/instance/connect/'))).toBe(false);
+    expect((await chamar(rota+'&consultarCodigo=1')).body).toMatchObject({pairingCode:'NEWC0DE2',revisaoCodigo:rotacao.body.revisaoCodigo});
+  }
   expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-invalido')).status).toBe(401);
   expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-outra-conta')).status).toBe(403);
   conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);

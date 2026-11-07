@@ -202,7 +202,8 @@ export async function conectarInstanciaWhatsappMedico(
             'MESSAGES_UPSERT',
             'CHATS_SET',
             'CONTACTS_SET',
-            'CONNECTION_UPDATE'
+            'CONNECTION_UPDATE',
+            'QRCODE_UPDATED'
           ]
         }
       })
