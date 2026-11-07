@@ -15,6 +15,34 @@ export function janelaConferencia(agora = new Date(), desde?: string): {inicio:s
   return {inicio:desde ?? inicio.toISOString().slice(0,10),fim};
 }
 
+const mesesPeriodo = 'janeiro fevereiro marco abril maio junho julho agosto setembro outubro novembro dezembro'.split(' ');
+const dataExtenso = new RegExp(`\\b(\\d{1,2}) de (${mesesPeriodo.join('|')})(?: de (\\d{4}))?\\b`, 'g');
+
+export function extrairInicioConferencia(texto: string, hoje: string) {
+  const fala = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const anos = new Set(fala.match(/\b(?:19|20)\d{2}\b/g) ?? []);
+  const datas = [
+    ...Array.from(fala.matchAll(/\b(\d{4})-(\d{2})-(\d{2})\b/g), m => [m[3]!, m[2]!, m[1], m.index, m[0].length] as const),
+    ...Array.from(fala.matchAll(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?\b(?!\/)/g), m => [m[1]!, m[2]!, m[3], m.index, m[0].length] as const),
+    ...Array.from(fala.matchAll(dataExtenso), m => [m[1]!, String(mesesPeriodo.indexOf(m[2]!) + 1), m[3], m.index, m[0].length] as const)
+  ];
+  if (datas.length > 1 || /\b(?:ate|entre)\b/.test(fala)) return { motivo: 'INTERVALO_OU_MULTIPLAS_DATAS' } as const;
+  if (anos.size > 1) return { motivo: 'MULTIPLOS_ANOS' } as const;
+  if (/\b(?:nao|nem|exceto)\b/.test(fala)) return { motivo: 'DATA_NEGADA' } as const;
+  const data = datas[0];
+  if (!data) return { motivo: 'DATA_NAO_IDENTIFICADA' } as const;
+  const [dia, mes, ano, posicao, tamanho] = data;
+  const antes = fala.slice(0, posicao).trim();
+  const depois = fala.slice(posicao + tamanho).trim();
+  if (!/^(?:(?:na verdade|corrigindo)[,: ]*(?:e )?)?(?:(?:quero conferir |o periodo comeca )?(?:desde|a partir de|em))?$/.test(antes) ||
+      !/^[.!]*$/.test(depois)) return { motivo: 'DATA_SEM_ESCOPO_CLARO' } as const;
+  if (anos.size && (!ano || !anos.has(ano))) return { motivo: 'ANO_DIVERGENTE' } as const;
+  const inicio = (ano ?? hoje.slice(0, 4)) + '-' + mes!.padStart(2, '0') + '-' + dia!.padStart(2, '0');
+  if (!dataValida(inicio)) return { motivo: 'DATA_INVALIDA' } as const;
+  if (inicio > hoje) return { motivo: 'DATA_FUTURA' } as const;
+  return { inicio, anoExplicito: Boolean(ano) } as const;
+}
+
 /** FonteAgenda só libera consultas depois de validar cobertura e detalhes completos. */
 export function leituraTribemdParaConferencia(
   resultado: ResultadoFonteAgenda, nome: string, janela: {inicio:string;fim:string}
