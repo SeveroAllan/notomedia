@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -35,7 +35,7 @@ const eventoSchema = z.object({
     }).passthrough(),
     message: z.object({
       conversation: z.string().optional(),
-      extendedTextMessage: z.object({ text: z.string().optional() }).passthrough().optional()
+      extendedTextMessage: z.object({ text: z.string().optional(), contextInfo: z.object({stanzaId:z.string().max(200).optional()}).passthrough().optional() }).passthrough().optional()
     }).passthrough().optional()
   }).passthrough()
 }).passthrough();
@@ -64,6 +64,11 @@ export function criarRouterWebhookAgente(deps: {
   exigirControleCusto?:boolean;
   diagnosticoAtivo?: boolean;
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  propostaEmissaoWhatsApp?: (
+    entrada:{contaId:string;texto:string;mensagemRef:string;conversaRef:string;citadaRef?:string},
+    publicar:(texto:string)=>Promise<string|null>
+  )=>Promise<string|null>;
+  enviarPropostaEmissao?: (telefone:string,texto:string)=>Promise<string|null>;
   autorizarEmissaoWhatsApp?: (contaId:string, texto:string, mensagemRef:string)=>Promise<string|null>;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
@@ -205,6 +210,25 @@ export function criarRouterWebhookAgente(deps: {
           res.sendStatus(200); return;
         }
         reservada = true;
+        if (deps.propostaEmissaoWhatsApp && deps.enviarPropostaEmissao) {
+          const ref = (tipo:'mensagem'|'conversa', id?:string) => createHmac('sha256',deps.segredo)
+            .update(JSON.stringify(['proposta_fiscal',tipo,evento.instance,telefone,id])).digest('hex');
+          const citada = evento.data.message?.extendedTextMessage?.contextInfo?.stanzaId;
+          const resposta = await deps.propostaEmissaoWhatsApp({
+            contaId,texto,mensagemRef:ref('mensagem',evento.data.key.id),
+            conversaRef:ref('conversa'),
+            ...(citada ? {citadaRef:ref('mensagem',citada)} : {})
+          },async textoProposta=>{
+            const id = await deps.enviarPropostaEmissao!(telefone,textoProposta);
+            return id ? ref('mensagem',id) : null;
+          });
+          if (resposta !== null) {
+            enviado = resposta === '' || await deps.enviar(telefone,resposta);
+            await finalizarMensagemConversa(deps.pool,contaId,evento.instance,evento.data.key.id,enviado);
+            res.sendStatus(enviado?200:503);
+            return;
+          }
+        }
         if (deps.autorizarEmissaoWhatsApp) {
           const respostaFiscal = await deps.autorizarEmissaoWhatsApp(contaId, texto,
             referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]));
