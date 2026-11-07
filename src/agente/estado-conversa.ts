@@ -111,20 +111,28 @@ export async function finalizarMensagemConversa(pool: Banco, contaId: string, in
   );
 }
 
+/** Uma escolha declarada na mensagem, independente do resultado do envio da resposta. */
+export function escolhaAgendaExplicita(entrada: string): AgendaEscolhida | undefined {
+  if (entrada.includes('?')) return;
+  const nome = normalizarNomeMedico(entrada.replace(/^\s*n[aã]o\s*,\s*/i, ''));
+  const curta = /^(tribe(?:md)?|amplimed)(?: nao (?:e )?(?:a |o )?(?:tribe(?:md)?|amplimed))?$/.exec(nome);
+  const declarada = /^(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|minha agenda e|a agenda e|a correta e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar|vamos pela|quis dizer)\s+(?:(?:a|o)\s+)?(tribe(?:md)?|amplimed)\b/.exec(nome);
+  const fonte = (curta ?? declarada)?.[1];
+  if (!fonte) return;
+  const outra = fonte === 'amplimed' ? 'tribe(?:md)?' : 'amplimed';
+  if (new RegExp('\\b' + outra + '\\b').test(nome) &&
+      !new RegExp('\\bnao\\s+(?:(?:e|a|o)\\s+)*' + outra + '$').test(nome)) return;
+  return fonte === 'amplimed' ? 'amplimed' : 'tribemd';
+}
+
 /** Somente fatos conversacionais autorizados, nenhum texto livre ou dado fiscal. */
 export function evoluirEstadoConversa(
   anterior: EstadoConversa, entrada: string, resposta: string,
   profissionais: readonly { id: string; nome: string }[]
 ): EstadoConversa {
   const atual: EstadoConversa = { ...anterior };
-  const nome = normalizarNomeMedico(entrada);
-  const fonteTribe = /\btribe(?:md)?\b/i.test(nome);
-  const fonteAmpli = /\bamplimed\b/i.test(nome);
-  const escolhaCurta = /^(?:tribe(?:md)?|amplimed)[.! ]*$/.test(nome);
-  const declaracao = !entrada.includes('?') && /^(?:(?:nao,?\s*)?(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|minha agenda e|a agenda e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar)\b)/.test(nome);
-  if (fonteTribe !== fonteAmpli && (escolhaCurta || declaracao)) {
-    atual.agendaEscolhida = fonteTribe ? 'tribemd' : 'amplimed';
-  }
+  const escolha = escolhaAgendaExplicita(entrada);
+  if (escolha) atual.agendaEscolhida = escolha;
 
   // Autorização/vínculo são efeitos EXCLUSIVOS da ferramenta tipada e do banco.
   // Nunca transformar fala, menção de nome ou 'sim' em identidade confirmada.

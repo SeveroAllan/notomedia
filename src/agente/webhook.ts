@@ -13,7 +13,7 @@ import {
 import { separarBaloes, reacaoContextual } from './baloes.js';
 import {
   registrarPeriodoConferencia,lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
-  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa
+  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa, escolhaAgendaExplicita
 } from './estado-conversa.js';
 import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
@@ -204,6 +204,11 @@ export function criarRouterWebhookAgente(deps: {
           res.sendStatus(200); return;
         }
         reservada = true;
+        const agendaEscolhida = escolhaAgendaExplicita(texto);
+        if (agendaEscolhida && agendaEscolhida !== estado.agendaEscolhida) {
+          await salvarEstadoConversa(deps.pool, contaId, { agendaEscolhida });
+          estado = await lerEstadoConversa(deps.pool, contaId);
+        }
         // Reconciliar resultados REAIS da fila antiga (pré-correção)
         // somente da mesma conta/instância, sem usar texto anterior como
         // prova e sem consultar portal ou IA. Estado concluído não reabre.
@@ -438,6 +443,7 @@ export function criarRouterWebhookAgente(deps: {
           // o fato diretamente; saves tardios não podem desfazer o progresso.
           const delta:EstadoConversa={...novo,tarefasPendentes};
           // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
+          delete delta.agendaEscolhida; // A escolha é gravada antes das ferramentas.
           delete delta.pesquisasRegistro;
           delete delta.periodoConferencia;
           if(periodoDaMensagem||estado.perguntaPendente==='periodo')delete delta.perguntaPendente;

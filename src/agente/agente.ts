@@ -9,7 +9,7 @@ import { contemCredencialAgenda } from '../cofre/links.js';
 import { normalizarCrm,nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
-import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
+import { escolhaAgendaExplicita, type EstadoConversa, type AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
@@ -164,6 +164,7 @@ function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boo
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
+  const agendaEmFoco = escolhaAgendaExplicita(entrada.texto) ?? entrada.estadoConversa?.agendaEscolhida;
   const profissionais = entrada.profissionais.filter(p => p.id && nomeProfissionalValido(p.nome)).slice(0, 21);
   // Descoberta já comprovada e pendente é a única condição que ativa
   // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
@@ -247,17 +248,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           };
         } catch { return { profissional: p.nome, erro: 'consulta indisponível; não presumir ausência de conexão' }; }
       }));
-      const quantosIndisponiveis = resultados.reduce((n, r) => n +
-        ('erro' in r ? 2 : Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.tribemd)) + Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.amplimed))), 0);
-      const codigo = quantosIndisponiveis === resultados.length * 2 ? 'STATUS_INDISPONIVEL' :
+      const fontes = agendaEmFoco ? [agendaEmFoco] : ['tribemd', 'amplimed'] as const;
+      const estados = resultados.flatMap(r => fontes.map(fonte => 'erro' in r ? 'consulta indisponível' : r[fonte]));
+      const quantosIndisponiveis = estados.filter(e =>
+        e === 'consulta indisponível' || e === 'integração não configurada neste ambiente').length;
+      const codigo = quantosIndisponiveis === estados.length ? 'STATUS_INDISPONIVEL' :
         quantosIndisponiveis ? 'STATUS_PARCIAL' :
-        resultados.some(r => 'tribemd' in r && (r.tribemd === 'conectada' || r.amplimed === 'conectada')) ?
-          'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
-      const faltaConfig = resultados.some(r => 'tribemd' in r &&
-        (r.tribemd === 'integração não configurada neste ambiente' ||
-          r.amplimed === 'integração não configurada neste ambiente'));
+        estados.includes('conectada') ? 'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
+      const faltaConfig = estados.includes('integração não configurada neste ambiente');
       registrarStatus(faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo);
-      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: resultados,
+      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: agendaEmFoco
+          ? resultados.map(r => 'erro' in r ? r : { profissional: r.profissional, [agendaEmFoco]: r[agendaEmFoco] })
+          : resultados, agendaEmFoco,
         observacao: faltaConfig
           ? 'A integração não está configurada neste ambiente. Não é falha da TribeMD ou Amplimed e repetir a consulta não resolve. É necessária configuração local antes do link seguro. Senhas só na página segura.'
           : 'Estado das conexões somente; nenhuma consulta ou nota foi verificada. Falha de consulta não comprova desconexão.' };
@@ -270,6 +272,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda: z.enum(['tribemd', 'amplimed']), profissional: z.string().nullable() }),
     async execute({ agenda, profissional }) {
       const inicio = Date.now();
+      if (agendaEmFoco && agenda !== agendaEmFoco) {
+        registrar('orientar_conexao_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {pronto: false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       const log = (codigo: CodigoFerramenta) => registrar('orientar_conexao_agenda', codigo, inicio);
       const plataforma = agenda === 'tribemd' ? 'TribeMD' : 'Amplimed';
       const painel = painelSeguro(entrada.painelUrl);
@@ -483,6 +489,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda: z.enum(['tribemd','amplimed']), profissional: z.string().nullable() }),
     async execute({agenda, profissional}) {
       const inicio=Date.now();
+      if (agendaEmFoco && agenda !== agendaEmFoco) {
+        registrar('descobrir_profissionais_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       const r=profissional === null ? null : identificar(profissional,profissionais);
       if (r && (r.erro || r.encontrados.length!==1)) {
         registrar('descobrir_profissionais_agenda','PROFISSIONAL_NAO_ENCONTRADO',inicio);
@@ -622,8 +632,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const escolhido=profissional === null || (r?.encontrados.length===1 &&
         (entrada.estadoConversa?.profissionalConfirmadoId===id ||
         normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional))));
-      const agendaEscolhida=entrada.estadoConversa?.agendaEscolhida===agenda ||
-        (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
+      const mencionouTribe = /\btribe(?:md)?\b/i.test(entrada.texto);
+      const mencionouAmpli = /\bamplimed\b/i.test(entrada.texto);
+      const agendaEscolhida = agendaEmFoco ? agendaEmFoco === agenda :
+        mencionouTribe !== mencionouAmpli && (agenda === 'tribemd' ? mencionouTribe : mencionouAmpli);
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
         return {aceitoParaEnvio:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
@@ -658,6 +670,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters:z.object({agenda:z.enum(['tribemd','amplimed'])}),
     async execute({agenda}) {
       const inicio=Date.now();
+      if (agendaEmFoco && agenda !== agendaEmFoco) {
+        registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONFIRMACAO',inicio);
+        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       const referencia=await ancoraDaConta().catch(()=>null);
       if(!referencia) {
         registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONTA',inicio);
