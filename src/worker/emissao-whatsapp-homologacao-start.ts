@@ -23,7 +23,7 @@ async function iniciar():Promise<void> {
     config.evolutionAssistantInstanceName,config.evolutionOfficialInstanceName);
   const filaRepositorio = new PostgresFilaRepositorio(pool,true,true,escopo);
   const emissorDps = new PostgresEmissorDpsService(pool,config.encryptionKey,undefined,undefined,storage,
-    new SefinNacionalClient(),true,true,false,true);
+    new SefinNacionalClient(),true,true,false,true,config.ambienteEmissaoWhatsApp?.ambiente);
   const workerId = 'whatsapp-homologacao-'+randomUUID();
   const parada = new AbortController();
   const parar = () => parada.abort();

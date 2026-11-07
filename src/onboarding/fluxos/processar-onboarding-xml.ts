@@ -20,6 +20,7 @@ export type ProcessarOnboardingXmlDeps = {
   chaveCriptografia: string;
   pepperCpf: string;
   documentoTitularEsperado?: string;
+  contaPilotoHomologacao?:string;
 };
 
 export type ResultadoProcessamentoXml = {
@@ -49,10 +50,16 @@ export async function processarOnboardingXml(
   const client = await deps.pool.connect();
   try {
     await client.query('begin');
-    await client.query('select id from medicos where id = $1 for update', [medicoId]);
+    if (deps.contaPilotoHomologacao) {
+      const autorizado=await client.query('select id from medicos where id=$1 and conta_id=$2 for update',
+        [medicoId,deps.contaPilotoHomologacao]);
+      if (autorizado.rows.length!==1) throw new Error('EMITENTE_FORA_DO_ESCOPO_HOMOLOGACAO');
+    } else {
+      await client.query('select id from medicos where id = $1 for update', [medicoId]);
+    }
     await salvarParametrosFiscais(client, {
     medicoId,
-    params: parametros,
+    params: deps.contaPilotoHomologacao ? {...parametros,ambiente:'homologacao'} : parametros,
     xmlStorageUrl,
     chaveCriptografia: deps.chaveCriptografia,
     pepperCpf: deps.pepperCpf
