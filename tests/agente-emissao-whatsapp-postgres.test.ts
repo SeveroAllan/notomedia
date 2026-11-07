@@ -1,3 +1,8 @@
+import express from 'express';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+import { criarRouterWebhookAgente } from '../src/agente/webhook.js';
+import { prepararAtendimentoTeste, registrarAtendimentoTeste } from '../src/io/postgres/postgres-atendimento-teste.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
@@ -119,6 +124,79 @@ it.runIf(Boolean(url))('duas autorizações geram uma solicitação e só o work
       select p.pedido_ref,p.resposta_ref,a.mensagem_ref,p.confirmada_em is not null confirmada
       from noto_auditoria_comprovantes a join noto_propostas_emissao_whatsapp p on p.id=a.proposta_whatsapp_id
     `)).rows).toEqual([{pedido_ref:'3'.repeat(64),resposta_ref:'4'.repeat(64),mensagem_ref:'f'.repeat(64),confirmada:true}]);
+    await pool.query(`
+      alter table agendamentos add unique(id,medico_id);
+      alter table pacientes add unique(id,medico_id), add column telefone text;
+      alter table medico_servicos_fiscais add unique(id,medico_id);
+      create table usuarios (conta_id uuid, ativo boolean, auth_user_id uuid, telefone text);
+      create table noto_agent_conversas (conta_id uuid primary key, estado jsonb);
+      create table noto_agent_mensagens (conta_id uuid, instancia text, mensagem_id text, atualizado_em timestamptz,
+        estado text default 'reservada', primary key(conta_id,instancia,mensagem_id));
+    `);
+    await pool.query(readFileSync(new URL('../scripts/migrations/20261112-noto-atendimento-teste-aprovado.sql',import.meta.url),'utf8'));
+    const telefone='5551999990000';
+    await pool.query('update pacientes set telefone=$1 where id=$2',[telefone,tomador]);
+    await pool.query('insert into usuarios values ($1,true,$2,$3)',[escopo.contaId,randomUUID(),telefone]);
+    const escopoTeste={...escopo,agendamentoId:randomUUID(),atendimentoTesteAtivo:true};
+    const dados={pacienteId:tomador,servicoId:servico,dataHora:'2026-01-15T15:00:00Z',valorCentavos:12345};
+    const {aprovacaoHash}=prepararAtendimentoTeste(escopoTeste,dados,telefone);
+    await expect(registrarAtendimentoTeste(pool,escopoTeste,{...dados,valorCentavos:100},telefone,aprovacaoHash))
+      .rejects.toThrow('APROVACAO_ATENDIMENTO_TESTE_DIVERGENTE');
+    await expect(registrarAtendimentoTeste(pool,escopoTeste,dados,'5551999990001',
+      prepararAtendimentoTeste(escopoTeste,dados,'5551999990001').aprovacaoHash))
+      .rejects.toThrow('ATENDIMENTO_TESTE_NAO_REGISTRADO');
+    await registrarAtendimentoTeste(pool,escopoTeste,dados,telefone,aprovacaoHash);
+    const {rows:[registro]}=await pool.query(`
+      select a.origem,t.aprovacao_hash from agendamentos a join noto_atendimentos_teste_aprovados t on t.agendamento_id=a.id
+      where a.id=$1
+    `,[escopoTeste.agendamentoId]);
+    expect(registro).toEqual({origem:'noto_teste_aprovado',aprovacao_hash:aprovacaoHash});
+    const desabilitado={...escopoTeste,atendimentoTesteAtivo:false};
+    expect(await autorizarEmissaoWhatsApp(pool,desabilitado,{...entrada,valor:dados.valorCentavos})).toBe('bloqueada');
+
+    const saidas:string[]=[];
+    const app=express();
+    app.use(express.json());
+    app.use(criarRouterWebhookAgente({
+      pool,ativo:true,envioAtivo:true,segredo:'segredo-local',instancia:'assistente-teste',
+      allowlist:[telefone],persistirConversa:true,
+      consultarStatus:async()=>{throw new Error('SEM_ACESSO_A_AGENDA');},
+      propostaEmissaoWhatsApp:(mensagem,publicar)=>tratarPropostaEmissaoWhatsApp(pool!,escopoTeste,mensagem,publicar),
+      enviarPropostaEmissao:async(destino,texto)=>{
+        expect(destino).toBe(telefone);
+        saidas.push(texto);
+        return 'balao-proposta-teste';
+      },
+      enviar:async(destino,texto)=>{
+        expect(destino).toBe(telefone);
+        saidas.push(texto);
+        return true;
+      }
+    }));
+    const servidor=app.listen(0,'127.0.0.1');
+    await once(servidor,'listening');
+    try {
+      const postar=async(id:string,message:object)=>fetch('http://127.0.0.1:'+(servidor.address() as AddressInfo).port,{
+        method:'POST',headers:{'content-type':'application/json','x-webhook-secret':'segredo-local'},
+        body:JSON.stringify({instance:'assistente-teste',event:'messages.upsert',data:{
+          key:{id,fromMe:false,remoteJid:telefone+'@s.whatsapp.net'},message
+        }})
+      });
+      expect((await postar('pedido-teste',{conversation:'Quero emitir uma nota'})).status).toBe(200);
+      expect(saidas[0]).toContain('Tomador Sintético');
+      expect(saidas[0]).toContain('123,45');
+      expect((await postar('confirmacao-teste',{extendedTextMessage:{
+        text:'Sim, pode emitir',contextInfo:{stanzaId:'balao-proposta-teste'}
+      }})).status).toBe(200);
+      expect(saidas[1]).toContain('Registrei a solicitação');
+    } finally { await new Promise<void>(resolve=>servidor.close(()=>resolve())); }
+    expect((await pool.query(`
+      select s.status,s.fila,s.valor_servico_centavos from solicitacoes_nota s
+      join solicitacao_nota_agendamentos sa on sa.solicitacao_id=s.id where sa.agendamento_id=$1
+    `,[escopoTeste.agendamentoId])).rows).toEqual([{status:'pronta',fila:'pronta',valor_servico_centavos:12345}]);
+    expect(await new PostgresFilaRepositorio(pool,true,true,desabilitado).buscarETravarProximoItem('teste-off')).toBeNull();
+    expect(await new PostgresFilaRepositorio(pool,true,true,escopoTeste).buscarETravarProximoItem('teste-on'))
+      .toMatchObject({medicoId:escopoTeste.medicoId,emissaoComprovante:true});
   } finally {
     await pool?.end();
     await admin.query('drop database if exists '+nome);

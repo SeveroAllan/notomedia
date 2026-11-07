@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
+import { atendimentoTesteAprovadoSql } from './postgres-atendimento-teste.js';
 
 export interface EscopoEmissaoWhatsApp {
   contaId: string;
   medicoId: string;
   agendamentoId: string;
+  atendimentoTesteAtivo?: boolean;
 }
 
 /** A autorização explícita traz atendimento e valor em centavos.
@@ -101,7 +103,7 @@ async function lerAlvoProposta(client:pg.PoolClient, escopo:EscopoEmissaoWhatsAp
       ${conversacional ? 'join public.pacientes p on p.id=a.paciente_id and p.medico_id=m.id' : ''}
       where ${conversacional ? "p.nome_validado and nullif(btrim(p.nome),'') is not null and" : ''} a.id=$1 and a.medico_id=$2 and a.valor_consulta_centavos>0 and ($4::integer is null or a.valor_consulta_centavos=$4)
         and a.identificacao_profissional_confirmada and a.status='realizado' and a.data_hora<=now()
-        and a.origem in ('tribemd','amplimed') and nullif(btrim(a.referencia_externa),'') is not null
+        and (a.origem in ('tribemd','amplimed') ${escopo.atendimentoTesteAtivo ? 'or ('+atendimentoTesteAprovadoSql('$3')+')' : ''}) and nullif(btrim(a.referencia_externa),'') is not null
         and pf.ambiente='homologacao' and pf.confirmado_pelo_medico
         and pf.cpf_cnpj_encriptado is not null and nullif(btrim(pf.serie_dps),'') is not null
         and pf.proximo_numero_dps > 0 and nullif(btrim(pf.cod_municipio_ibge),'') is not null

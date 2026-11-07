@@ -5,6 +5,7 @@
  */
 
 import type pg from 'pg';
+import { atendimentoTesteAprovadoSql } from './postgres-atendimento-teste.js';
 import type {
   FilaRepositorio,
   ItemFilaComTentativas,
@@ -14,7 +15,7 @@ import type {
 
 export class PostgresFilaRepositorio implements FilaRepositorio {
   constructor(private readonly pool: pg.Pool, private readonly modoAgente = false, private readonly emissaoComprovanteAtiva = false,
-    private readonly escopoWhatsApp?: Readonly<{ contaId: string; medicoId: string; agendamentoId?: string }>) {
+    private readonly escopoWhatsApp?: Readonly<{ contaId: string; medicoId: string; agendamentoId?: string; atendimentoTesteAtivo?:boolean }>) {
     if (escopoWhatsApp && (!emissaoComprovanteAtiva || !escopoWhatsApp.contaId || !escopoWhatsApp.medicoId)) {
       throw new Error('Escopo de emissão WhatsApp inválido.');
     }
@@ -31,7 +32,9 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
       and exists (select 1 from public.medicos m join public.medico_perfil_fiscal pf on pf.medico_id=m.id
         where m.id = $3::uuid and m.conta_id = $4::uuid and pf.ambiente='homologacao')
       ${escopo.agendamentoId ? `and exists (select 1 from public.solicitacao_nota_agendamentos sa
-        where sa.solicitacao_id=solicitacoes_nota.id and sa.medico_id=$3::uuid and sa.agendamento_id=$5::uuid)` : ''}`
+        join public.agendamentos a on a.id=sa.agendamento_id and a.medico_id=sa.medico_id
+        where sa.solicitacao_id=solicitacoes_nota.id and sa.medico_id=$3::uuid and sa.agendamento_id=$5::uuid
+          and (a.origem in ('tribemd','amplimed') ${escopo.atendimentoTesteAtivo?'or ('+atendimentoTesteAprovadoSql('$4')+')':''}))` : ''}`
       : this.emissaoComprovanteAtiva ? `(origem = 'api' or (${comprovanteEnfileirado}))` : "origem = 'api'";
     const sql = `
       with proximo as (
@@ -89,7 +92,9 @@ export class PostgresFilaRepositorio implements FilaRepositorio {
         where ec.solicitacao_id = $1 and sn.origem = 'whatsapp'
         and coalesce(to_jsonb(ec)->>'origem','comprovante') = '${escopo?.agendamentoId ? 'autorizacao_whatsapp' : 'comprovante'}'
         ${escopo?.agendamentoId ? `and exists (select 1 from public.solicitacao_nota_agendamentos sa
-          where sa.solicitacao_id=sn.id and sa.medico_id=sn.medico_id and sa.agendamento_id=$4::uuid)` : ''}
+          join public.agendamentos a on a.id=sa.agendamento_id and a.medico_id=sa.medico_id
+          where sa.solicitacao_id=sn.id and sa.medico_id=sn.medico_id and sa.agendamento_id=$4::uuid
+            and (a.origem in ('tribemd','amplimed') ${escopo.atendimentoTesteAtivo?'or ('+atendimentoTesteAprovadoSql('$3')+')':''}))` : ''}
         ${escopo ? 'and sn.medico_id=$2::uuid and exists (select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$3::uuid)' : ''}
         for update of ec, sn`, [solicitacaoId, ...(escopo ? [escopo.medicoId, escopo.contaId, ...(escopo.agendamentoId ? [escopo.agendamentoId] : [])] : [])]);
       if (rows[0]?.estado !== 'enfileirada') {
