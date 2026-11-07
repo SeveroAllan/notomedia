@@ -635,6 +635,12 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string().nullable() }),
     async execute({agenda,profissional}) {
       const inicio=Date.now();
+      const fonte = agenda === 'tribemd' ? 'tribe(?:md)?' : 'amplimed';
+      const recusada = new RegExp(`\\b(?:nao|nem) (?:uso|utilizo|quero usar|quero conectar) (?:a )?${fonte}\\b`);
+      if (recusada.test(normalizarNomeMedico(entrada.texto))) {
+        registrar('solicitar_link_seguro_agenda','AGENDA_RECUSADA',inicio);
+        return {aceitoParaEnvio:false,motivo:'AGENDA_RECUSADA'};
+      }
       const r=profissional === null ? null : identificar(profissional,profissionais);
       const id=r ? r.encontrados.length===1 ? r.encontrados[0]!.id : null
         : await ancoraDaConta().catch(()=>null);
@@ -1144,6 +1150,7 @@ export function acompanhamentoVerificado(
       ? `Posso conferir a conexão da ${nomeAgenda} para continuar.`
       : `A agenda escolhida é a ${nomeAgenda}. Posso conferir a conexão dela para continuar.`;
   }
+  if (tem('AGENDA_RECUSADA')) return 'Qual agenda você quer conectar agora?';
   // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
   return null;
 }
@@ -1490,7 +1497,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       const partes=resposta.split('[[RESULTADO_ACAO]]');
       const envioLinkAgenda = ferramentas.some(e =>
         e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
-      const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO');
+      const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.codigo === 'AGENDA_RECUSADA');
       const introducao = !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;

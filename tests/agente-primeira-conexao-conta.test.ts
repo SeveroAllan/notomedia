@@ -28,6 +28,19 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
     scripted.assertComplete();
   });
+  it('não consome a cota de link da agenda que o operador recusou', async () => {
+    const scripted = modelo('solicitar_link_seguro_agenda', {agenda:'amplimed',profissional:null},
+      'Enviei o link da Amplimed. [[RESULTADO_ACAO]]');
+    const solicitarLinkAgenda = vi.fn();
+    const resposta = await responderAgente({
+      texto:'pode sim, eu nem uso Amplimed', profissionais:[], estadoConversa:{agendaEscolhida:'amplimed'}
+    }, {modeloTeste:scripted, consultarStatus:async()=>vazio,
+      referenciaContaAgenda:async()=>referencia, solicitarLinkAgenda});
+    expect(solicitarLinkAgenda).not.toHaveBeenCalled();
+    expect(resposta).toBe('Qual agenda você quer conectar agora?');
+    scripted.assertComplete();
+  });
+
   it('consulta a TribeMD quando a pergunta a nomeia, mesmo com Amplimed salva',async()=>{
     const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},'A TribeMD está conectada.');
     const consultarStatus=vi.fn().mockResolvedValue(conectado);
