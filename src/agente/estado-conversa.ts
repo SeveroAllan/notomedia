@@ -71,7 +71,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
 }
 
 /** A data é escopo informado pelo usuário, nunca evidência de ausência de notas. */
-export async function registrarPeriodoConferencia(pool:Banco,contaId:string,profissionalId:string,inicio:string):Promise<boolean>{
+export async function registrarPeriodoConferencia(pool:Banco,contaId:string,profissionalId:string,inicio:string,substituirInicio?:string):Promise<boolean>{
   if(!/^\d{4}-\d{2}-\d{2}$/.test(inicio))return false;
   const data=new Date(inicio+'T00:00:00Z');
   if(!Number.isFinite(data.getTime())||data.toISOString().slice(0,10)!==inicio)return false;
@@ -81,11 +81,12 @@ export async function registrarPeriodoConferencia(pool:Banco,contaId:string,prof
     "jsonb_build_object('profissionalId',$2::text,'inicio',$3::text),'perguntaPendente',null),atualizado_em=now()",
     "where c.conta_id=$1 and c.estado->>'profissionalConfirmadoId'=$2",
     "and (c.estado->>'perguntaPendente'='periodo' or (",
-    "c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'",
-    "and (c.estado->'periodoConferencia' is null or c.estado->'periodoConferencia'='null'::jsonb)))",
+    "c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'))",
+    "and (c.estado->>'periodoConferencia' is null or (",
+    "c.estado->'periodoConferencia'->>'profissionalId'=$2 and c.estado->'periodoConferencia'->>'inicio'=$4))",
     'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
     'returning conta_id'
-  ].join('\n'),[contaId,profissionalId,inicio]);
+  ].join('\n'),[contaId,profissionalId,inicio,substituirInicio??null]);
   return r.rows.length===1;
 }
 

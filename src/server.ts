@@ -320,11 +320,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     },
     aoConectar: boasVindasInstancia
   }));
-  const consultarConferenciaConta = (contaId: string, medicoId: string, agenda: AgendaEscolhida) =>
-      conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
-        const janela=janelaConferencia();
+  const consultarConferenciaConta = async (contaId: string, medicoId: string, agenda: AgendaEscolhida, desde?:string) => {
+      const janela=janelaConferencia(new Date(),desde);
+      const dias=1+(Date.parse(janela.fim)-Date.parse(janela.inicio))/86_400_000;
+      if(!Number.isInteger(dias)||dias<1||dias>365)return {ok:false,motivo:'RECORTE_MUITO_GRANDE'} as const;
+      return conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
         if (fonte==='tribemd') {
-          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:30});
+          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:desde?Math.max(1,dias-1):30});
           return leituraTribemdParaConferencia(r,nome,janela);
         }
         // Amplimed já valida a escolha do código no filtro e o resourceId
@@ -341,7 +343,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=await cofres.lerAgendaAmplimed(id,janela.inicio,janela.fim,false,codigo);
         if (!r.ok) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
         return leituraAmplimedParaConferencia(r.dias,janela);
-      });
+      },desde?{inicio:desde,dias}:undefined);
+  };
   const descobrirProfissionaisConta = async (medicoId: string, agenda: AgendaEscolhida) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.

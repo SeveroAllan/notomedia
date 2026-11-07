@@ -8,11 +8,11 @@ function dataValida(s: string) {
   return FORMATO_DATA.test(s) && !Number.isNaN(Date.parse(s + 'T12:00:00Z')) &&
     new Date(s + 'T12:00:00Z').toISOString().slice(0, 10) === s;
 }
-export function janelaConferencia(agora = new Date()): {inicio:string; fim:string} {
+export function janelaConferencia(agora = new Date(), desde?: string): {inicio:string; fim:string} {
   const fim = new Intl.DateTimeFormat('en-CA', {timeZone:'America/Sao_Paulo'}).format(agora);
   const inicio = new Date(fim + 'T12:00:00Z');
   inicio.setUTCDate(inicio.getUTCDate() - 29);
-  return {inicio:inicio.toISOString().slice(0,10),fim};
+  return {inicio:desde ?? inicio.toISOString().slice(0,10),fim};
 }
 
 /** FonteAgenda só libera consultas depois de validar cobertura e detalhes completos. */

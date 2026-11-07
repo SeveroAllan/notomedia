@@ -1,3 +1,4 @@
+import { janelaConferencia } from './leitura-atendimentos.js';
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
 import OpenAI from 'openai';
 import type pg from 'pg';
@@ -35,7 +36,7 @@ export interface EntradaAgente {
 }
 type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?:string}|
   {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
-type DecisaoPeriodo = {ok:true;nome:string;inicio:string}|{ok:false;motivo:string};
+type DecisaoPeriodo = {ok:true;nome:string;inicio:string;conferencia?:string}|{ok:false;motivo:string};
 
 type ResultadoContinuidade={
   fatos:{vinculo:'confirmado';crm:'pendente'|'adiado'|'confirmado';crmValor:string|null;periodo:'pendente'|'registrado';inicioPeriodo:string|null;emitiuNota:false;consultouNotas:boolean};
@@ -52,8 +53,8 @@ const falaContinuidadeSchema=z.object({
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
-  solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null) => Promise<ResultadoEnfileirar>;
+  consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
+  solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null, inicioPeriodo?:string) => Promise<ResultadoEnfileirar>;
   aoTrabalho?: (trabalho: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar }) => void;
   aoConsultaEntregaLink?: (agenda:AgendaEscolhida, estado:{estado:string;comId:boolean}|null) => void;
   aoConferencia?: (resultado: ResultadoConferencia) => void;
@@ -71,7 +72,7 @@ export interface DependenciasAgente {
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
-  registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
+  registrarPeriodoConferencia?: (profissionalId:string,inicio:string,substituirInicio?:string)=>Promise<boolean>;
   aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
   aoContinuidadeOnboarding?: (r:ResultadoContinuidade)=>void;
   aoDiagnosticoContinuidade?: (r:NonNullable<DiagnosticoAgente['continuidade']>)=>void;
@@ -428,11 +429,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // leituras repetidas do portal nem migrar de médico durante a execução.
   let conferenciaEscolhida: string | null = null;
   let conferenciaEmVoo: Promise<ResultadoConferencia> | null = null;
-  if (deps.consultarConferencia) extras.push(tool({
-    name: 'conferir_atendimentos_e_notas',
-    description: 'Confere a agenda real de UM médico autorizado com vínculos fiscais exatos dos últimos 30 dias; não declara consultas sem nota, não emite e não cadastra nada. Escolha a agenda somente se explícita, já confirmada ou única conectada.',
-    parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
-    async execute({ profissional, agenda }) {
+  async function conferirAtendimentos(profissional:string, agenda:AgendaEscolhida, desde?:string) {
       const inicio = Date.now();
       const entregar = (resultado: ResultadoConferencia) => {
         deps.aoConferencia?.(resultado);
@@ -479,18 +476,23 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         conferenciaEscolhida=chave;
         if(deps.solicitarTrabalho) {
-          const pedido=await deps.solicitarTrabalho('conferencia_fiscal',agenda,medico.id);
+          const pedido=await deps.solicitarTrabalho('conferencia_fiscal',agenda,medico.id,...(desde?[desde] as const:[]));
           deps.aoTrabalho?.({tipo:'conferencia_fiscal',agenda,estado:pedido});
           registrar('conferir_atendimentos_e_notas',pedido.ok?'TRABALHO_REGISTRADO':'TRABALHO_INDISPONIVEL',inicio);
           return pedido.ok?{ok:true,estado:pedido.estado,observacao:'A consulta está em andamento fora deste turno; nenhuma nota foi confirmada nesta execução.'}:
             {ok:false,motivo:pedido.motivo};
         }
-        conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda);
+        conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda,...(desde?[desde] as const:[]));
         return entregar(await conferenciaEmVoo);
       } catch {
         return entregar({ok:false,motivo:'INTEGRACAO_INDISPONIVEL'});
       }
-    }
+  }
+  if (deps.consultarConferencia) extras.push(tool({
+    name: 'conferir_atendimentos_e_notas',
+    description: 'Confere a agenda real de UM médico autorizado com vínculos fiscais exatos dos últimos 30 dias; não declara consultas sem nota, não emite e não cadastra nada. Escolha a agenda somente se explícita, já confirmada ou única conectada.',
+    parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
+    execute: ({profissional,agenda})=>conferirAtendimentos(profissional,agenda)
   }));
   if (deps.descobrirProfissionais) extras.push(tool({
     name: 'descobrir_profissionais_agenda',
@@ -909,24 +911,48 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         deps.aoPeriodoConferencia?.({ok:false,motivo:decisao});
         return {ok:false,motivo:decisao,orientacao:'Converse sobre a dúvida ou o assunto atual. Não conclua nada sobre emissão.'};
       }
+      const hoje=janelaConferencia().fim;
+      const anos=[...new Set(entrada.texto.match(/\b(?:19|20)\d{2}\b/g)??[])];
+      if(inicio && /^\d{4}-\d{2}-\d{2}$/.test(inicio) && !anos.length)
+        inicio=hoje.slice(0,4)+inicio.slice(4);
+      if(!inicio || !/^\d{4}-\d{2}-\d{2}$/.test(inicio) || inicio>hoje ||
+        anos.length>1 || (anos.length===1 && inicio.slice(0,4)!==anos[0]) ||
+        /\b(?:ate|entre)\b/.test(normalizarNomeMedico(entrada.texto))){
+        registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
+        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER'});
+        return {ok:false,motivo:'DATA_A_ESCLARECER'};
+      }
       periodoFinalizado=true;
       const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
+      const anterior=entrada.estadoConversa?.periodoConferencia;
+      const substituir=anos.length===1&&anterior&&anterior.profissionalId===medico?.id
+        ? anterior.inicio : undefined;
       const gravado=medico&&inicio&&deps.registrarPeriodoConferencia&&(exigeRegistroPeriodo(entrada,deps)||continuidadeExecutada&&Boolean(profissionalComVinculoConfirmado(entrada)))&&
-        await deps.registrarPeriodoConferencia!(medico.id,inicio).catch(()=>false);
+        await deps.registrarPeriodoConferencia!(medico.id,inicio,...(substituir?[substituir] as const:[])).catch(()=>false);
       if(!gravado){
         registrar('registrar_periodo_conferencia','DEPENDENCIA_CONFIRMACAO',comeco);
         deps.aoPeriodoConferencia?.({ok:false,motivo:'PERIODO_NAO_REGISTRADO'});
         return {ok:false,motivo:'PERIODO_NAO_REGISTRADO'};
       }
       registrar('registrar_periodo_conferencia','PERIODO_REGISTRADO',comeco);
-      deps.aoPeriodoConferencia?.({ok:true,nome:medico!.nome,inicio:inicio!});
-      if(deps.consultarProntidao)await orientarCertificado(medico!.nome);
-      return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:false,
-        orientacao:'Só o período solicitado foi guardado. Nenhuma conclusão sobre notas ou emissão. CRM adiado permanece pendente.'};
+      const agenda=agendaConsulta;
+      const leitura=agenda&&deps.consultarConferencia
+        ? await conferirAtendimentos(medico!.nome,agenda,inicio!)
+        : null;
+      const conferencia=leitura&&'estado' in leitura
+        ? 'A conferência desse período está em andamento.'
+        : leitura&&leitura.ok&&'realizados' in leitura
+          ? descreverConferencia(leitura)
+          : !agenda?'Qual agenda devo conferir?'
+            : leitura&&'motivo' in leitura&&leitura.motivo==='FILA_INDISPONIVEL'
+              ? 'Não consegui iniciar a conferência agora. O período ficou salvo.'
+              : 'Não consegui conferir esse período na agenda selecionada. O período ficou salvo.';
+      deps.aoPeriodoConferencia?.({ok:true,nome:medico!.nome,inicio:inicio!,conferencia});
+      return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:Boolean(leitura&&'realizados' in leitura)};
   }
   if(deps.registrarPeriodoConferencia)extras.push(tool({
     name:'registrar_periodo_conferencia',
-    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Ao registrar, continue com certificado sem voltar ao CRM adiado.',
+    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Use o ano da mensagem quando informado. Com dia e mês sem ano, o servidor usa o ano atual se a data já passou. Depois de registrar, o servidor inicia a conferência.',
     parameters:z.object({decisao:z.enum(['definir','esclarecer','outro_assunto']),inicio:z.string().nullable()}),
     execute:async(args)=>executarPeriodo(args)
   }));
@@ -962,7 +988,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(!alvoValido)saida.resultados.push({ok:false,motivo:'ALVO_NAO_CONFIRMADO'});
       if(alvoValido&&pretendidas.has('definir_periodo')){
         const r=await executarPeriodo({decisao:'definir',inicio:inicioPeriodo});saida.resultados.push(r);
-        if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=inicioPeriodo;saida.acoesConcluidas.push('periodo_registrado');}
+        if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=r.inicio??null;saida.fatos.consultouNotas=r.consultaExecutada===true;saida.acoesConcluidas.push('periodo_registrado');}
       }
       const decisoes=intencoes.filter(i=>['aprovar_registro','adiar_registro','corrigir_registro','recusar_registro'].includes(i));
       if(decisoes.length&&!alvoValido)diagnostico.revisao='ALVO_INVALIDO';
@@ -1192,8 +1218,8 @@ function descreverEstadoSemAcao(entrada:EntradaAgente):string{
 
 function descreverPeriodoRegistrado(p:Extract<DecisaoPeriodo,{ok:true}>,certificado?:OrientacaoCertificado):string{
       const data=p.inicio.split('-').reverse().join('/');
-      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. Ainda não consultei atendimentos ou notas.'+
-        '\n'+(certificado?descreverCertificado(certificado):'Podemos continuar com o certificado, mantendo o CRM pendente.');
+      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. '+(p.conferencia??'Ainda não consultei atendimentos ou notas.')+
+        (certificado?'\n'+descreverCertificado(certificado):'');
 }
 
 function descreverCertificado(r:OrientacaoCertificado):string{
@@ -1396,6 +1422,14 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(exigeDecisaoVinculo(entrada,deps)&&!vinculoTurno.atual){
       registrar('CONFIRMACAO_SEM_FERRAMENTA',uso);
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
+    }
+    if(periodoTurno.atual?.ok){
+      registrar('RESPOSTA',uso);
+      return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
+    }
+    if(periodoTurno.atual&&!periodoTurno.atual.ok&&periodoTurno.atual.motivo==='DATA_A_ESCLARECER'){
+      registrar('RESPOSTA',uso);
+      return 'Qual é a data inicial, incluindo o ano, que você quer usar para conferir os atendimentos?';
     }
     if(continuidadeTurno.atual){
       if(continuidade?.intencoes.includes('definir_periodo')&&!continuidade.alvoValido){
