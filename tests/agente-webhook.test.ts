@@ -226,7 +226,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const modeloTeste=new ScriptedModel([
       [functionCall('continuar_onboarding',{profissional:'Alice',intencoes:['aprovar_registro','consultar_certificado'],
         inicioPeriodo:null,crmConfirmado:'36948/RS',rqeConfirmado:null,camposConfirmados:['crm']},{callId:'composto'})],
-      [assistantMessage(JSON.stringify({texto:'Pronto, o CRM ficou salvo. O acesso do certificado está abaixo.',
+      [assistantMessage(JSON.stringify({texto:'Pronto, o CRM ficou salvo. Abra a página segura para cadastrar o certificado.',
         fatos:{vinculo:'confirmado',crm:'confirmado',crmValor:'36948/RS',periodo:'pendente',inicioPeriodo:null,emitiuNota:false,consultouNotas:false},
         acoesConcluidas:['crm_salvo','pagina_certificado_preparada']}))]
     ]);
@@ -239,12 +239,14 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const pedido={...evento,data:{...evento.data,message:{conversation:'O CRM 36948/RS está certo, pode confirmar e salvar. E me manda o link da página do certificado, que não veio.'}}};
     await comServidor(app,async postar=>{
       expect((await postar(pedido)).status).toBe(aceiteLink?200:503);
+      expect(enviar.mock.calls.map(c=>c[1])).toEqual(aceiteLink
+        ? [url,'Pronto, o CRM ficou salvo.','Abra a página segura para cadastrar o certificado.']
+        : [url]);
       expect((await postar(pedido)).status).toBe(200);
     });
     expect(aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith('conta-a',id,{confirmarRqe:false});
     expect(enviar.mock.calls.filter(c=>c[1]===url)).toHaveLength(1);
     expect(enviar).toHaveBeenCalledWith('5551999998888',url,{linkPreview:false});
-    expect(enviar.mock.calls.slice(0,2).map(c=>c[1])).toEqual(['Pronto, o CRM ficou salvo.','O acesso do certificado está abaixo.']);
     expect(estado).toMatchObject({faseAgenda:'VINCULO_CONFIRMADO',pesquisasRegistro:{[id]:{estado:'confirmada'}}});
     expect(registrarDiagnostico.mock.calls[0]?.[0]).toMatchObject({
       linkCertificado:{produzidos:1,nosBaloes:1,aceitosApi:aceiteLink?1:0},envio:aceiteLink?'ENVIADO':'FALHOU'});
