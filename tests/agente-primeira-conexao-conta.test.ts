@@ -15,6 +15,19 @@ const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>ne
 );
 
 describe('primeira conexão por conta sem médico confirmado',()=>{
+  it.each(['Não, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
+    const scripted=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'amplimed',profissional:null},{callId:'antigo'})],
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'atual'})],
+      [assistantMessage('Use a página segura.')]
+    ]);
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
+    await responderAgente({texto,profissionais:[],estadoConversa:{agendaEscolhida:'amplimed'}},
+      {modeloTeste:scripted,consultarStatus:async()=>vazio,
+        referenciaContaAgenda:async()=>referencia,solicitarLinkAgenda});
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
+    scripted.assertComplete();
+  });
   it('orienta Cofre seguro sem escolher cadastro provisório nem perguntar qual médico',async()=>{
     const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},
       'Posso enviar a página segura para conectar sua TribeMD. Lá você informa a senha.');
