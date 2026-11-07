@@ -389,8 +389,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       },
       adiarConfirmacaoRegistro:(contaId:string,medicoId:string)=>
         adiarConfirmacaoRegistro(pool,contaId,medicoId),
-      aprovarRegistroProfissional:(contaId:string,medicoId:string)=>
-        aprovarRegistroProfissional(pool,contaId,medicoId),
+      aprovarRegistroProfissional:(contaId:string,medicoId:string,opcoes?:{confirmarRqe:boolean})=>
+        aprovarRegistroProfissional(pool,contaId,medicoId,opcoes),
       proporCorrecaoPesquisa:(contaId:string,medicoId:string,dados:{crm:string;rqe?:string}) =>
         proporCorrecaoPesquisa(pool,contaId,medicoId,dados),
       concluirRevisaoPesquisa:(contaId:string,medicoId:string) =>
@@ -477,9 +477,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     })).sucesso,
     reagir: (chave, emoji) => transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji),
     presenca: (telefone, estado) => transporteAgente.enviarPresenca(config.evolutionAssistantInstanceName, telefone, estado),
-    enviar: async (telefone, texto) => {
+    enviar: async (telefone, texto, opcoes) => {
       const resultado = await transporteAgente.enviarTexto({
-        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto
+        instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto,
+        ...(opcoes?{linkPreview:opcoes.linkPreview}:{})
       });
       if(config.notoPilotoRestrito&&config.notoAgentDiagnosticoAtivo){
         const aceite=diagnosticarAceiteSaida(config.evolutionAssistantWebhookSecret,

@@ -77,7 +77,7 @@ export function criarRouterWebhookAgente(deps: {
   solicitarLinkRegistro?: (contaId:string,medicoId:string,telefone:string,
     acao:'solicitar'|'consultar'|'substituir',mensagemId:string)=>Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
   adiarConfirmacaoRegistro?: (contaId:string,medicoId:string)=>Promise<boolean>;
-  aprovarRegistroProfissional?: (contaId:string,medicoId:string)=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
+  aprovarRegistroProfissional?: (contaId:string,medicoId:string,opcoes?:{confirmarRqe:boolean})=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
   proporCorrecaoPesquisa?: (contaId:string,medicoId:string,dados:{crm:string;rqe?:string})=>Promise<boolean>;
   concluirRevisaoPesquisa?: (contaId:string,medicoId:string)=>Promise<boolean>;
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
@@ -85,7 +85,7 @@ export function criarRouterWebhookAgente(deps: {
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
   atualizarEstadoLink?: (evento:unknown) => Promise<boolean>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
-  enviar: (telefone: string, texto: string) => Promise<boolean>;
+  enviar: (telefone: string, texto: string, opcoes?:{linkPreview:false}) => Promise<boolean>;
   painelUrl?: string;
   persistirConversa?: boolean;
   marcarLida?: (chave: ChaveMensagemRecebida) => Promise<boolean>;
@@ -257,6 +257,8 @@ export function criarRouterWebhookAgente(deps: {
         intervalo = setInterval(() => { void renovarPresenca(); }, 1500);
       }
 
+      const urlsCertificado=new Set<string>();
+      let linksCertificadoAceitos=0;
       let periodoDaMensagem=false;
       let descobertaVerificada: { agenda: AgendaEscolhida; nomes: string[] } | undefined;
       let diagnostico: DiagnosticoAgente | undefined;
@@ -296,6 +298,7 @@ export function criarRouterWebhookAgente(deps: {
           return chave;
         } } : {}),
         aoComprovante: comprovante => comprovantes.push(comprovante),
+        aoCertificadoSeguro:r=>{if(r.ok&&r.url)urlsCertificado.add(r.url);},
         ...(deps.descobrirProfissionais ? { descobrirProfissionais: async (medicoId: string, agenda: AgendaEscolhida) => {
           const r = await deps.descobrirProfissionais!(medicoId, agenda);
           if (r.ok && r.nomes?.length) descobertaVerificada = { agenda, nomes: r.nomes.filter(nomeProfissionalValido).slice(0,20) };
@@ -335,8 +338,8 @@ export function criarRouterWebhookAgente(deps: {
           adiarConfirmacaoRegistro:(medicoId:string)=>deps.adiarConfirmacaoRegistro!(contaId!,medicoId)
         }:{}),
         ...(contaId&&deps.aprovarRegistroProfissional?{
-          aprovarRegistroProfissional:(medicoId:string)=>
-            deps.aprovarRegistroProfissional!(contaId!,medicoId)
+          aprovarRegistroProfissional:(medicoId:string,opcoes?:{confirmarRqe:boolean})=>
+            opcoes?deps.aprovarRegistroProfissional!(contaId!,medicoId,opcoes):deps.aprovarRegistroProfissional!(contaId!,medicoId)
         }:{}),
         ...(contaId && deps.proporCorrecaoPesquisa ? {
           proporCorrecaoPesquisa:(medicoId:string,dados:{crm:string;rqe?:string})=>
@@ -370,11 +373,15 @@ export function criarRouterWebhookAgente(deps: {
         } : {})
       });
 
-      const baloes = separarBaloes(resposta);
+      const baloes = separarBaloes(resposta).filter((b,i,todos)=>!urlsCertificado.has(b)||todos.indexOf(b)===i);
+      // O link real não depende da redação do modelo nem do resultado de outra ação.
+      for(const url of urlsCertificado)if(!baloes.includes(url))baloes.push(url);
       enviado = baloes.length > 0;
       for (const balao of baloes) {
         if (deps.presenca) await renovarPresenca();
-        const ok = await deps.enviar(telefone, balao);
+        const linkCertificado=urlsCertificado.has(balao);
+        const ok = linkCertificado?await deps.enviar(telefone,balao,{linkPreview:false}):await deps.enviar(telefone,balao);
+        if(ok&&linkCertificado)linksCertificadoAceitos++;
         if (!ok) { enviado = false; break; }
         if (reservada && contaId) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
       }
@@ -449,7 +456,9 @@ export function criarRouterWebhookAgente(deps: {
         const registro: DiagnosticoMensagem = {
           tipo: 'noto_agent_execucao', versao: 1,
           mensagemRef: referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]),
-          respostaRef: referenciaDiagnostica(deps.segredo, 'resposta', [resposta]),
+          respostaRef: referenciaDiagnostica(deps.segredo, 'resposta', [baloes.join('\n')]),
+          ...(urlsCertificado.size?{linkCertificado:{produzidos:urlsCertificado.size,
+            nosBaloes:baloes.filter(b=>urlsCertificado.has(b)).length,aceitosApi:linksCertificadoAceitos}}:{}),
           conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
         };
         try {
