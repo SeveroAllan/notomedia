@@ -1,3 +1,4 @@
+import type { ContagensBrutasAgenda } from '../agenda/fonte-agenda.js';
 import type pg from 'pg';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import type { AgendaEscolhida } from './estado-conversa.js';
@@ -7,14 +8,21 @@ export type MotivoConferencia =
   'IDENTIDADE_INCOMPLETA' | 'REFERENCIAS_AMBIGUAS' | 'RECORTE_MUITO_GRANDE' |
   'INTEGRACAO_INDISPONIVEL' | 'AGENDA_AMBIGUA' | 'CONCILIACAO_INDISPONIVEL';
 
+export type ContagensLeituraConferencia = ContagensBrutasAgenda & {
+  realizados: number;
+  descartadosProfissional: number;
+  outrosDescartados: number;
+};
+
 export type LeituraParaConferencia =
   | { ok: true; agenda: AgendaEscolhida; totalRealizados: number;
       /** Apenas IDs de consultas verificadas do profissional, nunca dados de pacientes. */
-      referencias: string[]; semReferencia: number }
+      referencias: string[]; semReferencia: number; contagensLeitura?: ContagensLeituraConferencia }
   | { ok: false; motivo: MotivoConferencia };
 
 export type ResultadoConferencia =
   | { ok: true; agenda: AgendaEscolhida; profissional: string; janelaDias: number; inicioPeriodo?: string;
+      contagensLeitura?: ContagensLeituraConferencia;
       realizados: number; comReferencia: number; semReferencia: number;
       comVinculoConfirmado: number; comSolicitacaoVinculada: number;
       comNotaAutorizadaVinculada: number; semVinculoConfirmado: number;
@@ -121,6 +129,7 @@ export async function conferirAgendaComFiscal(
   }
   return {
     ok: true, agenda, profissional: nome, janelaDias: recorte?.dias ?? 30, ...(recorte ? {inicioPeriodo:recorte.inicio} : {}),
+    ...(leitura.contagensLeitura ? {contagensLeitura:leitura.contagensLeitura} : {}),
     realizados: leitura.totalRealizados, comReferencia: referencias.length,
     semReferencia: leitura.semReferencia, comVinculoConfirmado: comVinculo,
     comSolicitacaoVinculada: comSolicitacao, comNotaAutorizadaVinculada: comNota,

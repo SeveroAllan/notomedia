@@ -53,20 +53,30 @@ export function leituraTribemdParaConferencia(
   }
   if (resultado.fonte !== 'tribemd') return {ok:false,motivo:'LEITURA_INCOMPLETA'};
   if (!nome.trim() || !normalizarNomeMedico(nome)) return {ok:false,motivo:'IDENTIDADE_INCOMPLETA'};
-  let totalRealizados = 0;
+  let totalRealizados = 0, descartadosStatus = 0, descartadosData = 0, descartadosProfissional = 0;
   const referencias:string[] = [];
   for (const c of resultado.consultas) {
-    if (c.status !== 'realizada') continue;
+    if (c.status !== 'realizada') { descartadosStatus++; continue; }
     const data = c.dataHora.slice(0,10);
     if (!dataValida(data)) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
-    if (data < janela.inicio || data > janela.fim) continue;
+    if (data < janela.inicio || data > janela.fim) { descartadosData++; continue; }
     // A única médica cadastrada NÃO recebe consultas com profissional ausente.
     if (!c.profissional?.trim()) return {ok:false,motivo:'IDENTIDADE_INCOMPLETA'};
-    if (!consultaPertenceAoProfissional(c,nome)) continue;
+    if (!consultaPertenceAoProfissional(c,nome)) { descartadosProfissional++; continue; }
     totalRealizados++;
     referencias.push(c.idExterno);
   }
-  return {ok:true,agenda:'tribemd',totalRealizados,referencias,semReferencia:0};
+  const bruta = resultado.contagensBrutas;
+  if (!bruta) return {ok:true,agenda:'tribemd',totalRealizados,referencias,semReferencia:0};
+  descartadosStatus += bruta.descartadosStatus;
+  descartadosData += bruta.descartadosData;
+  const outrosDescartados = bruta.brutos - totalRealizados - descartadosStatus - descartadosData - descartadosProfissional;
+  if (!Number.isSafeInteger(outrosDescartados) || outrosDescartados < 0)
+    return {ok:false,motivo:'LEITURA_INCOMPLETA'};
+  return {ok:true,agenda:'tribemd',totalRealizados,referencias,semReferencia:0,contagensLeitura:{
+    brutos:bruta.brutos, realizados:totalRealizados, descartadosStatus, descartadosData,
+    descartadosProfissional, outrosDescartados
+  }};
 }
 
 export interface DiaConferenciaAmplimed {

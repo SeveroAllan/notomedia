@@ -9,8 +9,15 @@ const consultaSchema = z.object({
   profissional: z.string().trim().min(1).max(200).nullable().optional(),
   valorConsultaCentavos: z.number().int().nullable().optional()
 }).strict();
+const contagensBrutasSchema = z.object({
+  brutos: z.number().int().nonnegative(),
+  descartadosStatus: z.number().int().nonnegative(),
+  descartadosData: z.number().int().nonnegative()
+}).strict();
+export type ContagensBrutasAgenda = z.infer<typeof contagensBrutasSchema>;
+
 const resultadoSchema = z.discriminatedUnion('tipo', [
-  z.object({ tipo: z.literal('consultas'), fonte: z.string().min(1), consultas: z.array(consultaSchema) }).strict(),
+  z.object({ tipo: z.literal('consultas'), fonte: z.string().min(1), consultas: z.array(consultaSchema), contagensBrutas: contagensBrutasSchema.optional() }).strict(),
   z.object({ tipo: z.literal('erro'), codigo: z.enum(['FONTE_INDISPONIVEL', 'ACESSO_EXPIRADO', 'SEM_AGENDA_CONECTADA', 'SINCRONIZACAO_INCOMPLETA', 'PROFISSIONAL_NAO_IDENTIFICADO', 'PROFISSIONAL_AMBIGUO']) }).strict()
 ]);
 export interface EntradaFonteAgenda { medicoId: string; referenciaCofre: string; janelaDias?: number; agora?: Date }

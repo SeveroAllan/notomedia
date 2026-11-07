@@ -241,7 +241,11 @@ export class CofreTribemd {
                 resultado.agenda.intervalo.fim < hoje || !resultado.agenda.intervalo.inicio || resultado.agenda.intervalo.inicio > inicio.toISOString().slice(0, 10) || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
                 return { tipo: 'erro', codigo: 'SINCRONIZACAO_INCOMPLETA' };
             }
-            return { tipo: 'consultas', fonte: 'tribemd', consultas: resultado.consultas.map(c => {
+            return { tipo: 'consultas', fonte: 'tribemd', contagensBrutas: {
+                brutos: resultado.agenda.totalAtendimentos,
+                descartadosStatus: resultado.agenda.descartadosStatus,
+                descartadosData: resultado.agenda.descartadosData
+            }, consultas: resultado.consultas.map(c => {
                 if (!c.pacienteId || !c.atendimentoId || !c.dataConsultaObservada || c.dados?.codigo) throw new ErroCofre('LEITURA_INCOMPLETA');
                 const valor = c.dados?.valorConsulta;
                 const cobrado = c.dados?.valorCobrado;
