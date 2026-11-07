@@ -141,6 +141,9 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
 
+    if (this.pilotoWhatsApp && (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome))) {
+      return {sucesso:false,erro:'TOMADOR_NAO_VALIDADO',codigoErroSefin:'TOMADOR_NAO_VALIDADO'};
+    }
     // Se o nome ainda não foi validado, tenta obter via cadastro existente no banco ou API da Receita
     if (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome)) {
       // 1. Tenta reaproveitar de outro cadastro com o mesmo CPF que já tenha nome validado
