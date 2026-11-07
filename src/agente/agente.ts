@@ -1099,8 +1099,8 @@ export function acompanhamentoVerificado(
   const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
   if(tem('LINK_ACEITO_PARA_ENVIO')) return [
-    `O serviço de mensagens aceitou o pedido do link seguro para a ${nomeAgenda}.`,
-    'O link já foi aceito para envio, mas não tenho confirmação de entrega no WhatsApp.',
+    `O pedido de envio do link seguro da ${nomeAgenda} foi aceito.`,
+    'Quando o link aparecer no WhatsApp, abra a página segura para conectar a agenda.',
     'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
   ].join(' ');
   if(tem('CONEXAO_EXISTENTE')) return [
@@ -1426,7 +1426,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(estado.estado==='ENTREGUE') return 'O WhatsApp confirmou a entrega do link da '+fonte+'. Ainda vou precisar da conexão autenticada para avançar.';
       if(estado.estado==='LIDO') return 'O WhatsApp registrou a leitura do link da '+fonte+'. Isso ainda não confirma o login na agenda.';
       if(estado.estado==='ERRO_COMPROVADO') return 'A entrega do link da '+fonte+' teve um erro comprovado. Não vou reenviar a credencial sem sua autorização.';
-      if(estado.comId) return 'O pedido do link já foi aceito pelo serviço de mensagens para a '+fonte+'. Ainda não tenho confirmação de entrega no WhatsApp.';
+      if(estado.comId) return 'O pedido de envio do link seguro da '+fonte+' foi aceito. Quando o link aparecer no WhatsApp, abra a página segura para continuar.';
       return 'Consultei o link da '+fonte+', mas a entrega ainda não está comprovada. Isso não quer dizer que houve uma falha.';
     }
     // Longa navegação virou trabalho registrado: não aguardar 62s no Runner.
