@@ -30,6 +30,22 @@ function preparar(intencoes:string[],texto:string,acoes:string[],crm='adiado',cr
   return {modelo,aprovarRegistroProfissional,consultarProntidao,registrarPeriodoConferencia,confirmarProfissionais,links,deps,entrada};
 }
 describe('continuidade semântica com resultados verificáveis',()=>{
+  it('não promete registrar período ou conferir quando o alvo foi recusado',async()=>{
+    const p=preparar(['definir_periodo'],'Vou fazer isso agora.',[]);
+    p.entrada.texto='Pode usar 20/10 como início do período e conferir os atendimentos. Se estiver tudo certo, já quero emitir a nota.';
+    const modelo=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:'20/10',intencoes:['definir_periodo'],inicioPeriodo:'2026-10-20',
+        crmConfirmado:null,rqeConfirmado:null,camposConfirmados:[]},{callId:'alvo-recusado'})],
+      [assistantMessage(JSON.stringify({texto:'Vou fazer isso agora.',fatos,acoesConcluidas:[]}))]
+    ]);
+    const diagnosticos:DiagnosticoAgente[]=[];
+    const resposta=await responderAgente(p.entrada,{...p.deps,modeloTeste:modelo,aoDiagnostico:r=>diagnosticos.push(r)});
+    expect(resposta).toContain('Não consegui identificar o profissional');
+    expect(resposta).not.toContain('Vou fazer isso agora');
+    expect(diagnosticos.at(-1)).toMatchObject({codigo:'RESPOSTA_POR_ESTADO',continuidade:{alvoValido:false,acoesConcluidas:[]}});
+    expect(p.registrarPeriodoConferencia).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
   it.each([
     {intencoes:['conversar'],campos:[],crm:null,alvo:'Ana',revisao:'NAO_SOLICITADA',comparacao:'NAO_INFORMADO'},
     {intencoes:['aprovar_registro'],campos:[],crm:'36948/RS',alvo:'Ana',revisao:'CRM_NAO_AUTORIZADO',comparacao:'COINCIDE'},

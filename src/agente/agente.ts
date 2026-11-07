@@ -900,7 +900,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     name:'continuar_onboarding',
     description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use conversar para dúvidas/outro assunto, sem executar ações.',
     parameters:z.object({
-      profissional:z.string().nullable(),
+      profissional:z.string().nullable().describe('Use null quando a mensagem atual não cita um profissional: o servidor usa o vínculo confirmado. Se a mensagem cita um profissional, informe o nome citado. Nunca use data, rótulo de função ou ID como nome.'),
       intencoes:z.array(z.enum(['definir_periodo','aprovar_registro','adiar_registro','corrigir_registro','recusar_registro','consultar_certificado','conversar'])).min(1).max(4),
       inicioPeriodo:z.string().nullable(),crmConfirmado:z.string().nullable(),rqeConfirmado:z.string().nullable(),
       camposConfirmados:z.array(z.enum(['crm','rqe'])).max(2)
@@ -1360,6 +1360,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
     }
     if(continuidadeTurno.atual){
+      if(continuidade?.intencoes.includes('definir_periodo')&&!continuidade.alvoValido){
+        registrar('RESPOSTA_POR_ESTADO',uso);
+        return 'Não consegui identificar o profissional para registrar o período. De quem são os atendimentos que você quer conferir?';
+      }
       try{
         const json=resposta.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
         rejeicaoFala='JSON_INVALIDO';
