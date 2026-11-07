@@ -533,7 +533,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         u.telefone
       from medico_perfil_fiscal pf
       join medicos m on m.id = pf.medico_id
-      join usuarios u on u.id = m.usuario_id
+      left join usuarios u on u.id = m.usuario_id
       where pf.medico_id = $1
       limit 1
     `;
