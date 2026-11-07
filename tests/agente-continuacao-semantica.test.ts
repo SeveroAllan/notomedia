@@ -107,14 +107,67 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     p.modelo.assertComplete();
   });
   it('período é tratado semanticamente como escopo e a fala não vira histórico de emissão',async()=>{
-    const texto='O período começa em 1º de novembro. Podemos seguir com o A1.';
-    const p=preparar(['definir_periodo'],texto,['periodo_registrado','pagina_certificado_preparada'],'adiado',null,'2026-11-01');
-    p.entrada.texto='Desde 1 de novembro de 2026.';
-    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
-    expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,'2026-11-01');
-    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
-    expect(p.links).toHaveLength(1);
+    const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,'2023-10-20');
+    p.entrada.texto='Desde 20 de outubro.';
+    const solicitarTrabalho=vi.fn().mockResolvedValue({ok:true,estado:'iniciado'});
+    const consultarConferencia=vi.fn();
+    const ano=new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'America/Sao_Paulo'}).format();
+    const inicio=ano+'-10-20';
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date(ano+'-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,estadoConversa:{...p.entrada.estadoConversa,agendaEscolhida:'tribemd'}},
+        {...p.deps,consultarStatus:async()=>({tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}}),solicitarTrabalho,consultarConferencia});
+      expect(resposta).toContain('em andamento');
+      expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,inicio);
+      expect(solicitarTrabalho).toHaveBeenCalledExactlyOnceWith('conferencia_fiscal','tribemd',ID,inicio);
+      expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+      expect(p.links).toHaveLength(0);
+    } finally {vi.useRealTimers();}
     p.modelo.assertComplete();
+  });
+  it.each([
+    ['na verdade é desde 20 de outubro de 2026', '20/10/2026'],
+    ['20 de outubro de 2026', null],
+    ['20/10/2026', '2023-10-20']
+  ])('extrai a data da mensagem: %s', async (texto, dica) => {
+    const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,dica);
+    const solicitarTrabalho=vi.fn().mockResolvedValue({ok:true,estado:'iniciado'});
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,texto,estadoConversa:{...p.entrada.estadoConversa,
+        agendaEscolhida:'tribemd',periodoConferencia:{profissionalId:ID,inicio:'2023-10-20'}}},
+        {...p.deps,consultarStatus:async()=>({tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}}),
+          consultarConferencia:vi.fn(),solicitarTrabalho});
+      expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,'2026-10-20','2023-10-20');
+      expect(solicitarTrabalho).toHaveBeenCalledExactlyOnceWith('conferencia_fiscal','tribemd',ID,'2026-10-20');
+      expect(resposta).toContain('em andamento');
+      expect(resposta).not.toContain('Qual é a data inicial');
+    } finally {vi.useRealTimers();}
+  });
+  it.each([
+    ['2026-12-20', 'DATA_FUTURA'],
+    ['entre 20/10/2026 e 25/10/2026', 'INTERVALO_OU_MULTIPLAS_DATAS'],
+    ['31/10', 'ANO_NECESSARIO_PARA_SUBSTITUIR'],
+    ['não é 2023, é desde 20 de outubro de 2026', 'MULTIPLOS_ANOS'],
+    ['até outubro', 'INTERVALO_OU_MULTIPLAS_DATAS'],
+    ['não é desde 20 de outubro de 2026', 'DATA_NEGADA'],
+    ['Minha consulta foi em 20/10/2026', 'DATA_SEM_ESCOPO_CLARO']
+  ])('esclarece e diagnostica a rejeição: %s', async (texto, motivo) => {
+    const p=preparar(['definir_periodo'],'Certo.', [],'adiado',null,'20/10/2026');
+    const aoDiagnostico=vi.fn();
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,texto,estadoConversa:{...p.entrada.estadoConversa,
+        periodoConferencia:{profissionalId:ID,inicio:'2023-10-20'}}},{...p.deps,aoDiagnostico});
+      expect(resposta).toContain('Qual é a data inicial');
+      expect(p.registrarPeriodoConferencia).not.toHaveBeenCalled();
+      expect(aoDiagnostico).toHaveBeenCalledWith(expect.objectContaining({
+        rejeicaoPeriodo:{motivo}
+      }));
+    } finally {vi.useRealTimers();}
   });
   it('contrato que inventa vínculo pendente é recusado sem transformar isso em gravação',async()=>{
     const p=preparar(['conversar'],'Alice precisa ser vinculada novamente.',[]);

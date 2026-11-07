@@ -64,7 +64,8 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly sefinClient?: SefinNacionalClient,
     private readonly modoAgenteConservador = false,
     private readonly preparacaoFiscalAtiva = false,
-    private readonly retomadaRecusaAtiva = false
+    private readonly retomadaRecusaAtiva = false,
+    private readonly pilotoWhatsApp = false
   ) {}
 
   /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
@@ -140,6 +141,9 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
 
+    if (this.pilotoWhatsApp && (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome))) {
+      return {sucesso:false,erro:'TOMADOR_NAO_VALIDADO',codigoErroSefin:'TOMADOR_NAO_VALIDADO'};
+    }
     // Se o nome ainda não foi validado, tenta obter via cadastro existente no banco ou API da Receita
     if (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome)) {
       // 1. Tenta reaproveitar de outro cadastro com o mesmo CPF que já tenha nome validado
@@ -215,6 +219,8 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const anoMes = (preparacao?.ok ? preparacao.competencia : dataGeracao.toISOString()).slice(0, 7);
     let chaveAcessoFinal = '';
     let respostaSefinRaw: Record<string, unknown> | undefined;
+    if (this.pilotoWhatsApp && (!item.emissaoComprovante || !this.supabaseClient || !this.sefinClient || prestadorConfig.ambiente !== 2))
+      return {sucesso:false,erro:'EMISSAO_WHATSAPP_BLOQUEADA',codigoErroSefin:'AMBIENTE_FISCAL_BLOQUEADO'};
     let xmlAutorizadoFinal: string | undefined;
     let dataEmissaoFinal = new Date();
 
@@ -235,6 +241,10 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           sucesso: false,
           erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`, codigoErroSefin: 'CERTIFICADO_INVALIDO'
         };
+      }
+
+      if (this.pilotoWhatsApp && chaves.documentoTitular !== prestadorConfig.cnpj.replace(/\D/g,'')) {
+        return {sucesso:false,erro:'CERTIFICADO_TITULAR_DIVERGENTE',codigoErroSefin:'CERTIFICADO_TITULAR_DIVERGENTE'};
       }
 
       let resSefinFinal: any;
@@ -258,6 +268,14 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           certBase64: chaves.certBase64
         });
 
+        if (this.pilotoWhatsApp) {
+          const reserva = await this.pool.query(`
+            update public.noto_emissoes_comprovantes set dps_id=$2, atualizado_em=now()
+            where solicitacao_id=$1 and medico_id=$3 and origem='autorizacao_whatsapp'
+              and estado='emitindo' and dps_id is null
+          `,[item.id,dpsId,item.medicoId]);
+          if (reserva.rowCount !== 1) return {sucesso:false,erro:'DPS_JA_RESERVADA',codigoErroSefin:'DPS_JA_RESERVADA'};
+        }
         const resSefin = await this.sefinClient.transmitirDps({
           xmlAssinado,
           pfxBuffer: cert.pfxBuffer,
@@ -359,6 +377,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
 
       if (!resSefinFinal || !resSefinFinal.sucesso) {
         await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
+        if (this.pilotoWhatsApp && dpsIdFinal && (!resSefinFinal?.httpStatus || resSefinFinal.httpStatus>=500 || [408,409].includes(resSefinFinal.httpStatus))) {
+          const consulta = await this.sefinClient.consultarDpsGerada(dpsIdFinal, {
+            pfxBuffer:cert.pfxBuffer, senhaCertificado:cert.senhaCertificado, ambiente:2
+          });
+          return {sucesso:false,erro:'TRANSMISSAO_A_CONCILIAR',codigoErroSefin:'TRANSMISSAO_A_CONCILIAR_'+consulta.resultado.toUpperCase()};
+        }
         const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
         const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
           prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
@@ -473,7 +497,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
     }
 
-    if (!pdfBytes) {
+    if (!pdfBytes && !this.pilotoWhatsApp) {
       try { pdfBytes = await generateDanfsePdf(dadosDanfse); }
       catch (erro) {
         if (!item.emissaoComprovante) throw erro;
@@ -484,14 +508,15 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const xmlStoragePath = `notas/${item.medicoId}/${anoMes}/${chaveAcessoFinal}.xml`;
     if (this.supabaseClient && xmlAutorizadoFinal) {
       try {
-        await this.supabaseClient.storage
+        const { error } = await this.supabaseClient.storage
           .from('notas')
           .upload(xmlStoragePath, Buffer.from(xmlAutorizadoFinal, 'utf-8'), {
             contentType: 'application/xml',
             upsert: true
           });
+        if (error && this.pilotoWhatsApp) throw error;
       } catch (err: any) {
-        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote ? 'XML_STORAGE_FALHOU' : err?.message || err);
+        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote || this.pilotoWhatsApp ? 'XML_STORAGE_FALHOU' : err?.message || err);
       }
     }
 
@@ -529,11 +554,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         pf.regime_especial_tributacao,
         pf.percentual_tot_trib_sn,
         pf.dados_reforma_tributaria,
+        pf.confirmado_pelo_medico,
         u.email,
         u.telefone
       from medico_perfil_fiscal pf
       join medicos m on m.id = pf.medico_id
-      join usuarios u on u.id = m.usuario_id
+      left join usuarios u on u.id = m.usuario_id
       where pf.medico_id = $1
       limit 1
     `;
@@ -543,6 +569,13 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const r = rows[0];
     const opSimpNacMap: Record<string, 1 | 2 | 3> = { nao_optante: 1, mei: 2, me_epp: 3 };
     const regApMap: Record<string, 1 | 2 | 3> = { regime_1: 1, regime_2: 2, regime_3: 3 };
+
+    if (this.pilotoWhatsApp && (r.ambiente !== 'homologacao' || !r.confirmado_pelo_medico ||
+        r.dados_reforma_tributaria?.versao !== 2 || !r.documento_limpo || !r.cod_municipio_ibge ||
+        !r.serie_dps || !r.proximo_numero_dps || !opSimpNacMap[r.opcao_simples_nacional] ||
+        r.regime_especial_tributacao == null ||
+        (r.opcao_simples_nacional === 'me_epp' && !regApMap[r.regime_apuracao_sn]) ||
+        (r.opcao_simples_nacional !== 'nao_optante' && r.percentual_tot_trib_sn == null))) return null;
 
     return {
       referenciaImportada: r.dados_reforma_tributaria?.versao === 2,
@@ -562,7 +595,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         regApTribSN: regApMap[r.regime_apuracao_sn] || 1,
         regEspTrib: (r.regime_especial_tributacao ?? 0) as any
       },
-      pTotTribSN: Number(r.percentual_tot_trib_sn || 6.0)
+      pTotTribSN: this.pilotoWhatsApp ? Number(r.percentual_tot_trib_sn ?? 0) : Number(r.percentual_tot_trib_sn || 6.0)
     };
   }
 

@@ -1,3 +1,5 @@
+import { tratarComandoEmissaoWhatsApp, tratarPropostaEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
+import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
@@ -183,8 +185,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
         recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
         recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
+      const falhaAmplimed = evento.motivoAcesso === 'ASSINATURA_INATIVA'
+        ? 'Consegui entrar na Amplimed. A conta está sem assinatura ativa, e a Amplimed bloqueia a agenda. Para eu conseguir ler os atendimentos, a assinatura precisa estar ativa.'
+        : evento.motivoAcesso === 'ACESSO_CAPTCHA'
+        ? 'A Amplimed pediu uma confirmação de que você é humano. Abra a Amplimed no seu navegador, conclua essa etapa e depois peça um novo link seguro para tentar a conexão novamente.'
+        : evento.motivoAcesso === 'ACESSO_CODIGO_EMAIL_PENDENTE'
+          ? 'A verificação por e-mail da Amplimed ficou pendente. Peça um novo link seguro para iniciar outra tentativa e espere eu pedir o código antes de responder.'
+          : evento.motivoAcesso === 'ACESSO_RECUSADO'
+            ? 'A Amplimed recusou o acesso. Confira se você consegue entrar na Amplimed e peça um novo link seguro para corrigir os dados.'
+            : 'Ainda não consegui confirmar o login na Amplimed. Abra a Amplimed, confira se há alguma etapa pendente no acesso e peça um novo link seguro para tentar novamente.';
       const mensagens=!evento.conectado
-        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
+        ? evento.agenda==='amplimed' ? [falhaAmplimed]
+          : ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
         : nomes.length
           ? [`Conexão com a ${plataforma} confirmada.`,
             ...(andamento?[andamento]:[]),
@@ -279,6 +291,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
     });
   };
+  // O polling expõe só a revisão opaca do último evento da própria instância.
+  const chaveRevisaoPareamento = randomBytes(32);
+  const revisoesPareamento = new Map<string, string>();
+  const revisaoPareamento = (instancia: string, codigo: string) =>
+    createHmac('sha256', chaveRevisaoPareamento).update(instancia + ':' + codigo.replace(/-/g, '').toUpperCase()).digest('hex');
+
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
     pool, segredo: config.evolutionWebhookSecret,
@@ -293,13 +311,23 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return corpo?.instance?.state === 'open';
       } catch { return false; }
     },
+    aoAtualizarCodigo: (instancia, codigo) => {
+      revisoesPareamento.delete(instancia);
+      revisoesPareamento.set(instancia, revisaoPareamento(instancia, codigo));
+      if (revisoesPareamento.size > 256) {
+        const maisAntiga = revisoesPareamento.keys().next().value;
+        if (maisAntiga) revisoesPareamento.delete(maisAntiga);
+      }
+    },
     aoConectar: boasVindasInstancia
   }));
-  const consultarConferenciaConta = (contaId: string, medicoId: string, agenda: AgendaEscolhida) =>
-      conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
-        const janela=janelaConferencia();
+  const consultarConferenciaConta = async (contaId: string, medicoId: string, agenda: AgendaEscolhida, desde?:string) => {
+      const janela=janelaConferencia(new Date(),desde);
+      const dias=1+(Date.parse(janela.fim)-Date.parse(janela.inicio))/86_400_000;
+      if(!Number.isInteger(dias)||dias<1||dias>365)return {ok:false,motivo:'RECORTE_MUITO_GRANDE'} as const;
+      return conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
         if (fonte==='tribemd') {
-          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:30});
+          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:desde?Math.max(1,dias-1):30});
           return leituraTribemdParaConferencia(r,nome,janela);
         }
         // Amplimed já valida a escolha do código no filtro e o resourceId
@@ -316,7 +344,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=await cofres.lerAgendaAmplimed(id,janela.inicio,janela.fim,false,codigo);
         if (!r.ok) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
         return leituraAmplimedParaConferencia(r.dias,janela);
-      });
+      },desde?{inicio:desde,dias}:undefined);
+  };
   const descobrirProfissionaisConta = async (medicoId: string, agenda: AgendaEscolhida) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.
@@ -360,6 +389,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       relatar:(codigo,duracaoMs,tipo)=>
         console.info('NOTO_AGENT_TRABALHO',JSON.stringify({codigo,duracaoMs,tipo}))
     }) : {parar:async()=>{}};
+  let proximoLogSemNumeroPn = 0;
   app.use('/webhook/evolution', criarRouterWebhookAgente({
     pool,
     ativo: Boolean(config.notoAgentAtivo),
@@ -374,6 +404,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    ...(config.emissaoWhatsAppPropostaAtiva && config.emissaoWhatsAppProdutor ? {
+      propostaEmissaoWhatsApp: (
+        entrada:Parameters<typeof tratarPropostaEmissaoWhatsApp>[2],
+        publicar:Parameters<typeof tratarPropostaEmissaoWhatsApp>[3]
+      )=>tratarPropostaEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,entrada,publicar),
+      enviarPropostaEmissao: async (telefone:string,texto:string)=>{
+        const resultado = await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto,linkPreview:false
+        });
+        return resultado.sucesso ? resultado.mensagemId ?? null : null;
+      }
+    } : {}),
+    ...(config.emissaoWhatsAppProdutor ? {
+      autorizarEmissaoWhatsApp: (contaId:string,texto:string,mensagemRef:string) =>
+        tratarComandoEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,contaId,texto,mensagemRef)
+    } : {}),
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
     ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
@@ -412,6 +458,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       return consultarEntregaLink(pool,contaId,agenda);
     },
+    ...(config.notoPilotoRestrito ? { receberCodigoAmplimed: (contaId: string | null, telefone: string, texto: string) => {
+      const candidato = texto.trim();
+      if (/^\d{6}$/.test(candidato)) return true;
+      if (!/^amplimed\s+[a-f0-9]{8}(?:\s|$)/i.test(candidato)) return false;
+      if (contaId) cofres.links?.receberCodigoAmplimed(contaId, telefone, candidato);
+      return true;
+    } } : {}),
     atualizarEstadoLink: async entrada => {
       const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
         config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);
@@ -423,7 +476,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(recibo)console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(recibo));
       }
       // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
-      console.info('NOTO_RECIBO_LINK',codigo);
+      if (codigo !== 'SEM_NUMERO_PN' || Date.now() >= proximoLogSemNumeroPn) {
+        console.info('NOTO_RECIBO_LINK', codigo);
+        if (codigo === 'SEM_NUMERO_PN') proximoLogSemNumeroPn = Date.now() + 60_000;
+      }
       return codigo==='ATUALIZADO';
     },
     descobrirProfissionais: descobrirProfissionaisConta,
@@ -1026,6 +1082,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
       }
 
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
         telefoneConsultorio,
@@ -1042,7 +1100,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           medicoId, modoConexao: modoConexao || 'codigo', diagnostico: resultado.diagnostico
         });
       }
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ ...resultado, medicoId, revisaoAntesDaConsulta, revisaoCodigo: resultado.pairingCode
+        ? revisaoPareamento(resultado.nomeInstancia, resultado.pairingCode) : undefined });
     } catch (err: any) {
       console.error('Erro ao iniciar conexão WhatsApp:', err);
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao conectar WhatsApp' });
@@ -1057,14 +1117,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const { medicoId } = medicoAutorizado(res);
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await consultarStatusInstanciaWhatsapp(pool, {
+        consultarCodigo: req.query['consultarCodigo'] === '1',
         medicoId,
         evolutionUrl: config.evolutionApiUrl,
         evolutionApiKey: config.evolutionGlobalApiKey,
         aoConectar: aoConectarWhatsapp
       });
 
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      const revisaoCodigo = resultado.pairingCode
+        ? revisaoPareamento(nomeInstancia, resultado.pairingCode)
+        : resultado.state === 'connecting' ? revisoesPareamento.get(nomeInstancia) : undefined;
+      return res.json({ ...resultado, medicoId, revisaoCodigo,
+        revisaoAntesDaConsulta: resultado.pairingCode ? revisaoAntesDaConsulta : undefined });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }

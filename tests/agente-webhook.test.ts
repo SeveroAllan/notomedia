@@ -62,6 +62,22 @@ async function comServidor(
 }
 
 describe('Noto SDK — webhook autenticado e isolado', () => {
+  it('entrega o código Amplimed ao Cofre antes de gravar conversa ou chamar o modelo', async () => {
+    const receberCodigoAmplimed = vi.fn().mockReturnValue(true);
+    const { app, query, modeloTeste, enviar } = preparar({ receberCodigoAmplimed, persistirConversa: true });
+    const resposta = 'AMPLIMED deadbeef 444444';
+    const mensagem = {...evento, data:{...evento.data, message:{conversation:resposta}}};
+    await comServidor(app, async postar => {
+      expect((await postar(mensagem, 'invalido')).status).toBe(401);
+      expect(receberCodigoAmplimed).not.toHaveBeenCalled();
+      expect((await postar(mensagem)).status).toBe(204);
+    });
+    expect(receberCodigoAmplimed).toHaveBeenCalledExactlyOnceWith('conta-a', '5551999998888', resposta);
+    expect(query).toHaveBeenCalledOnce();
+    expect(JSON.stringify(query.mock.calls)).not.toContain('444444');
+    expect(modeloTeste.calls).toHaveLength(0);
+    expect(enviar).not.toHaveBeenCalled();
+  });
   it('usa o estado recuperado do Cofre no primeiro turno e exige a ferramenta', async () => {
     let estado:Record<string,unknown>={agendaEscolhida:'tribemd',
       descoberta:{agenda:'tribemd',nomes:['Alice Souza']}};
@@ -74,7 +90,8 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
       }
       if(sql.startsWith('insert into noto_agent_mensagens'))return {rows:[{mensagem_id:params[2]}]};
       if(sql.startsWith('update public.noto_agent_conversas as c')){
-        estado={...estado,faseAgenda:'CONFIRMACAO_PENDENTE',origemDescoberta:'legado_validado'};
+        estado={...estado,faseAgenda:'CONFIRMACAO_PENDENTE',origemDescoberta:'legado_validado',
+          perguntaPendente:'confirmar_profissional'};
         return {rows:[{conta_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'}]};
       }
       if(sql.startsWith('update public.noto_agent_conversas c set')){
@@ -178,7 +195,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     expect(estado).toMatchObject({periodoConferencia:{profissionalId:id,inicio:'2026-11-01'},
       perguntaPendente:null,pesquisasRegistro:{[id]:pesquisa}});
     const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
-    expect(texto).toContain('etapa=certificado');
+    expect(texto).not.toContain('etapa=certificado');
     expect(texto).not.toMatch(/não emite|36948/);
     expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
     modeloTeste.assertComplete();
@@ -209,7 +226,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const modeloTeste=new ScriptedModel([
       [functionCall('continuar_onboarding',{profissional:'Alice',intencoes:['aprovar_registro','consultar_certificado'],
         inicioPeriodo:null,crmConfirmado:'36948/RS',rqeConfirmado:null,camposConfirmados:['crm']},{callId:'composto'})],
-      [assistantMessage(JSON.stringify({texto:'Pronto, o CRM ficou salvo. O acesso do certificado está abaixo.',
+      [assistantMessage(JSON.stringify({texto:'Pronto, o CRM ficou salvo. Abra a página segura para cadastrar o certificado.',
         fatos:{vinculo:'confirmado',crm:'confirmado',crmValor:'36948/RS',periodo:'pendente',inicioPeriodo:null,emitiuNota:false,consultouNotas:false},
         acoesConcluidas:['crm_salvo','pagina_certificado_preparada']}))]
     ]);
@@ -222,12 +239,14 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const pedido={...evento,data:{...evento.data,message:{conversation:'O CRM 36948/RS está certo, pode confirmar e salvar. E me manda o link da página do certificado, que não veio.'}}};
     await comServidor(app,async postar=>{
       expect((await postar(pedido)).status).toBe(aceiteLink?200:503);
+      expect(enviar.mock.calls.map(c=>c[1])).toEqual(aceiteLink
+        ? [url,'Pronto, o CRM ficou salvo.','Abra a página segura para cadastrar o certificado.']
+        : [url]);
       expect((await postar(pedido)).status).toBe(200);
     });
     expect(aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith('conta-a',id,{confirmarRqe:false});
     expect(enviar.mock.calls.filter(c=>c[1]===url)).toHaveLength(1);
     expect(enviar).toHaveBeenCalledWith('5551999998888',url,{linkPreview:false});
-    expect(enviar.mock.calls.slice(0,2).map(c=>c[1])).toEqual(['Pronto, o CRM ficou salvo.','O acesso do certificado está abaixo.']);
     expect(estado).toMatchObject({faseAgenda:'VINCULO_CONFIRMADO',pesquisasRegistro:{[id]:{estado:'confirmada'}}});
     expect(registrarDiagnostico.mock.calls[0]?.[0]).toMatchObject({
       linkCertificado:{produzidos:1,nosBaloes:1,aceitosApi:aceiteLink?1:0},envio:aceiteLink?'ENVIADO':'FALHOU'});

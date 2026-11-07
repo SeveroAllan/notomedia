@@ -6,7 +6,7 @@ export type TipoTrabalhoNoto = 'descoberta_agenda' | 'conferencia_fiscal';
 export type EstadoTrabalhoNoto = 'pendente'|'executando'|'resultado_pronto'|'notificando'|'aceito_api'|'falhou'|'envio_incerto';
 export interface PedidoTrabalhoNoto {
   contaId: string; instancia: string; mensagemId: string; telefone: string;
-  tipo: TipoTrabalhoNoto; agenda: AgendaEscolhida; medicoId: string | null;
+  tipo: TipoTrabalhoNoto; agenda: AgendaEscolhida; medicoId: string | null; inicioPeriodo?:string;
 }
 export interface TrabalhoNoto extends PedidoTrabalhoNoto {
   id: string; estado: EstadoTrabalhoNoto; tentativas: number;
@@ -41,8 +41,8 @@ export async function enfileirarTrabalhoNoto(pool: Banco, p: PedidoTrabalhoNoto)
   try {
     const sql = [
       'insert into public.noto_agent_trabalhos',
-      '(conta_id,instancia,mensagem_id,telefone_destino,tipo,agenda,medico_id)',
-      'select $1,$2,$3,$4,$5,$6,$7::uuid',
+      '(conta_id,instancia,mensagem_id,telefone_destino,tipo,agenda,medico_id,inicio_periodo)',
+      'select $1,$2,$3,$4,$5,$6,$7::uuid,$9::date',
       'where exists(select 1 from public.usuarios u',
       'where u.conta_id=$1 and u.ativo=true and u.auth_user_id is not null',
       "and regexp_replace(u.telefone,'[^0-9]','','g')=any($8::text[]))",
@@ -51,14 +51,14 @@ export async function enfileirarTrabalhoNoto(pool: Banco, p: PedidoTrabalhoNoto)
       'on conflict do nothing returning id'
     ].join('\n');
     const r = await pool.query(sql,[p.contaId,p.instancia,p.mensagemId,p.telefone,p.tipo,p.agenda,p.medicoId,
-      gerarVariantesTelefoneBrasileiro(p.telefone)]);
+      gerarVariantesTelefoneBrasileiro(p.telefone),p.inicioPeriodo??null]);
     if (r.rows.length===1) return {ok:true,estado:'iniciado'};
     const ativo=await pool.query([
       'select 1 from public.noto_agent_trabalhos',
       'where conta_id=$1 and instancia=$2 and tipo=$3 and agenda=$4',
-      'and medico_id is not distinct from $5::uuid',
+      'and medico_id is not distinct from $5::uuid and inicio_periodo is not distinct from $6::date',
       "and estado in ('pendente','executando','resultado_pronto','notificando') limit 1"
-    ].join('\n'),[p.contaId,p.instancia,p.tipo,p.agenda,p.medicoId]);
+    ].join('\n'),[p.contaId,p.instancia,p.tipo,p.agenda,p.medicoId,p.inicioPeriodo??null]);
     if (ativo.rows.length) return {ok:true,estado:'ja_em_andamento'};
     return {ok:false,motivo:'SEM_AUTORIZACAO'};
   } catch { return {ok:false,motivo:'FILA_INDISPONIVEL'}; }
@@ -95,13 +95,13 @@ export async function reservarTrabalhoNoto(pool: Banco, executor: string): Promi
     "bloqueado_ate=now()+interval '4 minutes',atualizado_em=now()",
     'from proximo where t.id=proximo.id',
     'returning t.id,t.conta_id,t.instancia,t.mensagem_id,t.telefone_destino,',
-    't.tipo,t.agenda,t.medico_id,t.estado,t.tentativas'
+    't.tipo,t.agenda,t.medico_id,t.estado,t.tentativas,t.inicio_periodo::text'
   ].join('\n');
   const r=await pool.query(sql,[executor]),x=r.rows[0];
   return x?{
     id:x.id,contaId:x.conta_id,instancia:x.instancia,mensagemId:x.mensagem_id,
     telefone:x.telefone_destino,tipo:x.tipo,agenda:x.agenda,medicoId:x.medico_id,
-    estado:x.estado,tentativas:x.tentativas
+    estado:x.estado,tentativas:x.tentativas,...(x.inicio_periodo?{inicioPeriodo:x.inicio_periodo}:{})
   }:null;
 }
 

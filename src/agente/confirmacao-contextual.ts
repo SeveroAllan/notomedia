@@ -6,10 +6,8 @@ export type ResultadoDecisaoVinculo =
   | {ok:true;nomes:string[];agenda:AgendaEscolhida}
   | {ok:false;motivo:'SEM_DESCOBERTA'|'OUTRA_AGENDA'|'ALVO_AMBIGUO'|'NOME_NAO_COMPROVADO'|'NAO_AUTORIZOU'|'ESCLARECIMENTO'};
 
-/** A IA interpreta a intenção; o código delimita o alvo e autorizações.
- * Nunca se usa uma regex de "sim" ou a redação da pergunta anterior.
- * Uma resposta sem nome só é direcionável se houver exatamente UM nome pendente.
- */
+/** A descoberta autenticada permite antecipar o vínculo de um único alvo.
+ * A decisão contextual pode vetar o vínculo e nunca resolve ambiguidade sozinha. */
 export function decidirVinculo(
   estado:EstadoConversa|undefined,
   entrada:{agenda:AgendaEscolhida;decisao:DecisaoVinculo;nomes:string[];mensagem:string}
@@ -17,7 +15,8 @@ export function decidirVinculo(
   const descoberta=estado?.descoberta;
   if (!descoberta || estado?.faseAgenda!=='CONFIRMACAO_PENDENTE')
     return {ok:false,motivo:'SEM_DESCOBERTA'};
-  if (descoberta.agenda!==entrada.agenda)
+  if (descoberta.agenda!==entrada.agenda ||
+      (estado.agendaEscolhida && estado.agendaEscolhida!==entrada.agenda))
     return {ok:false,motivo:'OUTRA_AGENDA'};
   if (entrada.decisao==='negar') return {ok:false,motivo:'NAO_AUTORIZOU'};
   if (entrada.decisao!=='confirmar') return {ok:false,motivo:'ESCLARECIMENTO'};
@@ -44,6 +43,14 @@ export function decidirVinculo(
     return !tokens.some(t=>mensagem.split(' ').includes(t) &&
       disponiveis.filter(n=>normalizarNomeMedico(n).split(' ').includes(t)).length===1);
   }))return {ok:false,motivo:'ALVO_AMBIGUO'};
+  const mensagem = normalizarNomeMedico(entrada.mensagem);
+  const alvo = confirmados.length === 1 ? normalizarNomeMedico(confirmados[0]![0]!) : '';
+  const pedido = /^(?:(?:sim )?(?:confirmo|autorizo|quero|pode) )?vincul(?:a|ar|e) (?:a |o )?(.+?)(?: a (?:minha|sua) conta| a conta)?$/.exec(mensagem);
+  const pedidoNomeado = alvo && pedido &&
+    (pedido[1] === alvo || pedido[1] === alvo.replace(/^(?:dra|dr) /, ''));
+  const contraponto = /\b(?:nao|nem|talvez|duvida|incerteza|errad[oa]|outro (?:medico|profissional)|outra (?:medica|profissional))\b/.test(mensagem);
+  if (entrada.mensagem.includes('?') || contraponto || (disponiveis.length > 1 && !pedidoNomeado))
+    return {ok:false,motivo:'ESCLARECIMENTO'};
   return {ok:true,nomes:confirmados.map(c=>c[0]!),agenda:entrada.agenda};
 }
 

@@ -10,6 +10,7 @@ export type ConsultarStatusWhatsappInput = {
   medicoId: string;
   evolutionUrl: string;
   evolutionApiKey: string;
+  consultarCodigo?: boolean;
   aoConectar?: (medicoId: string) => Promise<void> | void;
 };
 
@@ -18,6 +19,7 @@ export type ResultadoStatusWhatsapp = {
   conectado: boolean;
   status: 'conectado' | 'pendente' | 'desconectado' | 'erro';
   state?: string;
+  pairingCode?: string;
   detalhe?: string;
 };
 
@@ -58,6 +60,21 @@ export async function consultarStatusInstanciaWhatsapp(
       return { ok: true, conectado: true, status: 'conectado', state: 'open' };
     }
 
+    if (input.consultarCodigo) {
+      if (state !== 'connecting') {
+        return { ok: false, conectado: false, status: 'pendente', state,
+          detalhe: 'A conexão foi encerrada. Gere uma conexão para tentar novamente.' };
+      }
+      const consulta = await fetch(`${baseUrl}/instance/connect/${nomeInstancia}`, {
+        headers: { apikey: evolutionApiKey }, signal: AbortSignal.timeout(5_000), redirect: 'error'
+      });
+      const corpo = consulta.ok ? await consulta.json().catch(() => ({})) : {};
+      if (typeof corpo.pairingCode !== 'string' || !/^[A-Z0-9-]{8,12}$/i.test(corpo.pairingCode)) {
+        return { ok: false, conectado: false, status: 'pendente', state,
+          detalhe: 'O código atual ainda não está disponível. Tente consultar novamente.' };
+      }
+      return { ok: true, conectado: false, status: 'pendente', state, pairingCode: corpo.pairingCode };
+    }
     return { ok: true, conectado: false, status: 'pendente', state };
   } catch (err: any) {
     return { ok: false, conectado: false, status: 'erro', detalhe: err?.message || 'Erro ao consultar status' };

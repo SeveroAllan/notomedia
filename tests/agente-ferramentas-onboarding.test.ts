@@ -75,7 +75,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(acessoSalvo),
       solicitarLinkAgenda,aoDiagnostico:diagnostico});
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('m1','amplimed');
-    expect(resposta).toContain('link seguro');
+    expect(resposta).toContain('A verificação da agenda começa ali.');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('LINK_ACEITO_PARA_ENVIO');
     modelo.assertComplete();
   });
@@ -120,7 +120,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     modelo.assertComplete();
   });
 
-  it('período informado define escopo, não ausência de notas, e continua no certificado sem cobrar CRM',async()=>{
+  it('período informado define escopo, não ausência de notas, sem abrir certificado nem cobrar CRM',async()=>{
     const modelo=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
       decisao:'definir',inicio:'2026-11-01'
     },{callId:'periodo'})]]);
@@ -135,11 +135,11 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
     expect(modelo.calls).toHaveLength(1);
     expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
-    expect(consultarProntidao).toHaveBeenCalledExactlyOnceWith('m1');
+    expect(consultarProntidao).not.toHaveBeenCalled();
     expect(resposta).toContain('período solicitado');
     expect(resposta).toContain('01/11/2026');
-    expect(resposta).toContain('Ainda não consultei atendimentos ou notas');
-    expect(resposta).toContain('etapa=certificado');
+    expect(resposta).toContain('Qual agenda devo conferir?');
+    expect(resposta).not.toContain('etapa=certificado');
     expect(resposta).not.toMatch(/não emite|não emitiu|parou de emitir|Quer que eu siga com a confirmação|36948/);
     expect(JSON.stringify(modelo.calls[0]!.request.input)).not.toContain('36948/RS');
     modelo.assertComplete();

@@ -27,8 +27,8 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
       referenciaContaAgenda:ancora(),solicitarLinkAgenda:enviar
     });
     expect(enviar).toHaveBeenCalledOnce();
-    expect(resposta).toContain('já foi aceito');
-    expect(resposta).toContain('não tenho confirmação de entrega');
+    expect(resposta).not.toMatch(/aceit|confirm.*entrega/i);
+    expect(resposta).toContain('Depois de preencher a página segura');
     expect(resposta).not.toMatch(/assim que estiver disponível|você o receberá|já solicitei/i);
     modelo.assertComplete();
   });
@@ -46,7 +46,7 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
       referenciaContaAgenda:ancora(),
       consultarEntregaLink:vi.fn().mockResolvedValue({estado:'SEM_CONFIRMACAO',comId:true,segundosDesdeAceite:120})
     });
-    expect(resposta).toContain('pedido do link já foi aceito');
+    expect(resposta).not.toMatch(/aceit|confirm.*entrega/i);
     expect(resposta).not.toMatch(/quando quiser|estou à disposição|receberá/i);
     modelo.assertComplete();
   });
@@ -80,17 +80,17 @@ describe('fala alinhada a ação real de conexão, sem IA paga',()=>{
       referenciaContaAgenda:ancora(),solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true}),
       aoComprovante
     });
-    expect(resposta).toMatch(/aceitou o pedido/);
+    expect(resposta).toContain('A verificação da agenda começa ali.');
     expect(aoComprovante).not.toHaveBeenCalled();
     modelo.assertComplete();
   });
 });
 
 describe('estado de ação controla o relato, não uma lista de frases proibidas',()=>{
-  it('mantém abertura natural enquanto só o código narra o marco',async()=>{
+  it('após pedido de link, usa a orientação sem a abertura livre',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'resultado-estruturado'})],
-      [assistantMessage('Certo, entendi a agenda que você quer conectar. [[RESULTADO_ACAO]]')]
+      [assistantMessage('Enviei novamente o link da Amplimed, mas ainda não tenho confirmação de entrega. [[RESULTADO_ACAO]]')]
     ]);
     const resposta=await responderAgente({
       texto:'Quero conectar a TribeMD',profissionais:[],
@@ -100,9 +100,9 @@ describe('estado de ação controla o relato, não uma lista de frases proibidas
       referenciaContaAgenda:ancora(),
       solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true})
     });
-    expect(resposta).toContain('Certo, entendi a agenda que você quer conectar.');
-    expect(resposta).toContain('já foi aceito');
-    expect(resposta).toContain('não tenho confirmação de entrega');
+    expect(resposta).not.toMatch(/Enviei novamente|Amplimed|confirmação de entrega/i);
+    expect(resposta).not.toMatch(/aceit|confirm.*entrega/i);
+    expect(resposta).toContain('Depois de preencher a página segura');
     expect(resposta).not.toContain('[[RESULTADO_ACAO]]');
     modelo.assertComplete();
   });
@@ -127,8 +127,8 @@ describe('estado de ação controla o relato, não uma lista de frases proibidas
         referenciaContaAgenda:ancora(),
         solicitarLinkAgenda:vi.fn().mockResolvedValue({aceitoParaEnvio:true})
       });
-      expect(saida).toMatch(/aceit/i);
-      expect(saida).toMatch(/não (?:há|tenho) comprovante|não tenho confirmação/i);
+      expect(saida).not.toMatch(/aceit|confirm.*entrega/i);
+      expect(saida).toContain('Depois de preencher a página segura');
       expect(saida).not.toMatch(/em breve|será encaminhado|já está entregue|vou pedir|quando ele estiver pronto/i);
       modelo.assertComplete();
     });

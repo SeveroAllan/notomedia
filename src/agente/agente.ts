@@ -1,3 +1,4 @@
+import { extrairInicioConferencia, janelaConferencia } from './leitura-atendimentos.js';
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
 import OpenAI from 'openai';
 import type pg from 'pg';
@@ -9,7 +10,7 @@ import { contemCredencialAgenda } from '../cofre/links.js';
 import { normalizarCrm,nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { semUso, type CodigoFerramenta, type DiagnosticoAgente, type EventoFerramenta, type FerramentaNoto } from './diagnostico.js';
 import { INSTRUCOES_NOTO } from './instrucoes.js';
-import type { EstadoConversa, AgendaEscolhida } from './estado-conversa.js';
+import { escolhaAgendaExplicita, type EstadoConversa, type AgendaEscolhida } from './estado-conversa.js';
 import type { ComprovanteTarefa } from './tarefas.js';
 import { descreverPanoramaFiscal, type ResultadoPanoramaFiscal } from './panorama-operacional.js';
 import { descreverConferencia, type ResultadoConferencia } from './conferencia-atendimentos.js';
@@ -35,7 +36,7 @@ export interface EntradaAgente {
 }
 type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?:string}|
   {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
-type DecisaoPeriodo = {ok:true;nome:string;inicio:string}|{ok:false;motivo:string};
+type DecisaoPeriodo = {ok:true;nome:string;inicio:string;conferencia?:string}|{ok:false;motivo:string;rejeicao?:DiagnosticoAgente['rejeicaoPeriodo']};
 
 type ResultadoContinuidade={
   fatos:{vinculo:'confirmado';crm:'pendente'|'adiado'|'confirmado';crmValor:string|null;periodo:'pendente'|'registrado';inicioPeriodo:string|null;emitiuNota:false;consultouNotas:boolean};
@@ -52,8 +53,8 @@ const falaContinuidadeSchema=z.object({
 export interface DependenciasAgente {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
-  solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null) => Promise<ResultadoEnfileirar>;
+  consultarConferencia?: (medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
+  solicitarTrabalho?: (tipo: TipoTrabalhoNoto, agenda: AgendaEscolhida, medicoId: string | null, inicioPeriodo?:string) => Promise<ResultadoEnfileirar>;
   aoTrabalho?: (trabalho: { tipo:TipoTrabalhoNoto; agenda:AgendaEscolhida; estado:ResultadoEnfileirar }) => void;
   aoConsultaEntregaLink?: (agenda:AgendaEscolhida, estado:{estado:string;comId:boolean}|null) => void;
   aoConferencia?: (resultado: ResultadoConferencia) => void;
@@ -71,7 +72,7 @@ export interface DependenciasAgente {
   proporCorrecaoPesquisa?: (medicoId:string,dados:{crm:string;rqe?:string}) => Promise<boolean>;
   concluirRevisaoPesquisa?: (medicoId:string) => Promise<boolean>;
   solicitarLinkRegistro?: (medicoId:string,acao?:'solicitar'|'consultar'|'substituir') => Promise<{ok:boolean;motivo?:string;anteriorInvalidado?:boolean}>;
-  registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
+  registrarPeriodoConferencia?: (profissionalId:string,inicio:string,substituirInicio?:string)=>Promise<boolean>;
   aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
   aoContinuidadeOnboarding?: (r:ResultadoContinuidade)=>void;
   aoDiagnosticoContinuidade?: (r:NonNullable<DiagnosticoAgente['continuidade']>)=>void;
@@ -163,7 +164,17 @@ function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boo
 
 /** Cria ferramentas somente de leitura para a conta resolvida no webhook.
  * O modelo não recebe identificadores internos nem consegue escolhê-los. */
+function agendaDaPergunta(texto: string): AgendaEscolhida | undefined {
+  if (!texto.includes('?')) return;
+  const tribe = /\btribe(?:md)?\b/i.test(texto);
+  const amplimed = /\bamplimed\b/i.test(texto);
+  return tribe === amplimed ? undefined : tribe ? 'tribemd' : 'amplimed';
+}
+
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
+  const escolhaAtual = escolhaAgendaExplicita(entrada.texto);
+  const agendaEmFoco = escolhaAtual ?? entrada.estadoConversa?.agendaEscolhida;
+  const agendaConsulta = escolhaAtual ?? agendaDaPergunta(entrada.texto) ?? agendaEmFoco;
   const profissionais = entrada.profissionais.filter(p => p.id && nomeProfissionalValido(p.nome)).slice(0, 21);
   // Descoberta já comprovada e pendente é a única condição que ativa
   // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
@@ -247,17 +258,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           };
         } catch { return { profissional: p.nome, erro: 'consulta indisponível; não presumir ausência de conexão' }; }
       }));
-      const quantosIndisponiveis = resultados.reduce((n, r) => n +
-        ('erro' in r ? 2 : Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.tribemd)) + Number(['consulta indisponível', 'integração não configurada neste ambiente'].includes(r.amplimed))), 0);
-      const codigo = quantosIndisponiveis === resultados.length * 2 ? 'STATUS_INDISPONIVEL' :
+      const fontes = agendaConsulta ? [agendaConsulta] : ['tribemd', 'amplimed'] as const;
+      const estados = resultados.flatMap(r => fontes.map(fonte => 'erro' in r ? 'consulta indisponível' : r[fonte]));
+      const quantosIndisponiveis = estados.filter(e =>
+        e === 'consulta indisponível' || e === 'integração não configurada neste ambiente').length;
+      const codigo = quantosIndisponiveis === estados.length ? 'STATUS_INDISPONIVEL' :
         quantosIndisponiveis ? 'STATUS_PARCIAL' :
-        resultados.some(r => 'tribemd' in r && (r.tribemd === 'conectada' || r.amplimed === 'conectada')) ?
-          'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
-      const faltaConfig = resultados.some(r => 'tribemd' in r &&
-        (r.tribemd === 'integração não configurada neste ambiente' ||
-          r.amplimed === 'integração não configurada neste ambiente'));
+        estados.includes('conectada') ? 'STATUS_CONECTADO' : 'STATUS_NAO_CONECTADO';
+      const faltaConfig = estados.includes('integração não configurada neste ambiente');
       registrarStatus(faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo);
-      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: resultados,
+      return { ok: true, codigo: faltaConfig ? 'INTEGRACAO_NAO_CONFIGURADA' : codigo, estados: agendaConsulta
+          ? resultados.map(r => 'erro' in r ? r : { profissional: r.profissional, [agendaConsulta]: r[agendaConsulta] })
+          : resultados, agendaConsulta,
         observacao: faltaConfig
           ? 'A integração não está configurada neste ambiente. Não é falha da TribeMD ou Amplimed e repetir a consulta não resolve. É necessária configuração local antes do link seguro. Senhas só na página segura.'
           : 'Estado das conexões somente; nenhuma consulta ou nota foi verificada. Falha de consulta não comprova desconexão.' };
@@ -270,6 +282,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda: z.enum(['tribemd', 'amplimed']), profissional: z.string().nullable() }),
     async execute({ agenda, profissional }) {
       const inicio = Date.now();
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('orientar_conexao_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {pronto: false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaConsulta};
+      }
       const log = (codigo: CodigoFerramenta) => registrar('orientar_conexao_agenda', codigo, inicio);
       const plataforma = agenda === 'tribemd' ? 'TribeMD' : 'Amplimed';
       const painel = painelSeguro(entrada.painelUrl);
@@ -413,11 +429,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // leituras repetidas do portal nem migrar de médico durante a execução.
   let conferenciaEscolhida: string | null = null;
   let conferenciaEmVoo: Promise<ResultadoConferencia> | null = null;
-  if (deps.consultarConferencia) extras.push(tool({
-    name: 'conferir_atendimentos_e_notas',
-    description: 'Confere a agenda real de UM médico autorizado com vínculos fiscais exatos dos últimos 30 dias; não declara consultas sem nota, não emite e não cadastra nada. Escolha a agenda somente se explícita, já confirmada ou única conectada.',
-    parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
-    async execute({ profissional, agenda }) {
+  async function conferirAtendimentos(profissional:string, agenda:AgendaEscolhida, desde?:string) {
       const inicio = Date.now();
       const entregar = (resultado: ResultadoConferencia) => {
         deps.aoConferencia?.(resultado);
@@ -464,18 +476,23 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         conferenciaEscolhida=chave;
         if(deps.solicitarTrabalho) {
-          const pedido=await deps.solicitarTrabalho('conferencia_fiscal',agenda,medico.id);
+          const pedido=await deps.solicitarTrabalho('conferencia_fiscal',agenda,medico.id,...(desde?[desde] as const:[]));
           deps.aoTrabalho?.({tipo:'conferencia_fiscal',agenda,estado:pedido});
           registrar('conferir_atendimentos_e_notas',pedido.ok?'TRABALHO_REGISTRADO':'TRABALHO_INDISPONIVEL',inicio);
           return pedido.ok?{ok:true,estado:pedido.estado,observacao:'A consulta está em andamento fora deste turno; nenhuma nota foi confirmada nesta execução.'}:
             {ok:false,motivo:pedido.motivo};
         }
-        conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda);
+        conferenciaEmVoo??=deps.consultarConferencia!(medico.id,agenda,...(desde?[desde] as const:[]));
         return entregar(await conferenciaEmVoo);
       } catch {
         return entregar({ok:false,motivo:'INTEGRACAO_INDISPONIVEL'});
       }
-    }
+  }
+  if (deps.consultarConferencia) extras.push(tool({
+    name: 'conferir_atendimentos_e_notas',
+    description: 'Confere a agenda real de UM médico autorizado com vínculos fiscais exatos dos últimos 30 dias; não declara consultas sem nota, não emite e não cadastra nada. Escolha a agenda somente se explícita, já confirmada ou única conectada.',
+    parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
+    execute: ({profissional,agenda})=>conferirAtendimentos(profissional,agenda)
   }));
   if (deps.descobrirProfissionais) extras.push(tool({
     name: 'descobrir_profissionais_agenda',
@@ -483,6 +500,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda: z.enum(['tribemd','amplimed']), profissional: z.string().nullable() }),
     async execute({agenda, profissional}) {
       const inicio=Date.now();
+      if (agendaEmFoco && agenda !== agendaEmFoco) {
+        registrar('descobrir_profissionais_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       const r=profissional === null ? null : identificar(profissional,profissionais);
       if (r && (r.erro || r.encontrados.length!==1)) {
         registrar('descobrir_profissionais_agenda','PROFISSIONAL_NAO_ENCONTRADO',inicio);
@@ -532,7 +553,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   let vinculoNesteTurno=false;
   if (deps.confirmarProfissionais&&entrada.estadoConversa?.faseAgenda!=='VINCULO_CONFIRMADO') extras.push(tool({
     name:'confirmar_profissionais_descobertos',
-    description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Classifique a intenção da mensagem atual: confirmar somente com autorização explícita; negar quando recusar; corrigir quando contestar o nome; esclarecer quando for pergunta ou outro assunto. NÃO trate toda mensagem como confirmação. Só vincule alvo comprovado; com vários nomes, não suponha qual é o profissional. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
+    description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Com um único profissional comprovado na agenda conectada da conta, use confirmar para antecipar o vínculo sem pedir nova confirmação. Use negar quando houver recusa, corrigir quando houver correção e esclarecer quando houver dúvida ou alvo incerto. Com vários nomes, confirmar exige pedido explícito com o nome. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
     parameters:z.object({
       agenda:z.enum(['tribemd','amplimed']),
       profissionalBase:z.string().nullable(),
@@ -616,14 +637,26 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string().nullable() }),
     async execute({agenda,profissional}) {
       const inicio=Date.now();
+      const fonte = agenda === 'tribemd' ? 'tribe(?:md)?' : 'amplimed';
+      const recusada = new RegExp(`\\b(?:nao|nem) (?:uso|utilizo|quero usar|quero conectar) (?:a )?${fonte}\\b`);
+      if (recusada.test(normalizarNomeMedico(entrada.texto))) {
+        registrar('solicitar_link_seguro_agenda','AGENDA_RECUSADA',inicio);
+        return {aceitoParaEnvio:false,motivo:'AGENDA_RECUSADA'};
+      }
       const r=profissional === null ? null : identificar(profissional,profissionais);
       const id=r ? r.encontrados.length===1 ? r.encontrados[0]!.id : null
         : await ancoraDaConta().catch(()=>null);
       const escolhido=profissional === null || (r?.encontrados.length===1 &&
         (entrada.estadoConversa?.profissionalConfirmadoId===id ||
         normalizarNomeMedico(entrada.texto).includes(normalizarNomeMedico(profissional))));
-      const agendaEscolhida=entrada.estadoConversa?.agendaEscolhida===agenda ||
-        (agenda === 'tribemd' ? /\btribe(?:md)?\b/i.test(entrada.texto) : /\bamplimed\b/i.test(entrada.texto));
+      const mencionouTribe = /\btribe(?:md)?\b/i.test(entrada.texto);
+      const mencionouAmpli = /\bamplimed\b/i.test(entrada.texto);
+      const agendaEscolhida = agendaEmFoco ? agendaEmFoco === agenda :
+        mencionouTribe !== mencionouAmpli && (agenda === 'tribemd' ? mencionouTribe : mencionouAmpli);
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('solicitar_link_seguro_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {aceitoParaEnvio:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaEmFoco};
+      }
       if (!id || !escolhido || !agendaEscolhida) {
         registrar('solicitar_link_seguro_agenda', !id?'DEPENDENCIA_CONTA':'DEPENDENCIA_PROFISSIONAL',inicio);
         return {aceitoParaEnvio:false,motivo:!id?'CONTA_NAO_IDENTIFICADA':'ESCOLHA_DE_AGENDA_NECESSARIA'};
@@ -658,6 +691,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters:z.object({agenda:z.enum(['tribemd','amplimed'])}),
     async execute({agenda}) {
       const inicio=Date.now();
+      if (agendaConsulta && agenda !== agendaConsulta) {
+        registrar('consultar_status_entrega_link_agenda','AGENDA_FORA_DO_FOCO',inicio);
+        return {ok:false,motivo:'AGENDA_FORA_DO_FOCO',agendaEscolhida:agendaConsulta};
+      }
       const referencia=await ancoraDaConta().catch(()=>null);
       if(!referencia) {
         registrar('consultar_status_entrega_link_agenda','DEPENDENCIA_CONTA',inicio);
@@ -874,24 +911,44 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         deps.aoPeriodoConferencia?.({ok:false,motivo:decisao});
         return {ok:false,motivo:decisao,orientacao:'Converse sobre a dúvida ou o assunto atual. Não conclua nada sobre emissão.'};
       }
+      const data = extrairInicioConferencia(entrada.texto, janelaConferencia().fim);
+      const anterior = entrada.estadoConversa?.periodoConferencia;
+      if ('motivo' in data || (anterior && !data.anoExplicito)) {
+        registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
+        const motivo = data.motivo ?? 'ANO_NECESSARIO_PARA_SUBSTITUIR';
+        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER',rejeicao:{motivo}});
+        return {ok:false,motivo:'DATA_A_ESCLARECER'};
+      }
+      inicio = data.inicio;
       periodoFinalizado=true;
       const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
+      const substituir=anterior&&anterior.profissionalId===medico?.id ? anterior.inicio : undefined;
       const gravado=medico&&inicio&&deps.registrarPeriodoConferencia&&(exigeRegistroPeriodo(entrada,deps)||continuidadeExecutada&&Boolean(profissionalComVinculoConfirmado(entrada)))&&
-        await deps.registrarPeriodoConferencia!(medico.id,inicio).catch(()=>false);
+        await deps.registrarPeriodoConferencia!(medico.id,inicio,...(substituir?[substituir] as const:[])).catch(()=>false);
       if(!gravado){
         registrar('registrar_periodo_conferencia','DEPENDENCIA_CONFIRMACAO',comeco);
         deps.aoPeriodoConferencia?.({ok:false,motivo:'PERIODO_NAO_REGISTRADO'});
         return {ok:false,motivo:'PERIODO_NAO_REGISTRADO'};
       }
       registrar('registrar_periodo_conferencia','PERIODO_REGISTRADO',comeco);
-      deps.aoPeriodoConferencia?.({ok:true,nome:medico!.nome,inicio:inicio!});
-      if(deps.consultarProntidao)await orientarCertificado(medico!.nome);
-      return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:false,
-        orientacao:'Só o período solicitado foi guardado. Nenhuma conclusão sobre notas ou emissão. CRM adiado permanece pendente.'};
+      const agenda=agendaConsulta;
+      const leitura=agenda&&deps.consultarConferencia
+        ? await conferirAtendimentos(medico!.nome,agenda,inicio!)
+        : null;
+      const conferencia=leitura&&'estado' in leitura
+        ? 'A conferência desse período está em andamento.'
+        : leitura&&leitura.ok&&'realizados' in leitura
+          ? descreverConferencia(leitura)
+          : !agenda?'Qual agenda devo conferir?'
+            : leitura&&'motivo' in leitura&&leitura.motivo==='FILA_INDISPONIVEL'
+              ? 'Não consegui iniciar a conferência agora. O período ficou salvo.'
+              : 'Não consegui conferir esse período na agenda selecionada. O período ficou salvo.';
+      deps.aoPeriodoConferencia?.({ok:true,nome:medico!.nome,inicio:inicio!,conferencia});
+      return {ok:true,inicio,escopo:'conferencia_solicitada',consultaExecutada:Boolean(leitura&&'realizados' in leitura)};
   }
   if(deps.registrarPeriodoConferencia)extras.push(tool({
     name:'registrar_periodo_conferencia',
-    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Ao registrar, continue com certificado sem voltar ao CRM adiado.',
+    description:'Interprete a resposta à pergunta de período: definir exige data inicial inequívoca; esclarecer para data ambígua; outro_assunto quando não responde o período. A data define SOMENTE o escopo pedido para conferir atendimentos; nunca afirma que o médico parou de emitir ou que faltam notas. Use o ano da mensagem quando informado. Com dia e mês sem ano, o servidor usa o ano atual se a data já passou. Depois de registrar, o servidor inicia a conferência.',
     parameters:z.object({decisao:z.enum(['definir','esclarecer','outro_assunto']),inicio:z.string().nullable()}),
     execute:async(args)=>executarPeriodo(args)
   }));
@@ -927,7 +984,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(!alvoValido)saida.resultados.push({ok:false,motivo:'ALVO_NAO_CONFIRMADO'});
       if(alvoValido&&pretendidas.has('definir_periodo')){
         const r=await executarPeriodo({decisao:'definir',inicio:inicioPeriodo});saida.resultados.push(r);
-        if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=inicioPeriodo;saida.acoesConcluidas.push('periodo_registrado');}
+        if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=r.inicio??null;saida.fatos.consultouNotas=r.consultaExecutada===true;saida.acoesConcluidas.push('periodo_registrado');}
       }
       const decisoes=intencoes.filter(i=>['aprovar_registro','adiar_registro','corrigir_registro','recusar_registro'].includes(i));
       if(decisoes.length&&!alvoValido)diagnostico.revisao='ALVO_INVALIDO';
@@ -977,7 +1034,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
       continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
       return {...saida,contratoResposta:{
-        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos e não recite o processo. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. A URL do certificado é anexada pelo transporte; não precisa copiá-la no texto.',
+        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos. Conte o resultado que muda a situação da pessoa, o impedimento ou a próxima ação dela. Use etapas internas e itens já visíveis na conversa só como contexto. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. Só oriente abrir a página se pagina_certificado_preparada estiver em acoesConcluidas. Nesse caso o transporte envia o link no mesmo turno antes do texto; não copie a URL nem narre seu envio.',
         formato:{texto:'Sua resposta natural ao usuário',fatos:saida.fatos,acoesConcluidas:saida.acoesConcluidas}
       }};
     }
@@ -1096,13 +1153,9 @@ export function acompanhamentoVerificado(
   entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
 ): string | null {
   const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
-  const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
+  const agenda=escolhaAgendaExplicita(entrada.texto)??agendaDaPergunta(entrada.texto)??entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
-  if(tem('LINK_ACEITO_PARA_ENVIO')) return [
-    `O serviço de mensagens aceitou o pedido do link seguro para a ${nomeAgenda}.`,
-    'O link já foi aceito para envio, mas não tenho confirmação de entrega no WhatsApp.',
-    'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
-  ].join(' ');
+  if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
   if(tem('CONEXAO_EXISTENTE')) return [
     `A agenda ${nomeAgenda} já está conectada.`,
     'Antes de vincular qualquer médico, precisamos verificar os profissionais na fonte.',
@@ -1113,6 +1166,13 @@ export function acompanhamentoVerificado(
     'Isso não confirma o login na agenda.',
     'A verificação dos médicos começa depois da conexão autenticada.'
   ].join(' ');
+  if (agenda && tem('AGENDA_FORA_DO_FOCO') &&
+      eventos.every(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.nome === 'consultar_contexto_conta')) {
+    return agendaDaPergunta(entrada.texto) && agenda !== entrada.estadoConversa?.agendaEscolhida
+      ? `Posso conferir a conexão da ${nomeAgenda} para continuar.`
+      : `A agenda escolhida é a ${nomeAgenda}. Posso conferir a conexão dela para continuar.`;
+  }
+  if (tem('AGENDA_RECUSADA')) return 'Qual agenda você quer conectar agora?';
   // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
   return null;
 }
@@ -1134,7 +1194,7 @@ function descreverRevisaoRegistro(r:Parameters<NonNullable<DependenciasAgente['a
           : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
       if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
       return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
-        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
+        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'.';
 }
 
 function descreverEstadoSemAcao(entrada:EntradaAgente):string{
@@ -1154,8 +1214,8 @@ function descreverEstadoSemAcao(entrada:EntradaAgente):string{
 
 function descreverPeriodoRegistrado(p:Extract<DecisaoPeriodo,{ok:true}>,certificado?:OrientacaoCertificado):string{
       const data=p.inicio.split('-').reverse().join('/');
-      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. Ainda não consultei atendimentos ou notas.'+
-        '\n'+(certificado?descreverCertificado(certificado):'Podemos continuar com o certificado, mantendo o CRM pendente.');
+      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. '+(p.conferencia??'Ainda não consultei atendimentos ou notas.')+
+        (certificado?'\n'+descreverCertificado(certificado):'');
 }
 
 function descreverCertificado(r:OrientacaoCertificado):string{
@@ -1172,8 +1232,11 @@ function descreverCertificado(r:OrientacaoCertificado):string{
  * Não declara vínculo executado se só houve decisão ou erro de dependência. */
 function explicarResultadoVinculo(
   v:{ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|
-    {ok:false;motivo:string}
+    {ok:false;motivo:string},
+  descoberta:EstadoConversa['descoberta']
 ):string{
+  if(!v.ok && v.motivo==='ESCLARECIMENTO' && descoberta?.nomes.length===1)
+    return 'Você confirma vincular '+descoberta.nomes[0]+' à sua conta?';
   if(!v.ok)return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
     ?'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
     :v.motivo==='VINCULO_JA_PROCESSADO_NO_TURNO'
@@ -1182,10 +1245,7 @@ function explicarResultadoVinculo(
   if(!v.registrado)return 'O cadastro aceitou o vínculo de '+v.nome+
     ', mas ainda não confirmei a gravação da etapa na conversa. Vou conferir essa etapa antes de pesquisar CRM/RQE.';
   const confirmacao='Vinculei '+v.nome+' à sua conta.';
-  if(v.pesquisa==='agendada')return confirmacao+
-    ' A pesquisa pública de CRM e RQE foi solicitada. Os dados precisam da sua confirmação antes de salvar.';
-  if(v.pesquisa==='ja_existe')return confirmacao+
-    ' A pesquisa pública já está registrada; não solicitei outra consulta.';
+  if(v.pesquisa!=='indisponivel')return confirmacao;
   return confirmacao+
     ' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
 }
@@ -1197,7 +1257,7 @@ function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidad
   switch(motivo){
     case 'ACEITO_API':
     case 'ACEITO_SEM_ENTREGA':
-      return troca+'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
+      return troca+'Se o link seguro'+alvo+' apareceu na conversa, use a página para preencher os dados. Se não apareceu, posso substituir o link com a sua autorização.';
     case 'ENVIO_INCERTO':
       return troca+'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
     case 'FALHA_COMPROVADA':
@@ -1230,6 +1290,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   let contratoFala:'VALIDO'|'INVALIDO'|undefined;
   let rejeicaoFala:DiagnosticoAgente['rejeicaoFala'];
   let continuidade:DiagnosticoAgente['continuidade'];
+  let rejeicaoPeriodo:DiagnosticoAgente['rejeicaoPeriodo'];
   const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) => {
     const temFerramenta=ferramentas.some(f=>f.nome==='confirmar_profissionais_descobertos');
     const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
@@ -1238,6 +1299,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       ...(contratoFala?{contratoFala}:{}),
       ...(rejeicaoFala?{rejeicaoFala}:{}),
       ...(continuidade?{continuidade}:{}),
+      ...(rejeicaoPeriodo?{rejeicaoPeriodo}:{}),
       estadoOnboarding:{
         vinculoConfirmadoNaConta:Boolean(profissionalComVinculoConfirmado(entrada)),
         perguntaPendente:entrada.estadoConversa?.perguntaPendente===undefined?'AUSENTE':entrada.estadoConversa.perguntaPendente,
@@ -1307,7 +1369,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
       aoVinculoResultado:r=>{vinculoTurno.atual=r;},
       aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
-      aoPeriodoConferencia:r=>{periodoTurno.atual=r;},
+      aoPeriodoConferencia:r=>{periodoTurno.atual=r;if(!r.ok)rejeicaoPeriodo=r.rejeicao;},
       aoCertificadoSeguro:r=>{certificadoTurno.atual=r;deps.aoCertificadoSeguro?.(r);},
       aoContinuidadeOnboarding:r=>{continuidadeTurno.atual=r;},
       aoDiagnosticoContinuidade:r=>{continuidade=r;deps.aoDiagnosticoContinuidade?.(r);},
@@ -1359,6 +1421,14 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('CONFIRMACAO_SEM_FERRAMENTA',uso);
       return 'A confirmação do profissional ainda não foi processada pela verificação necessária. Não vinculei ninguém nem iniciei pesquisa de CRM/RQE. A etapa continua pendente para retomarmos com segurança.';
     }
+    if(periodoTurno.atual?.ok){
+      registrar('RESPOSTA',uso);
+      return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
+    }
+    if(periodoTurno.atual&&!periodoTurno.atual.ok&&periodoTurno.atual.motivo==='DATA_A_ESCLARECER'){
+      registrar('RESPOSTA',uso);
+      return 'Qual é a data inicial, incluindo o ano, que você quer usar para conferir os atendimentos?';
+    }
     if(continuidadeTurno.atual){
       if(continuidade?.intencoes.includes('definir_periodo')&&!continuidade.alvoValido){
         registrar('RESPOSTA_POR_ESTADO',uso);
@@ -1402,7 +1472,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
 
     if(vinculoTurno.atual){
       registrar('RESPOSTA',uso);
-      return explicarResultadoVinculo(vinculoTurno.atual);
+      return explicarResultadoVinculo(vinculoTurno.atual,entrada.estadoConversa?.descoberta);
     }
     if(linkRegistroTurno.atual){
       const l=linkRegistroTurno.atual;
@@ -1426,7 +1496,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(estado.estado==='ENTREGUE') return 'O WhatsApp confirmou a entrega do link da '+fonte+'. Ainda vou precisar da conexão autenticada para avançar.';
       if(estado.estado==='LIDO') return 'O WhatsApp registrou a leitura do link da '+fonte+'. Isso ainda não confirma o login na agenda.';
       if(estado.estado==='ERRO_COMPROVADO') return 'A entrega do link da '+fonte+' teve um erro comprovado. Não vou reenviar a credencial sem sua autorização.';
-      if(estado.comId) return 'O pedido do link já foi aceito pelo serviço de mensagens para a '+fonte+'. Ainda não tenho confirmação de entrega no WhatsApp.';
+      if(estado.comId) return 'Se o link da '+fonte+' apareceu na conversa, abra a página segura. Se não apareceu, posso substituir o link com a sua autorização.';
       return 'Consultei o link da '+fonte+', mas a entrega ainda não está comprovada. Isso não quer dizer que houve uma falha.';
     }
     // Longa navegação virou trabalho registrado: não aguardar 62s no Runner.
@@ -1457,7 +1527,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       // A abertura natural é livre, mas o relato da ação provém do
       // estado comprovado. Saída fora do contrato usa só o relato seguro.
       const partes=resposta.split('[[RESULTADO_ACAO]]');
-      const introducao=partes.length===2 ? partes[0]!.trim() : '';
+      const envioLinkAgenda = ferramentas.some(e =>
+        e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
+      const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.codigo === 'AGENDA_RECUSADA');
+      const introducao = !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);
@@ -1492,7 +1565,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // inferência é interrompida. Esse fato precede o erro do Runner.
     if(vinculoTurno.atual){
       registrar('RESPOSTA');
-      return explicarResultadoVinculo(vinculoTurno.atual);
+      return explicarResultadoVinculo(vinculoTurno.atual,entrada.estadoConversa?.descoberta);
     }
     if (trabalhoTurno.atual?.estado.ok) {
       const fonte=trabalhoTurno.atual.agenda==='tribemd'?'TribeMD':'Amplimed';
@@ -1516,7 +1589,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     console.warn('NOTO_AGENT_EXECUCAO',JSON.stringify({codigo:natureza,duracaoMs:Math.max(0,Date.now()-inicio),
       ferramentas:ferramentas.map(f=>({nome:f.nome,codigo:f.codigo,duracaoMs:f.duracaoMs}))}));
     return natureza==='ABORT_SIGNAL'
-      ? 'A resposta demorou mais que o limite desta conversa. Vou manter o estado verificado; não vou dizer que a consulta falhou sem conferir o trabalho registrado.'
+      ? 'A consulta demorou mais que o esperado. Ainda não tenho o resultado.'
       : 'Não consegui continuar esta etapa da conversa agora. Vou preservar o que já foi confirmado para retomarmos sem recomeçar.';
   } finally {
     clearTimeout(relogio);
