@@ -74,6 +74,7 @@ export interface DependenciasAgente {
   registrarPeriodoConferencia?: (profissionalId:string,inicio:string)=>Promise<boolean>;
   aoPeriodoConferencia?: (r:DecisaoPeriodo)=>void;
   aoContinuidadeOnboarding?: (r:ResultadoContinuidade)=>void;
+  aoDiagnosticoContinuidade?: (r:NonNullable<DiagnosticoAgente['continuidade']>)=>void;
   aoCertificadoSeguro?: (r:OrientacaoCertificado)=>void;
   adiarConfirmacaoRegistro?: (medicoId:string)=>Promise<boolean>;
   aprovarRegistroProfissional?: (medicoId:string,opcoes?:{confirmarRqe:boolean})=>Promise<{ok:true;nome:string;crm:string;rqe:string|null}|{ok:false;motivo:string}>;
@@ -917,6 +918,11 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         emitiuNota:false,consultouNotas:false},acoesConcluidas:[],resultados:[]};
       const alvos=profissional===null?[medico]:identificar(profissional,profissionais).encontrados;
       const alvoValido=alvos.length===1&&alvos[0]!.id===medico.id;
+      const diagnostico:NonNullable<DiagnosticoAgente['continuidade']>={
+        intencoes:[...intencoes],camposConfirmados:[...camposConfirmados],alvoValido,
+        comparacaoCrm:crmConfirmado===null?'NAO_INFORMADO':'NAO_AVALIADO',
+        comparacaoRqe:rqeConfirmado===null?'NAO_INFORMADO':'NAO_AVALIADO',revisao:'NAO_SOLICITADA',
+        certificado:intencoes.includes('consultar_certificado')?'ALVO_INVALIDO':'NAO_SOLICITADO',acoesConcluidas:[]};
       const pretendidas=new Set(intencoes);
       if(!alvoValido)saida.resultados.push({ok:false,motivo:'ALVO_NAO_CONFIRMADO'});
       if(alvoValido&&pretendidas.has('definir_periodo')){
@@ -924,6 +930,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         if(r.ok){saida.fatos.periodo='registrado';saida.fatos.inicioPeriodo=inicioPeriodo;saida.acoesConcluidas.push('periodo_registrado');}
       }
       const decisoes=intencoes.filter(i=>['aprovar_registro','adiar_registro','corrigir_registro','recusar_registro'].includes(i));
+      if(decisoes.length&&!alvoValido)diagnostico.revisao='ALVO_INVALIDO';
+      if(alvoValido&&new Set(decisoes).size>1)diagnostico.revisao='INTENCOES_CONFLITANTES';
       if(alvoValido&&new Set(decisoes).size>1)saida.resultados.push({ok:false,motivo:'INTENCOES_CONFLITANTES'});
       if(alvoValido&&new Set(decisoes).size===1){
         const decisao=decisoes[0]!;
@@ -931,6 +939,12 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         const rqes=candidato&&'rqes' in candidato?candidato.rqes:candidato&&'rqe' in candidato&&candidato.rqe?[candidato.rqe]:[];
         const divergente=crmConfirmado!==null&&normalizarCrm(crmConfirmado)!==normalizarCrm(candidato?.crm)||
           rqeConfirmado!==null&&(rqes.length!==1||rqeConfirmado!==rqes[0]);
+        diagnostico.comparacaoCrm=crmConfirmado===null?'NAO_INFORMADO':
+          normalizarCrm(crmConfirmado)===normalizarCrm(candidato?.crm)?'COINCIDE':'DIVERGE';
+        diagnostico.comparacaoRqe=rqeConfirmado===null?'NAO_INFORMADO':
+          rqes.length===1&&rqeConfirmado===rqes[0]?'COINCIDE':'DIVERGE';
+        if(decisao==='aprovar_registro')diagnostico.revisao=!camposConfirmados.includes('crm')?'CRM_NAO_AUTORIZADO':
+          divergente?'REGISTRO_DIVERGENTE':revisao?.estado==='confirmada'?'JA_CONFIRMADO':'NAO_SOLICITADA';
         if(decisao==='aprovar_registro'&&(!camposConfirmados.includes('crm')||divergente))
           saida.resultados.push({ok:false,motivo:'REGISTRO_NAO_CONFIRMADO'});
         else if(decisao==='aprovar_registro'&&revisao?.estado==='confirmada')
@@ -940,6 +954,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           const confirmarRqe=camposConfirmados.includes('rqe')&&rqes.length===1;
           const r=await executarRevisao({profissional:medico.nome,decisao:mapa[decisao as keyof typeof mapa]},
             decisao==='aprovar_registro'?{confirmarRqe}:undefined);
+          diagnostico.revisao=r.ok?'EXECUTADA_SUCESSO':'EXECUTADA_FALHA';
           const gravado=r.ok&&'gravado' in r&&r.gravado;
           saida.resultados.push(gravado?{ok:true,gravado:true,crm:'crm' in r?r.crm:null,
             ...(confirmarRqe&&'rqe' in r?{rqe:r.rqe}:{}),camposGravados:confirmarRqe?['crm','rqe']:['crm']}:r);
@@ -955,7 +970,11 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(alvoValido&&pretendidas.has('consultar_certificado'))
         saida.resultados.push(deps.consultarProntidao?await orientarCertificado(medico.nome):{ok:false,motivo:'PRONTIDAO_NAO_CONFIGURADA'});
       if(certificadoResultado?.ok)saida.acoesConcluidas.push(certificadoResultado.certificadoValido?'certificado_verificado':'pagina_certificado_preparada');
-      registrar('continuar_onboarding','CONTINUIDADE_PROCESSADA',inicio);
+      if(alvoValido&&pretendidas.has('consultar_certificado'))diagnostico.certificado=certificadoResultado?.ok?
+        certificadoResultado.certificadoValido?'VALIDO':'PREPARADO':'RECUSADO';
+      diagnostico.acoesConcluidas=[...saida.acoesConcluidas];
+      deps.aoDiagnosticoContinuidade?.(diagnostico);
+      registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
       continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
       return {...saida,contratoResposta:{
         instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos e não recite o processo. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. A URL do certificado é anexada pelo transporte; não precisa copiá-la no texto.',
@@ -1209,12 +1228,16 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   const inicio = Date.now();
   const ferramentas: EventoFerramenta[] = [];
   let contratoFala:'VALIDO'|'INVALIDO'|undefined;
+  let rejeicaoFala:DiagnosticoAgente['rejeicaoFala'];
+  let continuidade:DiagnosticoAgente['continuidade'];
   const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) => {
     const temFerramenta=ferramentas.some(f=>f.nome==='confirmar_profissionais_descobertos');
     const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
     deps.aoDiagnostico?.({
       codigo,ferramentas:[...ferramentas],uso,duracaoMs:Math.max(0,Date.now()-inicio),
       ...(contratoFala?{contratoFala}:{}),
+      ...(rejeicaoFala?{rejeicaoFala}:{}),
+      ...(continuidade?{continuidade}:{}),
       estadoOnboarding:{
         vinculoConfirmadoNaConta:Boolean(profissionalComVinculoConfirmado(entrada)),
         perguntaPendente:entrada.estadoConversa?.perguntaPendente===undefined?'AUSENTE':entrada.estadoConversa.perguntaPendente,
@@ -1287,6 +1310,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoPeriodoConferencia:r=>{periodoTurno.atual=r;},
       aoCertificadoSeguro:r=>{certificadoTurno.atual=r;deps.aoCertificadoSeguro?.(r);},
       aoContinuidadeOnboarding:r=>{continuidadeTurno.atual=r;},
+      aoDiagnosticoContinuidade:r=>{continuidade=r;deps.aoDiagnosticoContinuidade?.(r);},
       aoLinkRegistro:r=>{linkRegistroTurno.atual=r;},
       registrarFerramenta: e => ferramentas.push(e)
     });
@@ -1338,14 +1362,20 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     if(continuidadeTurno.atual){
       try{
         const json=resposta.replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'');
-        const fala=falaContinuidadeSchema.parse(JSON.parse(json));
+        rejeicaoFala='JSON_INVALIDO';
+        const objeto=JSON.parse(json);
+        rejeicaoFala='FORMATO_INVALIDO';
+        const fala=falaContinuidadeSchema.parse(objeto);
         const r=continuidadeTurno.atual;
         const fatosIguais=Object.entries(r.fatos).every(([chave,valor])=>fala.fatos[chave as keyof typeof fala.fatos]===valor);
         const acoesIguais=[...fala.acoesConcluidas].sort().join('|')===[...r.acoesConcluidas].sort().join('|');
         // Valida o contrato de fatos e efeitos; não escolhe frases nem inspeciona vocabulário.
         if(fatosIguais&&acoesIguais){
+          rejeicaoFala=undefined;
           contratoFala='VALIDO';registrar('RESPOSTA',uso);return fala.texto;
         }
+        rejeicaoFala=!fatosIguais&&!acoesIguais?'FATOS_E_ACOES_DIVERGENTES':
+          !fatosIguais?'FATOS_DIVERGENTES':'ACOES_DIVERGENTES';
       }catch{/* Contrato inválido: usar somente os recibos verificados abaixo. */}
       contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO',uso);
     }
@@ -1466,6 +1496,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       return 'A leitura da '+fonte+' foi registrada. Vou continuar a conferência fora desta conversa e volto com os dados verificados.';
     }
     if(profissionalComVinculoConfirmado(entrada)){
+      rejeicaoFala='RUNNER_INTERROMPIDO';
       contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO');
       if(periodoTurno.atual?.ok)return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
       if(revisaoTurno.atual)return descreverRevisaoRegistro(revisaoTurno.atual,entrada,ferramentas,'',certificadoTurno.atual);

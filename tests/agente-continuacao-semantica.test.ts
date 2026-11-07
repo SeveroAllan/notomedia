@@ -2,6 +2,7 @@ import {describe,it,expect,vi} from 'vitest';
 import {ScriptedModel,assistantMessage,functionCall} from '@openai/agents/testing';
 import {criarAgenteNoto,responderAgente} from '../src/agente/agente.js';
 import type {EstadoConversa} from '../src/agente/estado-conversa.js';
+import type {DiagnosticoAgente} from '../src/agente/diagnostico.js';
 
 const ID='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const profissionais=[{id:ID,nome:'Dra. Ana Souza'}];
@@ -29,10 +30,59 @@ function preparar(intencoes:string[],texto:string,acoes:string[],crm='adiado',cr
   return {modelo,aprovarRegistroProfissional,consultarProntidao,registrarPeriodoConferencia,confirmarProfissionais,links,deps,entrada};
 }
 describe('continuidade semântica com resultados verificáveis',()=>{
+  it.each([
+    {intencoes:['conversar'],campos:[],crm:null,alvo:'Ana',revisao:'NAO_SOLICITADA',comparacao:'NAO_INFORMADO'},
+    {intencoes:['aprovar_registro'],campos:[],crm:'36948/RS',alvo:'Ana',revisao:'CRM_NAO_AUTORIZADO',comparacao:'COINCIDE'},
+    {intencoes:['aprovar_registro'],campos:['crm'],crm:'99999/RS',alvo:'Ana',revisao:'REGISTRO_DIVERGENTE',comparacao:'DIVERGE'},
+    {intencoes:['aprovar_registro','consultar_certificado'],campos:['crm'],crm:'36948/RS',alvo:'Bruno',revisao:'ALVO_INVALIDO',comparacao:'NAO_AVALIADO'}
+  ])('expõe o motivo de nenhuma ação sem argumentos sensíveis: $revisao',async(caso)=>{
+    const p=preparar(['conversar'],'Continuamos com o vínculo preservado.',[]);
+    const diagnosticos:DiagnosticoAgente[]=[];
+    const modelo=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:caso.alvo,intencoes:caso.intencoes,inicioPeriodo:null,
+        crmConfirmado:caso.crm,rqeConfirmado:null,camposConfirmados:caso.campos},{callId:'sem-acao'})],
+      [assistantMessage(JSON.stringify({texto:'Continuamos com o vínculo preservado.',fatos,acoesConcluidas:[]}))]
+    ]);
+    await responderAgente(p.entrada,{...p.deps,modeloTeste:modelo,aoDiagnostico:r=>diagnosticos.push(r)});
+    const ultimo=diagnosticos.at(-1)!;
+    expect(ultimo.continuidade).toMatchObject({intencoes:caso.intencoes,camposConfirmados:caso.campos,
+      alvoValido:caso.alvo==='Ana',revisao:caso.revisao,comparacaoCrm:caso.comparacao,acoesConcluidas:[]});
+    expect(ultimo.contratoFala).toBe('VALIDO');
+    expect(ultimo.ferramentas).toContainEqual(expect.objectContaining({nome:'continuar_onboarding',codigo:'CONTINUIDADE_SEM_ACAO'}));
+    expect(ultimo.rejeicaoFala).toBeUndefined();
+    expect(JSON.stringify(diagnosticos)).not.toMatch(/36948|99999|Ana|Bruno|https|bbbbbbbb/);
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(p.consultarProntidao).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
+  it.each([
+    {fatos:{...fatos,crm:'confirmado'},acoes:[],motivo:'FATOS_DIVERGENTES'},
+    {fatos,acoes:['crm_salvo'],motivo:'ACOES_DIVERGENTES'},
+    {fatos:{...fatos,crm:'confirmado'},acoes:['crm_salvo'],motivo:'FATOS_E_ACOES_DIVERGENTES'}
+  ])('identifica rejeição da fala sem expor conteúdo: $motivo',async(caso)=>{
+    const p=preparar(['conversar'],'Não executei ações.',[]);
+    const diagnosticos:DiagnosticoAgente[]=[];
+    const modelo=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:'Ana',intencoes:['conversar'],inicioPeriodo:null,
+        crmConfirmado:null,rqeConfirmado:null,camposConfirmados:[]},{callId:'contrato'})],
+      [assistantMessage(JSON.stringify({texto:'CONTEUDO_PRIVADO',fatos:caso.fatos,acoesConcluidas:caso.acoes}))]
+    ]);
+    const resposta=await responderAgente(p.entrada,{...p.deps,modeloTeste:modelo,aoDiagnostico:r=>diagnosticos.push(r)});
+    expect(resposta).not.toContain('CONTEUDO_PRIVADO');
+    expect(diagnosticos.at(-1)).toMatchObject({contratoFala:'INVALIDO',rejeicaoFala:caso.motivo});
+    expect(JSON.stringify(diagnosticos)).not.toContain('CONTEUDO_PRIVADO');
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
   it.each(['Pronto, confirmei o CRM da Ana. O acesso do certificado está aqui.',
     'O CRM ficou salvo. Para o A1, pode abrir o acesso abaixo.'])('atende CRM e certificado no mesmo turno com fala natural: %s',async(texto)=>{
     const p=preparar(['aprovar_registro','consultar_certificado'],texto,['crm_salvo','pagina_certificado_preparada'],'confirmado','36948/RS');
-    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
+    const diagnosticos:DiagnosticoAgente[]=[];
+    expect(await responderAgente(p.entrada,{...p.deps,aoDiagnostico:r=>diagnosticos.push(r)})).toBe(texto);
+    expect(diagnosticos.at(-1)?.continuidade).toMatchObject({
+      intencoes:['aprovar_registro','consultar_certificado'],camposConfirmados:['crm'],alvoValido:true,
+      comparacaoCrm:'COINCIDE',revisao:'EXECUTADA_SUCESSO',certificado:'PREPARADO',
+      acoesConcluidas:['crm_salvo','pagina_certificado_preparada']});
     expect(p.aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith(ID,{confirmarRqe:false});
     expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
     expect(p.confirmarProfissionais).not.toHaveBeenCalled();
