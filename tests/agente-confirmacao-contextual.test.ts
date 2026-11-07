@@ -288,7 +288,7 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
       const resposta=await responderAgente({texto,profissionais,estadoConversa:estado},{
         modeloTeste:modelo,consultarStatus:status,solicitarLinkRegistro
       });
-      expect(resposta).toMatch(/aceitou o link seguro/i);
+      expect(resposta).toContain('use a página para preencher os dados');
       expect(resposta).not.toContain('Já recebi seus dados');
       modelo.assertComplete();
     }
@@ -318,7 +318,7 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
       {decisao:'consultar',motivo:'ENVIO_INCERTO',ok:true,revo:false,
         trecho:'não vou reenviá-la às cegas'},
       {decisao:'consultar',motivo:'ACEITO_SEM_ENTREGA',ok:true,revo:false,
-        trecho:'ainda não confirmou entrega'},
+        trecho:'posso substituir o link com a sua autorização'},
       {decisao:'consultar',motivo:'FALHA_COMPROVADA',ok:false,revo:false,
         trecho:'falhou de forma comprovada'},
       {decisao:'consultar',motivo:'ENTREGUE',ok:true,revo:false,

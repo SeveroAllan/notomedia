@@ -75,7 +75,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(acessoSalvo),
       solicitarLinkAgenda,aoDiagnostico:diagnostico});
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('m1','amplimed');
-    expect(resposta).toContain('link seguro');
+    expect(resposta).toContain('A verificação da agenda começa ali.');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('LINK_ACEITO_PARA_ENVIO');
     modelo.assertComplete();
   });

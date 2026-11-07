@@ -977,7 +977,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
       continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
       return {...saida,contratoResposta:{
-        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos e não recite o processo. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. A URL do certificado é anexada pelo transporte; não precisa copiá-la no texto.',
+        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos. Conte o resultado que muda a situação da pessoa, o impedimento ou a próxima ação dela. Use etapas internas e itens já visíveis na conversa só como contexto. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. A URL do certificado é anexada pelo transporte; não precisa copiá-la no texto.',
         formato:{texto:'Sua resposta natural ao usuário',fatos:saida.fatos,acoesConcluidas:saida.acoesConcluidas}
       }};
     }
@@ -1098,11 +1098,7 @@ export function acompanhamentoVerificado(
   const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
   const agenda=entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
-  if(tem('LINK_ACEITO_PARA_ENVIO')) return [
-    `O pedido de envio do link seguro da ${nomeAgenda} foi aceito.`,
-    'Quando o link aparecer no WhatsApp, abra a página segura para conectar a agenda.',
-    'Depois que a conexão for confirmada, vou identificar os médicos na agenda.'
-  ].join(' ');
+  if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
   if(tem('CONEXAO_EXISTENTE')) return [
     `A agenda ${nomeAgenda} já está conectada.`,
     'Antes de vincular qualquer médico, precisamos verificar os profissionais na fonte.',
@@ -1134,7 +1130,7 @@ function descreverRevisaoRegistro(r:Parameters<NonNullable<DependenciasAgente['a
           : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
       if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
       return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
-        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'. Não alterei certificado nem parâmetros fiscais.';
+        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'.';
 }
 
 function descreverEstadoSemAcao(entrada:EntradaAgente):string{
@@ -1197,7 +1193,7 @@ function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidad
   switch(motivo){
     case 'ACEITO_API':
     case 'ACEITO_SEM_ENTREGA':
-      return troca+'O serviço aceitou o link seguro'+alvo+', mas o WhatsApp ainda não confirmou entrega. Posso conferir o recibo. Se não chegou, você pode autorizar a invalidação do anterior e uma nova solicitação.';
+      return troca+'Se o link seguro'+alvo+' apareceu na conversa, use a página para preencher os dados. Se não apareceu, posso substituir o link com a sua autorização.';
     case 'ENVIO_INCERTO':
       return troca+'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
     case 'FALHA_COMPROVADA':
@@ -1426,7 +1422,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       if(estado.estado==='ENTREGUE') return 'O WhatsApp confirmou a entrega do link da '+fonte+'. Ainda vou precisar da conexão autenticada para avançar.';
       if(estado.estado==='LIDO') return 'O WhatsApp registrou a leitura do link da '+fonte+'. Isso ainda não confirma o login na agenda.';
       if(estado.estado==='ERRO_COMPROVADO') return 'A entrega do link da '+fonte+' teve um erro comprovado. Não vou reenviar a credencial sem sua autorização.';
-      if(estado.comId) return 'O pedido de envio do link seguro da '+fonte+' foi aceito. Quando o link aparecer no WhatsApp, abra a página segura para continuar.';
+      if(estado.comId) return 'Se o link da '+fonte+' apareceu na conversa, abra a página segura. Se não apareceu, posso substituir o link com a sua autorização.';
       return 'Consultei o link da '+fonte+', mas a entrega ainda não está comprovada. Isso não quer dizer que houve uma falha.';
     }
     // Longa navegação virou trabalho registrado: não aguardar 62s no Runner.
