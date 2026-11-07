@@ -29,6 +29,7 @@ alter table public.noto_emissoes_comprovantes
 
 alter table public.solicitacoes_nota
   add column if not exists referencia_externa text,
+  add column if not exists competencia_emissao date,
   add column if not exists aguardando_cpf_medico boolean not null default false;
 
 create unique index if not exists idx_solicitacoes_medico_ref

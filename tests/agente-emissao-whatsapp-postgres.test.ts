@@ -58,6 +58,9 @@ it.runIf(Boolean(url))('duas autorizações geram uma solicitação e só o work
     expect((await Promise.all([autorizarEmissaoWhatsApp(pool,escopo,entrada),
       autorizarEmissaoWhatsApp(pool,escopo,{...entrada,mensagemRef:'teste-b'})])).sort()).toEqual(['enfileirada','ja_enfileirada']);
     expect((await pool.query('select count(*)::int n from solicitacoes_nota')).rows[0].n).toBe(1);
+    expect((await pool.query(`select s.competencia_emissao = (a.data_hora at time zone 'America/Sao_Paulo')::date igual
+      from solicitacoes_nota s join solicitacao_nota_agendamentos sa on sa.solicitacao_id=s.id
+      join agendamentos a on a.id=sa.agendamento_id`)).rows).toEqual([{igual:true}]);
     expect((await pool.query('select origem,lido from noto_auditoria_comprovantes')).rows).toEqual([{origem:'autorizacao_whatsapp',lido:null}]);
     expect(await new PostgresFilaRepositorio(pool,true,true).buscarETravarProximoItem('geral')).toBeNull();
     expect(await new PostgresFilaRepositorio(pool,true,true,{...escopo,agendamentoId:randomUUID()}).buscarETravarProximoItem('outro')).toBeNull();

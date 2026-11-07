@@ -21,13 +21,14 @@ export async function autorizarEmissaoWhatsApp(
     const { rows: [alvo] } = await client.query(`
       select a.paciente_id, a.servico_fiscal_id, a.origem, a.referencia_externa,
         to_char(a.data_hora at time zone 'America/Sao_Paulo', 'DD/MM/YYYY') data,
+        (a.data_hora at time zone 'America/Sao_Paulo')::date::text competencia,
         f.xdesc_serv, f.ctrib_nac, f.cnbs
       from public.agendamentos a
       join public.medicos m on m.id=a.medico_id and m.conta_id=$3
       join public.medico_perfil_fiscal pf on pf.medico_id=m.id
       join public.medico_servicos_fiscais f on f.id=a.servico_fiscal_id and f.medico_id=m.id
       where a.id=$1 and a.medico_id=$2 and a.valor_consulta_centavos=$4
-        and a.identificacao_profissional_confirmada and a.status='realizado'
+        and a.identificacao_profissional_confirmada and a.status='realizado' and a.data_hora<=now()
         and a.origem in ('tribemd','amplimed') and nullif(btrim(a.referencia_externa),'') is not null
         and pf.ambiente='homologacao' and pf.confirmado_pelo_medico
         and pf.cpf_cnpj_encriptado is not null and nullif(btrim(pf.serie_dps),'') is not null
@@ -54,10 +55,10 @@ export async function autorizarEmissaoWhatsApp(
     `, [escopo.medicoId,escopo.contaId,entrada.mensagemRef,entrada.valor]);
     const solicitacao = await client.query(`
       insert into public.solicitacoes_nota (medico_id,paciente_id,servico_fiscal_id,referencia_externa,
-        valor_servico_centavos,xdesc_serv,ctrib_nac,cnbs,datas_consulta_texto,origem,status,fila)
-      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'whatsapp','pronta','pronta') returning id
+        valor_servico_centavos,xdesc_serv,ctrib_nac,cnbs,datas_consulta_texto,competencia_emissao,origem,status,fila)
+      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,'whatsapp','pronta','pronta') returning id
     `, [escopo.medicoId,alvo.paciente_id,alvo.servico_fiscal_id,'whatsapp:'+chave,entrada.valor,
-      alvo.xdesc_serv,alvo.ctrib_nac,alvo.cnbs,alvo.data]);
+      alvo.xdesc_serv,alvo.ctrib_nac,alvo.cnbs,alvo.data,alvo.competencia]);
     const solicitacaoId = solicitacao.rows[0].id;
     await client.query(`
       insert into public.solicitacao_nota_agendamentos (solicitacao_id,agendamento_id,medico_id) values ($1,$2,$3)
