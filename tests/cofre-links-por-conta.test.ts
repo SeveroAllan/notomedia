@@ -4,7 +4,7 @@ import { LinksCofre } from '../src/cofre/links.js';
 import { cofreIdDaConta, contaDoCofreId } from '../src/cofre/identidade-conta.js';
 const A='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',B='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const telefone='5551999998888';
-function montar(conta:string=A,operador:string=telefone,contato:string=telefone){
+function montar(conta:string=A,operador:string=telefone,contato:string=telefone,agenda='tribemd'){
   const aoConcluirConta=vi.fn().mockResolvedValue(undefined);
   const chamadas:Array<{sql:string;params:unknown[]}>=[];
   const banco={ query:vi.fn(async(sql:string,params:unknown[]=[])=>{
@@ -16,13 +16,13 @@ function montar(conta:string=A,operador:string=telefone,contato:string=telefone)
     if(sql.includes('insert into cofre_links\n'))return {rows:[{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}]};
     if(sql.includes("values ($1, 'concluido')") && sql.includes('returning link_id'))return {rows:[{link_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}]};
     if(sql.includes('returning medico_id, conta_id'))return {rows:[{medico_id:null,conta_id:conta,
-      id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',agenda:'tribemd',destino_telefone:contato}]};
+      id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',agenda,destino_telefone:contato}]};
     return {rows:[],rowCount:1};
   }),release:vi.fn()};
   const pool={connect:vi.fn().mockResolvedValue(banco),query:banco.query} as unknown as pg.Pool;
   const cofre={status:vi.fn().mockResolvedValue({estado:'vazio',ativo:false}),iniciar:vi.fn().mockResolvedValue({estado:'conectando'})};
   const enviar=vi.fn().mockResolvedValue('enviado');
-  const links=new LinksCofre({pool,origem:'https://homologacao.example.test',cofre,enviar,aoConcluirConta});
+  const links=new LinksCofre({pool,origem:'https://homologacao.example.test',cofre,cofres:{amplimed:cofre},enviar,aoConcluirConta});
   return {links,cofre,enviar,banco,chamadas,aoConcluirConta};
 }
 describe('Cofre da conta sem qualquer registro em medicos',()=>{
@@ -97,4 +97,28 @@ describe('Cofre da conta sem qualquer registro em medicos',()=>{
     expect((await t.links.solicitarLinkConta(A,'tribemd',telefone)).motivo).toBe('COFRE_NAO_DISPONIVEL');
     expect(t.enviar).not.toHaveBeenCalled();
   });
+});
+
+it('encaminha o código Amplimed somente à tentativa ativa do mesmo titular',async()=>{
+  const t=montar(A,telefone,telefone,'amplimed');
+  await t.links.enviarCredencial('A'.repeat(43),{
+    email:'teste@example.invalid',senha:'senha-ficticia',consentimento:'amplimed-leitura-v1'
+  });
+  const espera=t.links.pedirCodigoAmplimed(cofreIdDaConta(A));
+  const mensagem=String(t.enviar.mock.calls[0]?.[1]);
+  const referencia=mensagem.match(/AMPLIMED ([a-f0-9]{8})/)?.[1];
+  expect(referencia).toBeDefined();
+  expect(t.enviar).toHaveBeenCalledExactlyOnceWith(cofreIdDaConta(A),mensagem,telefone);
+  expect(t.links.receberCodigoAmplimed(B,telefone,`AMPLIMED ${referencia} 111111`)).toBe(true);
+  expect(t.links.receberCodigoAmplimed(A,'5551999990000',`AMPLIMED ${referencia} 222222`)).toBe(true);
+  expect(t.links.receberCodigoAmplimed(A,telefone,'AMPLIMED deadbeef 333333')).toBe(true);
+  expect(t.links.receberCodigoAmplimed(A,telefone,`AMPLIMED ${referencia} 444444`)).toBe(true);
+  await expect(espera).resolves.toBe('444444');
+  expect(JSON.stringify(t.chamadas)).not.toContain('444444');
+  expect(t.links.receberCodigoAmplimed(A,telefone,`AMPLIMED ${referencia} 555555`)).toBe(true);
+  t.cofre.status.mockResolvedValue({estado:'atencao',ativo:false,codigo:'ACESSO_CAPTCHA'});
+  await t.links.concluir(cofreIdDaConta(A),false);
+  expect(t.aoConcluirConta).toHaveBeenCalledWith(A,expect.objectContaining({
+    agenda:'amplimed',conectado:false,motivoAcesso:'ACESSO_CAPTCHA'
+  }));
 });

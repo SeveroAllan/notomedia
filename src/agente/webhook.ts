@@ -83,6 +83,7 @@ export function criarRouterWebhookAgente(deps: {
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
+  receberCodigoAmplimed?: (contaId: string | null, telefone: string, texto: string) => boolean;
   atualizarEstadoLink?: (evento:unknown) => Promise<boolean>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string, opcoes?:{linkPreview:false}) => Promise<boolean>;
@@ -181,6 +182,13 @@ export function criarRouterWebhookAgente(deps: {
       );
       if (conta.rows.length > 1) { res.sendStatus(204); return; }
       contaId = conta.rows[0]?.conta_id ?? null;
+      if (deps.receberCodigoAmplimed?.(contaId, telefone, texto)) {
+        const bruto = (req as typeof req & { rawBody?: Buffer }).rawBody;
+        bruto?.fill(0);
+        req.body = {};
+        res.sendStatus(204);
+        return;
+      }
       // Somente SELECT sem resultado é evidência de conta ausente.
       // Uma falha de consulta cai no catch e jamais é tratada como ausência.
       const medicos = contaId ? await deps.pool.query(
