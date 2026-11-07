@@ -107,13 +107,23 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     p.modelo.assertComplete();
   });
   it('período é tratado semanticamente como escopo e a fala não vira histórico de emissão',async()=>{
-    const texto='O período começa em 1º de novembro. Podemos seguir com o A1.';
-    const p=preparar(['definir_periodo'],texto,['periodo_registrado','pagina_certificado_preparada'],'adiado',null,'2026-11-01');
-    p.entrada.texto='Desde 1 de novembro de 2026.';
-    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
-    expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,'2026-11-01');
-    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
-    expect(p.links).toHaveLength(1);
+    const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,'2023-10-20');
+    p.entrada.texto='Desde 20 de outubro.';
+    const solicitarTrabalho=vi.fn().mockResolvedValue({ok:true,estado:'iniciado'});
+    const consultarConferencia=vi.fn();
+    const ano=new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'America/Sao_Paulo'}).format();
+    const inicio=ano+'-10-20';
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date(ano+'-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,estadoConversa:{...p.entrada.estadoConversa,agendaEscolhida:'tribemd'}},
+        {...p.deps,consultarStatus:async()=>({tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}}),solicitarTrabalho,consultarConferencia});
+      expect(resposta).toContain('em andamento');
+      expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,inicio);
+      expect(solicitarTrabalho).toHaveBeenCalledExactlyOnceWith('conferencia_fiscal','tribemd',ID,inicio);
+      expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+      expect(p.links).toHaveLength(0);
+    } finally {vi.useRealTimers();}
     p.modelo.assertComplete();
   });
   it('contrato que inventa vínculo pendente é recusado sem transformar isso em gravação',async()=>{

@@ -195,7 +195,7 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     expect(estado).toMatchObject({periodoConferencia:{profissionalId:id,inicio:'2026-11-01'},
       perguntaPendente:null,pesquisasRegistro:{[id]:pesquisa}});
     const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
-    expect(texto).toContain('etapa=certificado');
+    expect(texto).not.toContain('etapa=certificado');
     expect(texto).not.toMatch(/não emite|36948/);
     expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
     modeloTeste.assertComplete();

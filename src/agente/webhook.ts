@@ -66,7 +66,7 @@ export function criarRouterWebhookAgente(deps: {
   registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
+  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
   solicitarTrabalho?: (pedido: PedidoTrabalhoNoto) => Promise<ResultadoEnfileirar>;
   listarTrabalhos?: (contaId: string, telefone: string, instancia: string) => Promise<SituacaoTrabalhoNoto[]>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
@@ -373,13 +373,13 @@ export function criarRouterWebhookAgente(deps: {
           }
         } : {}),
         ...(contaId && deps.solicitarTrabalho ? {
-          solicitarTrabalho: (tipo, fonte, medicoId) =>
+          solicitarTrabalho: (tipo, fonte, medicoId, inicioPeriodo) =>
             deps.solicitarTrabalho!({contaId:contaId!,instancia:evento.instance,
-              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId})
+              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId,...(inicioPeriodo?{inicioPeriodo}:{})})
         } : {}),
         ...(contaId && deps.consultarConferencia ? {
-          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida) =>
-            deps.consultarConferencia!(contaId!,medicoId,fonte),
+          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida, inicioPeriodo?:string) =>
+            deps.consultarConferencia!(contaId!,medicoId,fonte,...(inicioPeriodo?[inicioPeriodo] as const:[])),
           aoConferencia: (resultado: ResultadoConferencia) => {
             if (resultado.ok) conferenciaDaMensagem.atual=resultado;
           }
