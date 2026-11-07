@@ -551,7 +551,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   let vinculoNesteTurno=false;
   if (deps.confirmarProfissionais&&entrada.estadoConversa?.faseAgenda!=='VINCULO_CONFIRMADO') extras.push(tool({
     name:'confirmar_profissionais_descobertos',
-    description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Classifique a intenção da mensagem atual: confirmar somente com autorização explícita; negar quando recusar; corrigir quando contestar o nome; esclarecer quando for pergunta ou outro assunto. NÃO trate toda mensagem como confirmação. Só vincule alvo comprovado; com vários nomes, não suponha qual é o profissional. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
+    description:'Ferramenta obrigatória quando existir descoberta autenticada aguardando confirmação. Com um único profissional comprovado na agenda conectada da conta, use confirmar para antecipar o vínculo sem pedir nova confirmação. Use negar quando houver recusa, corrigir quando houver correção e esclarecer quando houver dúvida ou alvo incerto. Com vários nomes, confirmar exige pedido explícito com o nome. Não reler a agenda, não pesquisar CRM/RQE na mesma ferramenta.',
     parameters:z.object({
       agenda:z.enum(['tribemd','amplimed']),
       profissionalBase:z.string().nullable(),
