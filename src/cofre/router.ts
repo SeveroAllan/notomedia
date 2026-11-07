@@ -82,7 +82,13 @@ export function criarCofreContas(deps: {
         if (dir2fa) mkdirSync(dir2fa, { recursive: true, mode: 0o700 });
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
             verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
-            pedirCodigo2fa: dir2fa ? id => pedirCodigo2faPorArquivo(dir2fa, id) : undefined });
+            pedirCodigo2fa: async (id, canal) => {
+                if (homologacao && env.NOTO_AGENT_ATIVO === 'true' && env.NOTO_AGENT_ENVIO_ATIVO === 'true' &&
+                    canal === 'email' && links && contaDoCofreId(id)) {
+                    return links.pedirCodigoAmplimed(id);
+                }
+                return dir2fa ? pedirCodigo2faPorArquivo(dir2fa, id) : null;
+            } });
         if (origem && deps.enviarCofre) links = new LinksCofre({
             pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed },
             registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre,

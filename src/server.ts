@@ -184,8 +184,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
         recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
         recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
+      const falhaAmplimed = evento.motivoAcesso === 'ACESSO_CAPTCHA'
+        ? 'A Amplimed pediu uma confirmação de que você é humano. Abra a Amplimed no seu navegador, conclua essa etapa e depois peça um novo link seguro para tentar a conexão novamente.'
+        : evento.motivoAcesso === 'ACESSO_CODIGO_EMAIL_PENDENTE'
+          ? 'A verificação por e-mail da Amplimed ficou pendente. Peça um novo link seguro para iniciar outra tentativa e espere eu pedir o código antes de responder.'
+          : evento.motivoAcesso === 'ACESSO_RECUSADO'
+            ? 'A Amplimed recusou o acesso. Confira se você consegue entrar na Amplimed e peça um novo link seguro para corrigir os dados.'
+            : 'Ainda não consegui confirmar o login na Amplimed. Abra a Amplimed, confira se há alguma etapa pendente no acesso e peça um novo link seguro para tentar novamente.';
       const mensagens=!evento.conectado
-        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
+        ? evento.agenda==='amplimed' ? [falhaAmplimed]
+          : ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
         : nomes.length
           ? [`Conexão com a ${plataforma} confirmada.`,
             ...(andamento?[andamento]:[]),
@@ -427,6 +435,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       return consultarEntregaLink(pool,contaId,agenda);
     },
+    ...(config.notoPilotoRestrito ? { receberCodigoAmplimed: (contaId: string | null, telefone: string, texto: string) => {
+      const candidato = texto.trim();
+      if (/^\d{6}$/.test(candidato)) return true;
+      if (!/^amplimed\s+[a-f0-9]{8}(?:\s|$)/i.test(candidato)) return false;
+      if (contaId) cofres.links?.receberCodigoAmplimed(contaId, telefone, candidato);
+      return true;
+    } } : {}),
     atualizarEstadoLink: async entrada => {
       const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
         config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);

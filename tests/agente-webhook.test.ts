@@ -62,6 +62,22 @@ async function comServidor(
 }
 
 describe('Noto SDK — webhook autenticado e isolado', () => {
+  it('entrega o código Amplimed ao Cofre antes de gravar conversa ou chamar o modelo', async () => {
+    const receberCodigoAmplimed = vi.fn().mockReturnValue(true);
+    const { app, query, modeloTeste, enviar } = preparar({ receberCodigoAmplimed, persistirConversa: true });
+    const resposta = 'AMPLIMED deadbeef 444444';
+    const mensagem = {...evento, data:{...evento.data, message:{conversation:resposta}}};
+    await comServidor(app, async postar => {
+      expect((await postar(mensagem, 'invalido')).status).toBe(401);
+      expect(receberCodigoAmplimed).not.toHaveBeenCalled();
+      expect((await postar(mensagem)).status).toBe(204);
+    });
+    expect(receberCodigoAmplimed).toHaveBeenCalledExactlyOnceWith('conta-a', '5551999998888', resposta);
+    expect(query).toHaveBeenCalledOnce();
+    expect(JSON.stringify(query.mock.calls)).not.toContain('444444');
+    expect(modeloTeste.calls).toHaveLength(0);
+    expect(enviar).not.toHaveBeenCalled();
+  });
   it('usa o estado recuperado do Cofre no primeiro turno e exige a ferramenta', async () => {
     let estado:Record<string,unknown>={agendaEscolhida:'tribemd',
       descoberta:{agenda:'tribemd',nomes:['Alice Souza']}};

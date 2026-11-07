@@ -13,13 +13,13 @@ export class CofreAmplimed {
     private perfis: PerfisTribemd;
     constructor(private opcoes: { diretorio: string; chave: string; aoAlterarAcesso?: (medicoId: string) => void;
         /** Login de observação; sem ele a credencial só é guardada. */
-        verificar?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }) => Promise<CodigoLoginAmplimed>;
+        verificar?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: (canal?: 'email') => Promise<string | null> }) => Promise<CodigoLoginAmplimed>;
         /** Fallback assistido do desafio de 2FA (código transitório, vínculo à tentativa). Sem ele o desafio vira PRECISA_VERIFICACAO. */
-        pedirCodigo2fa?: (medicoId: string) => Promise<string | null>;
+        pedirCodigo2fa?: (medicoId: string, canal?: 'email') => Promise<string | null>;
         aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
         /** Leitura de observação da agenda do dia; sem ele a leitura fica indisponível. */
-        lerEventos?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }, diasAtras: number, detalhes?: boolean, codigoProfissional?: string) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean; motivo?: string }>;
-        listarProfissionais?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: () => Promise<string | null> }) => Promise<{ codigo: CodigoLoginAmplimed; profissionais: { codigo: string; nome: string }[] }> }) {
+        lerEventos?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: (canal?: 'email') => Promise<string | null> }, diasAtras: number, detalhes?: boolean, codigoProfissional?: string) => Promise<{ codigo: CodigoLoginAmplimed; dias: { data: string; eventos: { texto: string; cor: string; detalhe?: DetalheAmplimed | null }[] }[]; profissional: string | null; completo: boolean; motivo?: string }>;
+        listarProfissionais?: (credencial: { email: string; senha: string; estado?: EstadoNavegador; aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>; aoPedirCodigo2fa?: (canal?: 'email') => Promise<string | null> }) => Promise<{ codigo: CodigoLoginAmplimed; profissionais: { codigo: string; nome: string }[] }> }) {
         this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave);
     }
     private chave(id: string) { return 'amplimed-' + id; }
@@ -39,7 +39,7 @@ export class CofreAmplimed {
         const estado = p.estado;
         p.email = ''; p.senha = '';
         const pedir = this.opcoes.pedirCodigo2fa;
-        return { estado, aoPedirCodigo2fa: pedir ? () => pedir(id) : undefined,
+        return { estado, aoPedirCodigo2fa: pedir ? (canal?: 'email') => pedir(id, canal) : undefined,
             aoSalvarEstado: async (e: EstadoNavegador) => {
                 const q = await this.perfis.ler(this.chave(id));
                 try { if (q.senha) await this.perfis.salvar(this.chave(id), { ...q, estado: e }); }
@@ -86,7 +86,7 @@ export class CofreAmplimed {
         try { r = await this.tranca(id, () => this.opcoes.lerEventos!({ ...credencial, ...ganchos }, diasAtras, comDetalhes, codigoProfissional)); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
         if (r.motivo) return { ok: false as const, motivo: r.motivo };
-        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
+        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' || r.codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
         // Defesa em profundidade por cobertura, não por posição visual: cada data de hoje até "desde" deve existir exatamente uma vez.
@@ -118,7 +118,7 @@ export class CofreAmplimed {
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.listarProfissionais>>>;
         try { r = await this.tranca(id, () => this.opcoes.listarProfissionais!({ ...credencial, ...ganchos })); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
-        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
+        if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' || r.codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         return { ok: true as const, profissionais: r.profissionais };
     }
     /** Apaga a credencial e o estado do Amplimed deste médico. */
@@ -132,7 +132,9 @@ export class CofreAmplimed {
         const p = await this.perfis.ler(this.chave(id));
         try {
             const agora = new Date().toISOString();
-            const motivo = codigo === 'PRECISA_VERIFICACAO' || codigo === 'CAPTCHA' ? 'ACESSO_PRECISA_VERIFICACAO' : codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE';
+            const motivo = codigo === 'CAPTCHA' ? 'ACESSO_CAPTCHA'
+                : codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_CODIGO_EMAIL_PENDENTE'
+                : codigo === 'PRECISA_VERIFICACAO' ? 'ACESSO_PRECISA_VERIFICACAO' : codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE';
             if (p.senha) await this.perfis.salvar(this.chave(id), { ...p, cofre: { ...(p.cofre ?? { consentimentoEm: agora, atualizadoEm: agora, ativo: false, estado: 'salvo' }),
                 ativo: conectado, estado: conectado ? 'conectado' : 'atencao', verificadoEm: agora, atualizadoEm: agora, codigo: conectado ? undefined : motivo } });
         } finally { p.email = ''; p.senha = ''; }
