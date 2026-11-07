@@ -1,4 +1,4 @@
-import { janelaConferencia } from './leitura-atendimentos.js';
+import { extrairInicioConferencia, janelaConferencia } from './leitura-atendimentos.js';
 import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
 import OpenAI from 'openai';
 import type pg from 'pg';
@@ -36,7 +36,7 @@ export interface EntradaAgente {
 }
 type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?:string}|
   {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
-type DecisaoPeriodo = {ok:true;nome:string;inicio:string;conferencia?:string}|{ok:false;motivo:string};
+type DecisaoPeriodo = {ok:true;nome:string;inicio:string;conferencia?:string}|{ok:false;motivo:string;rejeicao?:DiagnosticoAgente['rejeicaoPeriodo']};
 
 type ResultadoContinuidade={
   fatos:{vinculo:'confirmado';crm:'pendente'|'adiado'|'confirmado';crmValor:string|null;periodo:'pendente'|'registrado';inicioPeriodo:string|null;emitiuNota:false;consultouNotas:boolean};
@@ -911,22 +911,21 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         deps.aoPeriodoConferencia?.({ok:false,motivo:decisao});
         return {ok:false,motivo:decisao,orientacao:'Converse sobre a dúvida ou o assunto atual. Não conclua nada sobre emissão.'};
       }
-      const hoje=janelaConferencia().fim;
-      const anos=[...new Set(entrada.texto.match(/\b(?:19|20)\d{2}\b/g)??[])];
-      if(inicio && /^\d{4}-\d{2}-\d{2}$/.test(inicio) && !anos.length)
-        inicio=hoje.slice(0,4)+inicio.slice(4);
-      if(!inicio || !/^\d{4}-\d{2}-\d{2}$/.test(inicio) || inicio>hoje ||
-        anos.length>1 || (anos.length===1 && inicio.slice(0,4)!==anos[0]) ||
-        /\b(?:ate|entre)\b/.test(normalizarNomeMedico(entrada.texto))){
+      const data = extrairInicioConferencia(entrada.texto, janelaConferencia().fim);
+      const anterior = entrada.estadoConversa?.periodoConferencia;
+      if ('motivo' in data || (anterior && !data.anoExplicito)) {
         registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
-        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER'});
+        // O campo do modelo é texto livre. Só formas de data podem ir ao diagnóstico.
+        const inicioModelo = inicio === null || /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/.test(inicio)
+          ? inicio : '[formato omitido]';
+        const motivo = data.motivo ?? 'ANO_NECESSARIO_PARA_SUBSTITUIR';
+        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER',rejeicao:{motivo,inicioModelo}});
         return {ok:false,motivo:'DATA_A_ESCLARECER'};
       }
+      inicio = data.inicio;
       periodoFinalizado=true;
       const medico=profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId);
-      const anterior=entrada.estadoConversa?.periodoConferencia;
-      const substituir=anos.length===1&&anterior&&anterior.profissionalId===medico?.id
-        ? anterior.inicio : undefined;
+      const substituir=anterior&&anterior.profissionalId===medico?.id ? anterior.inicio : undefined;
       const gravado=medico&&inicio&&deps.registrarPeriodoConferencia&&(exigeRegistroPeriodo(entrada,deps)||continuidadeExecutada&&Boolean(profissionalComVinculoConfirmado(entrada)))&&
         await deps.registrarPeriodoConferencia!(medico.id,inicio,...(substituir?[substituir] as const:[])).catch(()=>false);
       if(!gravado){
@@ -1294,6 +1293,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   let contratoFala:'VALIDO'|'INVALIDO'|undefined;
   let rejeicaoFala:DiagnosticoAgente['rejeicaoFala'];
   let continuidade:DiagnosticoAgente['continuidade'];
+  let rejeicaoPeriodo:DiagnosticoAgente['rejeicaoPeriodo'];
   const registrar = (codigo: DiagnosticoAgente['codigo'], uso = semUso()) => {
     const temFerramenta=ferramentas.some(f=>f.nome==='confirmar_profissionais_descobertos');
     const temPendencia=entrada.estadoConversa?.faseAgenda==='CONFIRMACAO_PENDENTE';
@@ -1302,6 +1302,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       ...(contratoFala?{contratoFala}:{}),
       ...(rejeicaoFala?{rejeicaoFala}:{}),
       ...(continuidade?{continuidade}:{}),
+      ...(rejeicaoPeriodo?{rejeicaoPeriodo}:{}),
       estadoOnboarding:{
         vinculoConfirmadoNaConta:Boolean(profissionalComVinculoConfirmado(entrada)),
         perguntaPendente:entrada.estadoConversa?.perguntaPendente===undefined?'AUSENTE':entrada.estadoConversa.perguntaPendente,
@@ -1371,7 +1372,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       aoConsultaEntregaLink: (agenda,estado) => {linkConsultado.atual={agenda,estado};},
       aoVinculoResultado:r=>{vinculoTurno.atual=r;},
       aoRevisaoRegistro:r=>{revisaoTurno.atual=r;},
-      aoPeriodoConferencia:r=>{periodoTurno.atual=r;},
+      aoPeriodoConferencia:r=>{periodoTurno.atual=r;if(!r.ok)rejeicaoPeriodo=r.rejeicao;},
       aoCertificadoSeguro:r=>{certificadoTurno.atual=r;deps.aoCertificadoSeguro?.(r);},
       aoContinuidadeOnboarding:r=>{continuidadeTurno.atual=r;},
       aoDiagnosticoContinuidade:r=>{continuidade=r;deps.aoDiagnosticoContinuidade?.(r);},

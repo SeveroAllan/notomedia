@@ -28,6 +28,10 @@ export interface DiagnosticoAgente {
     tokensTotal: number | null;
   };
   duracaoMs: number;
+  rejeicaoPeriodo?: {
+    motivo: 'INTERVALO_OU_MULTIPLAS_DATAS'|'DATA_NAO_IDENTIFICADA'|'DATA_INVALIDA'|'DATA_FUTURA'|'ANO_NECESSARIO_PARA_SUBSTITUIR';
+    inicioModelo: string|null;
+  };
   contratoFala?:'VALIDO'|'INVALIDO';
   rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO';
   continuidade?:{
