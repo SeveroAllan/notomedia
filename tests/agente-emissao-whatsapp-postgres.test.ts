@@ -135,17 +135,45 @@ it.runIf(Boolean(url))('duas autorizações geram uma solicitação e só o work
     `);
     await pool.query(readFileSync(new URL('../scripts/migrations/20261112-noto-atendimento-teste-aprovado.sql',import.meta.url),'utf8'));
     const telefone='5551999990000';
-    await pool.query('update pacientes set telefone=$1 where id=$2',[telefone,tomador]);
+    const tomadorTeste=randomUUID();
+    const chaves={pepper:'pepper-descartavel',criptografia:'chave-descartavel'};
+    await pool.query(`
+      create extension if not exists pgcrypto;
+      alter table pacientes add column origem_cadastro text default 'conversa',
+        add column cpf_cnpj_hash text,add column cpf_cnpj_encriptado bytea,
+        add column atualizado_em timestamptz,add unique(medico_id,telefone);
+      alter table agendamentos add column atualizado_em timestamptz;
+    `);
     await pool.query('insert into usuarios values ($1,true,$2,$3)',[escopo.contaId,randomUUID(),telefone]);
     const escopoTeste={...escopo,agendamentoId:randomUUID(),atendimentoTesteAtivo:true};
-    const dados={pacienteId:tomador,servicoId:servico,dataHora:'2026-01-15T15:00:00Z',valorCentavos:12345};
-    const {aprovacaoHash}=prepararAtendimentoTeste(escopoTeste,dados,telefone);
-    await expect(registrarAtendimentoTeste(pool,escopoTeste,{...dados,valorCentavos:100},telefone,aprovacaoHash))
+    const dados={pacienteId:tomadorTeste,servicoId:servico,dataHora:'2026-01-15T15:00:00Z',valorCentavos:12345,
+      tomador:{nome:'Tomador Sintético',cpf:'52998224725',telefone}};
+    const aprovar=(entrada:typeof dados)=>prepararAtendimentoTeste(escopoTeste,entrada,telefone,chaves.pepper).aprovacaoHash;
+    const registrar=(entrada:typeof dados,hash:string)=>registrarAtendimentoTeste(pool!,escopoTeste,entrada,telefone,hash,chaves);
+    const hashInicial=aprovar(dados);
+    await expect(registrar({...dados,tomador:{...dados.tomador,nome:'Outro Nome'}},hashInicial))
       .rejects.toThrow('APROVACAO_ATENDIMENTO_TESTE_DIVERGENTE');
-    await expect(registrarAtendimentoTeste(pool,escopoTeste,dados,'5551999990001',
-      prepararAtendimentoTeste(escopoTeste,dados,'5551999990001').aprovacaoHash))
-      .rejects.toThrow('ATENDIMENTO_TESTE_NAO_REGISTRADO');
-    await registrarAtendimentoTeste(pool,escopoTeste,dados,telefone,aprovacaoHash);
+    await expect(registrar({...dados,tomador:{...dados.tomador,telefone:'5551999990001'}},hashInicial))
+      .rejects.toThrow('TOMADOR_TESTE_FORA_DO_ESCOPO');
+    await expect(registrarAtendimentoTeste(pool,{...escopoTeste,atendimentoTesteAtivo:false},dados,telefone,hashInicial,chaves))
+      .rejects.toThrow('ATENDIMENTO_TESTE_FORA_DO_ESCOPO');
+    const dadosClinicos={...dados,pacienteId:tomador};
+    await expect(registrar(dadosClinicos,aprovar(dadosClinicos))).rejects.toThrow('TOMADOR_TESTE_NAO_REGISTRADO');
+    const atendimentoInvalido={...dados,servicoId:randomUUID()};
+    await expect(registrar(atendimentoInvalido,aprovar(atendimentoInvalido))).rejects.toThrow('ATENDIMENTO_TESTE_NAO_REGISTRADO');
+    expect((await pool.query('select id from pacientes where id=$1',[tomadorTeste])).rows).toHaveLength(0);
+
+    await registrar(dados,hashInicial);
+    const atualizados={...dados,tomador:{...dados.tomador,nome:'Tomador Sintético Revisado'}};
+    const aprovacaoHash=aprovar(atualizados);
+    await registrar(atualizados,aprovacaoHash);
+    expect((await pool.query(`
+      select nome,telefone,nome_validado,origem_cadastro,cpf_cnpj_hash is not null tem_hash,
+        pgp_sym_decrypt(cpf_cnpj_encriptado,$2)=$3 cpf_confere
+      from pacientes where id=$1
+    `,[tomadorTeste,chaves.criptografia,dados.tomador.cpf])).rows).toEqual([{
+      nome:'Tomador Sintético Revisado',telefone,nome_validado:true,origem_cadastro:'noto_teste_aprovado',tem_hash:true,cpf_confere:true
+    }]);
     const {rows:[registro]}=await pool.query(`
       select a.origem,t.aprovacao_hash from agendamentos a join noto_atendimentos_teste_aprovados t on t.agendamento_id=a.id
       where a.id=$1
@@ -183,7 +211,7 @@ it.runIf(Boolean(url))('duas autorizações geram uma solicitação e só o work
         }})
       });
       expect((await postar('pedido-teste',{conversation:'Quero emitir uma nota'})).status).toBe(200);
-      expect(saidas[0]).toContain('Tomador Sintético');
+      expect(saidas[0]).toContain('Tomador Sintético Revisado');
       expect(saidas[0]).toContain('123,45');
       expect((await postar('confirmacao-teste',{extendedTextMessage:{
         text:'Sim, pode emitir',contextInfo:{stanzaId:'balao-proposta-teste'}

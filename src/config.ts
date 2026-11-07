@@ -53,6 +53,7 @@ export interface AppConfig {
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
   notoPilotoRestrito?: boolean;
+  atendimentoTesteTomadorConfigurado?: boolean;
   atendimentoTesteWhatsApp?: EscopoEmissaoWhatsApp;
   emissaoWhatsAppPropostaAtiva?: boolean;
   emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
@@ -162,6 +163,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
     emissaoWhatsAppPropostaAtiva:propostaWhatsApp,
+    ...(atendimentoTesteAtivo && env['ENCRYPTION_KEY']?.trim() && env['APP_PEPPER']?.trim()
+      ? {atendimentoTesteTomadorConfigurado:true} : {}),
     ...(atendimentoTesteAtivo ? {atendimentoTesteWhatsApp:{...escopoWhatsApp,atendimentoTesteAtivo:true}} : {}),
     ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
     ...(workerWhatsApp ? {emissaoWhatsAppWorker:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
