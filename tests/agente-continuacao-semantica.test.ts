@@ -149,7 +149,11 @@ describe('continuidade semântica com resultados verificáveis',()=>{
   it.each([
     ['2026-12-20', 'DATA_FUTURA'],
     ['entre 20/10/2026 e 25/10/2026', 'INTERVALO_OU_MULTIPLAS_DATAS'],
-    ['31/10', 'ANO_NECESSARIO_PARA_SUBSTITUIR']
+    ['31/10', 'ANO_NECESSARIO_PARA_SUBSTITUIR'],
+    ['não é 2023, é desde 20 de outubro de 2026', 'MULTIPLOS_ANOS'],
+    ['até outubro', 'INTERVALO_OU_MULTIPLAS_DATAS'],
+    ['não é desde 20 de outubro de 2026', 'DATA_NEGADA'],
+    ['Minha consulta foi em 20/10/2026', 'DATA_SEM_ESCOPO_CLARO']
   ])('esclarece e diagnostica a rejeição: %s', async (texto, motivo) => {
     const p=preparar(['definir_periodo'],'Certo.', [],'adiado',null,'20/10/2026');
     const aoDiagnostico=vi.fn();
@@ -161,7 +165,7 @@ describe('continuidade semântica com resultados verificáveis',()=>{
       expect(resposta).toContain('Qual é a data inicial');
       expect(p.registrarPeriodoConferencia).not.toHaveBeenCalled();
       expect(aoDiagnostico).toHaveBeenCalledWith(expect.objectContaining({
-        rejeicaoPeriodo:{motivo,inicioModelo:'20/10/2026'}
+        rejeicaoPeriodo:{motivo}
       }));
     } finally {vi.useRealTimers();}
   });

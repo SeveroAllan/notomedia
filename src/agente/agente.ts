@@ -915,11 +915,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       const anterior = entrada.estadoConversa?.periodoConferencia;
       if ('motivo' in data || (anterior && !data.anoExplicito)) {
         registrar('registrar_periodo_conferencia','ESCLARECIMENTO',comeco);
-        // O campo do modelo é texto livre. Só formas de data podem ir ao diagnóstico.
-        const inicioModelo = inicio === null || /^\d{1,4}[-/]\d{1,2}[-/]\d{1,4}$/.test(inicio)
-          ? inicio : '[formato omitido]';
         const motivo = data.motivo ?? 'ANO_NECESSARIO_PARA_SUBSTITUIR';
-        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER',rejeicao:{motivo,inicioModelo}});
+        deps.aoPeriodoConferencia?.({ok:false,motivo:'DATA_A_ESCLARECER',rejeicao:{motivo}});
         return {ok:false,motivo:'DATA_A_ESCLARECER'};
       }
       inicio = data.inicio;
