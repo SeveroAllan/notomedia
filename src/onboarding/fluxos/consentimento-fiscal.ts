@@ -15,6 +15,7 @@ export async function registrarConsentimentoFiscal(pool: Pick<pg.Pool, 'query'>,
 /** Consentimento permite tentar a adoção; todas as validações fiscais continuam determinísticas. */
 export async function adotarReferenciaConsentida(deps: {
   pool: pg.Pool; preparacaoFiscalAtiva: boolean;
+  contaPilotoHomologacao?:string;
   confirmar?: typeof confirmarParametrosFiscais;
   registrar?: (evento: Record<string, unknown>) => void;
 }, medicoId: string, referenciaHash: unknown): Promise<{ ok: boolean; codigo?: string; detalhe?: string }> {
@@ -27,7 +28,8 @@ export async function adotarReferenciaConsentida(deps: {
       and a.dados_novos->>'versao' = $2 limit 1`, [medicoId, versaoConsentimentoFiscal]);
   if (!consentimento.rows.length) return { ok: false, codigo: 'CONSENTIMENTO_NAO_REGISTRADO' };
   try {
-    await (deps.confirmar ?? confirmarParametrosFiscais)(deps.pool, { medicoId, referenciaHash, usarReferencia: true });
+    await (deps.confirmar ?? confirmarParametrosFiscais)(deps.pool, { medicoId, referenciaHash, usarReferencia: true },
+      ...(deps.contaPilotoHomologacao?[deps.contaPilotoHomologacao] as const:[]));
     return { ok: true };
   } catch (erro: any) {
     const codigo = erro?.codigo || 'ADOTAR_REFERENCIA_FALHOU';

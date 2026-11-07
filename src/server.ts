@@ -869,6 +869,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }
   });
 
+  const escopoFiscalPiloto = (medicoId:string) =>
+    config.ambienteEmissaoWhatsApp?.medicoId === medicoId
+      ? {contaPilotoHomologacao:config.ambienteEmissaoWhatsApp.contaId} : {};
+
   // Nova consulta usando o A1 já armazenado; nenhuma cidade é fixada no código.
   app.post('/api/onboarding/buscar-referencia', async (req: Request, res: Response) => {
     try {
@@ -883,10 +887,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       console.info('[ADN] Busca de referência concluída:', consulta.resumo);
       const fiscal = await processarOnboardingXml({
         pool, supabase: authAdminService.supabaseClient,
-        documentoTitularEsperado: titular.documentoTitular, chaveCriptografia: config.encryptionKey, pepperCpf: config.appPepper
+        documentoTitularEsperado: titular.documentoTitular, chaveCriptografia: config.encryptionKey, ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
       },
         medicoId, consulta.documento.xml);
-      const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
+      const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
         medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
       return res.json({ ...fiscal, medicoId, fonte: 'adn', nsu: consulta.documento.nsu, adocaoFiscal });
@@ -914,7 +918,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           documentoTitularEsperado,
           supabase: authAdminService.supabaseClient,
           chaveCriptografia: config.encryptionKey,
-          pepperCpf: config.appPepper
+          ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
         },
         medicoId,
         xmlString
@@ -945,6 +949,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const { medicoId } = medicoAutorizado(res);
+      const {contaPilotoHomologacao}=escopoFiscalPiloto(medicoId);
       await confirmarParametrosFiscais(pool, usarReferencia === true ? { medicoId, referenciaHash, usarReferencia: true } : {
         medicoId,
         razaoSocial,
@@ -956,7 +961,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         parametrosEmissao,
         referenciaHash,
         usarReferencia: usarReferencia === true
-      });
+      }, ...(contaPilotoHomologacao?[contaPilotoHomologacao] as const:[]));
 
       return res.json({ ok: true, mensagem: 'Parâmetros fiscais confirmados com sucesso', medicoId });
     } catch (err: any) {
@@ -1026,13 +1031,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             documentoTitularEsperado: documentoTitular,
             supabase: authAdminService.supabaseClient,
             chaveCriptografia: config.encryptionKey,
-            pepperCpf: config.appPepper
+            ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
           },
           medicoId,
           consulta.documento.xml
         );
 
-        const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
+        const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
           medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
         return res.json({

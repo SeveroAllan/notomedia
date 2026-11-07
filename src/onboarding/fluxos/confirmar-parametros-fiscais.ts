@@ -22,9 +22,11 @@ export type ConfirmarParametrosInput = {
 
 export async function confirmarParametrosFiscais(
   pool: pg.Pool,
-  input: ConfirmarParametrosInput
+  input: ConfirmarParametrosInput,
+  contaPilotoHomologacao?:string
 ): Promise<void> {
-  if (input.usarReferencia || input.parametrosEmissao !== undefined) return confirmarPoliticaEmissao(pool, input);
+  if (input.usarReferencia || input.parametrosEmissao !== undefined) return confirmarPoliticaEmissao(pool, input, contaPilotoHomologacao);
+  if (contaPilotoHomologacao) throw new Error('PILOTO_EXIGE_POLITICA_FISCAL_REVISADA');
   const { medicoId, razaoSocial, especialidade, aliquotaIss, serieDps, proximoNumeroDps, opcaoSimplesNacional } = input;
 
   const sqlPerfil = `

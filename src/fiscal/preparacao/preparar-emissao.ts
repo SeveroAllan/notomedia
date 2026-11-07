@@ -12,13 +12,15 @@ export interface EvidenciasEmissao {
   competenciaInformada: string | null;
   datasConsultas: string[];
 }
-export function prepararEmissao(item: SolicitacaoEmissaoItem, evidencias: EvidenciasEmissao, hoje: string) {
+export function prepararEmissao(item: SolicitacaoEmissaoItem, evidencias: EvidenciasEmissao, hoje: string, ambientePiloto?:'homologacao') {
   const pendencias: PendenciaFiscal[] = [];
   const adicionar = (campo: string, codigo: string, mensagem: string) => pendencias.push({ campo, codigo, mensagem });
   if (!evidencias.perfil.confirmado) adicionar('perfil', 'PERFIL_NAO_CONFIRMADO', 'Revisar e confirmar os parâmetros do emitente.');
   if (evidencias.servicos.length !== 1) adicionar('servico', 'SERVICO_AMBIGUO', 'Vincular um único serviço fiscal ativo a esta solicitação.');
   const servico = evidencias.servicos.length === 1 ? evidencias.servicos[0] : undefined;
   const politica = servico?.politica;
+  const ambienteEscopado = ambientePiloto === 'homologacao' &&
+    politica?.perfil?.ambiente === 'homologacao' && evidencias.perfil.ambiente === 'homologacao';
   const validado = parametrosEmissaoSchema.safeParse(politica?.parametros);
   if (!politica?.confirmadoEm || !Number.isFinite(Date.parse(politica.confirmadoEm)) || politica.origem !== 'revisao_onboarding') {
     adicionar('parametros', 'PARAMETROS_NAO_CONFIRMADOS', 'Revisar os parâmetros de emissão do serviço e confirmar sua validade.');
@@ -46,7 +48,7 @@ export function prepararEmissao(item: SolicitacaoEmissaoItem, evidencias: Eviden
     for (const campo of ['ambiente', 'opcao', 'regime', 'especial', 'municipio', 'serie', 'referencia'] as const) {
       if (politica.perfil?.[campo] !== perfil[campo]) adicionar(`perfil.${campo}`, 'PERFIL_ALTERADO', 'O perfil mudou após a revisão dos parâmetros. Confirmar novamente.');
     }
-    if (validado.success && (validado.data.ambiente !== perfil.ambiente || validado.data.opcaoSimplesNacional !== perfil.opcao ||
+    if (validado.success && ((!ambienteEscopado && validado.data.ambiente !== perfil.ambiente) || validado.data.opcaoSimplesNacional !== perfil.opcao ||
       validado.data.regimeEspecialTributacao !== perfil.especial ||
       (perfil.opcao === 'me_epp' && validado.data.regimeApuracaoSn !== perfil.regime))) {
       adicionar('regime', 'REGIME_DIVERGENTE', 'Os parâmetros confirmados precisam corresponder ao perfil fiscal.');
@@ -62,9 +64,10 @@ export function prepararEmissao(item: SolicitacaoEmissaoItem, evidencias: Eviden
   if (!Number.isSafeInteger(item.valorServicoCentavos) || item.valorServicoCentavos <= 0) adicionar('valor', 'VALOR_INVALIDO', 'Informar o valor positivo do serviço em centavos.');
   if (!item.xdescServ.trim()) adicionar('descricao', 'DESCRICAO_AUSENTE', 'Informar a descrição do serviço realizado.');
   if (pendencias.length || !validado.success || !servico || !competencia) return { ok: false as const, pendencias };
-  return { ok: true as const, parametros: validado.data, competencia, servico,
+  const parametros = ambienteEscopado ? {...validado.data,ambiente:'homologacao' as const} : validado.data;
+  return { ok: true as const, parametros, competencia, servico,
     origem: { versao: 1, servicoId: servico.id, parametrosConfirmadosEm: politica!.confirmadoEm,
       referenciaHash: politica!.referenciaHash,
       competencia: 'data_emissao', classificacao: 'servico_revisado',
-      dadosAplicados: { competencia, ctribNac: servico.ctribNac, cnbs: servico.cnbs, ctribMun: servico.ctribMun, parametros: validado.data } } };
+      dadosAplicados: { competencia, ctribNac: servico.ctribNac, cnbs: servico.cnbs, ctribMun: servico.ctribMun, parametros } } };
 }

@@ -55,6 +55,7 @@ export interface AppConfig {
   notoPilotoRestrito?: boolean;
   atendimentoTesteTomadorConfigurado?: boolean;
   atendimentoTesteWhatsApp?: EscopoEmissaoWhatsApp;
+  ambienteEmissaoWhatsApp?: EscopoEmissaoWhatsApp & {ambiente:'homologacao'};
   emissaoWhatsAppPropostaAtiva?: boolean;
   emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
   emissaoWhatsAppWorker?: EscopoEmissaoWhatsApp;
@@ -68,12 +69,15 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
   if (propostaWhatsApp && !produtorWhatsApp) throw new Error('PROPOSTA_WHATSAPP_EXIGE_PRODUTOR');
   const workerWhatsApp = env['NOTO_EMISSAO_WHATSAPP_WORKER_ATIVO'] === 'true';
   const atendimentoTesteAtivo = env['NOTO_EMISSAO_WHATSAPP_ATENDIMENTO_TESTE_ATIVO'] === 'true';
+  const ambienteEmissaoWhatsApp = env['NOTO_EMISSAO_WHATSAPP_AMBIENTE']?.trim();
+  if (ambienteEmissaoWhatsApp && ambienteEmissaoWhatsApp !== 'homologacao')
+    throw new Error('EMISSAO_WHATSAPP_AMBIENTE_INVALIDO');
   const escopoWhatsApp = {
     contaId: env['NOTO_EMISSAO_WHATSAPP_CONTA_ID'] ?? '',
     medicoId: env['NOTO_EMISSAO_WHATSAPP_MEDICO_ID'] ?? '',
     agendamentoId: env['NOTO_EMISSAO_WHATSAPP_AGENDAMENTO_ID'] ?? ''
   };
-  if (produtorWhatsApp || workerWhatsApp || atendimentoTesteAtivo) {
+  if (produtorWhatsApp || workerWhatsApp || atendimentoTesteAtivo || ambienteEmissaoWhatsApp) {
     const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
     const destino = (env['ENVIO_REAL_ALLOWLIST'] ?? '').trim();
     if (env['NOTO_PILOTO_RESTRITO'] !== 'true' || !/^55\d{10,11}$/.test(destino) ||
@@ -162,6 +166,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
+    ...(ambienteEmissaoWhatsApp === 'homologacao' ? {ambienteEmissaoWhatsApp:{...escopoWhatsApp,ambiente:ambienteEmissaoWhatsApp}} : {}),
     emissaoWhatsAppPropostaAtiva:propostaWhatsApp,
     ...(atendimentoTesteAtivo && env['ENCRYPTION_KEY']?.trim() && env['APP_PEPPER']?.trim()
       ? {atendimentoTesteTomadorConfigurado:true} : {}),

@@ -65,7 +65,8 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly modoAgenteConservador = false,
     private readonly preparacaoFiscalAtiva = false,
     private readonly retomadaRecusaAtiva = false,
-    private readonly pilotoWhatsApp = false
+    private readonly pilotoWhatsApp = false,
+    private readonly ambientePiloto?:'homologacao'
   ) {}
 
   /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
@@ -130,7 +131,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     }
 
     const preparacao = this.preparacaoFiscalAtiva
-      ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }))
+      ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }), this.pilotoWhatsApp ? this.ambientePiloto : undefined)
       : undefined;
     if (preparacao && !preparacao.ok) {
       return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
