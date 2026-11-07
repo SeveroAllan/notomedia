@@ -86,6 +86,7 @@ export class CofreAmplimed {
         try { r = await this.tranca(id, () => this.opcoes.lerEventos!({ ...credencial, ...ganchos }, diasAtras, comDetalhes, codigoProfissional)); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
         if (r.motivo) return { ok: false as const, motivo: r.motivo };
+        if (r.codigo === 'ASSINATURA_INATIVA') return { ok: false as const, motivo: r.codigo };
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' || r.codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         if (!r.profissional) return { ok: false as const, motivo: 'PROFISSIONAL_NAO_IDENTIFICADO' };
         if (!r.completo || r.dias.length !== diasAtras + 1) return { ok: false as const, motivo: 'LEITURA_INCOMPLETA' };
@@ -118,6 +119,7 @@ export class CofreAmplimed {
         let r: Awaited<ReturnType<NonNullable<typeof this.opcoes.listarProfissionais>>>;
         try { r = await this.tranca(id, () => this.opcoes.listarProfissionais!({ ...credencial, ...ganchos })); } catch { return { ok: false as const, motivo: 'INSTABILIDADE' }; }
         finally { credencial.email = ''; credencial.senha = ''; }
+        if (r.codigo === 'ASSINATURA_INATIVA') return { ok: false as const, motivo: r.codigo };
         if (r.codigo !== 'CONECTADO') return { ok: false as const, motivo: r.codigo === 'PRECISA_VERIFICACAO' || r.codigo === 'CAPTCHA' || r.codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_PRECISA_VERIFICACAO' : r.codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE' };
         return { ok: true as const, profissionais: r.profissionais };
     }
@@ -132,7 +134,8 @@ export class CofreAmplimed {
         const p = await this.perfis.ler(this.chave(id));
         try {
             const agora = new Date().toISOString();
-            const motivo = codigo === 'CAPTCHA' ? 'ACESSO_CAPTCHA'
+            const motivo = codigo === 'ASSINATURA_INATIVA' ? 'ASSINATURA_INATIVA'
+                : codigo === 'CAPTCHA' ? 'ACESSO_CAPTCHA'
                 : codigo === 'CODIGO_EMAIL_PENDENTE' ? 'ACESSO_CODIGO_EMAIL_PENDENTE'
                 : codigo === 'PRECISA_VERIFICACAO' ? 'ACESSO_PRECISA_VERIFICACAO' : codigo === 'SENHA_RECUSADA' ? 'ACESSO_RECUSADO' : 'INSTABILIDADE';
             if (p.senha) await this.perfis.salvar(this.chave(id), { ...p, cofre: { ...(p.cofre ?? { consentimentoEm: agora, atualizadoEm: agora, ativo: false, estado: 'salvo' }),

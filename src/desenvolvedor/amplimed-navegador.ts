@@ -5,7 +5,7 @@ import { dominioAprovado } from '../agenda/agendas-suportadas.js';
 import type { EstadoNavegador } from './tribemd-perfil.js';
 
 export const loginAmplimed = 'https://app.amplimed.com.br/';
-export type CodigoLoginAmplimed = 'CONECTADO' | 'SENHA_RECUSADA' | 'PRECISA_VERIFICACAO' | 'CAPTCHA' | 'CODIGO_EMAIL_PENDENTE' | 'FORMULARIO_NAO_RECONHECIDO' | 'TEMPO_ESGOTADO' | 'NAVEGADOR_INDISPONIVEL';
+export type CodigoLoginAmplimed = 'CONECTADO' | 'SENHA_RECUSADA' | 'PRECISA_VERIFICACAO' | 'CAPTCHA' | 'CODIGO_EMAIL_PENDENTE' | 'ASSINATURA_INATIVA' | 'FORMULARIO_NAO_RECONHECIDO' | 'TEMPO_ESGOTADO' | 'NAVEGADOR_INDISPONIVEL';
 
 const acaoNoCaminho = /(?:^|\/)(?:logout|sair|delete|remove|update|create|save|excluir|salvar|editar|novo|cancelar|deletar)(?:\/|$)/i;
 
@@ -59,6 +59,10 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
   const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   let caminho = '';
   try { caminho = new URL(t.url).pathname; } catch { /* sem caminho */ }
+  if (t.senhasVisiveis === 0 && /^\/conta\/?$/.test(caminho) && dominioAprovado('amplimed', t.url) &&
+      /gestao de assinatura/.test(texto) && /assinar agora|sem assinatura ativa/.test(texto)) {
+    return 'ASSINATURA_INATIVA';
+  }
   if (/^\/2fa(\/|$)/.test(caminho)) return conviteDoisFatoresAmplimed(t) ? (conviteDoisFatoresObrigatorio(t) ? 'PRECISA_VERIFICACAO' : 'AGUARDANDO') : 'PRECISA_VERIFICACAO';
   if (desafioDoisFatoresAmplimed(t)) return 'PRECISA_VERIFICACAO';
   if (/recaptcha|nao sou (um )?robo|i'm not a robot/.test(texto) && t.senhasVisiveis > 0) return 'CAPTCHA';
@@ -141,7 +145,9 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       await page.waitForTimeout(2500);
       try {
         const tela0 = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
-        if (classificarTelaAmplimed(tela0) === 'CONECTADO') {
+        const estadoInicial = classificarTelaAmplimed(tela0);
+        if (estadoInicial === 'ASSINATURA_INATIVA') return estadoInicial;
+        if (estadoInicial === 'CONECTADO') {
           console.warn('AMPLIMED_SESSAO reutilizada');
           if (opcoes.aoConectar) { try { await opcoes.aoConectar(page); } catch { console.warn('AMPLIMED_LEITURA etapa=falha'); } }
           if (opcoes.aoSalvarEstado) { try { await opcoes.aoSalvarEstado(filtrarEstadoAmplimed(await context.storageState())); } catch { console.warn('AMPLIMED_SESSAO salvar_falhou'); } }

@@ -184,7 +184,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
         recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
         recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
-      const falhaAmplimed = evento.motivoAcesso === 'ACESSO_CAPTCHA'
+      const falhaAmplimed = evento.motivoAcesso === 'ASSINATURA_INATIVA'
+        ? 'Consegui entrar na Amplimed. A conta está sem assinatura ativa, e a Amplimed bloqueia a agenda. Para eu conseguir ler os atendimentos, a assinatura precisa estar ativa.'
+        : evento.motivoAcesso === 'ACESSO_CAPTCHA'
         ? 'A Amplimed pediu uma confirmação de que você é humano. Abra a Amplimed no seu navegador, conclua essa etapa e depois peça um novo link seguro para tentar a conexão novamente.'
         : evento.motivoAcesso === 'ACESSO_CODIGO_EMAIL_PENDENTE'
           ? 'A verificação por e-mail da Amplimed ficou pendente. Peça um novo link seguro para iniciar outra tentativa e espere eu pedir o código antes de responder.'
@@ -383,6 +385,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       relatar:(codigo,duracaoMs,tipo)=>
         console.info('NOTO_AGENT_TRABALHO',JSON.stringify({codigo,duracaoMs,tipo}))
     }) : {parar:async()=>{}};
+  let proximoLogSemNumeroPn = 0;
   app.use('/webhook/evolution', criarRouterWebhookAgente({
     pool,
     ativo: Boolean(config.notoAgentAtivo),
@@ -453,7 +456,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(recibo)console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(recibo));
       }
       // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
-      console.info('NOTO_RECIBO_LINK',codigo);
+      if (codigo !== 'SEM_NUMERO_PN' || Date.now() >= proximoLogSemNumeroPn) {
+        console.info('NOTO_RECIBO_LINK', codigo);
+        if (codigo === 'SEM_NUMERO_PN') proximoLogSemNumeroPn = Date.now() + 60_000;
+      }
       return codigo==='ATUALIZADO';
     },
     descobrirProfissionais: descobrirProfissionaisConta,
