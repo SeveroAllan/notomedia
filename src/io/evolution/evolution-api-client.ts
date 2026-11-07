@@ -145,6 +145,10 @@ export class EvolutionApiClient
   }
 
   async enviarPdf(params: EnviarPdfDanfseParams): Promise<ResultadoEnvioPdf> {
+    return this.enviarDocumento(params, 'application/pdf');
+  }
+
+  async enviarDocumento(params: EnviarPdfDanfseParams, mimetype: 'application/pdf'|'application/xml'): Promise<ResultadoEnvioPdf> {
     if(params.instanciaNome===this.instanciaSomenteOtp)return {sucesso:false,erro:'CANAL_OFICIAL_SOMENTE_OTP'};
     const url = `${this.baseUrl.replace(/\/$/, '')}/message/sendMedia/${params.instanciaNome}`;
     try {
@@ -170,7 +174,7 @@ export class EvolutionApiClient
         body: JSON.stringify({
           number: telNormalizado,
           mediatype: 'document',
-          mimetype: 'application/pdf',
+          mimetype,
           media: mediaPayload,
           fileName: params.nomeArquivo,
           caption: params.legenda || 'Segue sua Nota Fiscal de Serviços (NFS-e).'

@@ -1,3 +1,4 @@
+import { tratarComandoEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
@@ -403,6 +404,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
     diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    ...(config.emissaoWhatsAppProdutor ? {
+      autorizarEmissaoWhatsApp: (contaId:string,texto:string,mensagemRef:string) =>
+        tratarComandoEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,contaId,texto,mensagemRef)
+    } : {}),
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
     ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
