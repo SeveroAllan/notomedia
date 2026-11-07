@@ -54,6 +54,21 @@ export type ConfigPrestadorCompleto = ConfigPrestador & {
   proximoNumeroDps?: number;
 };
 
+export async function gravarXmlNota(
+  storage: SupabaseClient['storage'], caminho: string, xml: string, pilotoWhatsApp: boolean
+) {
+  const enviar = () => storage.from('notas').upload(caminho, Buffer.from(xml, 'utf8'), {
+    contentType: 'application/xml', upsert: true
+  });
+  let resultado = await enviar();
+  if (pilotoWhatsApp && /bucket.*not found/i.test(resultado.error?.message ?? '')) {
+    const { error } = await storage.createBucket('notas', { public: false });
+    if (error && Number(error.statusCode) !== 409 && !/already exists|duplicate/i.test(error.message)) throw error;
+    resultado = await enviar();
+  }
+  if (resultado.error && pilotoWhatsApp) throw resultado.error;
+}
+
 export class PostgresEmissorDpsService implements EmissorDpsService {
   constructor(
     private readonly pool: pg.Pool,
@@ -509,13 +524,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const xmlStoragePath = `notas/${item.medicoId}/${anoMes}/${chaveAcessoFinal}.xml`;
     if (this.supabaseClient && xmlAutorizadoFinal) {
       try {
-        const { error } = await this.supabaseClient.storage
-          .from('notas')
-          .upload(xmlStoragePath, Buffer.from(xmlAutorizadoFinal, 'utf-8'), {
-            contentType: 'application/xml',
-            upsert: true
-          });
-        if (error && this.pilotoWhatsApp) throw error;
+        await gravarXmlNota(this.supabaseClient.storage, xmlStoragePath, xmlAutorizadoFinal, this.pilotoWhatsApp);
       } catch (err: any) {
         console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote || this.pilotoWhatsApp ? 'XML_STORAGE_FALHOU' : err?.message || err);
       }
