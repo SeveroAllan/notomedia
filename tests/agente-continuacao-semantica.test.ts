@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {describe,it,expect,vi} from 'vitest';
 import {ScriptedModel,assistantMessage,functionCall} from '@openai/agents/testing';
 import {criarAgenteNoto,responderAgente} from '../src/agente/agente.js';
@@ -114,6 +115,16 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
     expect(p.confirmarProfissionais).not.toHaveBeenCalled();
     expect(p.links).toEqual(['https://homologacao.example.test/?medicoId='+ID+'&etapa=certificado']);
+    const itens=p.modelo.lastCall?.request.input as Array<{type?:string;output?:{text:string}}>;
+    const resultado=JSON.parse(itens.find(item=>item.type==='function_call_result')!.output!.text);
+    const arquivo=readFileSync(new URL('../contrato-continuar-onboarding.md',import.meta.url),'utf8').trim();
+    expect(resultado.contratoResposta.instrucao).toBe(arquivo);
+    expect(resultado.contratoResposta.instrucao).toContain('pagina_certificado_preparada');
+    expect(resultado.contratoResposta.formato).toEqual({
+      texto:'Sua resposta natural ao usuário',
+      fatos:{...fatos,crm:'confirmado',crmValor:'36948/RS'},
+      acoesConcluidas:['crm_salvo','pagina_certificado_preparada']
+    });
     expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
     p.modelo.assertComplete();
   });
