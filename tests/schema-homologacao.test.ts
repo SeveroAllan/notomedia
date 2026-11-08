@@ -46,7 +46,8 @@ testarBanco('migração reconcilia estado mínimo do Supabase novo, sem inferir 
       );
       CREATE TABLE public.medico_certificados (
         id uuid PRIMARY KEY, medico_id uuid REFERENCES public.medicos(id),
-        status text, criado_em timestamptz DEFAULT now()
+        status text, valido_de date, valido_ate date NOT NULL,
+        criado_em timestamptz DEFAULT now()
       );
       CREATE TABLE public.medico_perfil_fiscal (
         medico_id uuid PRIMARY KEY REFERENCES public.medicos(id),
