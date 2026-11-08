@@ -63,7 +63,7 @@ export function criarRouterWebhookAgente(deps: {
   controleCusto?:pg.Pool;
   exigirControleCusto?:boolean;
   diagnosticoAtivo?: boolean;
-  registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  registrarDiagnostico?: (registro: DiagnosticoMensagem, contaId: string) => void | Promise<void>;
   propostaEmissaoWhatsApp?: (
     entrada:{contaId:string;texto:string;mensagemRef:string;conversaRef:string;citadaRef?:string},
     publicar:(texto:string)=>Promise<string|null>
@@ -324,6 +324,8 @@ export function criarRouterWebhookAgente(deps: {
       const resposta = await responderAgente({
         texto, profissionais, semConta: !contaId, estadoConversa: estado,
         trabalhos,
+        verificacaoAgendaPendente:tarefasPendentes.some(t=>t.tipo==='verificar_agenda'&&
+          t.instancia===evento.instance&&t.remetenteRef===remetenteRef),
         painelUrl: deps.painelUrl,
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
@@ -513,8 +515,7 @@ export function criarRouterWebhookAgente(deps: {
           conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
         };
         try {
-          if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
-          else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
+          if (contaId) await deps.registrarDiagnostico?.(registro, contaId);
         } catch { /* Observabilidade não bloqueia atendimento. */ }
       }
       if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);

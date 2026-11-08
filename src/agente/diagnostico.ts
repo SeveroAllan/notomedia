@@ -1,3 +1,4 @@
+import type pg from 'pg';
 import { createHmac } from 'node:crypto';
 
 export type FerramentaNoto = 'continuar_onboarding' | 'registrar_periodo_conferencia' | 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'revisar_registro_profissional' | 'solicitar_link_seguro_registro' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas';
@@ -33,7 +34,7 @@ export interface DiagnosticoAgente {
       'MULTIPLOS_ANOS'|'DATA_NEGADA'|'DATA_SEM_ESCOPO_CLARO'|'ANO_DIVERGENTE';
   };
   contratoFala?:'VALIDO'|'INVALIDO';
-  rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO';
+  rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO'|'AFIRMACAO_SEM_EVIDENCIA';
   continuidade?:{
     intencoes:string[];
     camposConfirmados:('crm'|'rqe')[];
@@ -83,4 +84,18 @@ export function referenciaDiagnostica(segredo: string, tipo: 'mensagem' | 'respo
 
 export function semUso(): DiagnosticoAgente['uso'] {
   return { requisicoes: null, tokensEntrada: null, tokensSaida: null, tokensTotal: null };
+}
+
+export async function registrarDiagnosticoAuditoria(
+  pool: Pick<pg.Pool,'query'>, contaId:string, registro:DiagnosticoMensagem, revisao:string
+):Promise<void>{
+  const {codigo,ferramentas,uso,contratoFala,rejeicaoFala}=registro.agente;
+  const {requisicoes,tokensEntrada,tokensSaida,tokensTotal}=uso;
+  await pool.query(`insert into public.auditoria (conta_id,evento,dados)
+    values ($1,'noto_agent_execucao',$2::jsonb)`,[contaId,JSON.stringify({
+    codigo,ferramentas:ferramentas.map(({nome,codigo,duracaoMs})=>({nome,codigo,duracaoMs})),
+    uso:{requisicoes,tokensEntrada,tokensSaida,tokensTotal},contratoFala,rejeicaoFala,
+    mensagemRef:registro.mensagemRef,respostaRef:registro.respostaRef,
+    revisao:/^[a-f0-9]{7,64}$/i.test(revisao)?revisao:'desconhecido'
+  })]);
 }
