@@ -59,7 +59,7 @@ import { completarNvidia, completarOpenAi } from './io/nvidia/chat-client.js';
 import { processarOnboardingXml } from './onboarding/fluxos/processar-onboarding-xml.js';
 import { ErroAdocaoReferencia } from './onboarding/io/confirmar-politica-emissao.js';
 import { confirmarParametrosFiscais } from './onboarding/fluxos/confirmar-parametros-fiscais.js';
-import { registrarConsentimentoFiscal, adotarReferenciaConsentida, versaoConsentimentoFiscal } from './onboarding/fluxos/consentimento-fiscal.js';
+import { adotarReferenciaConsentida, versaoConsentimentoFiscal } from './onboarding/fluxos/consentimento-fiscal.js';
 import { salvarCertificadoMedico } from './onboarding/fluxos/salvar-certificado-medico.js';
 import { conectarInstanciaWhatsappMedico } from './onboarding/io/conectar-instancia-whatsapp-medico.js';
 import { consultarStatusInstanciaWhatsapp } from './onboarding/io/consultar-status-instancia-whatsapp.js';
@@ -981,23 +981,19 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Passo 2: Certificado A1 + importacao automatica da ultima NFS-e pelo ADN
   app.post('/api/onboarding/certificado', async (req: Request, res: Response) => {
     try {
-      const { medicoId: medicoIdRaw, arquivoBase64, nomeArquivo, senha, consentimentoFiscal } = req.body || {};
-      if (consentimentoFiscal !== undefined && consentimentoFiscal !== versaoConsentimentoFiscal) {
+      const { medicoId: medicoIdRaw, arquivoBase64, senha, consentimentoFiscal } = req.body || {};
+      if (consentimentoFiscal !== versaoConsentimentoFiscal) {
         return res.status(400).json({ ok: false, detalhe: 'Atualize a página antes de continuar com o certificado.' });
       }
       if (!medicoIdRaw || !arquivoBase64 || !senha) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId, arquivo e senha são obrigatórios' });
       }
-      const { medicoId } = medicoAutorizado(res);
+      const { medicoId, usuarioId } = medicoAutorizado(res);
       const arquivoBuffer = Buffer.from(arquivoBase64, 'base64');
 
-      let documentoTitular: string | undefined;
+      let certificado: ReturnType<typeof extrairChavesCertificado>;
       try {
-        const certificado = extrairChavesCertificado(arquivoBuffer, senha);
-        if (certificado.validoAte && certificado.validoAte.getTime() < Date.now()) {
-          return res.status(400).json({ ok: false, detalhe: 'O certificado A1 informado esta vencido.' });
-        }
-        documentoTitular = certificado.documentoTitular;
+        certificado = extrairChavesCertificado(arquivoBuffer, senha);
       } catch (err: any) {
         return res.status(400).json({
           ok: false,
@@ -1005,19 +1001,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       }
 
+      const { validoDe, validoAte, documentoTitular } = certificado;
+      const agora = Date.now();
+      if (!validoDe || !validoAte || !Number.isFinite(validoDe.getTime()) || !Number.isFinite(validoAte.getTime())) {
+        return res.status(400).json({ ok: false, detalhe: 'Não consegui verificar as datas do certificado A1.' });
+      }
+      if (validoDe.getTime() > agora || validoAte.getTime() <= agora) {
+        return res.status(400).json({ ok: false, detalhe: 'O certificado A1 está fora do período de validade.' });
+      }
+
       const resultado = await salvarCertificadoMedico(pool, authAdminService.supabaseClient, {
         medicoId,
         arquivoBuffer,
-        nomeArquivoOriginal: nomeArquivo || 'certificado.pfx',
+        usuarioId, validoDe, validoAte,
         senhaCertificado: senha
       });
 
       await cadastroCertificado.agendar({medicoId, certificadoId:resultado.certificadoId, documentoTitular}).catch(() =>
         console.warn('[Cadastro automático]', {codigo:'AGENDAMENTO_FALHOU'}));
-
-      if (consentimentoFiscal === versaoConsentimentoFiscal) {
-        await registrarConsentimentoFiscal(pool, medicoId, resultado.certificadoId);
-      }
 
       try {
         if (!documentoTitular) {
@@ -1065,8 +1066,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       }
     } catch (err: any) {
-      console.error('Erro ao salvar certificado:', err);
-      return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao processar certificado digital' });
+      console.error('Erro ao salvar certificado:', { codigo: err?.code, mensagem: err?.message });
+      return res.status(500).json({ ok: false, detalhe: 'Não foi possível salvar o certificado. Tente novamente.' });
     }
   });
 

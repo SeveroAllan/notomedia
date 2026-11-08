@@ -26,7 +26,7 @@ vi.mock('../src/io/postgres/salvar-perfil-profissional.js', () => ({
 vi.mock('../src/onboarding/fluxos/salvar-certificado-medico.js', () => ({ salvarCertificadoMedico: efeito.certificado }));
 vi.mock('../src/io/fiscal/carregar-certificado-medico.js', () => ({ carregarCertificadoMedico: efeito.carregarCertificado }));
 vi.mock('../src/io/fiscal/extrair-chaves-certificado.js', () => ({
-  extrairChavesCertificado: () => ({ documentoTitular: '12345678901', validoAte: new Date('2030-01-01') })
+  extrairChavesCertificado: () => ({ documentoTitular: '12345678901', validoDe: new Date('2020-01-01'), validoAte: new Date('2030-01-01') })
 }));
 vi.mock('../src/onboarding/fluxos/processar-onboarding-xml.js', () => ({ processarOnboardingXml: efeito.processarXml }));
 vi.mock('../src/onboarding/fluxos/consentimento-fiscal.js', () => ({
@@ -54,7 +54,7 @@ const OUTRO = '33333333-3333-4333-8333-333333333333';
 const AUTH = '44444444-4444-4444-8444-444444444444';
 const CHAMADAS = [
   { rota: '/api/onboarding/confirmar-fiscal', body: { medicoId: MEDICO, usarReferencia: true, referenciaHash: 'a'.repeat(64) } },
-  { rota: '/api/onboarding/certificado', body: { medicoId: MEDICO, arquivoBase64: 'Y2VydA==', senha: 'segredo' } },
+  { rota: '/api/onboarding/certificado', body: { medicoId: MEDICO, arquivoBase64: 'Y2VydA==', senha: 'segredo', consentimentoFiscal: 'consentimento-teste' } },
   { rota: '/api/onboarding/nome', body: { medicoId: MEDICO, usuarioId: USUARIO, nome: 'Alice Souza' } },
   { rota: '/api/conta/perfil', body: { medicoId: MEDICO, usuarioId: USUARIO, crm: '12345' } },
   { rota: '/api/conta/preferencias', body: { medicoId: MEDICO, usuarioId: USUARIO, solicitarCpfDiretoPaciente: true } },

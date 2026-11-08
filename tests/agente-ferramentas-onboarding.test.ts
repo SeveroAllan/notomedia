@@ -42,7 +42,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     const resposta=await responderAgente({texto:'Pode listar quem está na TribeMD da Alice?',profissionais},
       {modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(acessoSalvo),descobrirProfissionais,aoDiagnostico:diagnostico});
     expect(descobrirProfissionais).not.toHaveBeenCalled();
-    expect(resposta).toContain('não confirmei');
+    expect(resposta).toContain('A conexão com a agenda caiu');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('CONEXAO_PENDENTE');
     modelo.assertComplete();
   });

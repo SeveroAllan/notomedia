@@ -7,12 +7,15 @@
 
 import crypto from 'node:crypto';
 import type pg from 'pg';
+import { registrarConsentimentoFiscal } from './consentimento-fiscal.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type SalvarCertificadoInput = {
   medicoId: string;
   arquivoBuffer: Buffer;
-  nomeArquivoOriginal: string;
+  usuarioId: string;
+  validoDe: Date;
+  validoAte: Date;
   senhaCertificado: string;
 };
 
@@ -60,75 +63,59 @@ export async function salvarCertificadoMedico(
   supabase: SupabaseClient,
   input: SalvarCertificadoInput
 ): Promise<ResultadoSalvarCertificado> {
-  const { medicoId, arquivoBuffer, senhaCertificado } = input;
-  const certId = crypto.randomUUID();
-  const storagePath = `certificados/${medicoId}/${certId}.pfx`;
-
-  // 1. Armazena arquivo no Supabase Storage
-  await enviarCertificadoAoStorage(supabase, storagePath, arquivoBuffer);
-
-  // 2. Usa a funcao oficial do Vault. Nunca cria um registro ativo sem a senha.
+  const { medicoId, arquivoBuffer, senhaCertificado, usuarioId, validoDe, validoAte } = input;
+  const hash = crypto.createHash('sha256').update(arquivoBuffer).digest('hex');
+  let storagePath = `certificados/${medicoId}/${hash}.pfx`;
   const client = await pool.connect();
 
-  // 3. Define validade padrão de 1 ano para certificado A1 novo
-  const dataHoje = new Date();
-  const dataValidade = new Date();
-  dataValidade.setFullYear(dataHoje.getFullYear() + 1);
-
-  let res: { rows: Array<{ id: string; valido_ate: string }> };
   try {
     await client.query('begin');
-    const resVault = await client.query(
-      `select vault.create_secret($1, $2, $3) as id`,
-      [
-        senhaCertificado,
-        `cert_medico_${medicoId}_${certId}`,
-        'Senha do certificado digital A1'
-      ]
-    );
-    const secretUuid = resVault.rows[0]?.id;
-    if (!secretUuid) {
-      throw new Error('O Vault nao retornou o identificador do segredo.');
+    const medico = await client.query('select id from public.medicos where id = $1 and conta_id is not null for update', [medicoId]);
+    if (!medico.rows.length) throw new Error('MEDICO_NAO_ENCONTRADO');
+
+    const certificados = await client.query(`select id, arquivo_storage_path, status
+      from public.medico_certificados where medico_id = $1
+      order by (arquivo_storage_path = $2) desc, criado_em desc`, [medicoId, storagePath]);
+    let existente = certificados.rows.find(c => c.arquivo_storage_path === storagePath);
+    // O upload anterior ao uso do hash nomeava o objeto pelo UUID da linha.
+    for (const candidato of certificados.rows) {
+      if (existente) break;
+      if (candidato.arquivo_storage_path !== `certificados/${medicoId}/${candidato.id}.pfx`) continue;
+      const { data, error } = await supabase.storage.from(BUCKET_CERTIFICADOS).download(candidato.arquivo_storage_path);
+      if (error || !data) throw new Error('CERTIFICADO_ANTERIOR_INDISPONIVEL');
+      if (Buffer.from(await data.arrayBuffer()).equals(arquivoBuffer)) existente = candidato;
     }
 
-    // 3. Desativa certificados anteriores do mesmo medico.
-    await client.query(
-      `update medico_certificados set status = 'vencido' where medico_id = $1 and status = 'ativo'`,
-      [medicoId]
-    );
+    const certId = existente?.id ?? crypto.randomUUID();
+    if (existente?.status === 'revogado') throw new Error('CERTIFICADO_REVOGADO');
+    if (existente) {
+      storagePath = existente.arquivo_storage_path;
+    } else {
+      await enviarCertificadoAoStorage(supabase, storagePath, arquivoBuffer);
+      const resVault = await client.query('select vault.create_secret($1, $2, $3) as id', [
+        senhaCertificado, `cert_medico_${medicoId}_${certId}`, 'Senha do certificado digital A1'
+      ]);
+      const secretUuid = resVault.rows[0]?.id;
+      if (!secretUuid) throw new Error('O Vault nao retornou o identificador do segredo.');
+      await client.query(`insert into public.medico_certificados (
+        id, medico_id, arquivo_storage_path, senha_secret_id, valido_de, valido_ate, status
+      ) values ($1, $2, $3, $4, $5, $6, 'pendente')`, [
+        certId, medicoId, storagePath, secretUuid, validoDe.toISOString().slice(0, 10), validoAte.toISOString().slice(0, 10)
+      ]);
+    }
 
-    // 4. Grava o novo certificado somente depois de confirmar o segredo.
-    res = await client.query(
-      `insert into medico_certificados (
-        id, medico_id, arquivo_storage_path, senha_secret_id,
-        valido_de, valido_ate, status
-      ) values (
-        $1, $2, $3, $4,
-        $5, $6, 'ativo'
-      )
-      returning id, valido_ate`,
-      [
-        certId,
-        medicoId,
-        storagePath,
-        secretUuid,
-        dataHoje.toISOString().slice(0, 10),
-        dataValidade.toISOString().slice(0, 10)
-      ]
-    );
+    await registrarConsentimentoFiscal(client, medicoId, certId, usuarioId);
+    await client.query(`update public.medico_certificados set status = 'vencido'
+      where medico_id = $1 and status = 'ativo' and id <> $2`, [medicoId, certId]);
+    await client.query(`update public.medico_certificados set status = 'ativo', valido_de = $2, valido_ate = $3
+      where id = $1`, [certId, validoDe.toISOString().slice(0, 10), validoAte.toISOString().slice(0, 10)]);
     await client.query('commit');
+    return { ok: true, certificadoId: certId, storagePath, validoAte: validoAte.toISOString().slice(0, 10) };
   } catch (err) {
     await client.query('rollback').catch(() => undefined);
-    await supabase.storage.from(BUCKET_CERTIFICADOS).remove([storagePath]).catch(() => undefined);
+    // Um commit de resultado incerto pode ter referenciado o objeto. O reenvio reutiliza a mesma chave.
     throw err;
   } finally {
     client.release();
   }
-
-  return {
-    ok: true,
-    certificadoId: res.rows[0].id,
-    storagePath,
-    validoAte: res.rows[0].valido_ate
-  };
 }

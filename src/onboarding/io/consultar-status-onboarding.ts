@@ -86,7 +86,8 @@ export async function consultarStatusOnboarding(
           select c.id from medico_certificados c where c.medico_id=m.id and c.status='ativo'
           order by c.criado_em desc,c.id desc limit 1
         ) limit 1) as revisao_profissional,
-      (select count(*) from medico_certificados c where c.medico_id = m.id and c.status = 'ativo') as cert_ativos,
+      (select count(*) from medico_certificados c where c.medico_id = m.id and c.status = 'ativo'
+        and (c.valido_de is null or c.valido_de <= current_date) and c.valido_ate >= current_date) as cert_ativos,
       (select count(*) from whatsapp_instancias w where w.medico_id = m.id and w.status = 'conectado') as whats_conectados,
       exists(select 1 from whatsapp_instancias w where w.medico_id = m.id and w.oficial = false and w.conectado_em is not null) as whatsapp_vinculado
     from medicos m
