@@ -19,9 +19,6 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     const args={agenda:'tribemd',profissional:null};
     const scripted=new ScriptedModel([
       [functionCall('descobrir_profissionais_agenda',args,{callId:'descobrir'})],
-      [functionCall('orientar_conexao_agenda',args,{callId:'reconectar'})],
-      [functionCall('solicitar_link_seguro_agenda',args,{callId:'link'})],
-      [assistantMessage('A conexão com a TribeMD caiu. Abra a página segura para reconectar.')]
     ]);
     const descobrirProfissionais=vi.fn();
     const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
@@ -31,7 +28,7 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
     expect(resposta).toContain('reconectar');
     expect(descobrirProfissionais).not.toHaveBeenCalled();
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
-    expect(JSON.stringify(scripted.lastCall?.request.input)).toContain(salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA');
+    expect(scripted.calls).toHaveLength(1);
     scripted.assertComplete();
   });
   it.each(['Não, é a TribeMD', 'não é a Amplimed, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD', 'Podemos usar a TribeMD?', 'Pode trocar para a TribeMD?'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
@@ -151,8 +148,9 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
   });
 
   it('não descobre ninguém antes do login confirmado',async()=>{
-    const scripted=modelo('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:null},
-      'A conexão ainda não foi confirmada. Vou aguardar o acesso seguro.');
+    const scripted=new ScriptedModel([
+      [functionCall('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:null},{callId:'sem-login'})]
+    ]);
     const descobrirProfissionais=vi.fn();
     await responderAgente({texto:'Quem está na TribeMD?',profissionais:[medicoProvisorio]},
       {modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue(vazio),

@@ -35,7 +35,6 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
   it('acesso salvo sem conexão confirmada não inicia descoberta nem apresenta lista falsa',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:'Alice'},{callId:'acesso-salvo'})],
-      [assistantMessage('Há acesso salvo, mas não confirmei a conexão. Vou orientar o próximo passo seguro.')]
     ]);
     const descobrirProfissionais=vi.fn();
     const diagnostico=vi.fn();
