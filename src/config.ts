@@ -41,6 +41,7 @@ export interface AppConfig {
   notoAgentEnvioAtivo?: boolean;
   notoAgentTracesAtivos?: boolean;
   notoAgentDiagnosticoAtivo?: boolean;
+  notoAgentBuildRevisao?: string;
   notoAgentWebhookSecret?: string;
   workerEmbutidoAtivo?: boolean;
   notoAgentLoginContaExistenteApenas?: boolean;
@@ -159,6 +160,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     notoAgentEnvioAtivo: env['NOTO_AGENT_ENVIO_ATIVO'] === 'true',
     notoAgentTracesAtivos: env['NOTO_AGENT_TRACES_ATIVOS'] === 'true',
     notoAgentDiagnosticoAtivo: env['NOTO_AGENT_DIAGNOSTICO_ATIVO'] === 'true',
+    notoAgentBuildRevisao: env['NOTO_BUILD_REVISAO'],
     notoAgentWebhookSecret: env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() || '',
     workerEmbutidoAtivo: env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false',
     notoAgentLoginContaExistenteApenas: env['NOTO_AGENT_LOGIN_CONTA_EXISTENTE_APENAS'] === 'true',

@@ -1,3 +1,4 @@
+import { registrarDiagnosticoAuditoria } from './agente/diagnostico.js';
 import { tratarComandoEmissaoWhatsApp, tratarPropostaEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
@@ -403,7 +404,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
     exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
-    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    diagnosticoAtivo: config.notoPilotoRestrito && config.notoAgentDiagnosticoAtivo,
+    registrarDiagnostico: (registro, contaId) =>
+      registrarDiagnosticoAuditoria(pool, contaId, registro, config.notoAgentBuildRevisao ?? ''),
     ...(config.emissaoWhatsAppPropostaAtiva && config.emissaoWhatsAppProdutor ? {
       propostaEmissaoWhatsApp: (
         entrada:Parameters<typeof tratarPropostaEmissaoWhatsApp>[2],
