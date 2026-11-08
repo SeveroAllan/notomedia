@@ -49,7 +49,8 @@ export function decidirVinculo(
   const pedidoNomeado = alvo && pedido &&
     (pedido[1] === alvo || pedido[1] === alvo.replace(/^(?:dra|dr) /, ''));
   const contraponto = /\b(?:nao|nem|talvez|duvida|incerteza|errad[oa]|outro (?:medico|profissional)|outra (?:medica|profissional))\b/.test(mensagem);
-  if (entrada.mensagem.includes('?') || contraponto || (disponiveis.length > 1 && !pedidoNomeado))
+  const exigePedidoNomeado = disponiveis.length > 1 || !!estado.profissionalConfirmadoId;
+  if (entrada.mensagem.includes('?') || contraponto || (exigePedidoNomeado && !pedidoNomeado))
     return {ok:false,motivo:'ESCLARECIMENTO'};
   return {ok:true,nomes:confirmados.map(c=>c[0]!),agenda:entrada.agenda};
 }

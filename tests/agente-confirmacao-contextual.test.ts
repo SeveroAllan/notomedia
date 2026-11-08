@@ -99,6 +99,16 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
     expect(r.resposta).toContain('Vinculei Dra. Ana Souza');
     expect(r.resposta).not.toContain('pesquisa pública');
   });
+  it('um novo profissional após vínculo existente exige confirmação explícita do alvo',async()=>{
+    const estado:EstadoConversa={...unico,profissionalConfirmadoId:ANA,
+      descoberta:{agenda:'tribemd',nomes:['Dr. Bruno Lima']}};
+    const r=await simular('a minha agenda é a TribeMD','confirmar',[],estado);
+    expect(r.confirmarProfissionais).not.toHaveBeenCalled();
+    expect(r.aoVinculo).not.toHaveBeenCalled();
+    expect(decidirVinculo(estado,{agenda:'tribemd',decisao:'confirmar',
+      nomes:[],mensagem:'Vincula o Bruno Lima à conta'}))
+      .toEqual({ok:true,agenda:'tribemd',nomes:['Dr. Bruno Lima']});
+  });
   it.each(['Não quero vincular', 'Sim, mas ainda tenho dúvida', 'Pode vincular?', 'Esse nome está errado'])(
     'uma decisão confirmatória não prevalece sobre: %s', async texto => {
       const r = await simular(texto, 'confirmar', []);
