@@ -5,6 +5,7 @@
  */
 
 import type pg from 'pg';
+import { versaoConsentimentoFiscal } from '../fluxos/consentimento-fiscal.js';
 import { temAprovacaoProfissional } from '../../cadastro/revisao-painel.js';
 import { dadosProfissionaisCompletos } from '../../conta/validar-dados-emissao.js';
 import { parametrosEmissaoSchema } from '../../fiscal/preparacao/parametros-emissao.js';
@@ -87,7 +88,13 @@ export async function consultarStatusOnboarding(
           order by c.criado_em desc,c.id desc limit 1
         ) limit 1) as revisao_profissional,
       (select count(*) from medico_certificados c where c.medico_id = m.id and c.status = 'ativo'
-        and (c.valido_de is null or c.valido_de <= current_date) and c.valido_ate >= current_date) as cert_ativos,
+        and (c.valido_de is null or c.valido_de <= current_date) and c.valido_ate >= current_date
+        and exists(select 1 from public.auditoria a
+          where a.conta_id::text = to_jsonb(m)->>'conta_id'
+            and a.evento = 'consentimento_parametros_fiscais'
+            and a.dados->>'medicoId' = m.id::text
+            and a.dados->>'certificadoId' = c.id::text
+            and a.dados->>'versao' = $2)) as cert_ativos,
       (select count(*) from whatsapp_instancias w where w.medico_id = m.id and w.status = 'conectado') as whats_conectados,
       exists(select 1 from whatsapp_instancias w where w.medico_id = m.id and w.oficial = false and w.conectado_em is not null) as whatsapp_vinculado
     from medicos m
@@ -98,7 +105,7 @@ export async function consultarStatusOnboarding(
     limit 1
   `;
 
-  const { rows } = await pool.query(sql, [medicoId]);
+  const { rows } = await pool.query(sql, [medicoId, versaoConsentimentoFiscal]);
   if (rows.length === 0) {
     throw new Error(`Médico ${medicoId} não encontrado.`);
   }
@@ -112,6 +119,7 @@ export async function consultarStatusOnboarding(
   const referenciaValidada = !referenciaNova || (politicaRevisada &&
     validarReferenciaFiscal(r.dados_reforma_tributaria, r.parametros_emissao).length === 0);
   const passo2FiscalConfirmado = Boolean(r.confirmado_pelo_medico) && (!preparacaoFiscalAtiva || politicaRevisada) && referenciaValidada;
+  // Consentimento e vigência são prontidão de cadastro, sem comprovar titularidade do A1.
   const passo3CertificadoValido = Number(r.cert_ativos || 0) > 0;
   const passoProfissionalAprovado = temAprovacaoProfissional(r.revisao_profissional ?? null, { nome: r.medico_nome, crm: r.crm ?? null, rqe: r.rqe ?? null });
   const passo4WhatsappConectado = Number(r.whats_conectados || 0) > 0;

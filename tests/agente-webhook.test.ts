@@ -622,6 +622,30 @@ describe('webhook: referência pertence à conta autenticada',()=>{
   });
 
 
+  it.each([false,true])('reconecta pelo handler sem segunda inferência, acesso salvo=%s',async salvo=>{
+    const query=vi.fn(async(sql:string)=>{
+      if(sql.includes('distinct conta_id'))return {rows:[{conta_id:contaId}]};
+      if(sql.includes('from medicos'))return {rows:[]};
+      throw Error('SQL não previsto');
+    });
+    const modeloTeste=new ScriptedModel([
+      [functionCall('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:null},{callId:'descobrir'})]
+    ]);
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
+    const descobrirProfissionais=vi.fn();
+    const {app,enviar}=preparar({pool:{query} as unknown as pg.Pool,modeloTeste,solicitarLinkAgenda,
+      descobrirProfissionais,consultarStatus:vi.fn().mockResolvedValue({
+        tribemd:{salvo,conectada:false},amplimed:{salvo:false,conectada:false}
+      })});
+    const req={...evento,data:{...evento.data,message:{conversation:'Confira os profissionais da TribeMD'}}};
+    await comServidor(app,async postar=>expect((await postar(req)).status).toBe(200));
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(chaveConta,'tribemd','5551999998888');
+    expect(descobrirProfissionais).not.toHaveBeenCalled();
+    expect(enviar.mock.calls.map(c=>c[1]).join(' ')).toBe('A conexão com a agenda caiu. Abra a página segura para reconectar.');
+    expect(modeloTeste.calls).toHaveLength(1);
+    modeloTeste.assertComplete();
+  });
+
   it('conta nova sem qualquer linha em medicos inicia via token do Cofre da conta',async()=>{
     const query=vi.fn(async(sql:string,params:unknown[])=>{
       if(sql.includes('distinct conta_id'))return {rows:[{conta_id:contaId}]};

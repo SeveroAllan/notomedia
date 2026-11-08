@@ -494,6 +494,14 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     parameters: z.object({ profissional: z.string(), agenda: z.enum(['tribemd','amplimed']) }),
     execute: ({profissional,agenda})=>conferirAtendimentos(profissional,agenda)
   }));
+  let reconexaoAgenda:Promise<unknown>|undefined;
+  async function orientarReconexao(agenda:AgendaEscolhida,profissional:string|null,motivo:string,inicio:number) {
+    registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
+    reconexaoAgenda??=deps.solicitarLinkAgenda
+      ? solicitarLinkSeguroAgenda({agenda,profissional}) : Promise.resolve();
+    await reconexaoAgenda;
+    return {ok:false,motivo};
+  }
   if (deps.descobrirProfissionais) extras.push(tool({
     name: 'descobrir_profissionais_agenda',
     description: 'Após conexão comprovada, consulta nomes REAIS na agenda. profissional=null usa somente referência técnica da conta (sem escolher médico). Nunca revela pacientes.',
@@ -523,9 +531,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
             ? 'INTEGRACAO_NAO_CONFIGURADA' : 'CONEXAO_INDISPONIVEL'};
         }
         if (!status.conectada) {
-          registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
-          return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA',
-            proximaEtapa:'A agenda está desconectada e não foi lida. Use orientar_conexao_agenda para reconectar a mesma agenda; não relate ausência de profissionais.'};
+          return orientarReconexao(agenda,profissional,status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA',inicio);
         }
         if(deps.solicitarTrabalho) {
           // A referência técnica de uma conexão legada pode ser médico da conta.
@@ -538,6 +544,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
             {ok:false,motivo:pedido.motivo};
         }
         const resultado=await deps.descobrirProfissionais!(id,agenda);
+        if(!resultado.ok && (resultado.motivo==='AGENDA_NAO_CONECTADA'||resultado.motivo==='ACESSO_SALVO_SEM_CONEXAO')){
+          return orientarReconexao(agenda,profissional,resultado.motivo,inicio);
+        }
         const nomes = resultado.ok ? (resultado.nomes??[]).filter(nomeProfissionalValido).slice(0,20) : [];
         registrar('descobrir_profissionais_agenda',resultado.ok ? (nomes.length ? 'PROFISSIONAIS_ENCONTRADOS' : 'PROFISSIONAIS_NAO_IDENTIFICADOS') : 'STATUS_INDISPONIVEL',inicio);
         if (resultado.ok && nomes.length) deps.aoComprovante?.({ tipo: 'descobrir_profissionais', profissionalId: id, agenda });
@@ -632,11 +641,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       }
     }
   }));
-  if (deps.solicitarLinkAgenda) extras.push(tool({
-    name: 'solicitar_link_seguro_agenda',
-    description: 'Após escolha explícita de agenda, envia link único ao operador autorizado. profissional=null permite primeira conexão pela CONTA, sem médico conhecido. Nunca recebe senha.',
-    parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string().nullable() }),
-    async execute({agenda,profissional}) {
+  async function executarLinkSeguroAgenda({agenda,profissional}:{agenda:AgendaEscolhida;profissional:string|null}) {
       const inicio=Date.now();
       const fonte = agenda === 'tribemd' ? 'tribe(?:md)?' : 'amplimed';
       const recusada = new RegExp(`\\b(?:nao|nem) (?:uso|utilizo|quero usar|quero conectar) (?:a )?${fonte}\\b`);
@@ -685,6 +690,18 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         return {aceitoParaEnvio:false,motivo:'ENVIO_INDISPONIVEL'};
       }
     }
+  const pedidosLinkAgenda = new Map<string, ReturnType<typeof executarLinkSeguroAgenda>>();
+  function solicitarLinkSeguroAgenda(args:{agenda:AgendaEscolhida;profissional:string|null}) {
+    const chave=JSON.stringify([args.agenda,args.profissional]);
+    const pedido=pedidosLinkAgenda.get(chave)??executarLinkSeguroAgenda(args);
+    pedidosLinkAgenda.set(chave,pedido);
+    return pedido;
+  }
+  if (deps.solicitarLinkAgenda) extras.push(tool({
+    name: 'solicitar_link_seguro_agenda',
+    description: 'Após escolha explícita de agenda, envia link único ao operador autorizado. profissional=null permite primeira conexão pela CONTA, sem médico conhecido. Nunca recebe senha.',
+    parameters: z.object({ agenda:z.enum(['tribemd','amplimed']), profissional:z.string().nullable() }),
+    execute:solicitarLinkSeguroAgenda
   }));
   if (deps.consultarEntregaLink) extras.push(tool({
     name:'consultar_status_entrega_link_agenda',
@@ -1076,7 +1093,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
-    toolUseBehavior:async(_contexto,resultados)=>(periodoFinalizado&&!continuidadeExecutada)||resultados.some(r=>r.tool.name==='confirmar_profissionais_descobertos')
+    toolUseBehavior:async(_contexto,resultados)=>reconexaoAgenda||(periodoFinalizado&&!continuidadeExecutada)||resultados.some(r=>r.tool.name==='confirmar_profissionais_descobertos')
       ?{isFinalOutput:true,isInterrupted:undefined,finalOutput:''}
       :{isFinalOutput:false,isInterrupted:undefined}
   });
@@ -1161,17 +1178,18 @@ export function respostaCompativelComFerramentas(resposta: string, eventos: read
  * transporte: a resposta vem de evidência tipada, não de frases proibidas.
  * Fora dessas transições, preserva integralmente a conversa livre.
  */
+function descreverReconexao(eventos:readonly EventoFerramenta[]):string|null {
+  if(!eventos.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE'))return null;
+  const link=eventos.some(e=>e.nome==='solicitar_link_seguro_agenda'&&e.codigo==='LINK_ACEITO_PARA_ENVIO');
+  return 'A conexão com a agenda caiu. '+(link?'Abra a página segura para reconectar.':'Precisamos reconectar pela página segura para conferir os profissionais.');
+}
+
 export function acompanhamentoVerificado(
   entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
 ): string | null {
   const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
   const agenda=escolhaAgendaExplicita(entrada.texto)??agendaDaPergunta(entrada.texto)??entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
-  if(eventos.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE')&&
-     !tem('PROFISSIONAIS_ENCONTRADOS')&&!tem('PROFISSIONAIS_NAO_IDENTIFICADOS')&&!tem('TRABALHO_REGISTRADO')){
-    const link=eventos.some(e=>e.nome==='solicitar_link_seguro_agenda'&&e.codigo==='LINK_ACEITO_PARA_ENVIO');
-    return 'A conexão com a agenda caiu. '+(link?'Abra a página segura para reconectar.':'Precisamos reconectar pela página segura para conferir os profissionais.');
-  }
   if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
   if(tem('CONEXAO_EXISTENTE')) return [
     `A agenda ${nomeAgenda} já está conectada.`,
@@ -1437,6 +1455,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const uso = {
       requisicoes: u.requests, tokensEntrada: u.inputTokens, tokensSaida: u.outputTokens, tokensTotal: u.totalTokens
     };
+    const reconexao=descreverReconexao(ferramentas);
+    if(reconexao){registrar('RESPOSTA',uso);return reconexao;}
     // O provedor deve honrar toolChoice. Se não honrar (ou um modelo de
     // teste emitir texto livre), não aceitar nenhuma afirmação de vínculo.
     // Não repetir a IA: manter pendência e evidenciar a falha de contrato.
@@ -1553,8 +1573,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       const envioLinkAgenda = ferramentas.some(e =>
         e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
       const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.codigo === 'AGENDA_RECUSADA');
-      const descobertaSemConexao = ferramentas.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE');
-      const introducao = !descobertaSemConexao && !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
+      const introducao = !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);
@@ -1578,6 +1597,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
     return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch (erro) {
+    const reconexao=descreverReconexao(ferramentas);
+    if(reconexao){registrar('RESPOSTA');return reconexao;}
     if(erro instanceof PausaCustoPiloto){
       registrar('RESPOSTA');
       return erro.motivo==='LIMITE_TESTE'?FALA_LIMITE_TESTE:
