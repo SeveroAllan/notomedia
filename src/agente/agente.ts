@@ -843,6 +843,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       registrar('revisar_registro_profissional','DADOS_PROFISSIONAIS_SALVOS',inicio);
       deps.aoRevisaoRegistro?.({ok:true,tipo:'aprovacao',nome:r.nome,crm:r.crm,rqe:r.rqe,...(opcoes?{rqeConfirmado:opcoes.confirmarRqe}:{})});
       deps.aoComprovante?.({tipo:'salvar_dados_profissionais',profissionalId:medico.id});
+      if(deps.consultarProntidao)await orientarCertificado(medico);
       return {ok:true,gravado:true,crm:r.crm,rqe:r.rqe};
   }
   if(deps.aprovarRegistroProfissional || deps.solicitarLinkRegistro)extras.push(tool({
@@ -859,12 +860,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   let continuidadeExecutada=false;
   let continuidadeResultado:ResultadoContinuidade|undefined;
   let certificadoResultado:OrientacaoCertificado|undefined;
-  async function orientarCertificado(profissional:string):Promise<OrientacaoCertificado>{
+  async function orientarCertificado(medico:{id:string;nome:string}|undefined):Promise<OrientacaoCertificado>{
     const inicio=Date.now();
-    const encontrados=identificar(profissional,profissionais).encontrados;
-    const medico=encontrados[0];
     const concluir=(r:OrientacaoCertificado)=>{if(r.nome)certificadoResultado=r;deps.aoCertificadoSeguro?.(r);return r;};
-    if(!medico||encontrados.length!==1||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id){
+    if(!medico||entrada.estadoConversa?.profissionalConfirmadoId!==medico.id){
       registrar('orientar_certificado_seguro','DEPENDENCIA_PROFISSIONAL',inicio);
       return concluir({ok:false,nome:'',motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'});
     }
@@ -901,7 +900,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     name:'orientar_certificado_seguro',
     description:'Verifica o certificado do médico confirmado e retorna a página autenticada se faltar. Não recebe arquivo ou senha pela conversa. Uma falha de prontidão não prova indisponibilidade da página.',
     parameters:z.object({profissional:z.string()}),
-    execute:async({profissional})=>orientarCertificado(profissional)
+    execute:async({profissional})=>{
+      const encontrados=identificar(profissional,profissionais).encontrados;
+      return orientarCertificado(encontrados.length===1?encontrados[0]:undefined);
+    }
   }));
   async function executarPeriodo({decisao,inicio}:{decisao:'definir'|'esclarecer'|'outro_assunto';inicio:string|null}){
       if(continuidadeResultado)return {ok:false,motivo:'SOLICITACAO_JA_PROCESSADA'};
@@ -1024,17 +1026,19 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           if(r.ok&&decisao==='corrigir_registro')saida.acoesConcluidas.push('correcao_solicitada');
         }
       }
-      if(alvoValido&&pretendidas.has('consultar_certificado'))
-        saida.resultados.push(deps.consultarProntidao?await orientarCertificado(medico.nome):{ok:false,motivo:'PRONTIDAO_NAO_CONFIGURADA'});
+      if(alvoValido&&pretendidas.has('consultar_certificado')&&!certificadoResultado)
+        saida.resultados.push(deps.consultarProntidao?await orientarCertificado(medico):{ok:false,motivo:'PRONTIDAO_NAO_CONFIGURADA'});
+      else if(certificadoResultado)
+        saida.resultados.push(certificadoResultado);
       if(certificadoResultado?.ok)saida.acoesConcluidas.push(certificadoResultado.certificadoValido?'certificado_verificado':'pagina_certificado_preparada');
-      if(alvoValido&&pretendidas.has('consultar_certificado'))diagnostico.certificado=certificadoResultado?.ok?
+      if(certificadoResultado||(alvoValido&&pretendidas.has('consultar_certificado')))diagnostico.certificado=certificadoResultado?.ok?
         certificadoResultado.certificadoValido?'VALIDO':'PREPARADO':'RECUSADO';
       diagnostico.acoesConcluidas=[...saida.acoesConcluidas];
       deps.aoDiagnosticoContinuidade?.(diagnostico);
       registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
       continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
       return {...saida,contratoResposta:{
-        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos. Conte o resultado que muda a situação da pessoa, o impedimento ou a próxima ação dela. Use etapas internas e itens já visíveis na conversa só como contexto. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. Só oriente abrir a página se pagina_certificado_preparada estiver em acoesConcluidas. Nesse caso o transporte envia o link no mesmo turno antes do texto; não copie a URL nem narre seu envio.',
+        instrucao:'Responda SOMENTE JSON com texto natural, fatos e acoesConcluidas. Use os fatos e ações verificados mais recentes; se outra ferramenta devolver continuidadeAtualizada, ela substitui este contrato. Não acrescente ações sem resultado. Texto breve e humano, responda todos os pedidos. Conte o resultado que muda a situação da pessoa, o impedimento ou a próxima ação dela. Use etapas internas e itens já visíveis na conversa só como contexto. Não repita o CRM adiado se o usuário não o retomou. Não declare vínculo pendente nem ausência de notas. Informe se o certificado estiver válido. Só oriente abrir a página se pagina_certificado_preparada estiver em acoesConcluidas. Nesse caso o transporte envia o link no mesmo turno antes do texto; não copie a URL nem narre seu envio.',
         formato:{texto:'Sua resposta natural ao usuário',fatos:saida.fatos,acoesConcluidas:saida.acoesConcluidas}
       }};
     }
@@ -1194,7 +1198,8 @@ function descreverRevisaoRegistro(r:Parameters<NonNullable<DependenciasAgente['a
           : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
       if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
       return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
-        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'.';
+        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'.'+
+        (certificado?'\n'+descreverCertificado(certificado,true):'');
 }
 
 function descreverEstadoSemAcao(entrada:EntradaAgente):string{
@@ -1208,7 +1213,7 @@ function descreverEstadoSemAcao(entrada:EntradaAgente):string{
         ?' A confirmação do CRM/RQE continua adiada.':'';
       return vinculo+crm+' Ainda não consultei atendimentos ou notas neste turno.\n'+
         (periodo?'O início do período solicitado é '+periodo.inicio.split('-').reverse().join('/')+
-          '. Podemos seguir com a verificação do certificado?'
+          '.'
           :'Qual é a data inicial do período que você quer conferir nos atendimentos?');
 }
 
@@ -1218,7 +1223,12 @@ function descreverPeriodoRegistrado(p:Extract<DecisaoPeriodo,{ok:true}>,certific
         (certificado?'\n'+descreverCertificado(certificado):'');
 }
 
-function descreverCertificado(r:OrientacaoCertificado):string{
+function descreverCertificado(r:OrientacaoCertificado,dadosConfirmados=false):string{
+  if(dadosConfirmados){
+    if(!r.ok)return 'Ainda não consegui verificar o certificado de '+r.nome+'.';
+    if(r.certificadoValido)return 'O certificado de '+r.nome+' está válido.';
+    return 'Para cadastrar o certificado de '+r.nome+', abra a página segura. O A1 e a senha entram somente nela.';
+  }
   if(!r.ok){
     if(r.motivo==='IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA')return 'Preciso identificar o médico confirmado antes de orientar o certificado. Qual profissional você quer configurar?';
     if(r.motivo==='PRONTIDAO_INDISPONIVEL')return 'Não consegui consultar a situação do certificado. Isso não comprova que a página esteja indisponível. O próximo passo é recuperar essa consulta e retomar o certificado; o vínculo e o CRM pendente ficam preservados.';
@@ -1595,3 +1605,4 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     clearTimeout(relogio);
   }
 }
+
