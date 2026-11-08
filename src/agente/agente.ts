@@ -524,7 +524,8 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         }
         if (!status.conectada) {
           registrar('descobrir_profissionais_agenda','CONEXAO_PENDENTE',inicio);
-          return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA'};
+          return {ok:false,motivo:status.salvo?'ACESSO_SALVO_SEM_CONEXAO':'AGENDA_NAO_CONECTADA',
+            proximaEtapa:'A agenda está desconectada e não foi lida. Use orientar_conexao_agenda para reconectar a mesma agenda; não relate ausência de profissionais.'};
         }
         if(deps.solicitarTrabalho) {
           // A referência técnica de uma conexão legada pode ser médico da conta.
@@ -957,10 +958,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
 
   if(profissionalComVinculoConfirmado(entrada))extras.push(tool({
     name:'continuar_onboarding',
-    description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use conversar para dúvidas/outro assunto, sem executar ações.',
+    description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use retomar_registro quando pedirem para validar ou continuar o CRM sem aprovar os valores. Use conversar para outras dúvidas, sem executar ações.',
     parameters:z.object({
       profissional:z.string().nullable().describe('Use null quando a mensagem atual não cita um profissional: o servidor usa o vínculo confirmado. Se a mensagem cita um profissional, informe o nome citado. Nunca use data, rótulo de função ou ID como nome.'),
-      intencoes:z.array(z.enum(['definir_periodo','aprovar_registro','adiar_registro','corrigir_registro','recusar_registro','consultar_certificado','conversar'])).min(1).max(4),
+      intencoes:z.array(z.enum(['definir_periodo','aprovar_registro','adiar_registro','corrigir_registro','recusar_registro','retomar_registro','consultar_certificado','conversar'])).min(1).max(4),
       inicioPeriodo:z.string().nullable(),crmConfirmado:z.string().nullable(),rqeConfirmado:z.string().nullable(),
       camposConfirmados:z.array(z.enum(['crm','rqe'])).max(2)
     }),
@@ -1026,12 +1027,19 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
           if(r.ok&&decisao==='corrigir_registro')saida.acoesConcluidas.push('correcao_solicitada');
         }
       }
-      if(alvoValido&&pretendidas.has('consultar_certificado')&&!certificadoResultado)
+      const retomarRegistro=alvoValido&&pretendidas.has('retomar_registro')&&
+        revisao?.estado==='aguardando_confirmacao'&&!saida.acoesConcluidas.includes('crm_salvo');
+      if(retomarRegistro){
+        const candidato=revisao.proposta??(revisao.razao==='ENCONTRADO'&&revisao.candidatos?.length===1?revisao.candidatos[0]:undefined);
+        saida.resultados.push({estado:'REGISTRO_PENDENTE',profissional:medico.nome,
+          candidato:candidato??null,orientacao:'Apresente os dados pendentes e peça confirmação. Nenhum dado foi salvo.'});
+      }
+      if(alvoValido&&pretendidas.has('consultar_certificado')&&!certificadoResultado&&!retomarRegistro)
         saida.resultados.push(deps.consultarProntidao?await orientarCertificado(medico):{ok:false,motivo:'PRONTIDAO_NAO_CONFIGURADA'});
       else if(certificadoResultado)
         saida.resultados.push(certificadoResultado);
       if(certificadoResultado?.ok)saida.acoesConcluidas.push(certificadoResultado.certificadoValido?'certificado_verificado':'pagina_certificado_preparada');
-      if(certificadoResultado||(alvoValido&&pretendidas.has('consultar_certificado')))diagnostico.certificado=certificadoResultado?.ok?
+      if(certificadoResultado||(alvoValido&&pretendidas.has('consultar_certificado')&&!retomarRegistro))diagnostico.certificado=certificadoResultado?.ok?
         certificadoResultado.certificadoValido?'VALIDO':'PREPARADO':'RECUSADO';
       diagnostico.acoesConcluidas=[...saida.acoesConcluidas];
       deps.aoDiagnosticoContinuidade?.(diagnostico);
@@ -1159,6 +1167,11 @@ export function acompanhamentoVerificado(
   const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
   const agenda=escolhaAgendaExplicita(entrada.texto)??agendaDaPergunta(entrada.texto)??entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
   const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
+  if(eventos.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE')&&
+     !tem('PROFISSIONAIS_ENCONTRADOS')&&!tem('PROFISSIONAIS_NAO_IDENTIFICADOS')&&!tem('TRABALHO_REGISTRADO')){
+    const link=eventos.some(e=>e.nome==='solicitar_link_seguro_agenda'&&e.codigo==='LINK_ACEITO_PARA_ENVIO');
+    return 'A conexão com a agenda caiu. '+(link?'Abra a página segura para reconectar.':'Precisamos reconectar pela página segura para conferir os profissionais.');
+  }
   if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
   if(tem('CONEXAO_EXISTENTE')) return [
     `A agenda ${nomeAgenda} já está conectada.`,
@@ -1540,7 +1553,8 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       const envioLinkAgenda = ferramentas.some(e =>
         e.nome === 'solicitar_link_seguro_agenda' && e.codigo === 'LINK_ACEITO_PARA_ENVIO');
       const conflitoAgenda = ferramentas.some(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.codigo === 'AGENDA_RECUSADA');
-      const introducao = !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
+      const descobertaSemConexao = ferramentas.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE');
+      const introducao = !descobertaSemConexao && !envioLinkAgenda && !conflitoAgenda && partes.length === 2 ? partes[0]!.trim() : '';
       const narracao=introducao.length>0 && introducao.length<=120
         ? introducao+' '+relato : relato;
       registrar('RESPOSTA',uso);
@@ -1605,4 +1619,3 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     clearTimeout(relogio);
   }
 }
-

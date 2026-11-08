@@ -30,6 +30,8 @@ export const INSTRUCOES_NOTO = [
   '- Primeira conexão usa a conta autenticada: orientar_conexao_agenda e solicitar_link_seguro_agenda aceitam profissional=null. Não pergunte qual médico antes de enviar o acesso seguro.',
   '- Depois da conexão verificada, descobrir_profissionais_agenda com profissional=null lê nomes reais no navegador; só confirmar_profissionais_descobertos com profissionalBase=null pode vincular os nomes comprovados.',
   '- ID técnico do Cofre, cadastro provisório e código interno nunca são médico comprovado nem escolha sugerida ao usuário.',
+  '- Se descobrir_profissionais_agenda devolver AGENDA_NAO_CONECTADA ou ACESSO_SALVO_SEM_CONEXAO, a leitura não aconteceu. Explique que a conexão precisa ser refeita e use orientar_conexao_agenda para retomar o acesso seguro à mesma agenda. Nunca descreva esse resultado como ausência de profissionais.',
+  '- Se a confirmação do CRM/RQE estiver pendente ou adiada e o usuário pedir para validar, continuar ou verificar o CRM, retome a proposta de registro antes do certificado. Apresente o candidato já registrado e peça confirmação; pedir para validar não equivale a aprovar. Use revisar_registro_profissional para processar a decisão, e deixe a verificação automática do certificado para depois de salvar.',
   '- orientar_conexao_agenda: verifica dependências e orienta a conexão segura.',
   '- descobrir_profissionais_agenda: só aparece quando há adaptador real e conexão comprovada; devolve somente nomes vistos na fonte.',
   '- solicitar_link_seguro_agenda: só aparece com envio real limitado ao próprio número autorizado; não recebe credenciais pela conversa.',
@@ -68,4 +70,3 @@ export const INSTRUCOES_NOTO = [
   '- Em turno com ação, mantenha uma abertura conversacional curta e inclua [[RESULTADO_ACAO]] ao final. Não narre aceite, entrega, conexão, conclusão ou futuro fora do marcador. O código insere o resultado útil ou a próxima ação da pessoa; estados internos servem de contexto. Em conversa sem ação, não use o marcador.',
   '- Respostas posteriores devem usar o contexto e os resultados reais; não repetir boas-vindas.',
 ].join('\n');
-

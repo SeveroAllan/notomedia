@@ -30,6 +30,17 @@ function preparar(intencoes:string[],texto:string,acoes:string[],crm='adiado',cr
   return {modelo,aprovarRegistroProfissional,consultarProntidao,registrarPeriodoConferencia,confirmarProfissionais,links,deps,entrada};
 }
 describe('continuidade semântica com resultados verificáveis',()=>{
+  it('retoma o CRM adiado antes do certificado, sem gravar nem preparar link',async()=>{
+    const texto='O CRM sugerido da Ana é 36948/RS. Você confirma esse número?';
+    const p=preparar(['retomar_registro','consultar_certificado'],texto,[]);
+    p.entrada.texto='Vamos validar o CRM';
+    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
+    expect(JSON.stringify(p.modelo.lastCall?.request.input)).toContain('REGISTRO_PENDENTE');
+    expect(JSON.stringify(p.modelo.lastCall?.request.input)).toContain('36948/RS');
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(p.consultarProntidao).not.toHaveBeenCalled();
+    expect(p.links).toEqual([]);
+  });
   it('não promete registrar período ou conferir quando o alvo foi recusado',async()=>{
     const p=preparar(['definir_periodo'],'Vou fazer isso agora.',[]);
     p.entrada.texto='Pode usar 20/10 como início do período e conferir os atendimentos. Se estiver tudo certo, já quero emitir a nota.';
@@ -264,4 +275,3 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     p.modelo.assertComplete();
   });
 });
-
