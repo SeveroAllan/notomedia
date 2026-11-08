@@ -106,6 +106,19 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
     p.modelo.assertComplete();
   });
+  it.each([false,true])('verifica só o certificado do profissional recém-confirmado (válido: %s)',async(valido)=>{
+    const texto=valido?'O certificado da Ana está válido.':'Abra a página segura para cadastrar o certificado da Ana.';
+    const p=preparar(['aprovar_registro'],texto,
+      ['crm_salvo',valido?'certificado_verificado':'pagina_certificado_preparada'],'confirmado','36948/RS');
+    p.entrada.texto='O CRM 36948/RS está certo, pode confirmar e salvar.';
+    p.entrada.profissionais=[...profissionais,{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',nome:'Dr. Bruno Lima'}];
+    p.consultarProntidao.mockResolvedValue({certificadoValido:valido,dadosProfissionaisCompletos:true});
+    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
+    expect(p.aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith(ID,{confirmarRqe:false});
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.links).toEqual(valido?[]:['https://homologacao.example.test/?medicoId='+ID+'&etapa=certificado']);
+    p.modelo.assertComplete();
+  });
   it('período é tratado semanticamente como escopo e a fala não vira histórico de emissão',async()=>{
     const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,'2023-10-20');
     p.entrada.texto='Desde 20 de outubro.';
@@ -251,3 +264,4 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     p.modelo.assertComplete();
   });
 });
+

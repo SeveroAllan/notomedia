@@ -212,7 +212,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
       {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia:vi.fn()});
     expect(resposta).not.toMatch(/parou de emitir|precisa ser vinculada/);
     expect(resposta).toContain('período solicitado é 01/11/2026');
-    expect(resposta).toContain('verificação do certificado');
+    expect(resposta).not.toContain('Podemos seguir com a verificação do certificado?');
     modelo.assertComplete();
   });
   it('modelo sem ferramenta de período não pode transformar a data em conclusão fiscal',async()=>{
