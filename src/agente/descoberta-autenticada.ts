@@ -43,11 +43,15 @@ export async function persistirDescobertaComprovada(
     "'confirmar_profissional' else null end),",
     'atualizado_em=now()',
     "where (c.estado->>'agendaEscolhida' is null or c.estado->>'agendaEscolhida'=$3)",
-    "and (c.estado->>'faseAgenda' is null or c.estado->>'faseAgenda'",
+    "and (((c.estado->>'faseAgenda' is null or c.estado->>'faseAgenda'",
     "in ('DESCOBERTA_PENDENTE','CONFIRMACAO_PENDENTE'))",
     "and (c.estado->'descoberta' is null or c.estado->'descoberta'=$2::jsonb)",
     "and (c.estado->>'profissionalConfirmadoId' is null or",
-    "c.estado->>'faseAgenda'='CONFIRMACAO_PENDENTE')",
+    "c.estado->>'faseAgenda'='CONFIRMACAO_PENDENTE'))",
+    "or ($4='trabalho_agenda' and c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'",
+    "and c.estado->>'profissionalConfirmadoId' is not null",
+    "and not coalesce((c.estado->'descoberta'->'nomes') @> ($2::jsonb->'nomes')",
+    "and (c.estado->'descoberta'->'nomes') <@ ($2::jsonb->'nomes'), false)))",
     'returning conta_id'
   ].join('\n'),[contaId,JSON.stringify(fonte),agenda,origem]);
   return r.rows.length===1;
