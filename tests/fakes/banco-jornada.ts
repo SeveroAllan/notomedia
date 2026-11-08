@@ -71,9 +71,8 @@ export class BancoJornada {
     if (s.startsWith('update medico_servicos_fiscais set parametros_emissao')) {this.servico.parametros_emissao=JSON.parse(p[2]);return ret();}
     if (s.startsWith('update medico_perfil_fiscal set razao_social')) {this.perfil.razao_social=p[1];return ret();}
     if (s.startsWith('update medico_servicos_fiscais set aliquota_iss')) {this.servico.aliquota_iss=p[1];return ret();}
-    if (s.startsWith('insert into auditoria')) {this.auditoria.push({sql:s,params:p});return ret();}
     if (s.startsWith('insert into public.auditoria')) {
-      if (!this.auditoria.some(a=>a.sql===s&&a.params[3]===p[3])) this.auditoria.push({sql:s,params:p});return ret();
+      if (!s.includes('consentimento_parametros_fiscais')||!this.auditoria.some(a=>a.sql===s&&a.params[3]===p[3])) this.auditoria.push({sql:s,params:p});return ret();
     }
     if (s.startsWith('select true as permitido from public.auditoria')) return ret(this.auditoria.some(a=>a.sql.includes('consentimento_parametros_fiscais')&&JSON.parse(a.params[2]).certificadoId===this.certificados.find(c=>c.status==='ativo')?.id)?[{permitido:true}]:[]);
     if (s.startsWith('insert into cadastro_certificado_trabalhos')) {for(const c of this.certificados.filter(c=>c.status==='ativo'))if(!this.trabalhos.some(t=>t.certificado_id===c.id))this.trabalhos.push({id:randomUUID(),medico_id:c.medico_id,certificado_id:c.id,documento_titular:p[2]??null,snapshot:{nome:this.medico.nome_completo,crm:this.medico.crm},dados:{},estado:'pendente',tentativas:0,reserva:null});return ret();}

@@ -114,9 +114,11 @@ export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId:
         referencia: p.xml_nota_referencia_url } };
     await client.query(`update medico_servicos_fiscais set parametros_emissao = $3
       where id = $1 and medico_id = $2`, [s.id, input.medicoId, JSON.stringify(politica)]);
-    await client.query(`insert into auditoria (acao, entidade, entidade_id, dados_anteriores, dados_novos)
-      values ('confirmar_parametros_emissao', 'medico_servicos_fiscais', $1, $2, $3)`,
-      [s.id, s.parametros_emissao ? JSON.stringify(s.parametros_emissao) : null, JSON.stringify(politica)]);
+    await client.query(`insert into public.auditoria (conta_id, evento, dados)
+      select m.conta_id, 'confirmar_parametros_emissao', $2::jsonb
+      from public.medicos m where m.id = $1`, [input.medicoId, JSON.stringify({
+      servicoId: s.id, medicoId: input.medicoId, antes: s.parametros_emissao ?? null, depois: politica
+    })]);
     if (input.especialidade) {
       await client.query(`update medicos set especialidade = $2, atualizado_em = now()
         where id = $1`, [input.medicoId, input.especialidade]);

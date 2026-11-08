@@ -34,7 +34,7 @@ function bancoFiscal() {
     if (texto.startsWith('select id, ctrib_nac')) return { rows: [{ id: 'servico-1', ctrib_nac: '040101', ctrib_mun: null, cnbs: null, parametros_emissao: estado.politica }] };
     if (texto.startsWith('update medico_perfil_fiscal set confirmado_pelo_medico')) { estado.confirmado = true; estado.ambiente=valores[7]; return { rows: [], rowCount: 1 }; }
     if (texto.startsWith('update medico_servicos_fiscais set parametros_emissao')) { estado.politica = JSON.parse(valores[2]); return { rows: [], rowCount: 1 }; }
-    if (texto.startsWith('insert into auditoria')) return { rows: [], rowCount: 1 };
+    if (texto.startsWith('insert into public.auditoria')) return { rows: [], rowCount: 1 };
     if (texto.includes('as cert_ativos')) return { rows: [{ medico_id: 'medico-1', medico_nome: 'Medica Ficticia',
       crm: '12345/SC', rqe: null, confirmado_pelo_medico: estado.confirmado, dados_reforma_tributaria: estado.referencia,
       parametros_emissao: estado.politica, extraido_automaticamente: true, cert_ativos: '1', whats_conectados: '1',
