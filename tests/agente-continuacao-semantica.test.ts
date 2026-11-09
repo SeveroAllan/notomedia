@@ -31,6 +31,54 @@ function preparar(intencoes:string[],texto:string,acoes:string[],crm='adiado',cr
   return {modelo,aprovarRegistroProfissional,consultarProntidao,registrarPeriodoConferencia,confirmarProfissionais,links,deps,entrada};
 }
 describe('continuidade semântica com resultados verificáveis',()=>{
+  it('escolhe consultar prontidão diretamente, sem passar por roteador obrigatório',async()=>{
+    const p=preparar(['conversar'],'Não confirmei a prontidão fiscal.',[]);
+    const modelo=new ScriptedModel([
+      [functionCall('consultar_prontidao_onboarding',{profissional:'Ana'},{callId:'consulta-prontidao'})],
+      [assistantMessage(JSON.stringify({texto:'Ainda falta verificar os requisitos de emissão.',fatos,acoesConcluidas:[]}))]
+    ]);
+    const resposta=await responderAgente({...p.entrada,texto:'O que falta para emitir?'},{...p.deps,modeloTeste:modelo});
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(resposta).toBe('Ainda falta verificar os requisitos de emissão.');
+    modelo.assertComplete();
+  });
+  it('continua a conversa sem ferramenta e não expõe JSON estruturado ao WhatsApp',async()=>{
+    const p=preparar(['conversar'],'Entendi, podemos conversar sobre isso.',[]);
+    const modelo=new ScriptedModel([
+      [assistantMessage(JSON.stringify({texto:'Entendi, podemos conversar sobre isso.',fatos,acoesConcluidas:[]}))]
+    ]);
+    const resposta=await responderAgente({...p.entrada,texto:'Obrigado pela explicação.'},{...p.deps,modeloTeste:modelo});
+    expect(resposta).toBe('Entendi, podemos conversar sobre isso.');
+    expect(resposta).not.toContain('"acoesConcluidas"');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
+  it('interpreta agenda e certificado no mesmo turno sem perder o segundo pedido',async()=>{
+    const p=preparar(['conversar'],'',[]);
+    p.entrada.texto='Confere os médicos da TribeMD e me envia o acesso do certificado.';
+    p.entrada.estadoConversa.agendaEscolhida='tribemd';
+    const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Dra. Ana Souza']});
+    const modelo=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:'Ana',
+        intencoes:['verificar_agenda','consultar_certificado'],inicioPeriodo:null,
+        crmConfirmado:null,rqeConfirmado:null,camposConfirmados:[]},{callId:'duas-acoes'})],
+      [assistantMessage(JSON.stringify({texto:'Consultei a agenda e preparei o acesso seguro do certificado.',
+        fatos,acoesConcluidas:['agenda_lida','pagina_certificado_preparada']}))]
+    ]);
+    const resposta=await responderAgente(p.entrada,{...p.deps,modeloTeste:modelo,descobrirProfissionais,
+      consultarStatus:vi.fn().mockResolvedValue({tribemd:{salvo:true,conectada:true},
+        amplimed:{salvo:false,conectada:false}})});
+    expect(resposta).toBe('Consultei a agenda e preparei o acesso seguro do certificado.');
+    expect(descobrirProfissionais).toHaveBeenCalledOnce();
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.links).toHaveLength(1);
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
   it('retoma o CRM adiado antes do certificado, sem gravar nem preparar link',async()=>{
     const texto='O CRM sugerido da Ana é 36948/RS. Você confirma esse número?';
     const p=preparar(['retomar_registro','consultar_certificado'],texto,[]);
@@ -125,7 +173,9 @@ describe('continuidade semântica com resultados verificáveis',()=>{
       fatos:{...fatos,crm:'confirmado',crmValor:'36948/RS'},
       acoesConcluidas:['crm_salvo','pagina_certificado_preparada']
     });
-    expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    // O agente escolheu continuar_onboarding; o harness não o impôs.
+    expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(p.modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
     p.modelo.assertComplete();
   });
   it.each([false,true])('verifica só o certificado do profissional recém-confirmado (válido: %s)',async(valido)=>{

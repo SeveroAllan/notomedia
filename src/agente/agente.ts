@@ -1019,10 +1019,12 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
               'A leitura da agenda não identificou nomes de profissionais.'
             :'A conferência da agenda ficou agendada. Te aviso quando tiver o resultado.';
         diagnostico.acoesConcluidas=saida.acoesConcluidas;
-        deps.aoDiagnosticoContinuidade?.(diagnostico);
-        registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
-        continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
-        return saida;
+        if(pretendidas.size===1){
+          deps.aoDiagnosticoContinuidade?.(diagnostico);
+          registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
+          continuidadeResultado=saida;deps.aoContinuidadeOnboarding?.(saida);
+          return saida;
+        }
       }
       if(!alvoValido)saida.resultados.push({ok:false,motivo:'ALVO_NAO_CONFIRMADO'});
       if(alvoValido&&pretendidas.has('definir_periodo')){
@@ -1081,6 +1083,9 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       if(certificadoResultado?.ok)saida.acoesConcluidas.push(certificadoResultado.certificadoValido?'certificado_verificado':'pagina_certificado_preparada');
       if(certificadoResultado||(alvoValido&&pretendidas.has('consultar_certificado')&&!retomarRegistro))diagnostico.certificado=certificadoResultado?.ok?
         certificadoResultado.certificadoValido?'VALIDO':'PREPARADO':'RECUSADO';
+      // Com outros pedidos, a leitura da agenda é apenas um resultado do turno.
+      // A resposta final deve considerar também as demais ações verificadas.
+      if(pretendidas.size>1)delete saida.falaAgenda;
       diagnostico.acoesConcluidas=[...saida.acoesConcluidas];
       deps.aoDiagnosticoContinuidade?.(diagnostico);
       registrar('continuar_onboarding',saida.acoesConcluidas.length?'CONTINUIDADE_PROCESSADA':'CONTINUIDADE_SEM_ACAO',inicio);
@@ -1099,17 +1104,16 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     outputType:profissionalComVinculoConfirmado(entrada)?falaContinuidadeSchema:'text',
     modelSettings:{
       maxTokens:1024,
+      // O agente escolhe as ferramentas; chamadas sequenciais preservam a ordem
+      // e impedem gravações concorrentes no mesmo turno.
+      parallelToolCalls:false,
       ...(confirmacaoPendente ? {
-        // 'required' deixaria a IA escolher qualquer ferramenta ou texto.
-        // O SDK exige exatamente esta ferramenta no PRIMEIRO turno do modelo.
-        toolChoice:'confirmar_profissionais_descobertos',
-        parallelToolCalls:false
-      } : profissionalComVinculoConfirmado(entrada)?{
-        toolChoice:'continuar_onboarding',parallelToolCalls:false
-      } : exigeRegistroPeriodo(entrada,deps)?{
-        toolChoice:'registrar_periodo_conferencia',parallelToolCalls:false
-      } : exigeRevisaoRegistro(entrada,deps)?{
-        toolChoice:'revisar_registro_profissional',parallelToolCalls:false
+        // Vínculo exige decisão tipada antes de qualquer resposta livre.
+        toolChoice:'confirmar_profissionais_descobertos'
+      } : !profissionalComVinculoConfirmado(entrada)&&exigeRegistroPeriodo(entrada,deps)?{
+        toolChoice:'registrar_periodo_conferencia'
+      } : !profissionalComVinculoConfirmado(entrada)&&exigeRevisaoRegistro(entrada,deps)?{
+        toolChoice:'revisar_registro_profissional'
       } : {})
     },
     tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
@@ -1381,7 +1385,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
           entrada.estadoConversa.periodoConferencia.profissionalId===entrada.estadoConversa.profissionalConfirmadoId),
         crmAdiado:Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true),
         ferramentaPeriodoObrigatoria:!profissionalComVinculoConfirmado(entrada)&&exigeRegistroPeriodo(entrada,deps),
-        ferramentaContinuidadeObrigatoria:Boolean(profissionalComVinculoConfirmado(entrada))
+        ferramentaContinuidadeObrigatoria:false
       },
       ...(temFerramenta||temPendencia||entrada.estadoConversa?.faseAgenda==='VINCULO_CONFIRMADO'||codigo==='CONFIRMACAO_SEM_FERRAMENTA'?{
         estadoVinculo:{
@@ -1461,6 +1465,13 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     const resultado = await runner.run(agent, [
       { role: 'user', content: JSON.stringify({
         mensagem: entrada.texto.slice(0, 1500),
+        missaoOnboarding:{
+          objetivo:'preparar cada medico autorizado para emissao fiscal com dados verificados',
+          continuidade:'retomar com base no estado persistido e nos resultados das ferramentas',
+          conclusao:'exige prontidao fiscal verificada por profissional',
+          faseAgenda:entrada.estadoConversa?.faseAgenda??'A_VERIFICAR',
+          profissionalConfirmado:profissionalComVinculoConfirmado(entrada)?.nome??null
+        },
         contextoAnterior: (entrada.contexto ?? []).slice(-3).map(s => s.slice(0, 500)),
         // IDs de mensagens e referências de tarefas ficam no orquestrador,
         // nunca no contexto enviado ao modelo externo.
@@ -1530,6 +1541,33 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
           !fatosIguais?'FATOS_DIVERGENTES':'ACOES_DIVERGENTES';
       }catch{/* Contrato inválido: usar somente os recibos verificados abaixo. */}
       contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO',uso);
+    }
+    // Sem roteador obrigatório, o agente também pode responder ou consultar
+    // ferramentas de leitura sem chamar continuar_onboarding. O JSON do SDK
+    // nunca pode chegar bruto ao WhatsApp nem inventar efeitos.
+    const confirmadoSemContinuidade=profissionalComVinculoConfirmado(entrada);
+    if(confirmadoSemContinuidade&&!continuidadeTurno.atual&&resposta.startsWith('{')){
+      try{
+        const fala=falaContinuidadeSchema.parse(JSON.parse(resposta));
+        const pesquisa=entrada.estadoConversa?.pesquisasRegistro?.[confirmadoSemContinuidade.id];
+        const periodo=entrada.estadoConversa?.periodoConferencia?.profissionalId===confirmadoSemContinuidade.id
+          ?entrada.estadoConversa.periodoConferencia:null;
+        const fatosEsperados={
+          vinculo:'confirmado',crm:pesquisa?.estado==='confirmada'?'confirmado':
+            pesquisa?.confirmacaoAdiada?'adiado':'pendente',crmValor:null,
+          periodo:periodo?'registrado':'pendente',inicioPeriodo:periodo?.inicio??null,
+          emitiuNota:false,consultouNotas:false
+        };
+        if(Object.entries(fatosEsperados).every(([k,v])=>fala.fatos[k as keyof typeof fala.fatos]===v)&&
+          fala.acoesConcluidas.length===0&&
+          ferramentas.every(f=>['consultar_contexto_conta','consultar_status_agendas',
+            'consultar_prontidao_onboarding'].includes(f.nome))&&
+          respostaCompativelComFerramentas(fala.texto,ferramentas)){
+          contratoFala='VALIDO';registrar('RESPOSTA',uso);return fala.texto;
+        }
+      }catch{/* A fala livre não substitui fatos comprovados. */}
+      contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO',uso);
+      return descreverEstadoSemAcao(entrada);
     }
     if(!profissionalComVinculoConfirmado(entrada)&&exigeRegistroPeriodo(entrada,deps)&&!periodoTurno.atual&&!continuidadeTurno.atual){
       registrar('PERIODO_SEM_FERRAMENTA',uso);
