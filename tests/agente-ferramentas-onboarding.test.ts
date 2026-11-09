@@ -163,12 +163,16 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
       expect(diagnostico.mock.calls.at(-1)?.[0]).toMatchObject({
         estadoVinculo:{fase:'VINCULO_CONFIRMADO'},
         estadoOnboarding:{vinculoConfirmadoNaConta:true,perguntaPendente:pergunta===null?null:'AUSENTE',
-          crmAdiado:true,ferramentaPeriodoObrigatoria:false,ferramentaContinuidadeObrigatoria:true}
+          crmAdiado:true,ferramentaPeriodoObrigatoria:false,ferramentaContinuidadeObrigatoria:false}
       });
       const primeiraEntrada=modelo.calls[0]!.request.input[0];
       if(!primeiraEntrada||typeof primeiraEntrada==='string'||!('content' in primeiraEntrada))throw Error('Contexto não enviado');
       const contexto=JSON.parse(String(primeiraEntrada.content));
       expect(contexto.vinculoProfissionalVerificado).toEqual({nome:'Dra. Alice Silva',estado:'CONFIRMADO',novaConfirmacaoNecessaria:false});
+      expect(contexto.missaoOnboarding).toMatchObject({
+        objetivo:'preparar cada medico autorizado para emissao fiscal com dados verificados',
+        faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmado:'Dra. Alice Silva'
+      });
       modelo.assertComplete();
     }
   });
