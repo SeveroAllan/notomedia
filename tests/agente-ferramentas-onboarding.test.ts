@@ -155,7 +155,8 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
           ...(pergunta===null?{perguntaPendente:null}:{}),
           pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',confirmacaoAdiada:true}}}},
         {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia,aoDiagnostico:diagnostico});
-      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+      expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
       expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
       expect(resposta).toContain('período solicitado');
       expect(resposta).not.toMatch(/não emite|não emitiu|confirmar.*vincul/);

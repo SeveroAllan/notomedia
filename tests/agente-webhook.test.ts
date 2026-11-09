@@ -198,7 +198,8 @@ describe('Noto SDK — webhook autenticado e isolado', () => {
     const texto=enviar.mock.calls.map(c=>c[1]).join(' ');
     expect(texto).not.toContain('etapa=certificado');
     expect(texto).not.toMatch(/não emite|36948/);
-    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(modeloTeste.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modeloTeste.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
     modeloTeste.assertComplete();
   });
 
@@ -698,7 +699,8 @@ describe('webhook: referência pertence à conta autenticada',()=>{
     await comServidor(app,async postar=>expect((await postar({
       ...evento,data:{...evento.data,message:{conversation:texto}}
     })).status).toBe(200));
-    expect(modeloTeste.calls[0]?.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(modeloTeste.calls[0]?.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modeloTeste.calls[0]?.request.modelSettings.parallelToolCalls).toBe(false);
     const entradaModelo=modeloTeste.calls[0]?.request.input as Array<{content:string}>;
     expect(JSON.parse(entradaModelo[0]!.content).verificacaoAgendaPendente).toBe(true);
     const saida=enviar.mock.calls.map(c=>String(c[1])).join(' ');

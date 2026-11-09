@@ -198,7 +198,8 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     const resposta=await responderAgente({texto:'Não sei confirmar esses dados agora.',
       profissionais,estadoConversa:sugestao},{modeloTeste:modelo,consultarStatus:status,
       adiarConfirmacaoRegistro,aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais});
-    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
     expect(adiarConfirmacaoRegistro).toHaveBeenCalledExactlyOnceWith(ANA);
     expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(solicitarLinkRegistro).not.toHaveBeenCalled();
@@ -235,7 +236,8 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     estado.pesquisasRegistro![ANA]!.confirmacaoAdiada=true;
     const agente=criarAgenteNoto({texto:'Vamos ver o certificado.',profissionais,estadoConversa:estado},
       {consultarStatus:status,adiarConfirmacaoRegistro:async()=>true,aprovarRegistroProfissional:vi.fn()});
-    expect(agente.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(agente.modelSettings.toolChoice).toBeUndefined();
+    expect(agente.modelSettings.parallelToolCalls).toBe(false);
   });
   it('falha ao registrar adiamento não anuncia persistência nem aprova',async()=>{
     const aprovarRegistroProfissional=vi.fn();
