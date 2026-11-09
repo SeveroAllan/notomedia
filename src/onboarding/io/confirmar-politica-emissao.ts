@@ -34,11 +34,16 @@ function explicarCamposPendentes(campos: string[]): string {
     ? `A nota tem pendências em: ${motivos.join('; ')}. Esses dados estão incompletos, inconsistentes ou exigem suporte adicional. A equipe precisa analisar esses itens antes de liberar a emissão.`
     : 'A declaração original da nota precisa de análise antes de liberar a emissão. A equipe pode consultar as pendências específicas nos registros de validação.';
 }
-export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId: string; referenciaHash?: string; usarReferencia?: boolean; parametrosEmissao?: unknown; opcaoSimplesNacional?: string; serieDps?: string; proximoNumeroDps?: number; razaoSocial?: string; especialidade?: string; aliquotaIss?: number }): Promise<void> {
+export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId: string; referenciaHash?: string; usarReferencia?: boolean; parametrosEmissao?: unknown; opcaoSimplesNacional?: string; serieDps?: string; proximoNumeroDps?: number; razaoSocial?: string; especialidade?: string; aliquotaIss?: number }, contaPilotoHomologacao?:string): Promise<void> {
   let parametros: ParametrosEmissao | undefined = input.usarReferencia ? undefined : parametrosEmissaoSchema.parse(input.parametrosEmissao);
   const client = await pool.connect();
   try {
     await client.query('begin');
+    if (contaPilotoHomologacao) {
+      const autorizado=await client.query('select id from medicos where id=$1 and conta_id=$2 for share',
+        [input.medicoId,contaPilotoHomologacao]);
+      if (autorizado.rows.length!==1) throw new Error('EMITENTE_FORA_DO_ESCOPO_HOMOLOGACAO');
+    }
     const perfil = await client.query(`select cod_municipio_ibge, serie_dps, xml_nota_referencia_url, dados_reforma_tributaria
       from medico_perfil_fiscal where medico_id = $1 for update`, [input.medicoId]);
     const servicos = await client.query(`select id, ctrib_nac, cnbs, ctrib_mun, parametros_emissao from medico_servicos_fiscais
@@ -95,22 +100,25 @@ export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId:
     if (!/^\d{1,5}$/.test(serie)) throw new Error('Série da DPS inválida.');
     if (input.proximoNumeroDps !== undefined && (!Number.isSafeInteger(input.proximoNumeroDps) || input.proximoNumeroDps < 1)) throw new Error('Número da DPS inválido.');
     if (!/^\d{6}$/.test(s.ctrib_nac)) throw new Error('Código de tributação do serviço inválido.');
+    const ambiente = contaPilotoHomologacao ? 'homologacao' : parametros.ambiente;
     await client.query(`update medico_perfil_fiscal set confirmado_pelo_medico = true,
       ambiente = $8, serie_dps = $2, proximo_numero_dps = coalesce($3, proximo_numero_dps),
       opcao_simples_nacional = $4, regime_apuracao_sn = $5, regime_especial_tributacao = $6,
       percentual_tot_trib_sn = coalesce($7, percentual_tot_trib_sn), atualizado_em = now()
       where medico_id = $1`, [input.medicoId, serie, input.proximoNumeroDps, parametros.opcaoSimplesNacional,
-      parametros.regimeApuracaoSn ?? null, parametros.regimeEspecialTributacao, parametros.percentualTotTribSN, parametros.ambiente]);
+      parametros.regimeApuracaoSn ?? null, parametros.regimeEspecialTributacao, parametros.percentualTotTribSN, ambiente]);
     const politica = { parametros, referenciaHash: input.referenciaHash, confirmadoEm: new Date().toISOString(), origem: 'revisao_onboarding', fidelidadeReferencia: Boolean(input.usarReferencia),
       ctribNac: s.ctrib_nac, cnbs: s.cnbs, ctribMun: s.ctrib_mun,
-      perfil: { ambiente: parametros.ambiente, opcao: parametros.opcaoSimplesNacional, regime: parametros.regimeApuracaoSn ?? null,
+      perfil: { ambiente, opcao: parametros.opcaoSimplesNacional, regime: parametros.regimeApuracaoSn ?? null,
         especial: parametros.regimeEspecialTributacao, municipio: p.cod_municipio_ibge, serie,
         referencia: p.xml_nota_referencia_url } };
     await client.query(`update medico_servicos_fiscais set parametros_emissao = $3
       where id = $1 and medico_id = $2`, [s.id, input.medicoId, JSON.stringify(politica)]);
-    await client.query(`insert into auditoria (acao, entidade, entidade_id, dados_anteriores, dados_novos)
-      values ('confirmar_parametros_emissao', 'medico_servicos_fiscais', $1, $2, $3)`,
-      [s.id, s.parametros_emissao ? JSON.stringify(s.parametros_emissao) : null, JSON.stringify(politica)]);
+    await client.query(`insert into public.auditoria (conta_id, evento, dados)
+      select m.conta_id, 'confirmar_parametros_emissao', $2::jsonb
+      from public.medicos m where m.id = $1`, [input.medicoId, JSON.stringify({
+      servicoId: s.id, medicoId: input.medicoId, antes: s.parametros_emissao ?? null, depois: politica
+    })]);
     if (input.especialidade) {
       await client.query(`update medicos set especialidade = $2, atualizado_em = now()
         where id = $1`, [input.medicoId, input.especialidade]);

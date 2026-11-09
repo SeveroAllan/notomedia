@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -13,7 +13,7 @@ import {
 import { separarBaloes, reacaoContextual } from './baloes.js';
 import {
   registrarPeriodoConferencia,lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
-  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa
+  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa, escolhaAgendaExplicita
 } from './estado-conversa.js';
 import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
@@ -35,7 +35,7 @@ const eventoSchema = z.object({
     }).passthrough(),
     message: z.object({
       conversation: z.string().optional(),
-      extendedTextMessage: z.object({ text: z.string().optional() }).passthrough().optional()
+      extendedTextMessage: z.object({ text: z.string().optional(), contextInfo: z.object({stanzaId:z.string().max(200).optional()}).passthrough().optional() }).passthrough().optional()
     }).passthrough().optional()
   }).passthrough()
 }).passthrough();
@@ -63,10 +63,16 @@ export function criarRouterWebhookAgente(deps: {
   controleCusto?:pg.Pool;
   exigirControleCusto?:boolean;
   diagnosticoAtivo?: boolean;
-  registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  registrarDiagnostico?: (registro: DiagnosticoMensagem, contaId: string) => void | Promise<void>;
+  propostaEmissaoWhatsApp?: (
+    entrada:{contaId:string;texto:string;mensagemRef:string;conversaRef:string;citadaRef?:string},
+    publicar:(texto:string)=>Promise<string|null>
+  )=>Promise<string|null>;
+  enviarPropostaEmissao?: (telefone:string,texto:string)=>Promise<string|null>;
+  autorizarEmissaoWhatsApp?: (contaId:string, texto:string, mensagemRef:string)=>Promise<string|null>;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
+  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
   solicitarTrabalho?: (pedido: PedidoTrabalhoNoto) => Promise<ResultadoEnfileirar>;
   listarTrabalhos?: (contaId: string, telefone: string, instancia: string) => Promise<SituacaoTrabalhoNoto[]>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
@@ -83,6 +89,7 @@ export function criarRouterWebhookAgente(deps: {
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
+  receberCodigoAmplimed?: (contaId: string | null, telefone: string, texto: string) => boolean;
   atualizarEstadoLink?: (evento:unknown) => Promise<boolean>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string, opcoes?:{linkPreview:false}) => Promise<boolean>;
@@ -181,6 +188,13 @@ export function criarRouterWebhookAgente(deps: {
       );
       if (conta.rows.length > 1) { res.sendStatus(204); return; }
       contaId = conta.rows[0]?.conta_id ?? null;
+      if (deps.receberCodigoAmplimed?.(contaId, telefone, texto)) {
+        const bruto = (req as typeof req & { rawBody?: Buffer }).rawBody;
+        bruto?.fill(0);
+        req.body = {};
+        res.sendStatus(204);
+        return;
+      }
       // Somente SELECT sem resultado é evidência de conta ausente.
       // Uma falha de consulta cai no catch e jamais é tratada como ausência.
       const medicos = contaId ? await deps.pool.query(
@@ -196,6 +210,40 @@ export function criarRouterWebhookAgente(deps: {
           res.sendStatus(200); return;
         }
         reservada = true;
+        if (deps.propostaEmissaoWhatsApp && deps.enviarPropostaEmissao) {
+          const ref = (tipo:'mensagem'|'conversa', id?:string) => createHmac('sha256',deps.segredo)
+            .update(JSON.stringify(['proposta_fiscal',tipo,evento.instance,telefone,id])).digest('hex');
+          const citada = evento.data.message?.extendedTextMessage?.contextInfo?.stanzaId;
+          const resposta = await deps.propostaEmissaoWhatsApp({
+            contaId,texto,mensagemRef:ref('mensagem',evento.data.key.id),
+            conversaRef:ref('conversa'),
+            ...(citada ? {citadaRef:ref('mensagem',citada)} : {})
+          },async textoProposta=>{
+            const id = await deps.enviarPropostaEmissao!(telefone,textoProposta);
+            return id ? ref('mensagem',id) : null;
+          });
+          if (resposta !== null) {
+            enviado = resposta === '' || await deps.enviar(telefone,resposta);
+            await finalizarMensagemConversa(deps.pool,contaId,evento.instance,evento.data.key.id,enviado);
+            res.sendStatus(enviado?200:503);
+            return;
+          }
+        }
+        if (deps.autorizarEmissaoWhatsApp) {
+          const respostaFiscal = await deps.autorizarEmissaoWhatsApp(contaId, texto,
+            referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]));
+          if (respostaFiscal !== null) {
+            enviado = await deps.enviar(telefone, respostaFiscal);
+            await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+            res.sendStatus(enviado ? 200 : 503);
+            return;
+          }
+        }
+        const agendaEscolhida = escolhaAgendaExplicita(texto);
+        if (agendaEscolhida && agendaEscolhida !== estado.agendaEscolhida) {
+          await salvarEstadoConversa(deps.pool, contaId, { agendaEscolhida });
+          estado = await lerEstadoConversa(deps.pool, contaId);
+        }
         // Reconciliar resultados REAIS da fila antiga (pré-correção)
         // somente da mesma conta/instância, sem usar texto anterior como
         // prova e sem consultar portal ou IA. Estado concluído não reabre.
@@ -276,6 +324,8 @@ export function criarRouterWebhookAgente(deps: {
       const resposta = await responderAgente({
         texto, profissionais, semConta: !contaId, estadoConversa: estado,
         trabalhos,
+        verificacaoAgendaPendente:tarefasPendentes.some(t=>t.tipo==='verificar_agenda'&&
+          t.instancia===evento.instance&&t.remetenteRef===remetenteRef),
         painelUrl: deps.painelUrl,
         contexto: contextoPorConta.get(chaveContexto) ?? []
       }, {
@@ -328,8 +378,8 @@ export function criarRouterWebhookAgente(deps: {
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
         ...(contaId&&deps.persistirConversa?{
-          registrarPeriodoConferencia:async(profissionalId:string,inicio:string)=>{
-            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio);
+          registrarPeriodoConferencia:async(profissionalId:string,inicio:string,substituirInicio?:string)=>{
+            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio,substituirInicio);
             if(gravado)periodoDaMensagem=true;
             return gravado;
           }
@@ -360,22 +410,24 @@ export function criarRouterWebhookAgente(deps: {
           }
         } : {}),
         ...(contaId && deps.solicitarTrabalho ? {
-          solicitarTrabalho: (tipo, fonte, medicoId) =>
+          solicitarTrabalho: (tipo, fonte, medicoId, inicioPeriodo) =>
             deps.solicitarTrabalho!({contaId:contaId!,instancia:evento.instance,
-              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId})
+              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId,...(inicioPeriodo?{inicioPeriodo}:{})})
         } : {}),
         ...(contaId && deps.consultarConferencia ? {
-          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida) =>
-            deps.consultarConferencia!(contaId!,medicoId,fonte),
+          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida, inicioPeriodo?:string) =>
+            deps.consultarConferencia!(contaId!,medicoId,fonte,...(inicioPeriodo?[inicioPeriodo] as const:[])),
           aoConferencia: (resultado: ResultadoConferencia) => {
             if (resultado.ok) conferenciaDaMensagem.atual=resultado;
           }
         } : {})
       });
 
-      const baloes = separarBaloes(resposta).filter((b,i,todos)=>!urlsCertificado.has(b)||todos.indexOf(b)===i);
-      // O link real não depende da redação do modelo nem do resultado de outra ação.
-      for(const url of urlsCertificado)if(!baloes.includes(url))baloes.push(url);
+      // Envie o link antes da fala que pode orientar o usuário a abri-lo.
+      const baloes = [
+        ...urlsCertificado,
+        ...separarBaloes(resposta).filter(balao => !urlsCertificado.has(balao))
+      ];
       enviado = baloes.length > 0;
       for (const balao of baloes) {
         if (deps.presenca) await renovarPresenca();
@@ -430,6 +482,7 @@ export function criarRouterWebhookAgente(deps: {
           // o fato diretamente; saves tardios não podem desfazer o progresso.
           const delta:EstadoConversa={...novo,tarefasPendentes};
           // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
+          delete delta.agendaEscolhida; // A escolha é gravada antes das ferramentas.
           delete delta.pesquisasRegistro;
           delete delta.periodoConferencia;
           if(periodoDaMensagem||estado.perguntaPendente==='periodo')delete delta.perguntaPendente;
@@ -462,8 +515,7 @@ export function criarRouterWebhookAgente(deps: {
           conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
         };
         try {
-          if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
-          else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
+          if (contaId) await deps.registrarDiagnostico?.(registro, contaId);
         } catch { /* Observabilidade não bloqueia atendimento. */ }
       }
       if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);

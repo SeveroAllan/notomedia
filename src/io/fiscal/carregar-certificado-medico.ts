@@ -30,6 +30,7 @@ export async function carregarCertificadoMedico(
       valido_ate
     from medico_certificados
     where medico_id = $1 and status = 'ativo'
+      and (valido_de is null or valido_de <= current_date) and valido_ate >= current_date
     order by criado_em desc
     limit 1
   `;

@@ -56,8 +56,11 @@ export class BancoJornada {
     if (s.startsWith('update medicos')&&s.includes('especialidade = coalesce(nullif')) {this.medico.especialidade ||= p[1];return ret();}
     if (s.startsWith('select vault.create_secret')) {const id=randomUUID();this.segredos.set(id,p[0]);return ret([{id}]);}
     if (s.includes('from vault.decrypted_secrets')) return ret([{secret:this.segredos.get(p[0])}]);
-    if (s.startsWith('update medico_certificados set status')) {this.certificados.forEach(c=>{if(c.medico_id===p[0]&&c.status==='ativo')c.status='vencido';});return ret();}
-    if (s.startsWith('insert into medico_certificados')) {const c={id:p[0],medico_id:p[1],arquivo_storage_path:p[2],senha_secret_id:p[3],valido_de:p[4],valido_ate:p[5],status:'ativo'};this.certificados.unshift(c);return ret([c]);}
+    if (s.startsWith('select id from public.medicos where id = $1 and conta_id is not null for update')) return ret(this.medico?.id===p[0]?[{id:p[0]}]:[]);
+    if (s.startsWith('select id, arquivo_storage_path, status from public.medico_certificados')) return ret(this.certificados.filter(c=>c.medico_id===p[0]));
+    if (s.startsWith("update public.medico_certificados set status = 'vencido'")) {this.certificados.forEach(c=>{if(c.medico_id===p[0]&&c.id!==p[1]&&c.status==='ativo')c.status='vencido';});return ret();}
+    if (s.startsWith("update public.medico_certificados set status = 'ativo'")) {Object.assign(this.certificados.find(c=>c.id===p[0]),{status:'ativo',valido_de:p[1],valido_ate:p[2]});return ret();}
+    if (s.startsWith('insert into public.medico_certificados')) {const c={id:p[0],medico_id:p[1],arquivo_storage_path:p[2],senha_secret_id:p[3],valido_de:p[4],valido_ate:p[5],status:'pendente'};this.certificados.unshift(c);return ret([c]);}
     if (s.startsWith('select id, medico_id, arquivo_storage_path')||s.startsWith('select id from medico_certificados')) return ret(this.certificados.filter(c=>c.status==='ativo').slice(0,1));
     if (s.startsWith('insert into medico_perfil_fiscal')) {this.perfil={medico_id:p[0],razao_social:p[5],inscricao_municipal:p[7],uf:p[8],cod_municipio_ibge:p[9],serie_dps:p[10],opcao_simples_nacional:p[11],regime_apuracao_sn:p[12],regime_especial_tributacao:p[13],ambiente:p[14],proximo_numero_dps:p[16],dados_reforma_tributaria:JSON.parse(p[19]),xml_nota_referencia_url:p[20],extraido_automaticamente:true,confirmado_pelo_medico:false};return ret();}
     if (s.startsWith('update medico_servicos_fiscais set padrao')) return ret();
@@ -68,8 +71,10 @@ export class BancoJornada {
     if (s.startsWith('update medico_servicos_fiscais set parametros_emissao')) {this.servico.parametros_emissao=JSON.parse(p[2]);return ret();}
     if (s.startsWith('update medico_perfil_fiscal set razao_social')) {this.perfil.razao_social=p[1];return ret();}
     if (s.startsWith('update medico_servicos_fiscais set aliquota_iss')) {this.servico.aliquota_iss=p[1];return ret();}
-    if (s.startsWith('insert into auditoria')) {this.auditoria.push({sql:s,params:p});return ret();}
-    if (s.startsWith('select true as permitido from auditoria')) return ret(this.auditoria.some(a=>a.sql.includes('consentimento_parametros_fiscais')&&JSON.parse(a.params[1]).certificadoId===this.certificados.find(c=>c.status==='ativo')?.id)?[{permitido:true}]:[]);
+    if (s.startsWith('insert into public.auditoria')) {
+      if (!s.includes('consentimento_parametros_fiscais')||!this.auditoria.some(a=>a.sql===s&&a.params[3]===p[3])) this.auditoria.push({sql:s,params:p});return ret();
+    }
+    if (s.startsWith('select true as permitido from public.auditoria')) return ret(this.auditoria.some(a=>a.sql.includes('consentimento_parametros_fiscais')&&JSON.parse(a.params[2]).certificadoId===this.certificados.find(c=>c.status==='ativo')?.id)?[{permitido:true}]:[]);
     if (s.startsWith('insert into cadastro_certificado_trabalhos')) {for(const c of this.certificados.filter(c=>c.status==='ativo'))if(!this.trabalhos.some(t=>t.certificado_id===c.id))this.trabalhos.push({id:randomUUID(),medico_id:c.medico_id,certificado_id:c.id,documento_titular:p[2]??null,snapshot:{nome:this.medico.nome_completo,crm:this.medico.crm},dados:{},estado:'pendente',tentativas:0,reserva:null});return ret();}
     if (s.startsWith('update cadastro_certificado_trabalhos t set estado=')&&s.includes('where t.estado not in')) {for(const t of this.trabalhos)if(!['obsoleto','concluido'].includes(t.estado)&&!this.certificados.some(c=>c.id===t.certificado_id&&c.status==='ativo'))t.estado='obsoleto';return ret();}
     if (s.startsWith('update cadastro_certificado_trabalhos t set estado=')&&s.includes("t.estado='aguardando_confirmacao'")) return ret();

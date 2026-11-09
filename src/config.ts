@@ -1,3 +1,4 @@
+import type { EscopoEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
 /**
  * Leitura e validação das variáveis de ambiente de infraestrutura e segredos.
  * Este é o único módulo autorizado a interagir com process.env para segredos,
@@ -40,6 +41,7 @@ export interface AppConfig {
   notoAgentEnvioAtivo?: boolean;
   notoAgentTracesAtivos?: boolean;
   notoAgentDiagnosticoAtivo?: boolean;
+  notoAgentBuildRevisao?: string;
   notoAgentWebhookSecret?: string;
   workerEmbutidoAtivo?: boolean;
   notoAgentLoginContaExistenteApenas?: boolean;
@@ -52,11 +54,37 @@ export interface AppConfig {
   envioPacienteRealAtivo?: boolean;
   envioRealAllowlist?: string[];
   notoPilotoRestrito?: boolean;
+  atendimentoTesteTomadorConfigurado?: boolean;
+  atendimentoTesteWhatsApp?: EscopoEmissaoWhatsApp;
+  ambienteEmissaoWhatsApp?: EscopoEmissaoWhatsApp & {ambiente:'homologacao'};
+  emissaoWhatsAppPropostaAtiva?: boolean;
+  emissaoWhatsAppProdutor?: EscopoEmissaoWhatsApp;
+  emissaoWhatsAppWorker?: EscopoEmissaoWhatsApp;
   meuDanfeApiKey?: string;
   hubDesenvolvedorToken?: string;
 }
 
 export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const produtorWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PRODUTOR_ATIVO'] === 'true';
+  const propostaWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PROPOSTA_ATIVA'] === 'true';
+  if (propostaWhatsApp && !produtorWhatsApp) throw new Error('PROPOSTA_WHATSAPP_EXIGE_PRODUTOR');
+  const workerWhatsApp = env['NOTO_EMISSAO_WHATSAPP_WORKER_ATIVO'] === 'true';
+  const atendimentoTesteAtivo = env['NOTO_EMISSAO_WHATSAPP_ATENDIMENTO_TESTE_ATIVO'] === 'true';
+  const ambienteEmissaoWhatsApp = env['NOTO_EMISSAO_WHATSAPP_AMBIENTE']?.trim();
+  if (ambienteEmissaoWhatsApp && ambienteEmissaoWhatsApp !== 'homologacao')
+    throw new Error('EMISSAO_WHATSAPP_AMBIENTE_INVALIDO');
+  const escopoWhatsApp = {
+    contaId: env['NOTO_EMISSAO_WHATSAPP_CONTA_ID'] ?? '',
+    medicoId: env['NOTO_EMISSAO_WHATSAPP_MEDICO_ID'] ?? '',
+    agendamentoId: env['NOTO_EMISSAO_WHATSAPP_AGENDAMENTO_ID'] ?? ''
+  };
+  if (produtorWhatsApp || workerWhatsApp || atendimentoTesteAtivo || ambienteEmissaoWhatsApp) {
+    const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
+    const destino = (env['ENVIO_REAL_ALLOWLIST'] ?? '').trim();
+    if (env['NOTO_PILOTO_RESTRITO'] !== 'true' || !/^55\d{10,11}$/.test(destino) ||
+        !Object.values(escopoWhatsApp).every(id => uuid.test(id)) || (produtorWhatsApp && workerWhatsApp))
+      throw new Error('EMISSAO_WHATSAPP_EXIGE_ESCOPO_ISOLADO');
+  }
   if (env['PREPARACAO_FISCAL_ATIVA'] === 'true' && env['AGENTE_FISCAL_ATIVO'] !== 'true') {
     throw new Error('PREPARACAO_FISCAL_ATIVA requer AGENTE_FISCAL_ATIVO para tratar pendências sem retentativas cegas.');
   }
@@ -132,6 +160,7 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     notoAgentEnvioAtivo: env['NOTO_AGENT_ENVIO_ATIVO'] === 'true',
     notoAgentTracesAtivos: env['NOTO_AGENT_TRACES_ATIVOS'] === 'true',
     notoAgentDiagnosticoAtivo: env['NOTO_AGENT_DIAGNOSTICO_ATIVO'] === 'true',
+    notoAgentBuildRevisao: env['NOTO_BUILD_REVISAO'],
     notoAgentWebhookSecret: env['EVOLUTION_ASSISTANT_WEBHOOK_SECRET']?.trim() || '',
     workerEmbutidoAtivo: env['NOTO_WORKER_EMBUTIDO_ATIVO'] !== 'false',
     notoAgentLoginContaExistenteApenas: env['NOTO_AGENT_LOGIN_CONTA_EXISTENTE_APENAS'] === 'true',
@@ -139,6 +168,13 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     retomadaRecusaSefinAtiva: env['RETOMADA_RECUSA_SEFIN_ATIVA'] === 'true',
     preparacaoFiscalAtiva: env['PREPARACAO_FISCAL_ATIVA'] === 'true',
     comunicacaoMedicoAtiva: env['COMUNICACAO_MEDICO_ATIVA'] === 'true',
+    ...(ambienteEmissaoWhatsApp === 'homologacao' ? {ambienteEmissaoWhatsApp:{...escopoWhatsApp,ambiente:ambienteEmissaoWhatsApp}} : {}),
+    emissaoWhatsAppPropostaAtiva:propostaWhatsApp,
+    ...(atendimentoTesteAtivo && env['ENCRYPTION_KEY']?.trim() && env['APP_PEPPER']?.trim()
+      ? {atendimentoTesteTomadorConfigurado:true} : {}),
+    ...(atendimentoTesteAtivo ? {atendimentoTesteWhatsApp:{...escopoWhatsApp,atendimentoTesteAtivo:true}} : {}),
+    ...(produtorWhatsApp ? {emissaoWhatsAppProdutor:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
+    ...(workerWhatsApp ? {emissaoWhatsAppWorker:{...escopoWhatsApp,...(atendimentoTesteAtivo?{atendimentoTesteAtivo:true}:{})}} : {}),
     emissaoComprovanteHomologacaoAtiva: env['EMISSAO_COMPROVANTE_HOMOLOGACAO_ATIVA'] === 'true',
     envioMedicoRealAtivo: env['ENVIO_MEDICO_REAL_ATIVO'] === 'true',
     envioPacienteRealAtivo: env['ENVIO_PACIENTE_REAL_ATIVO'] === 'true',

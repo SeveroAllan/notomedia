@@ -20,12 +20,52 @@ export function contemCredencialAgenda(texto: string): boolean {
 }
 
 export interface CofreAgenda { status(id: string): Promise<{ estado: string; ativo?: boolean; codigo?: string | null }>; iniciar(id: string, credencial?: { email: string; senha: string }): Promise<unknown> }
-export interface ConclusaoAgenda { agenda: AgendaSuportada; conectado: boolean; falhaAcesso?: boolean; chave: string; contatoTelefone?:string }
+export interface ConclusaoAgenda { agenda: AgendaSuportada; conectado: boolean; falhaAcesso?: boolean; motivoAcesso?: string; chave: string; contatoTelefone?:string }
 
 export interface TextoLinkAgendaEnviado { medicoId: string; telefoneMedico: string; linkId: string; indice: number; texto: string }
 
 export class LinksCofre {
     private aguardando = new Map<string, { id: string; agenda: string; contatoTelefone?:string }>();
+    private codigosPendentes = new Map<string, {
+        referencia: string; telefone: string; linkId: string; entregar: (codigo: string | null) => void
+    }>();
+
+    async pedirCodigoAmplimed(id: string): Promise<string | null> {
+        const link = this.aguardando.get(id);
+        if (link?.agenda !== 'amplimed' || !link.contatoTelefone || !contaDoCofreId(id) || this.codigosPendentes.has(id)) return null;
+        const referencia = randomBytes(4).toString('hex');
+        let entregar!: (codigo: string | null) => void;
+        const resposta = new Promise<string | null>(resolve => { entregar = resolve; });
+        const pendencia = { referencia, telefone: link.contatoTelefone, linkId: link.id, entregar };
+        this.codigosPendentes.set(id, pendencia);
+        const limite = setTimeout(() => entregar(null), 240_000);
+        try {
+            const envio = this.deps.enviar(id,
+                `A Amplimed enviou um código de verificação ao seu e-mail. Responda AMPLIMED ${referencia} seguido dos seis dígitos. Use somente o código da Amplimed para esta tentativa.`,
+                link.contatoTelefone).catch(() => 'erro');
+            // O prazo também limita a espera caso o transporte fique pendente.
+            const resultado = await Promise.race([envio, resposta]);
+            return resultado === 'enviado' ? await resposta : resultado === 'erro' || resultado === 'simulado' ? null : resultado;
+        } finally {
+            clearTimeout(limite);
+            if (this.codigosPendentes.get(id) === pendencia) this.codigosPendentes.delete(id);
+        }
+    }
+
+    receberCodigoAmplimed(contaId: string, telefone: string, texto: string): boolean {
+        if (!/^amplimed\s+[a-f0-9]{8}(?:\s|$)/i.test(texto.trim())) return false;
+        const dados = /^amplimed\s+([a-f0-9]{8})\s+(\d{6})$/i.exec(texto.trim());
+        const id = cofreIdDaConta(contaId);
+        const pendencia = this.codigosPendentes.get(id);
+        if (dados && pendencia && dados[1]!.toLowerCase() === pendencia.referencia &&
+            this.aguardando.get(id)?.id === pendencia.linkId &&
+            gerarVariantesTelefoneBrasileiro(pendencia.telefone).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v))) {
+            this.codigosPendentes.delete(id);
+            pendencia.entregar(dados[2]!);
+        }
+        return true; // Código de verificação nunca segue para a conversa.
+    }
+
     constructor(private deps: {
         pool: pg.Pool;
         origem: string;
@@ -473,14 +513,16 @@ export class LinksCofre {
         this.aguardando.delete(medicoId);
         const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
         if (!rows.length) return;
-        const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
+        const motivoAcesso = conectado ? undefined :
+            (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo ?? undefined;
+        const falhaAcesso = motivoAcesso === 'ACESSO_PRECISA_VERIFICACAO';
         // O sucesso da conta é um evento de onboarding, não de médico/emissão.
         const contaId = contaDoCofreId(medicoId);
         if (contaId && this.deps.aoConcluirConta) {
             await this.deps.aoConcluirConta(contaId, {
                 agenda: link.agenda as AgendaSuportada, conectado, chave: link.id,
                 ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}),
-                ...(!conectado?{falhaAcesso}:{})
+                ...(!conectado?{falhaAcesso,motivoAcesso}:{})
             });
             return;
         }

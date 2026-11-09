@@ -35,7 +35,7 @@ function bancoFiscal() {
       if (sql.includes('select cod_municipio_ibge')) return { rows: [{ cod_municipio_ibge: '4205407', serie_dps: '00001', xml_nota_referencia_url: 'referencia-ficticia', dados_reforma_tributaria: referencia }], rowCount: 1 };
       if (sql.includes('select id, ctrib_nac')) return { rows: [{ id: 'servico-1', ctrib_nac: '040101', cnbs: null, ctrib_mun: null, parametros_emissao: null }], rowCount: 1 };
       if (sql.includes('returning id, solicitar_cpf')) return { rows: encontrado ? [{ id: 'medico-1', solicitar_cpf_direto_paciente: valores[0] }] : [], rowCount: encontrado ? 1 : 0 };
-      if (/^(begin|commit|rollback)$/.test(sql) || /^\s*(update (medico_perfil_fiscal|medico_servicos_fiscais|medicos)|insert into auditoria)\b/.test(sql)) return { rows: [], rowCount: encontrado ? 1 : 0 };
+      if (/^(begin|commit|rollback)$/.test(sql) || /^\s*(update (medico_perfil_fiscal|medico_servicos_fiscais|medicos)|insert into public\.auditoria)\b/.test(sql)) return { rows: [], rowCount: encontrado ? 1 : 0 };
       throw new Error('SQL inesperado no fake fiscal: ' + sql);
     },
     release() { liberado = true; }
@@ -145,7 +145,7 @@ describe('confirmação fiscal na fronteira SQL', () => {
     expect(gravado.valores).toEqual(['servico-1', 'medico-1', JSON.stringify(dados)]);
     expect(dados).toMatchObject({ parametros, origem: 'revisao_onboarding', perfil, ctribNac: '040101', cnbs: null, ctribMun: null });
     expect(Number.isFinite(Date.parse(dados.confirmadoEm))).toBe(true);
-    expect(banco.comandos.find(c => c.sql.startsWith('insert into auditoria'))!.valores).toEqual(['servico-1', null, JSON.stringify(dados)]);
+    expect(banco.comandos.find(c => c.sql.startsWith('insert into public.auditoria'))!.valores).toEqual(['medico-1', JSON.stringify({ servicoId: 'servico-1', medicoId: 'medico-1', antes: null, depois: dados })]);
   });
   it('referência trocada interrompe confirmação e solicita rollback', async () => {
     const banco = bancoFiscal(); banco.referencia({ versao: 2, hash: 'novo-hash' });

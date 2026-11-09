@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { classificarTelaAmplimed, desafioDoisFatoresAmplimed, eventoAgendaAmplimedDoFeed, filtrarEstadoAmplimed, navegacaoPulouDataAmplimed, permitirRequisicaoAmplimed } from '../src/desenvolvedor/amplimed-navegador.js';
 import { montarLeituraAmplimed } from '../src/agenda/amplimed-leitor.js';
 
+it('reconhece o bloqueio de assinatura somente na tela comprovada da Amplimed', () => {
+  const tela = { url: 'https://app.amplimed.com.br/conta', texto: 'Gestão de Assinatura\nAssinar agora', senhasVisiveis: 0 };
+  expect(classificarTelaAmplimed(tela)).toBe('ASSINATURA_INATIVA');
+  expect(classificarTelaAmplimed({ ...tela, texto: 'Gestão de Assinatura\nPlano ativo' })).toBe('AGUARDANDO');
+  expect(classificarTelaAmplimed({ ...tela, url: 'https://outro.invalid/conta' })).toBe('AGUARDANDO');
+  expect(classificarTelaAmplimed({ ...tela, url: 'https://app.amplimed.com.br/agenda', texto: 'Agenda' })).toBe('CONECTADO');
+});
+
 describe('guarda de rede do Amplimed', () => {
   it('POST só uma vez, no domínio aprovado, com envio liberado', () => {
     expect(permitirRequisicaoAmplimed('https://app.amplimed.com.br/login', 'POST', 'fetch', true)).toBe(true);

@@ -71,7 +71,7 @@ export async function lerEstadoConversa(pool: Banco, contaId: string): Promise<E
 }
 
 /** A data é escopo informado pelo usuário, nunca evidência de ausência de notas. */
-export async function registrarPeriodoConferencia(pool:Banco,contaId:string,profissionalId:string,inicio:string):Promise<boolean>{
+export async function registrarPeriodoConferencia(pool:Banco,contaId:string,profissionalId:string,inicio:string,substituirInicio?:string):Promise<boolean>{
   if(!/^\d{4}-\d{2}-\d{2}$/.test(inicio))return false;
   const data=new Date(inicio+'T00:00:00Z');
   if(!Number.isFinite(data.getTime())||data.toISOString().slice(0,10)!==inicio)return false;
@@ -81,11 +81,12 @@ export async function registrarPeriodoConferencia(pool:Banco,contaId:string,prof
     "jsonb_build_object('profissionalId',$2::text,'inicio',$3::text),'perguntaPendente',null),atualizado_em=now()",
     "where c.conta_id=$1 and c.estado->>'profissionalConfirmadoId'=$2",
     "and (c.estado->>'perguntaPendente'='periodo' or (",
-    "c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'",
-    "and (c.estado->'periodoConferencia' is null or c.estado->'periodoConferencia'='null'::jsonb)))",
+    "c.estado->>'faseAgenda'='VINCULO_CONFIRMADO'))",
+    "and (c.estado->>'periodoConferencia' is null or (",
+    "c.estado->'periodoConferencia'->>'profissionalId'=$2 and c.estado->'periodoConferencia'->>'inicio'=$4))",
     'and exists(select 1 from public.medicos m where m.id=$2::uuid and m.conta_id=$1)',
     'returning conta_id'
-  ].join('\n'),[contaId,profissionalId,inicio]);
+  ].join('\n'),[contaId,profissionalId,inicio,substituirInicio??null]);
   return r.rows.length===1;
 }
 
@@ -111,20 +112,34 @@ export async function finalizarMensagemConversa(pool: Banco, contaId: string, in
   );
 }
 
+/** Uma escolha declarada na mensagem, independente do resultado do envio da resposta. */
+export function escolhaAgendaExplicita(entrada: string): AgendaEscolhida | undefined {
+  const nome = normalizarNomeMedico(entrada.replace(/^\s*n[aã]o\s*,\s*/i, ''));
+  const correcao = /^nao e (?:a |o )?(tribe(?:md)?|amplimed) e (?:a |o )?(tribe(?:md)?|amplimed)$/.exec(nome);
+  if (correcao && !entrada.includes('?')) {
+    const recusada = correcao[1] === 'amplimed' ? 'amplimed' : 'tribemd';
+    const escolhida = correcao[2] === 'amplimed' ? 'amplimed' : 'tribemd';
+    return recusada !== escolhida ? escolhida : undefined;
+  }
+  const curta = /^(tribe(?:md)?|amplimed)(?: nao (?:e )?(?:a |o )?(?:tribe(?:md)?|amplimed))?$/.exec(nome);
+  const declarada = /^(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|(?:a )?minha agenda e|a agenda e|a correta e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar|vamos pela|quis dizer)\s+(?:(?:a|o)\s+)?(tribe(?:md)?|amplimed)\b/.exec(nome);
+  const pedido = /^(?:(?:pode|podemos|posso|poderia|d[aá] para|vamos) (?:conectar|usar|trocar para|mudar para|seguir com|seguir pela)|quero usar|quero trocar para)\s+(?:(?:a|o)\s+)?(tribe(?:md)?|amplimed)\b/.exec(nome);
+  const fonte = (pedido ?? (entrada.includes('?') ? null : curta ?? declarada))?.[1];
+  if (!fonte) return;
+  const outra = fonte === 'amplimed' ? 'tribe(?:md)?' : 'amplimed';
+  if (new RegExp('\\b' + outra + '\\b').test(nome) &&
+      !new RegExp('\\bnao\\s+(?:(?:e|a|o)\\s+)*' + outra + '$').test(nome)) return;
+  return fonte === 'amplimed' ? 'amplimed' : 'tribemd';
+}
+
 /** Somente fatos conversacionais autorizados, nenhum texto livre ou dado fiscal. */
 export function evoluirEstadoConversa(
   anterior: EstadoConversa, entrada: string, resposta: string,
   profissionais: readonly { id: string; nome: string }[]
 ): EstadoConversa {
   const atual: EstadoConversa = { ...anterior };
-  const nome = normalizarNomeMedico(entrada);
-  const fonteTribe = /\btribe(?:md)?\b/i.test(nome);
-  const fonteAmpli = /\bamplimed\b/i.test(nome);
-  const escolhaCurta = /^(?:tribe(?:md)?|amplimed)[.! ]*$/.test(nome);
-  const declaracao = !entrada.includes('?') && /^(?:(?:nao,?\s*)?(?:e|eh|eu uso|uso|utilizo|utilizamos|tenho|minha agenda e|a agenda e|quero conectar|preciso conectar|vamos conectar|conecte|vamos usar)\b)/.test(nome);
-  if (fonteTribe !== fonteAmpli && (escolhaCurta || declaracao)) {
-    atual.agendaEscolhida = fonteTribe ? 'tribemd' : 'amplimed';
-  }
+  const escolha = escolhaAgendaExplicita(entrada);
+  if (escolha) atual.agendaEscolhida = escolha;
 
   // Autorização/vínculo são efeitos EXCLUSIVOS da ferramenta tipada e do banco.
   // Nunca transformar fala, menção de nome ou 'sim' em identidade confirmada.

@@ -80,7 +80,8 @@ export async function conectarInstanciaWhatsappMedico(
     const bodyCreate: Record<string, any> = {
       instanceName: nomeInstancia,
       integration: 'WHATSAPP-BAILEYS',
-      qrcode: !telefonePareamento,
+      // Na Evolution esta flag inicia o socket. O número seleciona o pareamento por código.
+      qrcode: true,
       syncFullHistory: true
     };
     if (telefonePareamento) {
@@ -103,8 +104,9 @@ export async function conectarInstanciaWhatsappMedico(
     if (resCreate.ok && dataCreate.qrcode?.base64) {
       qrcodeBase64 = dataCreate.qrcode.base64;
     }
-    if (resCreate.ok && !porQrCode && dataCreate.pairingCode) {
-      pairingCode = dataCreate.pairingCode;
+    if (resCreate.ok && !porQrCode) {
+      pairingCode = dataCreate.qrcode?.pairingCode || dataCreate.pairingCode || null;
+      if (pairingCode) qrcodeBase64 = null;
     }
   } catch (err) {
     diagnostico = { etapa: 'instance/create', codigo: 'CONEXAO_FALHOU' };
@@ -200,7 +202,8 @@ export async function conectarInstanciaWhatsappMedico(
             'MESSAGES_UPSERT',
             'CHATS_SET',
             'CONTACTS_SET',
-            'CONNECTION_UPDATE'
+            'CONNECTION_UPDATE',
+            'QRCODE_UPDATED'
           ]
         }
       })

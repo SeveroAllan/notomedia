@@ -1236,13 +1236,17 @@
         </div>
 
         <div id="boxPairingCode" class="hidden" style="width: 100%; text-align: center;">
-          <p class="body-md" style="color: var(--text-secondary);">Digite este código de pareamento no WhatsApp:</p>
+          <p class="body-md" style="color: var(--text-secondary);">Digite o código exibido no WhatsApp. A tela avisa quando ele mudar.</p>
           <div class="pairing-code" id="txtPairingCode">----</div>
+          <p id="avisoCodigoPareamento" role="status" hidden>O código mudou. Toque em Consultar código atual antes de tentar de novo.</p>
           <p class="body-md" style="color: var(--text-muted); text-align: center;">
             WhatsApp &gt; Aparelhos conectados &gt; Conectar um aparelho &gt; Conectar com número de telefone
           </p>
         </div>
 
+        <p class="body-md" style="color: var(--text-muted);">
+          Antes de gerar o código, deixe o WhatsApp na tela de conectar com número de telefone. Se o código mudar ou for recusado, toque em Consultar código atual.
+        </p>
         <button type="button" class="btn-action" id="btnIniciarWhatsapp">
           <span id="btnIniciarWhatsappTxt">Gerar Conexão WhatsApp</span>
         </button>
@@ -2384,6 +2388,7 @@
     let modoConexaoWhatsapp = 'codigo';
     let renovarQrAutomaticamente = false;
     let conexaoWhatsappEmAndamento = false;
+    let codigoPareamentoExibido = null;
 
     function pararPollingConexao() {
       if (pollingConexaoId) {
@@ -2393,11 +2398,18 @@
     }
 
     async function verificarStatusWhatsapp(medicoId) {
+      const exibido = codigoPareamentoExibido;
       try {
         const res = await fetch(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`, {
           headers: { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }
         });
         const data = await res.json();
+        if (exibido && exibido === codigoPareamentoExibido && exibido.medicoId === medicoId &&
+            data.ok && data.revisaoCodigo && data.revisaoCodigo !== exibido.revisao &&
+            data.revisaoCodigo !== exibido.revisaoAntesDaConsulta) {
+          exibido.desatualizado = true;
+          document.getElementById('avisoCodigoPareamento').hidden = false;
+        }
         if (data.ok && data.conectado) {
           pararPollingConexao();
           const statusDiv = document.getElementById('statusEsperandoQr');
@@ -2415,6 +2427,9 @@
     let segundosDesdeUltimaConexao = 0;
 
     function exibirConexaoWhatsapp(data) {
+      const anterior = codigoPareamentoExibido;
+      codigoPareamentoExibido = null;
+      document.getElementById('avisoCodigoPareamento').hidden = true;
       document.getElementById('boxQrCode').classList.add('hidden');
       document.getElementById('boxPairingCode').classList.add('hidden');
       if (!data.ok) {
@@ -2432,9 +2447,17 @@
         return true;
       }
       if (data.pairingCode) {
+        if (data.revisaoCodigo) {
+          const desatualizado = anterior?.revisao === data.revisaoCodigo && anterior.desatualizado;
+          codigoPareamentoExibido = {
+            medicoId: data.medicoId, revisao: data.revisaoCodigo,
+            revisaoAntesDaConsulta: data.revisaoAntesDaConsulta, desatualizado
+          };
+          document.getElementById('avisoCodigoPareamento').hidden = !desatualizado;
+        }
         document.getElementById('txtPairingCode').textContent = data.pairingCode;
         document.getElementById('boxPairingCode').classList.remove('hidden');
-        document.getElementById('btnIniciarWhatsappTxt').textContent = 'Recarregar Código';
+        document.getElementById('btnIniciarWhatsappTxt').textContent = 'Consultar código atual';
         return true;
       }
       if (data.qrcodeBase64) {
@@ -2454,13 +2477,17 @@
       document.getElementById('btnIniciarWhatsapp').disabled = true;
       document.getElementById('btnConectarQr').disabled = true;
       try {
-        const res = await fetch('/api/onboarding/whatsapp/iniciar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sessaoAtual.tokenAcesso },
-          body: JSON.stringify({ medicoId, modoConexao: modoConexaoWhatsapp })
-        });
+        const consultarAtual = modoConexaoWhatsapp === 'codigo' && codigoPareamentoExibido?.medicoId === medicoId;
+        const headers = { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso };
+        const res = consultarAtual
+          ? await fetch(`/api/onboarding/whatsapp/status?medicoId=${encodeURIComponent(medicoId)}&consultarCodigo=1`, { headers })
+          : await fetch('/api/onboarding/whatsapp/iniciar', {
+              method: 'POST',
+              headers: { ...headers, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ medicoId, modoConexao: modoConexaoWhatsapp })
+            });
         const data = await res.json();
-        if (res.ok && data.ok && data.status === 'open') {
+        if (res.ok && data.ok && (data.status === 'open' || data.conectado)) {
           pararPollingConexao();
           await carregarFluxoOnboarding();
           return;

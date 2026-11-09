@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {describe,it,expect,vi} from 'vitest';
 import {ScriptedModel,assistantMessage,functionCall} from '@openai/agents/testing';
 import {criarAgenteNoto,responderAgente} from '../src/agente/agente.js';
@@ -30,6 +31,65 @@ function preparar(intencoes:string[],texto:string,acoes:string[],crm='adiado',cr
   return {modelo,aprovarRegistroProfissional,consultarProntidao,registrarPeriodoConferencia,confirmarProfissionais,links,deps,entrada};
 }
 describe('continuidade semântica com resultados verificáveis',()=>{
+  it('escolhe consultar prontidão diretamente, sem passar por roteador obrigatório',async()=>{
+    const p=preparar(['conversar'],'Não confirmei a prontidão fiscal.',[]);
+    const modelo=new ScriptedModel([
+      [functionCall('consultar_prontidao_onboarding',{profissional:'Ana'},{callId:'consulta-prontidao'})],
+      [assistantMessage(JSON.stringify({texto:'Ainda falta verificar os requisitos de emissão.',fatos,acoesConcluidas:[]}))]
+    ]);
+    const resposta=await responderAgente({...p.entrada,texto:'O que falta para emitir?'},{...p.deps,modeloTeste:modelo});
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(resposta).toBe('Ainda falta verificar os requisitos de emissão.');
+    modelo.assertComplete();
+  });
+  it('continua a conversa sem ferramenta e não expõe JSON estruturado ao WhatsApp',async()=>{
+    const p=preparar(['conversar'],'Entendi, podemos conversar sobre isso.',[]);
+    const modelo=new ScriptedModel([
+      [assistantMessage(JSON.stringify({texto:'Entendi, podemos conversar sobre isso.',fatos,acoesConcluidas:[]}))]
+    ]);
+    const resposta=await responderAgente({...p.entrada,texto:'Obrigado pela explicação.'},{...p.deps,modeloTeste:modelo});
+    expect(resposta).toBe('Entendi, podemos conversar sobre isso.');
+    expect(resposta).not.toContain('"acoesConcluidas"');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
+  it('interpreta agenda e certificado no mesmo turno sem perder o segundo pedido',async()=>{
+    const p=preparar(['conversar'],'',[]);
+    p.entrada.texto='Confere os médicos da TribeMD e me envia o acesso do certificado.';
+    p.entrada.estadoConversa.agendaEscolhida='tribemd';
+    const descobrirProfissionais=vi.fn().mockResolvedValue({ok:true,nomes:['Dra. Ana Souza']});
+    const modelo=new ScriptedModel([
+      [functionCall('continuar_onboarding',{profissional:'Ana',
+        intencoes:['verificar_agenda','consultar_certificado'],inicioPeriodo:null,
+        crmConfirmado:null,rqeConfirmado:null,camposConfirmados:[]},{callId:'duas-acoes'})],
+      [assistantMessage(JSON.stringify({texto:'Consultei a agenda e preparei o acesso seguro do certificado.',
+        fatos,acoesConcluidas:['agenda_lida','pagina_certificado_preparada']}))]
+    ]);
+    const resposta=await responderAgente(p.entrada,{...p.deps,modeloTeste:modelo,descobrirProfissionais,
+      consultarStatus:vi.fn().mockResolvedValue({tribemd:{salvo:true,conectada:true},
+        amplimed:{salvo:false,conectada:false}})});
+    expect(resposta).toBe('Consultei a agenda e preparei o acesso seguro do certificado.');
+    expect(descobrirProfissionais).toHaveBeenCalledOnce();
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.links).toHaveLength(1);
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    modelo.assertComplete();
+  });
+  it('retoma o CRM adiado antes do certificado, sem gravar nem preparar link',async()=>{
+    const texto='O CRM sugerido da Ana é 36948/RS. Você confirma esse número?';
+    const p=preparar(['retomar_registro','consultar_certificado'],texto,[]);
+    p.entrada.texto='Vamos validar o CRM';
+    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
+    expect(JSON.stringify(p.modelo.lastCall?.request.input)).toContain('REGISTRO_PENDENTE');
+    expect(JSON.stringify(p.modelo.lastCall?.request.input)).toContain('36948/RS');
+    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+    expect(p.consultarProntidao).not.toHaveBeenCalled();
+    expect(p.links).toEqual([]);
+  });
   it('não promete registrar período ou conferir quando o alvo foi recusado',async()=>{
     const p=preparar(['definir_periodo'],'Vou fazer isso agora.',[]);
     p.entrada.texto='Pode usar 20/10 como início do período e conferir os atendimentos. Se estiver tudo certo, já quero emitir a nota.';
@@ -103,18 +163,96 @@ describe('continuidade semântica com resultados verificáveis',()=>{
     expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
     expect(p.confirmarProfissionais).not.toHaveBeenCalled();
     expect(p.links).toEqual(['https://homologacao.example.test/?medicoId='+ID+'&etapa=certificado']);
-    expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    const itens=p.modelo.lastCall?.request.input as Array<{type?:string;output?:{text:string}}>;
+    const resultado=JSON.parse(itens.find(item=>item.type==='function_call_result')!.output!.text);
+    const arquivo=readFileSync(new URL('../contrato-continuar-onboarding.md',import.meta.url),'utf8').trim();
+    expect(resultado.contratoResposta.instrucao).toBe(arquivo);
+    expect(resultado.contratoResposta.instrucao).toContain('pagina_certificado_preparada');
+    expect(resultado.contratoResposta.formato).toEqual({
+      texto:'Sua resposta natural ao usuário',
+      fatos:{...fatos,crm:'confirmado',crmValor:'36948/RS'},
+      acoesConcluidas:['crm_salvo','pagina_certificado_preparada']
+    });
+    // O agente escolheu continuar_onboarding; o harness não o impôs.
+    expect(p.modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(p.modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
+    p.modelo.assertComplete();
+  });
+  it.each([false,true])('verifica só o certificado do profissional recém-confirmado (válido: %s)',async(valido)=>{
+    const texto=valido?'O certificado da Ana está válido.':'Abra a página segura para cadastrar o certificado da Ana.';
+    const p=preparar(['aprovar_registro'],texto,
+      ['crm_salvo',valido?'certificado_verificado':'pagina_certificado_preparada'],'confirmado','36948/RS');
+    p.entrada.texto='O CRM 36948/RS está certo, pode confirmar e salvar.';
+    p.entrada.profissionais=[...profissionais,{id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',nome:'Dr. Bruno Lima'}];
+    p.consultarProntidao.mockResolvedValue({certificadoValido:valido,dadosProfissionaisCompletos:true});
+    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
+    expect(p.aprovarRegistroProfissional).toHaveBeenCalledExactlyOnceWith(ID,{confirmarRqe:false});
+    expect(p.consultarProntidao).toHaveBeenCalledExactlyOnceWith(ID);
+    expect(p.links).toEqual(valido?[]:['https://homologacao.example.test/?medicoId='+ID+'&etapa=certificado']);
     p.modelo.assertComplete();
   });
   it('período é tratado semanticamente como escopo e a fala não vira histórico de emissão',async()=>{
-    const texto='O período começa em 1º de novembro. Podemos seguir com o A1.';
-    const p=preparar(['definir_periodo'],texto,['periodo_registrado','pagina_certificado_preparada'],'adiado',null,'2026-11-01');
-    p.entrada.texto='Desde 1 de novembro de 2026.';
-    expect(await responderAgente(p.entrada,p.deps)).toBe(texto);
-    expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,'2026-11-01');
-    expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
-    expect(p.links).toHaveLength(1);
+    const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,'2023-10-20');
+    p.entrada.texto='Desde 20 de outubro.';
+    const solicitarTrabalho=vi.fn().mockResolvedValue({ok:true,estado:'iniciado'});
+    const consultarConferencia=vi.fn();
+    const ano=new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'America/Sao_Paulo'}).format();
+    const inicio=ano+'-10-20';
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date(ano+'-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,estadoConversa:{...p.entrada.estadoConversa,agendaEscolhida:'tribemd'}},
+        {...p.deps,consultarStatus:async()=>({tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}}),solicitarTrabalho,consultarConferencia});
+      expect(resposta).toContain('em andamento');
+      expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,inicio);
+      expect(solicitarTrabalho).toHaveBeenCalledExactlyOnceWith('conferencia_fiscal','tribemd',ID,inicio);
+      expect(p.aprovarRegistroProfissional).not.toHaveBeenCalled();
+      expect(p.links).toHaveLength(0);
+    } finally {vi.useRealTimers();}
     p.modelo.assertComplete();
+  });
+  it.each([
+    ['na verdade é desde 20 de outubro de 2026', '20/10/2026'],
+    ['20 de outubro de 2026', null],
+    ['20/10/2026', '2023-10-20']
+  ])('extrai a data da mensagem: %s', async (texto, dica) => {
+    const p=preparar(['definir_periodo'],'Certo.', ['periodo_registrado'],'adiado',null,dica);
+    const solicitarTrabalho=vi.fn().mockResolvedValue({ok:true,estado:'iniciado'});
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,texto,estadoConversa:{...p.entrada.estadoConversa,
+        agendaEscolhida:'tribemd',periodoConferencia:{profissionalId:ID,inicio:'2023-10-20'}}},
+        {...p.deps,consultarStatus:async()=>({tribemd:{salvo:true,conectada:true},amplimed:{salvo:false,conectada:false}}),
+          consultarConferencia:vi.fn(),solicitarTrabalho});
+      expect(p.registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith(ID,'2026-10-20','2023-10-20');
+      expect(solicitarTrabalho).toHaveBeenCalledExactlyOnceWith('conferencia_fiscal','tribemd',ID,'2026-10-20');
+      expect(resposta).toContain('em andamento');
+      expect(resposta).not.toContain('Qual é a data inicial');
+    } finally {vi.useRealTimers();}
+  });
+  it.each([
+    ['2026-12-20', 'DATA_FUTURA'],
+    ['entre 20/10/2026 e 25/10/2026', 'INTERVALO_OU_MULTIPLAS_DATAS'],
+    ['31/10', 'ANO_NECESSARIO_PARA_SUBSTITUIR'],
+    ['não é 2023, é desde 20 de outubro de 2026', 'MULTIPLOS_ANOS'],
+    ['até outubro', 'INTERVALO_OU_MULTIPLAS_DATAS'],
+    ['não é desde 20 de outubro de 2026', 'DATA_NEGADA'],
+    ['Minha consulta foi em 20/10/2026', 'DATA_SEM_ESCOPO_CLARO']
+  ])('esclarece e diagnostica a rejeição: %s', async (texto, motivo) => {
+    const p=preparar(['definir_periodo'],'Certo.', [],'adiado',null,'20/10/2026');
+    const aoDiagnostico=vi.fn();
+    vi.useFakeTimers({toFake:['Date']});
+    vi.setSystemTime(new Date('2026-11-07T12:00:00Z'));
+    try {
+      const resposta=await responderAgente({...p.entrada,texto,estadoConversa:{...p.entrada.estadoConversa,
+        periodoConferencia:{profissionalId:ID,inicio:'2023-10-20'}}},{...p.deps,aoDiagnostico});
+      expect(resposta).toContain('Qual é a data inicial');
+      expect(p.registrarPeriodoConferencia).not.toHaveBeenCalled();
+      expect(aoDiagnostico).toHaveBeenCalledWith(expect.objectContaining({
+        rejeicaoPeriodo:{motivo}
+      }));
+    } finally {vi.useRealTimers();}
   });
   it('contrato que inventa vínculo pendente é recusado sem transformar isso em gravação',async()=>{
     const p=preparar(['conversar'],'Alice precisa ser vinculada novamente.',[]);
