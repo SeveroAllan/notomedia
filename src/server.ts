@@ -184,6 +184,23 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         }
         console.info('NOTO_COFRE_DESCOBERTA',
           nomes.length?'CONFIRMACAO_PERSISTIDA':'DESCOBERTA_PENDENTE');
+        // Uma sessão conectada mas sem nomes não pode encerrar a missão.
+        // Só uma leitura complementar por conta/agenda; a chave durável
+        // impede repetir a navegação em loops de callback/reconexão.
+        if(!nomes.length && process.env['NOTO_AGENT_TRABALHOS_ATIVO']==='true' &&
+          config.notoAgentAtivo && config.notoAgentEnvioAtivo){
+          const telefoneDestino=variantes.find(t=>/^55\d{10,11}$/.test(t));
+          if(telefoneDestino){
+            const chave='agenda-conectada-'+createHmac('sha256',config.evolutionAssistantWebhookSecret)
+              .update(JSON.stringify([contaId,evento.agenda])).digest('hex').slice(0,32);
+            const trabalho=await enfileirarTrabalhoNoto(pool,{
+              contaId,instancia:config.evolutionAssistantInstanceName,mensagemId:chave,
+              telefone:telefoneDestino,tipo:'descoberta_agenda',
+              agenda:evento.agenda,medicoId:null
+            });
+            if(trabalho.ok)console.info('NOTO_COFRE_DESCOBERTA','LEITURA_COMPLEMENTAR_REGISTRADA');
+          }
+        }
       }
       if (!config.notoAgentEnvioAtivo) return;
       const diagnostico=evento.diagnosticoLeitura;
