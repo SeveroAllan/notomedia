@@ -86,7 +86,10 @@ testar('PostgreSQL descartável: 4 tentativas totais, backoff e reinício não d
     expect(await agendarPesquisaRegistro(pool,CONTA,ANA,NOME)).toBe('ja_existe');
 
     const enviar=vi.fn().mockResolvedValue(true);
-    expect(await notificarPesquisaRegistro(pool,'5551999998888',enviar)).toBe(true);
+    const continuarEvento=vi.fn(async(e:{textoComprovado:string})=>e.textoComprovado);
+    expect(await notificarPesquisaRegistro(pool,'5551999998888',enviar,continuarEvento)).toBe(true);
+    expect(continuarEvento).toHaveBeenCalledOnce();
+    expect(continuarEvento.mock.calls[0]![0]).toMatchObject({tipo:'pesquisa_registro',contaId:CONTA});
     expect(enviar).toHaveBeenCalledOnce();
     expect(enviar.mock.calls[0]![1]).toMatch(/não consegui obter CRM\/RQE confiáveis/i);
     expect(enviar.mock.calls[0]![1]).toMatch(/página segura/i);
