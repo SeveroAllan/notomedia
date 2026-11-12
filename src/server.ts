@@ -235,7 +235,27 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               ? explicarLeituraPendente(diagnostico)
               : 'A conexão não trouxe uma lista autenticada de médicos na Amplimed.',
             'Mantive a conexão e a descoberta pendente, sem vincular profissionais por suposição.'];
-      for(const frase of mensagens) for(const balao of separarBaloes(frase)){
+      // O callback autenticado é um evento, não uma autorização do usuário.
+      // O agente pode contextualizar a fala, mas não escolher ferramentas
+      // mutáveis nem substituir o resultado persistido da agenda.
+      let falas=mensagens;
+      if(config.notoPilotoRestrito && config.notoAgentAtivo &&
+        process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA']==='true' &&
+        nomes.length>0 && orcamentoPiloto){
+        const relato=mensagens.join('\n');
+        const natural=await continuarEventoComNoto({
+          tipo:'descoberta_agenda',contaId,textoComprovado:relato
+        },{
+          pool,consultarStatus:ref=>cofres.statusAgendas(ref),
+          ...(config.openaiApiKey?{apiKey:config.openaiApiKey}:{}),
+          ...(config.openaiTextoModel?{modeloNome:config.openaiTextoModel}:{}),
+          controleCusto:orcamentoPiloto,
+          exigirControleCusto:true,
+          tracesAtivos:config.notoAgentTracesAtivos
+        }).catch(()=>null);
+        if(natural)falas=[natural];
+      }
+      for(const frase of falas) for(const balao of separarBaloes(frase)){
         const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
           config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
           instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
