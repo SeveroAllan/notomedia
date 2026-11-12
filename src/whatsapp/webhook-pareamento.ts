@@ -37,7 +37,10 @@ export function criarRouterWebhookPareamento(deps: {
     if(evento==='messages.upsert'){
       if(!deps.aoReceberMidia){res.sendStatus(204);return;}
       const chave=req.body?.data?.key;
-      const msg=req.body?.data?.message;
+      const raiz=req.body?.data?.message;
+      // Evolution pode encapsular PDFs com legenda. Não abrir view-once
+      // nem mensagens efêmeras: somente mídia recebida no fluxo regular.
+      const msg=raiz?.documentWithCaptionMessage?.message??raiz;
       const documento=msg?.imageMessage ?? msg?.documentMessage;
       const mime=documento?.mimetype;
       if(typeof instancia!=='string'||!/^medico_[a-f0-9]{12}$/i.test(instancia)||
