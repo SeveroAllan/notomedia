@@ -13,7 +13,7 @@ const base={
   informarOperador:vi.fn().mockResolvedValue(true)
 };
 const pool=(resposta:{repetido?:boolean;conta?:boolean;operador?:boolean}={})=>{
-  const query=vi.fn(async(sql:string):Promise<unknown>=>{
+  const query=vi.fn(async(sql:string,_parametros?:unknown[]):Promise<unknown>=>{
     if(sql.includes('from public.whatsapp_instancias w'))
       return {rows:resposta.conta===false?[]:[{conta_id:conta,medico_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}]};
     if(sql.includes('from public.usuarios u'))
