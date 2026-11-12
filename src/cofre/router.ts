@@ -16,6 +16,7 @@ import { validarCofreHomologacao } from './configuracao-homologacao.js';
 import { diagnosticarDescobertaTribemd, type DiagnosticoDescoberta } from '../agenda/diagnostico-descoberta.js';
 import type { ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
+import { criarPlanejadorNavegacaoOpenAi } from '../desenvolvedor/navegador-planejador.js';
 /** Nomes só se o navegador autenticado tiver carregado um recorte completo.
  * Sem dados reais ou com leitura incompleta, retorna [] e não usa cadastro Noto.
  * Nunca retorna pacientes, consultas ou identificadores técnicos.
@@ -59,6 +60,15 @@ export function criarCofreContas(deps: {
     const env = deps.env ?? process.env, app = express();
     const homologacao = env['NOTO_PILOTO_RESTRITO'] === 'true';
     const cofreAutorizado = !homologacao || validarCofreHomologacao(env);
+    // Não ativar navegador IA fora da homologação controlada. Mesmo os
+    // rótulos de navegação só são vistos pelo modelo depois do login real.
+    const planejarNavegacao=cofreAutorizado&&homologacao&&
+      env['NOTO_NAVEGADOR_IA_ATIVO']==='true'&&
+      env['NOTO_AGENT_TRABALHOS_ATIVO']==='true'&&
+      env['NOTO_AGENT_ATIVO']==='true'&&env['OPENAI_API_KEY']?.trim()&&
+      env['OPENAI_TEXTO_MODEL']==='gpt-4o-mini'
+      ? criarPlanejadorNavegacaoOpenAi(env['OPENAI_API_KEY'],deps.pool,'gpt-4o-mini')
+      : undefined;
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
     let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, links: LinksCofre | undefined;
@@ -75,13 +85,13 @@ export function criarCofreContas(deps: {
         if (!base)
             throw Error();
         const raiz = join(base, 'cofres-contas-v1');
-        cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
+        cofre = new CofreTribemd({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '', chromium: env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser', xvfb: env.XVFB_EXECUTABLE_PATH, planejarNavegacao, aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve() });
         const chromiumAmplimed = env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium-browser';
         const dir2fa = env.NOTO_AMPLIMED_2FA_DIRETORIO || undefined;
         // O diretório é local ao container (some a cada deploy): recria a cada boot, restrito ao serviço.
         if (dir2fa) mkdirSync(dir2fa, { recursive: true, mode: 0o700 });
         cofreAmplimed = new CofreAmplimed({ aoAlterarAcesso: deps.aoAlterarAcesso, diretorio: raiz, chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
-            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
+            verificar: c => verificarLoginAmplimed({ executavel: chromiumAmplimed, ...c }), lerEventos: (c, diasAtras, detalhes, codigoProfissional) => lerEventosAgendaAmplimed({ executavel: chromiumAmplimed, ...c, diasAtras, detalhes, codigoProfissional }), listarProfissionais: c => listarProfissionaisAgendaAmplimed({ executavel: chromiumAmplimed, ...c, planejarNavegacao }), aoConcluir: (id, conectado) => links?.concluir(id, conectado) ?? Promise.resolve(),
             pedirCodigo2fa: async (id, canal) => {
                 if (homologacao && env.NOTO_AGENT_ATIVO === 'true' && env.NOTO_AGENT_ENVIO_ATIVO === 'true' &&
                     canal === 'email' && links && contaDoCofreId(id)) {
