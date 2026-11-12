@@ -7,7 +7,7 @@ const certificado='22222222-2222-4222-8222-222222222222';
 const conta='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const estado={certificadoValido:true,profissionalConfirmado:true,perfilFiscalConfirmado:false};
 const dados=(opcoes:{conta?:boolean;repetido?:boolean}={})=>{
-  const query=vi.fn(async(sql:string):Promise<{rows:any[];rowCount?:number}>=>{
+  const query=vi.fn(async(sql:string,_parametros?:unknown[]):Promise<{rows:any[];rowCount?:number}>=>{
     if(sql.includes('from public.medicos m'))return{rows:opcoes.conta===false?[]:[{conta_id:conta}]};
     if(sql.includes('insert into noto_agent_mensagens'))
       return{rows:opcoes.repetido?[]:[{mensagem_id:'evento'}]};
@@ -52,7 +52,7 @@ describe('evento fiscal A1: aviso comprovado sem autorização de emissão',()=>
     const {pool,query}=dados(),d=deps(pool);
     d.enviar.mockResolvedValueOnce(false);
     expect(await notificarCertificadoRecebido(medico,certificado,d)).toBe('incerto');
-    expect(query.mock.calls.at(-1)![1][3]).toBe('incerta');
+    expect(query.mock.calls.at(-1)![1]?.[3]).toBe('incerta');
     expect(d.enviar).toHaveBeenCalledOnce();
   });
 });
