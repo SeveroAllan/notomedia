@@ -1238,7 +1238,7 @@
         <div id="boxPairingCode" class="hidden" style="width: 100%; text-align: center;">
           <p class="body-md" style="color: var(--text-secondary);">Digite o código exibido no WhatsApp. A tela avisa quando ele mudar.</p>
           <div class="pairing-code" id="txtPairingCode">----</div>
-          <p id="avisoCodigoPareamento" role="status" hidden>O código mudou. Toque em Consultar código atual antes de tentar de novo.</p>
+          <p id="avisoCodigoPareamento" role="status" hidden>O código mudou e foi atualizado automaticamente. Use o novo código exibido.</p>
           <p class="body-md" style="color: var(--text-muted); text-align: center;">
             WhatsApp &gt; Aparelhos conectados &gt; Conectar um aparelho &gt; Conectar com número de telefone
           </p>
@@ -2404,10 +2404,24 @@
           headers: { Authorization: 'Bearer ' + sessaoAtual.tokenAcesso }
         });
         const data = await res.json();
-        if (exibido && exibido === codigoPareamentoExibido && exibido.medicoId === medicoId &&
+        if (modoConexaoWhatsapp === 'codigo' && exibido &&
+            exibido === codigoPareamentoExibido && exibido.medicoId === medicoId &&
+            data.ok && data.pairingCode && data.revisaoCodigo &&
+            data.revisaoCodigo !== exibido.revisao &&
+            data.revisaoCodigo !== exibido.revisaoAntesDaConsulta) {
+          // O evento QRCODE_UPDATED já entregou o código novo ao servidor.
+          // Nunca solicitar outro pairing code por polling.
+          document.getElementById('txtPairingCode').textContent = data.pairingCode;
+          exibido.revisao = data.revisaoCodigo;
+          exibido.revisaoAntesDaConsulta = null;
+          exibido.desatualizado = false;
+          document.getElementById('avisoCodigoPareamento').hidden = false;
+        } else if (exibido && exibido === codigoPareamentoExibido &&
             data.ok && data.revisaoCodigo && data.revisaoCodigo !== exibido.revisao &&
             data.revisaoCodigo !== exibido.revisaoAntesDaConsulta) {
           exibido.desatualizado = true;
+          document.getElementById('avisoCodigoPareamento').textContent =
+            'O código exibido pode ter expirado. Consulte o código atual antes de usá-lo.';
           document.getElementById('avisoCodigoPareamento').hidden = false;
         }
         if (data.ok && data.conectado) {
@@ -2429,6 +2443,7 @@
     function exibirConexaoWhatsapp(data) {
       const anterior = codigoPareamentoExibido;
       codigoPareamentoExibido = null;
+      document.getElementById('avisoCodigoPareamento').textContent = 'O código mudou e foi atualizado automaticamente. Use o novo código exibido.';
       document.getElementById('avisoCodigoPareamento').hidden = true;
       document.getElementById('boxQrCode').classList.add('hidden');
       document.getElementById('boxPairingCode').classList.add('hidden');
