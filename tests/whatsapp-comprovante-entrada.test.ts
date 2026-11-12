@@ -83,4 +83,34 @@ describe('MVP: entrada de documentos de pacientes isolada e sem emissão',()=>{
     expect(await processarMidiaRecebida(evento,deps)).toBe('incerto');
     expect(query.mock.calls.at(-1)![1]).toEqual([conta,evento.instancia,evento.mensagemId,'incerta']);
   });
+  it('só produz proposta com consulta identificada e aprovação posterior, nunca emite',async()=>{
+    const {db}=pool();
+    const proporNotaPiloto=vi.fn().mockResolvedValue(true);
+    const informarOperador=vi.fn();
+    const deps={...base,pool:db,informarOperador,proporNotaPiloto,
+      consultarPossivelConsulta:vi.fn().mockResolvedValue({
+        estado:'identificada',profissional:'Dra. Alice',dataConsulta:'2026-11-11',
+        medicoId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        agendamentoId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+      })
+    };
+    expect(await processarMidiaRecebida(evento,deps)).toBe('notificado');
+    expect(proporNotaPiloto).toHaveBeenCalledOnce();
+    expect(proporNotaPiloto.mock.calls[0]![0]).toMatchObject({
+      contaId:conta,mensagemId:evento.mensagemId,
+      consulta:{agendamentoId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}
+    });
+    expect(informarOperador).not.toHaveBeenCalled();
+  });
+  it('comprovante ambíguo não propõe emissão',async()=>{
+    const {db}=pool();
+    const proporNotaPiloto=vi.fn(),informarOperador=vi.fn().mockResolvedValue(true);
+    const deps={...base,pool:db,informarOperador,proporNotaPiloto,
+      consultarPossivelConsulta:vi.fn().mockResolvedValue({estado:'ambiguo'})
+    };
+    expect(await processarMidiaRecebida(evento,deps)).toBe('notificado');
+    expect(proporNotaPiloto).not.toHaveBeenCalled();
+    expect(informarOperador.mock.calls[0]![1]).toContain('mais de uma possibilidade');
+  });
+
 });
