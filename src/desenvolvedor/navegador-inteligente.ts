@@ -36,7 +36,7 @@ export function filtrarOpcoesNavegacao(
     try{
       const url=new URL(destino);
       return url.protocol==='https:'&&url.hostname===dominios[portal] &&
-        /^\/(?:agenda|profissionais?|medicos|m[eé]dicos)(?:\/|$)/iu.test(url.pathname) &&
+        (portal==='tribemd' ? /^\\/(?:atendimentos\\/agenda|profissionais?|medicos)(?:\\/|$)/iu.test(url.pathname) : /^\\/(?:agenda|profissionais?|medicos)(?:\\/|$)/iu.test(url.pathname)) &&
         !url.username&&!url.password&&!url.search&&!url.hash;
     }catch{return false;}
   };
