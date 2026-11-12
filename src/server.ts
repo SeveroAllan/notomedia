@@ -32,6 +32,7 @@ import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { continuarEventoComNoto, type EventoTrabalhoVerificado } from './agente/continuar-evento.js';
+import { notificarCertificadoRecebido } from './agente/evento-certificado.js';
 import { processarMidiaRecebida } from './whatsapp/ingestao-comprovante.js';
 import { criarClassificadorOpenAi } from './whatsapp/classificar-documento.js';
 import { lerEstadoConversa } from './agente/estado-conversa.js';
@@ -748,6 +749,30 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   }
 
   const adnNfseClient = new AdnNfseClient();
+  const avisarCertificadoRecebido = async(medicoId:string,certificadoId:string) => {
+    if(!config.notoPilotoRestrito||!config.notoAgentEnvioAtivo||
+      process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA']!=='true')return;
+    await notificarCertificadoRecebido(medicoId,certificadoId,{
+      pool,instanciaAssistente:config.evolutionAssistantInstanceName,
+      operadorTeste:config.envioRealAllowlist?.[0]??'',
+      consultarEstado:async id=>{
+        const s=await consultarStatusOnboarding(pool,id,false);
+        return {
+          certificadoValido:s.passos.passo3CertificadoValido,
+          profissionalConfirmado:s.passos.passoProfissionalAprovado,
+          perfilFiscalConfirmado:s.passos.passo2FiscalConfirmado
+        };
+      },
+      enviar:async(tel,texto)=>{
+        const r=await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,
+          contatoTelefone:tel,texto
+        });
+        return r.sucesso;
+      },
+      ...(continuarEvento?{continuarEvento}:{})
+    });
+  };
 
   const aoConectarWhatsapp = async (medicoId: string) => {
     const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
@@ -1229,6 +1254,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
           medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
+        await avisarCertificadoRecebido(medicoId,resultado.certificadoId).catch(() => {});
         return res.json({
           ...resultado,
           medicoId,
@@ -1242,6 +1268,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       } catch (err: any) {
         console.warn('[ADN] Importacao automatica indisponivel:', { etapa: 'importacao_referencia', codigo: err?.codigo || 'IMPORTACAO_FALHOU', diagnostico: err?.diagnostico, mensagem: err?.message });
+        await avisarCertificadoRecebido(medicoId,resultado.certificadoId).catch(() => {});
         return res.json({
           ...resultado,
           medicoId,
