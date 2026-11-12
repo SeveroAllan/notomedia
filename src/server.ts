@@ -36,6 +36,7 @@ import { processarMidiaRecebida } from './whatsapp/ingestao-comprovante.js';
 import { criarClassificadorOpenAi } from './whatsapp/classificar-documento.js';
 import { lerEstadoConversa } from './agente/estado-conversa.js';
 import { selecionarConsultaComprovante } from './agenda/fonte-agenda.js';
+import { prepararLoteAmplimed } from './agenda/amplimed-lote.js';
 import { adiarConfirmacaoRegistro,agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
@@ -390,7 +391,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           },
           consultarPossivelConsulta:async(contaId,_medicoReferenciaId,remetente,classe)=>{
             const estado=await lerEstadoConversa(pool,contaId);
-            if(estado.agendaEscolhida!=='tribemd'||!estado.profissionalConfirmadoId)
+            if(!estado.profissionalConfirmadoId||!estado.agendaEscolhida)
               return {estado:'indisponivel' as const};
             const medico=await pool.query(
               'select nome_completo from public.medicos where id=$1 and conta_id=$2 limit 1',
@@ -403,15 +404,33 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             // instância nem utiliza cadastro antigo como vínculo de paciente.
             const referencia=cofreIdDaConta(contaId);
             const status=await cofres.statusAgendas(referencia);
-            if(!status.tribemd.conectada)return {estado:'indisponivel' as const};
-            const leitura=await cofres.fonteAgenda.consultar({
-              medicoId:estado.profissionalConfirmadoId,
-              referenciaCofre:referencia,janelaDias:30
-            });
-            if(leitura.tipo!=='consultas')return {estado:'indisponivel' as const};
-            const consultas=leitura.consultas.filter(p=>
-              typeof p.profissional==='string' &&
-              normalizarNomeMedico(p.profissional)===normalizarNomeMedico(nome));
+            let consultas: import('./agenda/fonte-agenda.js').ConsultaSincronizada[]=[];
+            if(estado.agendaEscolhida==='tribemd'){
+              if(!status.tribemd.conectada)return {estado:'indisponivel' as const};
+              const leitura=await cofres.fonteAgenda.consultar({
+                medicoId:estado.profissionalConfirmadoId,
+                referenciaCofre:referencia,janelaDias:30
+              });
+              if(leitura.tipo!=='consultas')return {estado:'indisponivel' as const};
+              consultas=leitura.consultas.filter(p=>typeof p.profissional==='string'&&
+                normalizarNomeMedico(p.profissional)===normalizarNomeMedico(nome))
+                .map(p=>({...p,valorConsultaCentavos:p.valorConsultaCentavos??null}));
+            } else {
+              if(!status.amplimed.conectada)return {estado:'indisponivel' as const};
+              const lista=await cofres.listarProfissionaisAmplimed(estado.profissionalConfirmadoId);
+              if(!lista.ok)return {estado:'indisponivel' as const};
+              const possiveis=lista.profissionais.filter(p=>
+                normalizarNomeMedico(p.nome)===normalizarNomeMedico(nome)&&!!p.codigo?.trim());
+              if(possiveis.length!==1||lista.profissionais.filter(p=>p.codigo===possiveis[0]!.codigo).length!==1)
+                return {estado:'indisponivel' as const};
+              const hoje=new Date().toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+              const desde=new Date(Date.now()-29*86_400_000)
+                .toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+              const leitura=await cofres.lerAgendaAmplimed(
+                estado.profissionalConfirmadoId,desde,hoje,true,possiveis[0]!.codigo);
+              if(!leitura.ok)return {estado:'indisponivel' as const};
+              consultas=prepararLoteAmplimed(leitura.dias).consultas;
+            }
             const r=selecionarConsultaComprovante(consultas,remetente,new Set(),
               classe.dataPagamento);
             if(r.tipo==='consulta'){
@@ -424,13 +443,14 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                 'select a.id from public.agendamentos a',
                 'join public.medicos m on m.id=a.medico_id and m.conta_id=$1',
                 'where a.medico_id=$2::uuid and a.referencia_externa=$3',
-                "and a.origem='tribemd' and a.status='realizado'",
+                'and a.origem=$5 and a.status=\'realizado\'',
                 'and a.valor_consulta_centavos=$4',
                 'and not exists(select 1 from public.solicitacao_nota_agendamentos s',
                 'where s.medico_id=a.medico_id and s.agendamento_id=a.id)',
                 'limit 2'
               ].join(' '),[contaId,estado.profissionalConfirmadoId,r.consulta.idExterno,
-                classe.valorCentavos&&r.consulta.valorConsultaCentavos===classe.valorCentavos?classe.valorCentavos:null]);
+                classe.valorCentavos&&r.consulta.valorConsultaCentavos===classe.valorCentavos?classe.valorCentavos:null,
+                estado.agendaEscolhida]);
               return {estado:'identificada' as const,
                 dataConsulta:data.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'}),
                 profissional:nome,
