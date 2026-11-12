@@ -2,6 +2,7 @@ import type { FonteAgenda, ResultadoFonteAgenda } from '../agenda/fonte-agenda.j
 import { mereceSegundaLeituraPontual, preferirSegundaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
+import type { PlanejadorNavegacao } from '../desenvolvedor/navegador-inteligente.js';
 export class ErroCofre extends Error {
     constructor(public codigo: string) { super(codigo); }
 }
@@ -16,6 +17,7 @@ export interface OpcoesCofre {
     chave: string;
     chromium: string;
     xvfb?: string;
+    planejarNavegacao?:PlanejadorNavegacao;
     simultaneos?: number;
     aoAlterarAcesso?: (medicoId: string) => void;
     aoConcluir?: (medicoId: string, conectado: boolean) => Promise<void>;
@@ -107,7 +109,7 @@ export class CofreTribemd {
         limite.unref();
         const autenticar = async (usarCookies: boolean) => {
             t.controller.signal.throwIfAborted();
-            navegador = await NavegadorTribemd.criar({ executavel: this.opcoes.chromium, xvfb: this.opcoes.xvfb, estado: usarCookies ? p.estado : undefined }, t.controller.signal);
+            navegador = await NavegadorTribemd.criar({ executavel: this.opcoes.chromium, xvfb: this.opcoes.xvfb, estado: usarCookies ? p.estado : undefined, planejarNavegacao:this.opcoes.planejarNavegacao }, t.controller.signal);
             const estado = await navegador.abrir();
             if (estado !== 'perfil_reutilizado') {
                 entrouComSenha = true;
