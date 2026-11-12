@@ -132,7 +132,7 @@ export class EvolutionApiClient
       const dados=envelope?.data?.base64 ? envelope.data : envelope;
       let base64=typeof dados?.base64==='string'?dados.base64:'';
       let mimetype=typeof dados?.mimetype==='string'?dados.mimetype:undefined;
-      const prefixo=/^data:(image\\/(?:jpeg|png)|application\\/pdf);base64,/i.exec(base64);
+      const prefixo=new RegExp('^data:(image/(?:jpeg|png)|application/pdf);base64,','i').exec(base64);
       if(prefixo){
         mimetype=mimetype??prefixo[1]!.toLowerCase();
         base64=base64.slice(prefixo[0].length);
