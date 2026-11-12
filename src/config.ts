@@ -39,6 +39,8 @@ export interface AppConfig {
   agenteFiscalAtivo?: boolean;
   notoAgentAtivo?: boolean;
   notoAgentEnvioAtivo?: boolean;
+  comprovantesRecepcaoAtiva?:boolean;
+  comprovantesRemetentesTeste?:string[];
   notoAgentTracesAtivos?: boolean;
   notoAgentDiagnosticoAtivo?: boolean;
   notoAgentBuildRevisao?: string;
@@ -65,6 +67,14 @@ export interface AppConfig {
 }
 
 export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  const recebimentoComprovante=env['NOTO_COMPROVANTES_RECEPCAO_ATIVA']==='true';
+  const remetentesComprovante=(env['NOTO_COMPROVANTES_REMETENTES_TESTE']||'').split(/[,;\s]+/).filter(Boolean);
+  if(recebimentoComprovante && (env['NOTO_PILOTO_RESTRITO']!=='true' ||
+      env['NOTO_AGENT_ENVIO_ATIVO']!=='true' || !env['OPENAI_API_KEY']?.trim() ||
+      remetentesComprovante.length<1 || remetentesComprovante.length>3 ||
+      !remetentesComprovante.every(t=>/^55\d{10,11}$/.test(t)))) {
+    throw new Error('COMPROVANTES_EXIGEM_PILOTO_E_REMETENTES_AUTORIZADOS');
+  }
   const produtorWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PRODUTOR_ATIVO'] === 'true';
   const propostaWhatsApp = env['NOTO_EMISSAO_WHATSAPP_PROPOSTA_ATIVA'] === 'true';
   if (propostaWhatsApp && !produtorWhatsApp) throw new Error('PROPOSTA_WHATSAPP_EXIGE_PRODUTOR');
@@ -158,6 +168,8 @@ export function carregarConfig(env: NodeJS.ProcessEnv = process.env): AppConfig 
     agenteFiscalAtivo: env['AGENTE_FISCAL_ATIVO'] === 'true',
     notoAgentAtivo: env['NOTO_AGENT_ATIVO'] === 'true',
     notoAgentEnvioAtivo: env['NOTO_AGENT_ENVIO_ATIVO'] === 'true',
+    comprovantesRecepcaoAtiva:recebimentoComprovante,
+    comprovantesRemetentesTeste:remetentesComprovante,
     notoAgentTracesAtivos: env['NOTO_AGENT_TRACES_ATIVOS'] === 'true',
     notoAgentDiagnosticoAtivo: env['NOTO_AGENT_DIAGNOSTICO_ATIVO'] === 'true',
     notoAgentBuildRevisao: env['NOTO_BUILD_REVISAO'],
