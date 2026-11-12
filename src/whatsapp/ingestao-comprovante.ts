@@ -112,7 +112,7 @@ export async function processarMidiaRecebida(
       }catch{/* Falha na agenda não comprova ausência de atendimento. */}
     }
     if(classificacao.tipo==='comprovante_possivel'&&classificacao.confianca==='alta'&&
-      classificacao.dataPagamento&&consulta?.estado==='identificada'&&
+      classificacao.dataPagamento&&classificacao.valorCentavos&&consulta?.estado==='identificada'&&
       consulta.agendamentoId&&consulta.medicoId&&deps.proporNotaPiloto){
       try{
         const proposto=await deps.proporNotaPiloto({contaId,mensagemId:evento.mensagemId,consulta});
