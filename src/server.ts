@@ -32,6 +32,10 @@ import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
 import { continuarEventoComNoto, type EventoTrabalhoVerificado } from './agente/continuar-evento.js';
+import { processarMidiaRecebida } from './whatsapp/ingestao-comprovante.js';
+import { criarClassificadorOpenAi } from './whatsapp/classificar-documento.js';
+import { lerEstadoConversa } from './agente/estado-conversa.js';
+import { selecionarConsultaComprovante } from './agenda/fonte-agenda.js';
 import { adiarConfirmacaoRegistro,agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
@@ -321,7 +325,75 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if (maisAntiga) revisoesPareamento.delete(maisAntiga);
       }
     },
-    aoConectar: boasVindasInstancia
+    aoConectar: boasVindasInstancia,
+    ...(config.comprovantesRecepcaoAtiva && config.notoPilotoRestrito && orcamentoPiloto ? {
+      aoReceberMidia: async (evento:import('./whatsapp/ingestao-comprovante.js').MidiaRecebida)=>{
+        await processarMidiaRecebida(evento,{
+          pool,
+          remetentesAutorizados:config.comprovantesRemetentesTeste??[],
+          operadorAutorizado:config.envioRealAllowlist?.[0]??'',
+          carregarMidia:(instancia,mensagemId)=>evolutionClient.obterBase64MensagemMidia(instancia,mensagemId),
+          classificador:{
+            classificar:async midia=>{
+              // O limite é reservado ANTES de enviar dados ao modelo.
+              // Mesmo timeout retem a reserva se o uso não estiver comprovado.
+              const reserva=await reservarCustoPiloto(orcamentoPiloto,'conversa',config.openaiVisaoModel??'gpt-4o-mini');
+              let uso:{entrada:number;saida:number}|null=null;
+              const classificador=criarClassificadorOpenAi(config.openaiApiKey!,config.openaiVisaoModel??'gpt-4o-mini',
+                registro=>{uso=registro;});
+              try{
+                return await classificador.classificar(midia);
+              }finally{
+                await liquidarCustoPiloto(orcamentoPiloto,reserva,uso);
+              }
+            }
+          },
+          informarOperador:async (telefone,texto)=>{
+            const resultado=await transporteAgente.enviarTexto({
+              instanciaNome:config.evolutionAssistantInstanceName,
+              contatoTelefone:telefone,texto
+            });
+            return resultado.sucesso;
+          },
+          consultarPossivelConsulta:async(contaId,_medicoReferenciaId,remetente,classe)=>{
+            const estado=await lerEstadoConversa(pool,contaId);
+            if(estado.agendaEscolhida!=='tribemd'||!estado.profissionalConfirmadoId)
+              return {estado:'indisponivel' as const};
+            const medico=await pool.query(
+              'select nome_completo from public.medicos where id=$1 and conta_id=$2 limit 1',
+              [estado.profissionalConfirmadoId,contaId]
+            );
+            const nome=medico.rows[0]?.nome_completo;
+            if(typeof nome!=='string'||!nomeProfissionalValido(nome))
+              return {estado:'indisponivel' as const};
+            // Somente agenda autenticada da conta; não presume médico da
+            // instância nem utiliza cadastro antigo como vínculo de paciente.
+            const referencia=cofreIdDaConta(contaId);
+            const status=await cofres.statusAgendas(referencia);
+            if(!status.tribemd.conectada)return {estado:'indisponivel' as const};
+            const leitura=await cofres.fonteAgenda.consultar({
+              medicoId:estado.profissionalConfirmadoId,
+              referenciaCofre:referencia,janelaDias:30
+            });
+            if(leitura.tipo!=='consultas')return {estado:'indisponivel' as const};
+            const consultas=leitura.consultas.filter(p=>
+              typeof p.profissional==='string' &&
+              normalizarNomeMedico(p.profissional)===normalizarNomeMedico(nome));
+            const r=selecionarConsultaComprovante(consultas,remetente,new Set(),
+              classe.dataPagamento);
+            if(r.tipo==='consulta'){
+              const data=new Date(r.consulta.dataHora);
+              if(!Number.isFinite(data.getTime()))return {estado:'indisponivel' as const};
+              return {estado:'identificada' as const,
+                dataConsulta:data.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'}),
+                profissional:nome};
+            }
+            return {estado: r.motivo==='MULTIPLAS_CONSULTAS_SEM_NOTA'?
+              'ambiguo' as const:'indisponivel' as const};
+          }
+        });
+      }
+    }:{})
   }));
   const consultarConferenciaConta = async (contaId: string, medicoId: string, agenda: AgendaEscolhida, desde?:string) => {
       const janela=janelaConferencia(new Date(),desde);
