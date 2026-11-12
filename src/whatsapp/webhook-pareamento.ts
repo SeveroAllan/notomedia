@@ -1,6 +1,6 @@
 /**
  * Webhook das instâncias pareadas pelo usuário. Não processa mensagens de pacientes,
- * não chama IA, não armazena conversas e não envia respostas.
+ * não interpreta conversas e não envia respostas para pacientes.\n * O processamento de mídias é opt-in, com autorização e serviço isolados.
  *
  * A instância do Noto Assistente utiliza outro webhook (agente/webhook.ts).
  */
@@ -22,6 +22,7 @@ export function criarRouterWebhookPareamento(deps: {
   confirmarConexao?: (instancia: string) => Promise<boolean>;
   aoAtualizarCodigo?: (instancia: string, codigo: string) => void;
   aoConectar?: (instancia: string) => Promise<void>;
+  aoReceberMidia?: (evento:{instancia:string;mensagemId:string;remetente:string;mimetype:string})=>Promise<void>;
 }) {
   const router = Router();
   router.post('/', async (req, res) => {
@@ -33,6 +34,31 @@ export function criarRouterWebhookPareamento(deps: {
 
     const evento = String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.');
     const instancia = req.body?.instance;
+    if(evento==='messages.upsert'){
+      if(!deps.aoReceberMidia){res.sendStatus(204);return;}
+      const chave=req.body?.data?.key;
+      const msg=req.body?.data?.message;
+      const documento=msg?.imageMessage ?? msg?.documentMessage;
+      const mime=documento?.mimetype;
+      if(typeof instancia!=='string'||!/^medico_[a-f0-9]{12}$/i.test(instancia)||
+        chave?.fromMe!==false||typeof chave.id!=='string'||
+        !/^[A-Za-z0-9_-]{5,150}$/.test(chave.id)||
+        typeof chave.remoteJid!=='string'||!/^[0-9]{10,13}@s\.whatsapp\.net$/.test(chave.remoteJid)||
+        !['image/jpeg','image/png','application/pdf'].includes(mime)){
+        res.sendStatus(204);return;
+      }
+      try{
+        await deps.aoReceberMidia({
+          instancia,mensagemId:chave.id,
+          remetente:chave.remoteJid.slice(0,chave.remoteJid.indexOf('@')),mimetype:mime
+        });
+        res.sendStatus(204);
+      }catch{
+        // Sem payload, telefone ou conteúdo do arquivo no log.
+        res.sendStatus(503);
+      }
+      return;
+    }
     if (evento === 'qrcode.updated') {
       const qr = req.body?.data?.qrcode;
       if (typeof instancia === 'string' && /^medico_[a-f0-9]{12}$/i.test(instancia) &&
