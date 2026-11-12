@@ -6,6 +6,7 @@ import { agendaTribemd, loginTribemd, origemTribemd, permitirRequisicaoTribemd, 
 import { LeitorAgendaTribemd, ErroAgendaTribemd, type RecorteAgendaTribemd } from './tribemd-agenda.js';
 import { codigoEstadoLoginTribemd, type EstadoTelaLoginTribemd } from './tribemd-login-estado.js';
 import type { EstadoNavegador } from './tribemd-perfil.js';
+import { navegarComAgente, type PlanejadorNavegacao } from './navegador-inteligente.js';
 export class ErroTribemd extends Error {
  constructor(public codigo:string,public diagnostico?:{etapa:string;statusHttp?:number;rede?:DiagnosticoRedeLoginTribemd;tela?:EstadoTelaLoginTribemd}){super(codigo);}
 }
@@ -20,8 +21,8 @@ export class NavegadorTribemd {
  private diagnostico?:DiagnosticoRedeLoginTribemd; private etapa='abrindo_login'; private statusHttp?:number;
  private agenda?:LeitorAgendaTribemd;private leituraFalhou=false;
  private envioLogin=false;private ultimaTela?:EstadoTelaLoginTribemd;
- private constructor(private context:BrowserContext,private browser:Browser,private display:TelaVirtualTribemd){}
- static async criar(opcoes:{executavel:string;xvfb?:string;estado?:EstadoNavegador;proxy?:string},signal:AbortSignal) {
+ private constructor(private context:BrowserContext,private browser:Browser,private display:TelaVirtualTribemd,private planejarNavegacao?:PlanejadorNavegacao){}
+ static async criar(opcoes:{executavel:string;xvfb?:string;estado?:EstadoNavegador;proxy?:string;planejarNavegacao?:PlanejadorNavegacao},signal:AbortSignal) {
   signal.throwIfAborted();let display:TelaVirtualTribemd;
   try{display=await TelaVirtualTribemd.iniciar(signal,opcoes.xvfb);}catch{throw new ErroTribemd('TELA_VIRTUAL_INDISPONIVEL');}
   let browser:Browser|undefined;
@@ -32,7 +33,7 @@ export class NavegadorTribemd {
    const context=await browser.newContext({viewport:{width:1280,height:900},acceptDownloads:false,serviceWorkers:'block',storageState:opcoes.estado});
    // Sem trace/HAR/video. Não anexar listeners console/pageerror/request de conteúdo.
    await context.routeWebSocket('**/*',ws=>ws.close());
-   const n=new NavegadorTribemd(context,browser,display);
+   const n=new NavegadorTribemd(context,browser,display,opcoes.planejarNavegacao);
    signal.addEventListener('abort',()=>{void n.encerrar();},{once:true});
    if(signal.aborted){await n.encerrar();signal.throwIfAborted();}
    return n;
@@ -114,6 +115,10 @@ export class NavegadorTribemd {
   try{
    const destino=pagina==='agenda'?agendaTribemd:'/pacientes';
    if(this.leituraFalhou||new URL(p.url()).pathname!==destino){
+    // A IA escolhe somente caminhos visíveis e já autorizados; no caso de
+    // ambiguidade/falha, o leitor read-only existente continua como fallback.
+    if(pagina==='agenda'&&this.planejarNavegacao)
+      await navegarComAgente(p,'tribemd','abrir_agenda',this.planejarNavegacao).catch(()=>{});
     const r=await p.goto(origemTribemd+destino,{waitUntil:'domcontentloaded',timeout:25000});
     this.statusHttp=r?.status();if(this.statusHttp&&this.statusHttp>=400)throw new ErroTribemd('LEITURA_HTTP_ERRO');
    }

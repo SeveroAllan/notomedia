@@ -153,7 +153,7 @@ describe('pareamento usa sessão autenticada do OTP', () => {
     expect(chamadas[0].opcoes.headers.Authorization).toBe('Bearer sessao-validada');
   });
 
-  it('avisa sobre rotação sem trocar caracteres até a consulta manual autenticada', async () => {
+  it('atualiza o código automaticamente após evento autenticado sem solicitar nova geração', async () => {
     const elementos = new Map();
     const el = (id: string) => {
       if (!elementos.has(id)) elementos.set(id, { textContent: '', hidden: true, classList: { add() {}, remove() {} } });
@@ -165,19 +165,17 @@ describe('pareamento usa sessão autenticada do OTP', () => {
       sessaoAtual:{tokenAcesso:'sessao-validada'}, document:{getElementById:el},
       fetch:async (url:string,opcoes:any) => {
         chamadas.push({url,opcoes});
-        return {ok:true,json:async()=>({ok:true,medicoId:'medico-de-teste',revisaoCodigo:'nova',
-          ...(url.endsWith('consultarCodigo=1')?{pairingCode:'NEWC0DE2'}:{})})};
+        return {ok:true,json:async()=>({ok:true,medicoId:'medico-de-teste',
+          revisaoCodigo:'nova',pairingCode:'NEWC0DE2'})};
       }
     });
     runInContext(trecho('    async function verificarStatusWhatsapp(', '    function iniciarPollingConexao('),ctx);
     runInContext("exibirConexaoWhatsapp({ok:true,medicoId:'medico-de-teste',pairingCode:'OLDC0DE1',revisaoCodigo:'antiga'})",ctx);
     await runInContext("verificarStatusWhatsapp('medico-de-teste')",ctx);
     expect(el('avisoCodigoPareamento').hidden).toBe(false);
-    expect(el('txtPairingCode').textContent).toBe('OLDC0DE1');
-    await runInContext("atualizarCodigoConexao('medico-de-teste')",ctx);
-    expect(chamadas[1]?.url).toBe('/api/onboarding/whatsapp/status?medicoId=medico-de-teste&consultarCodigo=1');
-    expect(chamadas[1]?.opcoes.headers.Authorization).toBe('Bearer sessao-validada');
-    expect(el('avisoCodigoPareamento').hidden).toBe(true);
     expect(el('txtPairingCode').textContent).toBe('NEWC0DE2');
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0]?.url).toBe('/api/onboarding/whatsapp/status?medicoId=medico-de-teste');
+    expect(chamadas[0]?.opcoes.headers.Authorization).toBe('Bearer sessao-validada');
   });
 });

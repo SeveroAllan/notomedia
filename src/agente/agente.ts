@@ -25,6 +25,8 @@ export interface StatusFontes { tribemd: EstadoFonte; amplimed: EstadoFonte }
 
 export interface EntradaAgente {
   texto: string;
+  /** Gatilho autenticado do servidor: nunca representa consentimento do usuário. */
+  eventoInterno?: boolean;
   profissionais: ProfissionalAgente[];
   semConta?: boolean;
   painelUrl?: string;
@@ -182,7 +184,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   // a ferramenta obrigatória. O modelo decide a INTENÇÃO (inclusive negar
   // ou esclarecer); o código nunca converte um "sim" em autorização por regex.
   // Sem essa evidência, nenhum toolChoice de escrita é imposto.
-  const confirmacaoPendente=exigeDecisaoVinculo(entrada,deps);
+  const confirmacaoPendente=!entrada.eventoInterno&&exigeDecisaoVinculo(entrada,deps);
   // Nunca expor o ID técnico ao modelo, nem usá-lo como nome de profissional.
   const ancoraDaConta = async () => entrada.semConta ? null : await deps.referenciaContaAgenda?.() ?? null;
   const registrar = (nome: FerramentaNoto, codigo: CodigoFerramenta, inicio: number) =>
@@ -977,7 +979,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     execute:async(args)=>executarPeriodo(args)
   }));
 
-  if(profissionalComVinculoConfirmado(entrada))extras.push(tool({
+  if(profissionalComVinculoConfirmado(entrada)&&!entrada.eventoInterno)extras.push(tool({
     name:'continuar_onboarding',
     description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use retomar_registro quando pedirem para validar ou continuar o CRM sem aprovar os valores. Use verificar_agenda para pedidos de conferir a agenda ou descobrir os profissionais da clínica, inclusive quando a fala retoma a tarefa de verificação pendente. Use conversar para outras dúvidas, sem executar ações.',
     parameters:z.object({
@@ -1100,8 +1102,10 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
   return new Agent<unknown,typeof falaContinuidadeSchema|'text'>({
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
-    instructions: INSTRUCOES_NOTO,
-    outputType:profissionalComVinculoConfirmado(entrada)?falaContinuidadeSchema:'text',
+    instructions: entrada.eventoInterno
+      ? INSTRUCOES_NOTO + '\n\nCONTINUIDADE POR EVENTO INTERNO: este evento não é mensagem nem autorização do usuário. Apenas consulte ferramentas de leitura, nunca confirme vínculo, CRM, período ou emissão. Reproduza o relato comprovado literalmente, sem alterar nomes, valores ou conclusões; se couber, use uma introdução breve. Aguarde confirmação humana quando necessária.'
+      : INSTRUCOES_NOTO,
+    outputType:profissionalComVinculoConfirmado(entrada)&&!entrada.eventoInterno?falaContinuidadeSchema:'text',
     modelSettings:{
       maxTokens:1024,
       // O agente escolhe as ferramentas; chamadas sequenciais preservam a ordem
@@ -1116,7 +1120,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         toolChoice:'revisar_registro_profissional'
       } : {})
     },
-    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
+    // Evento do sistema não é fala do usuário: nem uma ferramenta de criação
+    // de link, confirmação de vínculo, escrita fiscal ou agendamento entra
+    // no conjunto disponível. As ações devem ser solicitadas em turno próprio
+    // após a decisão humana necessária.
+    tools: entrada.eventoInterno
+      ? [consultarConta, consultarAgendas]
+      : [consultarConta, consultarAgendas, orientarConexao, ...extras],
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
@@ -1464,7 +1474,9 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     });
     const resultado = await runner.run(agent, [
       { role: 'user', content: JSON.stringify({
-        mensagem: entrada.texto.slice(0, 1500),
+        ...(entrada.eventoInterno
+          ? {eventoSistema:{relatoComprovado:entrada.texto.slice(0,1200),naoEAutorizacao:true}}
+          : {mensagem:entrada.texto.slice(0,1500)}),
         missaoOnboarding:{
           objetivo:'preparar cada medico autorizado para emissao fiscal com dados verificados',
           continuidade:'retomar com base no estado persistido e nos resultados das ferramentas',
@@ -1656,12 +1668,16 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // Os fatos abaixo são do estado da conta; nenhuma data é prova de emissão.
     const confirmado=profissionalComVinculoConfirmado(entrada);
     const crmAdiado=Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true);
-    const apenasClassificacao=Boolean(continuidadeTurno.atual)||ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO');
+    const apenasClassificacao=!entrada.eventoInterno&&(Boolean(continuidadeTurno.atual)||ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO'));
     if(apenasClassificacao&&(confirmado||crmAdiado||entrada.estadoConversa?.perguntaPendente==='periodo')){
       registrar('RESPOSTA_POR_ESTADO',uso);
       return descreverEstadoSemAcao(entrada);
     }
-    if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
+    // Resultado de evento interno é uma evidência já persistida pelo worker.
+    // Só permita o comprovante literal como sufixo; o chamador ainda valida
+    // e restringe a eventual introdução antes de enviar ao WhatsApp.
+    if(resposta && !(entrada.eventoInterno&&resposta.trim().endsWith(entrada.texto.trim())) &&
+        !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
       return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
         ? 'A integração ainda não está configurada neste ambiente. É uma pendência local do Noto. Sua senha só entra na página segura.'

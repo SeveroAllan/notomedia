@@ -31,6 +31,13 @@ import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
 import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
+import { continuarEventoComNoto, type EventoTrabalhoVerificado } from './agente/continuar-evento.js';
+import { notificarCertificadoRecebido } from './agente/evento-certificado.js';
+import { processarMidiaRecebida } from './whatsapp/ingestao-comprovante.js';
+import { criarClassificadorOpenAi } from './whatsapp/classificar-documento.js';
+import { lerEstadoConversa } from './agente/estado-conversa.js';
+import { selecionarConsultaComprovante } from './agenda/fonte-agenda.js';
+import { prepararLoteAmplimed } from './agenda/amplimed-lote.js';
 import { adiarConfirmacaoRegistro,agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
@@ -179,6 +186,23 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         }
         console.info('NOTO_COFRE_DESCOBERTA',
           nomes.length?'CONFIRMACAO_PERSISTIDA':'DESCOBERTA_PENDENTE');
+        // Uma sessão conectada mas sem nomes não pode encerrar a missão.
+        // Só uma leitura complementar por conta/agenda; a chave durável
+        // impede repetir a navegação em loops de callback/reconexão.
+        if(!nomes.length && process.env['NOTO_AGENT_TRABALHOS_ATIVO']==='true' &&
+          config.notoAgentAtivo && config.notoAgentEnvioAtivo){
+          const telefoneDestino=variantes.find(t=>/^55\d{10,11}$/.test(t));
+          if(telefoneDestino){
+            const chave='agenda-conectada-'+createHmac('sha256',config.evolutionAssistantWebhookSecret)
+              .update(JSON.stringify([contaId,evento.agenda])).digest('hex').slice(0,32);
+            const trabalho=await enfileirarTrabalhoNoto(pool,{
+              contaId,instancia:config.evolutionAssistantInstanceName,mensagemId:chave,
+              telefone:telefoneDestino,tipo:'descoberta_agenda',
+              agenda:evento.agenda,medicoId:null
+            });
+            if(trabalho.ok)console.info('NOTO_COFRE_DESCOBERTA','LEITURA_COMPLEMENTAR_REGISTRADA');
+          }
+        }
       }
       if (!config.notoAgentEnvioAtivo) return;
       const diagnostico=evento.diagnosticoLeitura;
@@ -211,7 +235,27 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               ? explicarLeituraPendente(diagnostico)
               : 'A conexão não trouxe uma lista autenticada de médicos na Amplimed.',
             'Mantive a conexão e a descoberta pendente, sem vincular profissionais por suposição.'];
-      for(const frase of mensagens) for(const balao of separarBaloes(frase)){
+      // O callback autenticado é um evento, não uma autorização do usuário.
+      // O agente pode contextualizar a fala, mas não escolher ferramentas
+      // mutáveis nem substituir o resultado persistido da agenda.
+      let falas=mensagens;
+      if(config.notoPilotoRestrito && config.notoAgentAtivo &&
+        process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA']==='true' &&
+        nomes.length>0 && orcamentoPiloto){
+        const relato=mensagens.join('\n');
+        const natural=await continuarEventoComNoto({
+          tipo:'descoberta_agenda',contaId,textoComprovado:relato
+        },{
+          pool,consultarStatus:ref=>cofres.statusAgendas(ref),
+          ...(config.openaiApiKey?{apiKey:config.openaiApiKey}:{}),
+          ...(config.openaiTextoModel?{modeloNome:config.openaiTextoModel}:{}),
+          controleCusto:orcamentoPiloto,
+          exigirControleCusto:true,
+          tracesAtivos:config.notoAgentTracesAtivos
+        }).catch(()=>null);
+        if(natural)falas=[natural];
+      }
+      for(const frase of falas) for(const balao of separarBaloes(frase)){
         const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
           config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
           instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto:balao
@@ -295,8 +339,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // O polling expõe só a revisão opaca do último evento da própria instância.
   const chaveRevisaoPareamento = randomBytes(32);
   const revisoesPareamento = new Map<string, string>();
+  // Só memória volátil (nunca banco/log). Expiração curta para não exibir
+  // código rotacionado como válido. Ambiente multi-réplica exige cache compartilhado.
+  const codigosRecentesPareamento = new Map<string,{codigo:string;recebidoEm:number}>();
   const revisaoPareamento = (instancia: string, codigo: string) =>
     createHmac('sha256', chaveRevisaoPareamento).update(instancia + ':' + codigo.replace(/-/g, '').toUpperCase()).digest('hex');
+  const codigoRecente = (instancia:string) => {
+    const atual=codigosRecentesPareamento.get(instancia);
+    if(!atual)return null;
+    if(Date.now()-atual.recebidoEm>60_000){
+      codigosRecentesPareamento.delete(instancia);
+      return null;
+    }
+    return atual.codigo;
+  };
 
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
@@ -313,14 +369,148 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       } catch { return false; }
     },
     aoAtualizarCodigo: (instancia, codigo) => {
+      codigosRecentesPareamento.set(instancia,{codigo,recebidoEm:Date.now()});
       revisoesPareamento.delete(instancia);
       revisoesPareamento.set(instancia, revisaoPareamento(instancia, codigo));
       if (revisoesPareamento.size > 256) {
         const maisAntiga = revisoesPareamento.keys().next().value;
-        if (maisAntiga) revisoesPareamento.delete(maisAntiga);
+        if (maisAntiga){
+          revisoesPareamento.delete(maisAntiga);
+          codigosRecentesPareamento.delete(maisAntiga);
+        }
       }
     },
-    aoConectar: boasVindasInstancia
+    aoConectar: boasVindasInstancia,
+    ...(config.comprovantesRecepcaoAtiva && config.notoPilotoRestrito && orcamentoPiloto ? {
+      aoReceberMidia: async (evento:import('./whatsapp/ingestao-comprovante.js').MidiaRecebida)=>{
+        await processarMidiaRecebida(evento,{
+          pool,
+          remetentesAutorizados:config.comprovantesRemetentesTeste??[],
+          operadorAutorizado:gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist?.[0]??'').find(t=>/^55\d{10,11}$/.test(t))??'',
+          carregarMidia:(instancia,mensagemId)=>evolutionClient.obterBase64MensagemMidia(instancia,mensagemId),
+          classificador:{
+            classificar:async midia=>{
+              // O limite é reservado ANTES de enviar dados ao modelo.
+              // Mesmo timeout retem a reserva se o uso não estiver comprovado.
+              const reserva=await reservarCustoPiloto(orcamentoPiloto,'conversa',config.openaiVisaoModel??'gpt-4o-mini');
+              let uso:{entrada:number;saida:number}|null=null;
+              const classificador=criarClassificadorOpenAi(config.openaiApiKey!,config.openaiVisaoModel??'gpt-4o-mini',
+                registro=>{uso=registro;});
+              try{
+                return await classificador.classificar(midia);
+              }finally{
+                await liquidarCustoPiloto(orcamentoPiloto,reserva,uso);
+              }
+            }
+          },
+          informarOperador:async (telefone,texto)=>{
+            const resultado=await transporteAgente.enviarTexto({
+              instanciaNome:config.evolutionAssistantInstanceName,
+              contatoTelefone:telefone,texto
+            });
+            return resultado.sucesso;
+          },
+          consultarPossivelConsulta:async(contaId,_medicoReferenciaId,remetente,classe)=>{
+            const estado=await lerEstadoConversa(pool,contaId);
+            if(!estado.profissionalConfirmadoId||!estado.agendaEscolhida)
+              return {estado:'indisponivel' as const};
+            const medico=await pool.query(
+              'select nome_completo from public.medicos where id=$1 and conta_id=$2 limit 1',
+              [estado.profissionalConfirmadoId,contaId]
+            );
+            const nome=medico.rows[0]?.nome_completo;
+            if(typeof nome!=='string'||!nomeProfissionalValido(nome))
+              return {estado:'indisponivel' as const};
+            // Somente agenda autenticada da conta; não presume médico da
+            // instância nem utiliza cadastro antigo como vínculo de paciente.
+            const referencia=cofreIdDaConta(contaId);
+            const status=await cofres.statusAgendas(referencia);
+            let consultas: import('./agenda/fonte-agenda.js').ConsultaSincronizada[]=[];
+            if(estado.agendaEscolhida==='tribemd'){
+              if(!status.tribemd.conectada)return {estado:'indisponivel' as const};
+              const leitura=await cofres.fonteAgenda.consultar({
+                medicoId:estado.profissionalConfirmadoId,
+                referenciaCofre:referencia,janelaDias:30
+              });
+              if(leitura.tipo!=='consultas')return {estado:'indisponivel' as const};
+              consultas=leitura.consultas.filter(p=>typeof p.profissional==='string'&&
+                normalizarNomeMedico(p.profissional)===normalizarNomeMedico(nome))
+                .map(p=>({...p,valorConsultaCentavos:p.valorConsultaCentavos??null}));
+            } else {
+              if(!status.amplimed.conectada)return {estado:'indisponivel' as const};
+              const lista=await cofres.listarProfissionaisAmplimed(estado.profissionalConfirmadoId);
+              if(!lista.ok)return {estado:'indisponivel' as const};
+              const possiveis=lista.profissionais.filter(p=>
+                normalizarNomeMedico(p.nome)===normalizarNomeMedico(nome)&&!!p.codigo?.trim());
+              if(possiveis.length!==1||lista.profissionais.filter(p=>p.codigo===possiveis[0]!.codigo).length!==1)
+                return {estado:'indisponivel' as const};
+              const hoje=new Date().toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+              const desde=new Date(Date.now()-29*86_400_000)
+                .toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+              const leitura=await cofres.lerAgendaAmplimed(
+                estado.profissionalConfirmadoId,desde,hoje,true,possiveis[0]!.codigo);
+              if(!leitura.ok)return {estado:'indisponivel' as const};
+              consultas=prepararLoteAmplimed(leitura.dias).consultas;
+            }
+            const r=selecionarConsultaComprovante(consultas,remetente,new Set(),
+              classe.dataPagamento);
+            if(r.tipo==='consulta'){
+              const data=new Date(r.consulta.dataHora);
+              if(!Number.isFinite(data.getTime()))return {estado:'indisponivel' as const};
+              // Proposta só quando existe correspondência EXATA com o
+              // agendamento fiscal registrado. Consulta do portal, isolada,
+              // não comprova ausência de nota nem libera emissão.
+              const banco=await pool.query([
+                'select a.id from public.agendamentos a',
+                'join public.medicos m on m.id=a.medico_id and m.conta_id=$1',
+                'where a.medico_id=$2::uuid and a.referencia_externa=$3',
+                'and a.origem=$5 and a.status=\'realizado\'',
+                'and a.valor_consulta_centavos=$4',
+                'and not exists(select 1 from public.solicitacao_nota_agendamentos s',
+                'where s.medico_id=a.medico_id and s.agendamento_id=a.id)',
+                'limit 2'
+              ].join(' '),[contaId,estado.profissionalConfirmadoId,r.consulta.idExterno,
+                classe.valorCentavos&&r.consulta.valorConsultaCentavos===classe.valorCentavos?classe.valorCentavos:null,
+                estado.agendaEscolhida]);
+              return {estado:'identificada' as const,
+                dataConsulta:data.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'}),
+                profissional:nome,
+                ...(banco.rows.length===1?{
+                  agendamentoId:String(banco.rows[0].id),
+                  medicoId:estado.profissionalConfirmadoId
+                }:{})};
+            }
+            return {estado: r.motivo==='MULTIPLAS_CONSULTAS_SEM_NOTA'?
+              'ambiguo' as const:'indisponivel' as const};
+          },
+          ...(config.emissaoWhatsAppProdutor&&config.emissaoWhatsAppPropostaAtiva?{
+            proporNotaPiloto:async(e:{contaId:string;mensagemId:string;consulta:import('./whatsapp/ingestao-comprovante.js').PossivelConsulta})=>{
+              const escopo=config.emissaoWhatsAppProdutor!;
+              if(e.contaId!==escopo.contaId||e.consulta.medicoId!==escopo.medicoId||
+                e.consulta.agendamentoId!==escopo.agendamentoId)return false;
+              const operador=gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist?.[0]??'')
+                .find(v=>/^55\d{10,11}$/.test(v));
+              if(!operador||!config.evolutionAssistantWebhookSecret)return false;
+              const ref=(tipo:string,id?:string)=>createHmac('sha256',config.evolutionAssistantWebhookSecret)
+                .update(JSON.stringify(['proposta_fiscal',tipo,config.evolutionAssistantInstanceName,operador,id]))
+                .digest('hex');
+              const resposta=await tratarPropostaEmissaoWhatsApp(pool,escopo,{
+                contaId:e.contaId,texto:'propor nota de teste',
+                mensagemRef:ref('comprovante',e.mensagemId),
+                conversaRef:ref('conversa')
+              },async texto=>{
+                const envio=await transporteAgente.enviarTexto({
+                  instanciaNome:config.evolutionAssistantInstanceName,
+                  contatoTelefone:operador,texto,linkPreview:false
+                });
+                return envio.sucesso&&envio.mensagemId?ref('mensagem',envio.mensagemId):null;
+              });
+              return resposta==='';
+            }
+          }:{})
+        });
+      }
+    }:{})
   }));
   const consultarConferenciaConta = async (contaId: string, medicoId: string, agenda: AgendaEscolhida, desde?:string) => {
       const janela=janelaConferencia(new Date(),desde);
@@ -367,10 +557,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const trabalhosHabilitados = process.env['NOTO_AGENT_TRABALHOS_ATIVO'] === 'true' &&
     config.notoPilotoRestrito === true && config.notoAgentAtivo === true &&
     config.notoAgentEnvioAtivo === true && (config.envioRealAllowlist?.length??0)===1;
+  // Opt-in sem migração: a fila durável já existente é a origem dos eventos.
+  // Nunca habilitar sem orçamento controlado e allowlist do piloto.
+  const continuarEvento = trabalhosHabilitados &&
+    process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA'] === 'true'
+    ? (evento:EventoTrabalhoVerificado) => continuarEventoComNoto(evento,{
+        pool,consultarStatus:(referencia)=>cofres.statusAgendas(referencia),
+        ...(config.openaiApiKey ? {apiKey:config.openaiApiKey}:{}),
+        ...(config.openaiTextoModel ? {modeloNome:config.openaiTextoModel}:{}),
+        ...(orcamentoPiloto ? {controleCusto:orcamentoPiloto}:{}),
+        exigirControleCusto:true,
+        tracesAtivos:config.notoAgentTracesAtivos
+      })
+    : undefined;
   app.locals.iniciarTrabalhos = () => trabalhosHabilitados ?
     iniciarTrabalhosNoto({
       pool,instancia:config.evolutionAssistantInstanceName,
       ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
+      ...(continuarEvento ? {continuarEvento}:{}),
       descobrir:(contaId,medicoId,agenda) =>
         descobrirProfissionaisConta(medicoId??cofreIdDaConta(contaId),agenda),
       conferir:consultarConferenciaConta,
@@ -565,9 +769,35 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   }
 
   const adnNfseClient = new AdnNfseClient();
+  const avisarCertificadoRecebido = async(medicoId:string,certificadoId:string) => {
+    if(!config.notoPilotoRestrito||!config.notoAgentEnvioAtivo||
+      process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA']!=='true')return;
+    await notificarCertificadoRecebido(medicoId,certificadoId,{
+      pool,instanciaAssistente:config.evolutionAssistantInstanceName,
+      operadorTeste:config.envioRealAllowlist?.[0]??'',
+      consultarEstado:async id=>{
+        const s=await consultarStatusOnboarding(pool,id,false);
+        return {
+          certificadoValido:s.passos.passo3CertificadoValido,
+          profissionalConfirmado:s.passos.passoProfissionalAprovado,
+          perfilFiscalConfirmado:s.passos.passo2FiscalConfirmado
+        };
+      },
+      enviar:async(tel,texto)=>{
+        const r=await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,
+          contatoTelefone:tel,texto
+        });
+        return r.sucesso;
+      },
+      ...(continuarEvento?{continuarEvento}:{})
+    });
+  };
 
   const aoConectarWhatsapp = async (medicoId: string) => {
     const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+    codigosRecentesPareamento.delete(nomeInstancia);
+    revisoesPareamento.delete(nomeInstancia);
     await boasVindasInstancia(nomeInstancia);
   };
 
@@ -1044,6 +1274,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
           medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
+        await avisarCertificadoRecebido(medicoId,resultado.certificadoId).catch(() => {});
         return res.json({
           ...resultado,
           medicoId,
@@ -1057,6 +1288,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       } catch (err: any) {
         console.warn('[ADN] Importacao automatica indisponivel:', { etapa: 'importacao_referencia', codigo: err?.codigo || 'IMPORTACAO_FALHOU', diagnostico: err?.diagnostico, mensagem: err?.message });
+        await avisarCertificadoRecebido(medicoId,resultado.certificadoId).catch(() => {});
         return res.json({
           ...resultado,
           medicoId,
@@ -1137,11 +1369,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       });
 
       res.setHeader('Cache-Control', 'no-store');
-      const revisaoCodigo = resultado.pairingCode
-        ? revisaoPareamento(nomeInstancia, resultado.pairingCode)
+      // A pesquisa periódica nunca gera outro código. Para atualização
+      // automática, devolvemos o último QRCODE_UPDATED recebido e autenticado.
+      const rotacionado=resultado.state==='connecting'?codigoRecente(nomeInstancia):null;
+      const codigoAtual=rotacionado??resultado.pairingCode;
+      const revisaoCodigo = codigoAtual
+        ? revisaoPareamento(nomeInstancia,codigoAtual)
         : resultado.state === 'connecting' ? revisoesPareamento.get(nomeInstancia) : undefined;
-      return res.json({ ...resultado, medicoId, revisaoCodigo,
-        revisaoAntesDaConsulta: resultado.pairingCode ? revisaoAntesDaConsulta : undefined });
+      return res.json({ ...resultado, ...(codigoAtual?{pairingCode:codigoAtual}:{}), medicoId, revisaoCodigo,
+        revisaoAntesDaConsulta: codigoAtual ? revisaoAntesDaConsulta : undefined });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }

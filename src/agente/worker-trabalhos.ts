@@ -8,6 +8,7 @@ import type { ConsultaRegistro } from '../cadastro/consultas.js';
 import { executarPesquisaRegistro,notificarPesquisaRegistro,recuperarPesquisaInterrompida } from './pesquisa-profissional-conversa.js';
 import {lerOrcamentoNoto,notificarPausaPorCusto} from './limite-gasto-rodada.js';
 import {persistirDescobertaComprovada} from './descoberta-autenticada.js';
+import type { EventoTrabalhoVerificado } from './continuar-evento.js';
 import {
   reservarTrabalhoNoto,reservarNotificacaoNoto,concluirLeituraNoto,
   falharLeituraNoto,terminarNotificacaoNoto,recuperarTrabalhosInterrompidos,type TrabalhoParaNotificar
@@ -25,6 +26,8 @@ export interface DependenciasTrabalhos {
   pesquisarRegistro?:ConsultaRegistro;
   destinatarioPesquisa?:string;
   controleCusto?:pg.Pool;
+  /** Reativa o Noto com evidências, sem conceder autorização de escrita. */
+  continuarEvento?: (evento:EventoTrabalhoVerificado)=>Promise<string|null>;
 }
 const causaSegura=(motivo:string|undefined) =>
   ['LEITURA_INCOMPLETA','ACESSO_EXPIRADO','PROFISSIONAL_NAO_IDENTIFICADO',
@@ -116,6 +119,7 @@ export async function notificarResultadoPendente(deps:DependenciasTrabalhos):Pro
       // do snapshot autenticado. UPDATE com zero linhas afetadas era ignorado
       // e originava convite impossível de confirmar depois.
       let aviso=textoResultado(job);
+      let evidenciaPersistida=true;
       if(job.tipo==='descoberta_agenda' && job.resultado &&
          typeof job.resultado==='object' && !Array.isArray(job.resultado)){
         const r=job.resultado as Record<string,unknown>;
@@ -123,10 +127,21 @@ export async function notificarResultadoPendente(deps:DependenciasTrabalhos):Pro
           const registrado=await persistirDescobertaComprovada(
             deps.pool,job.contaId,job.agenda,r['nomes']);
           if(!registrado){
+            evidenciaPersistida=false;
             deps.relatar?.('DESCOBERTA_ESTADO_NAO_PERSISTIDO',Date.now()-inicio,job.tipo);
             // Nenhum nome/identidade é afirmado neste balão.
             aviso='A leitura da agenda terminou, mas ainda não consegui registrar a etapa de confirmação na sua conta. Não vinculei nenhum profissional. Vou preservar o resultado para uma conferência segura.';
           }
+        }
+      }
+      if(evidenciaPersistida && deps.continuarEvento){
+        try{
+          const fala=await deps.continuarEvento({
+            tipo:job.tipo,contaId:job.contaId,textoComprovado:aviso
+          });
+          if(fala)aviso=fala;
+        }catch{
+          deps.relatar?.('CONTINUIDADE_INDISPONIVEL',Date.now()-inicio,job.tipo);
         }
       }
       aceitoApi=await deps.enviar(job.telefone,aviso);
@@ -155,7 +170,7 @@ export function iniciarTrabalhosNoto(deps:DependenciasTrabalhos,intervaloMs=2500
       }
       if(deps.pesquisarRegistro&&deps.destinatarioPesquisa){
         await recuperarPesquisaInterrompida(deps.pool);
-        if(await notificarPesquisaRegistro(deps.pool,deps.destinatarioPesquisa,deps.enviar))return;
+        if(await notificarPesquisaRegistro(deps.pool,deps.destinatarioPesquisa,deps.enviar,deps.continuarEvento))return;
       }
       const notificou=await notificarResultadoPendente(deps);
       if(notificou)return;

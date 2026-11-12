@@ -1,4 +1,5 @@
 import { chromium, type Browser, type Page } from 'playwright-core';
+import {navegarComAgente,type PlanejadorNavegacao} from './navegador-inteligente.js';
 import { dataDoCabecalhoAmplimed, dataEsperadaAtras, lerDetalheAmplimedTexto } from '../agenda/amplimed-leitor.js';
 import { statusAmplimedPorCor } from '../agenda/amplimed-mapeamento.js';
 import { dominioAprovado } from '../agenda/agendas-suportadas.js';
@@ -247,9 +248,11 @@ export function filtrarEventosPorCodigoProfissional<T extends { codigoProfission
 }
 
 /** Lista os profissionais do filtro da agenda (checkboxes .select_profs): código do filtro + nome exibido. */
-export async function listarProfissionaisAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; profissionais: ProfissionalFiltroAmplimed[] }> {
+export async function listarProfissionaisAgendaAmplimed(opcoes: { executavel: string; email: string; senha: string; tempoMs?: number; planejarNavegacao?:PlanejadorNavegacao }, signal?: AbortSignal): Promise<{ codigo: CodigoLoginAmplimed; profissionais: ProfissionalFiltroAmplimed[] }> {
   let profissionais: ProfissionalFiltroAmplimed[] = [];
   const codigo = await verificarLoginAmplimed({ ...opcoes, aoConectar: async page => {
+    if(opcoes.planejarNavegacao)
+      await navegarComAgente(page,'amplimed','localizar_profissionais',opcoes.planejarNavegacao).catch(()=>{});
     if (!/\/agenda/.test(page.url())) await page.goto('https://app.amplimed.com.br/agenda', { waitUntil: 'domcontentloaded', timeout: 20000 });
     // O contêiner aparece antes dos checkboxes (carga assíncrona do filtro): esperar o primeiro .select_profs,
     // não só o #seletor_profissional, senão a leitura vê zero entradas em página ainda populando.
