@@ -425,10 +425,12 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
                 'join public.medicos m on m.id=a.medico_id and m.conta_id=$1',
                 'where a.medico_id=$2::uuid and a.referencia_externa=$3',
                 "and a.origem='tribemd' and a.status='realizado'",
+                'and a.valor_consulta_centavos=$4',
                 'and not exists(select 1 from public.solicitacao_nota_agendamentos s',
                 'where s.medico_id=a.medico_id and s.agendamento_id=a.id)',
                 'limit 2'
-              ].join(' '),[contaId,estado.profissionalConfirmadoId,r.consulta.idExterno]);
+              ].join(' '),[contaId,estado.profissionalConfirmadoId,r.consulta.idExterno,
+                classe.valorCentavos&&r.consulta.valorConsultaCentavos===classe.valorCentavos?classe.valorCentavos:null]);
               return {estado:'identificada' as const,
                 dataConsulta:data.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'}),
                 profissional:nome,
