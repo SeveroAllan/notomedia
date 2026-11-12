@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import type { EventoTrabalhoVerificado } from './continuar-evento.js';
 import {PausaCustoPiloto} from './limite-gasto-rodada.js';
 import { normalizarNomeMedico } from '../conta/medicos-conta.js';
 import { normalizarCrm, nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
@@ -285,14 +286,24 @@ export async function destinatarioPesquisaAutorizado(
 
 /** Notifica uma única vez e registra aceite da API sem presumir entrega. */
 export async function notificarPesquisaRegistro(
-  pool:Banco,telefone:string,enviar:(telefone:string,texto:string)=>Promise<boolean>
+  pool:Banco,telefone:string,enviar:(telefone:string,texto:string)=>Promise<boolean>,
+  continuarEvento?: (evento:EventoTrabalhoVerificado)=>Promise<string|null>
 ):Promise<boolean>{
   const tarefa=await reservarAvisoPesquisa(pool);
   if(!tarefa)return false;
   let aceito=false;
   try{
-    if(await destinatarioPesquisaAutorizado(pool,tarefa.contaId,telefone,tarefa.medicoId,tarefa.nome))
-      aceito=await enviar(telefone,descreverPesquisaPublica(tarefa));
+    if(await destinatarioPesquisaAutorizado(pool,tarefa.contaId,telefone,tarefa.medicoId,tarefa.nome)){
+      const comprovado=descreverPesquisaPublica(tarefa);
+      let aviso=comprovado;
+      if(continuarEvento){
+        try{
+          const r=await continuarEvento({tipo:'pesquisa_registro',contaId:tarefa.contaId,textoComprovado:comprovado});
+          if(r)aviso=r;
+        }catch{/* Sem confirmação de IA, preserve o relato verificado. */}
+      }
+      aceito=await enviar(telefone,aviso);
+    }
   }catch{aceito=false;}
   finally{await marcarAvisoPesquisa(pool,tarefa,aceito);}
   return true;
