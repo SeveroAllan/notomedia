@@ -417,13 +417,54 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             if(r.tipo==='consulta'){
               const data=new Date(r.consulta.dataHora);
               if(!Number.isFinite(data.getTime()))return {estado:'indisponivel' as const};
+              // Proposta só quando existe correspondência EXATA com o
+              // agendamento fiscal registrado. Consulta do portal, isolada,
+              // não comprova ausência de nota nem libera emissão.
+              const banco=await pool.query([
+                'select a.id from public.agendamentos a',
+                'join public.medicos m on m.id=a.medico_id and m.conta_id=$1',
+                'where a.medico_id=$2::uuid and a.referencia_externa=$3',
+                "and a.origem='tribemd' and a.status='realizado'",
+                'and not exists(select 1 from public.solicitacao_nota_agendamentos s',
+                'where s.medico_id=a.medico_id and s.agendamento_id=a.id)',
+                'limit 2'
+              ].join(' '),[contaId,estado.profissionalConfirmadoId,r.consulta.idExterno]);
               return {estado:'identificada' as const,
                 dataConsulta:data.toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'}),
-                profissional:nome};
+                profissional:nome,
+                ...(banco.rows.length===1?{
+                  agendamentoId:String(banco.rows[0].id),
+                  medicoId:estado.profissionalConfirmadoId
+                }:{})};
             }
             return {estado: r.motivo==='MULTIPLAS_CONSULTAS_SEM_NOTA'?
               'ambiguo' as const:'indisponivel' as const};
-          }
+          },
+          ...(config.emissaoWhatsAppProdutor&&config.emissaoWhatsAppPropostaAtiva?{
+            proporNotaPiloto:async(e:{contaId:string;mensagemId:string;consulta:import('./whatsapp/ingestao-comprovante.js').PossivelConsulta})=>{
+              const escopo=config.emissaoWhatsAppProdutor!;
+              if(e.contaId!==escopo.contaId||e.consulta.medicoId!==escopo.medicoId||
+                e.consulta.agendamentoId!==escopo.agendamentoId)return false;
+              const operador=gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist?.[0]??'')
+                .find(v=>/^55\d{10,11}$/.test(v));
+              if(!operador||!config.evolutionAssistantWebhookSecret)return false;
+              const ref=(tipo:string,id?:string)=>createHmac('sha256',config.evolutionAssistantWebhookSecret)
+                .update(JSON.stringify(['proposta_fiscal',tipo,config.evolutionAssistantInstanceName,operador,id]))
+                .digest('hex');
+              const resposta=await tratarPropostaEmissaoWhatsApp(pool,escopo,{
+                contaId:e.contaId,texto:'propor nota de teste',
+                mensagemRef:ref('comprovante',e.mensagemId),
+                conversaRef:ref('conversa')
+              },async texto=>{
+                const envio=await transporteAgente.enviarTexto({
+                  instanciaNome:config.evolutionAssistantInstanceName,
+                  contatoTelefone:operador,texto,linkPreview:false
+                });
+                return envio.sucesso&&envio.mensagemId?ref('mensagem',envio.mensagemId):null;
+              });
+              return resposta==='';
+            }
+          }:{})
         });
       }
     }:{})
