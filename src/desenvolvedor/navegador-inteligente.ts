@@ -36,7 +36,10 @@ export function filtrarOpcoesNavegacao(
     try{
       const url=new URL(destino);
       return url.protocol==='https:'&&url.hostname===dominios[portal] &&
-        (portal==='tribemd' ? /^\\/(?:atendimentos\\/agenda|profissionais?|medicos)(?:\\/|$)/iu.test(url.pathname) : /^\\/(?:agenda|profissionais?|medicos)(?:\\/|$)/iu.test(url.pathname)) &&
+        (portal==='tribemd'
+          ? ['/atendimentos/agenda','/profissionais','/profissional','/medicos']
+          : ['/agenda','/profissionais','/profissional','/medicos'])
+          .some(rota=>url.pathname===rota||url.pathname.startsWith(rota+'/')) &&
         !url.username&&!url.password&&!url.search&&!url.hash;
     }catch{return false;}
   };
