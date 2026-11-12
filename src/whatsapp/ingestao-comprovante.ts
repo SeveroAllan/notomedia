@@ -22,6 +22,9 @@ export interface PossivelConsulta {
   estado:'identificada'|'ambiguo'|'indisponivel';
   dataConsulta?:string;
   profissional?:string;
+  /** Somente correspondência confirmada com agendamento da mesma conta. */
+  agendamentoId?:string;
+  medicoId?:string;
 }
 
 export interface DependenciasIngestao {
@@ -34,6 +37,8 @@ export interface DependenciasIngestao {
   /** Somente leitura da agenda autenticada; jamais conclui ausência de nota. */
   consultarPossivelConsulta?:(contaId:string,medicoReferenciaId:string,
     remetente:string,classificacao:ClassificacaoMidia)=>Promise<PossivelConsulta>;
+  /** Somente em homologação, cria proposta aguardando aprovação; não emite. */
+  proporNotaPiloto?:(evento:{contaId:string;mensagemId:string;consulta:PossivelConsulta})=>Promise<boolean>;
 }
 
 export function avisoComprovante(
@@ -105,6 +110,17 @@ export async function processarMidiaRecebida(
         const c=await deps.consultarPossivelConsulta(contaId,medicoReferenciaId,evento.remetente,classificacao);
         if(['identificada','ambiguo','indisponivel'].includes(c.estado))consulta=c;
       }catch{/* Falha na agenda não comprova ausência de atendimento. */}
+    }
+    if(classificacao.tipo==='comprovante_possivel'&&classificacao.confianca==='alta'&&
+      classificacao.dataPagamento&&consulta?.estado==='identificada'&&
+      consulta.agendamentoId&&consulta.medicoId&&deps.proporNotaPiloto){
+      try{
+        const proposto=await deps.proporNotaPiloto({contaId,mensagemId:evento.mensagemId,consulta});
+        if(proposto){
+          notificou=true; // O transportador da proposta já aceitou o envio.
+          return 'notificado';
+        }
+      }catch{/* Sem proposta validada, manter conferência sem autorizar nota. */}
     }
     const aviso=avisoComprovante(classificacao,consulta);
     if(!aviso)return 'incerto';
