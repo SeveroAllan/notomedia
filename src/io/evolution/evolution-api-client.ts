@@ -95,34 +95,49 @@ export class EvolutionApiClient
       /^\d{10,13}$/.test(telefone.replace(/\D/g, ''));
   }
 
+  /** Mídia recebida é sensível: baixar com limite estrito, sem gravar ou logar. */
   async obterBase64MensagemMidia(
     instancia: string,
     mensagemId: string
   ): Promise<{ base64?: string; mimetype?: string } | null> {
+    if(!/^medico_[a-f0-9]{12}$/i.test(instancia) ||
+      !/^[A-Za-z0-9_-]{5,150}$/.test(mensagemId))return null;
     const url = `${this.baseUrl.replace(/\/$/, '')}/chat/getBase64FromMediaMessage/${encodeURIComponent(instancia)}`;
+    const MAX_JSON_BYTES=4_200_000;
     try {
       const resp = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: this.apiKey
-        },
-        body: JSON.stringify({
-          message: {
-            key: {
-              id: mensagemId
-            }
-          },
-          convertToMp4: false
-        }),
+        method: 'POST',redirect:'error',
+        headers: {'Content-Type': 'application/json',apikey:this.apiKey},
+        body: JSON.stringify({message:{key:{id:mensagemId}},convertToMp4:false}),
         signal: AbortSignal.timeout(15_000)
       });
-      if (!resp.ok) return null;
-      const dados = (await resp.json()) as any;
-      return {
-        base64: dados.base64,
-        mimetype: dados.mimetype
-      };
+      const informado=Number(resp.headers.get('content-length')??'0');
+      if(!resp.ok || !resp.body || informado>MAX_JSON_BYTES){
+        await resp.body?.cancel().catch(()=>{});
+        return null;
+      }
+      const partes:Buffer[]=[];
+      let bytes=0;
+      const leitor=resp.body.getReader();
+      try{
+        while(true){
+          const r=await leitor.read();
+          if(r.done)break;
+          bytes+=r.value.byteLength;
+          if(bytes>MAX_JSON_BYTES)return null;
+          partes.push(Buffer.from(r.value));
+        }
+      }finally{await leitor.cancel().catch(()=>{});}
+      const envelope=JSON.parse(Buffer.concat(partes,bytes).toString('utf8'));
+      const dados=envelope?.data?.base64 ? envelope.data : envelope;
+      let base64=typeof dados?.base64==='string'?dados.base64:'';
+      let mimetype=typeof dados?.mimetype==='string'?dados.mimetype:undefined;
+      const prefixo=/^data:(image\\/(?:jpeg|png)|application\\/pdf);base64,/i.exec(base64);
+      if(prefixo){
+        mimetype=mimetype??prefixo[1]!.toLowerCase();
+        base64=base64.slice(prefixo[0].length);
+      }
+      return base64 ? {base64,...(mimetype?{mimetype}:{})} : null;
     } catch {
       return null;
     }
