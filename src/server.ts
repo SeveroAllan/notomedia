@@ -317,8 +317,20 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // O polling expõe só a revisão opaca do último evento da própria instância.
   const chaveRevisaoPareamento = randomBytes(32);
   const revisoesPareamento = new Map<string, string>();
+  // Só memória volátil (nunca banco/log). Expiração curta para não exibir
+  // código rotacionado como válido. Ambiente multi-réplica exige cache compartilhado.
+  const codigosRecentesPareamento = new Map<string,{codigo:string;recebidoEm:number}>();
   const revisaoPareamento = (instancia: string, codigo: string) =>
     createHmac('sha256', chaveRevisaoPareamento).update(instancia + ':' + codigo.replace(/-/g, '').toUpperCase()).digest('hex');
+  const codigoRecente = (instancia:string) => {
+    const atual=codigosRecentesPareamento.get(instancia);
+    if(!atual)return null;
+    if(Date.now()-atual.recebidoEm>60_000){
+      codigosRecentesPareamento.delete(instancia);
+      return null;
+    }
+    return atual.codigo;
+  };
 
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
@@ -335,11 +347,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       } catch { return false; }
     },
     aoAtualizarCodigo: (instancia, codigo) => {
+      codigosRecentesPareamento.set(instancia,{codigo,recebidoEm:Date.now()});
       revisoesPareamento.delete(instancia);
       revisoesPareamento.set(instancia, revisaoPareamento(instancia, codigo));
       if (revisoesPareamento.size > 256) {
         const maisAntiga = revisoesPareamento.keys().next().value;
-        if (maisAntiga) revisoesPareamento.delete(maisAntiga);
+        if (maisAntiga){
+          revisoesPareamento.delete(maisAntiga);
+          codigosRecentesPareamento.delete(maisAntiga);
+        }
       }
     },
     aoConectar: boasVindasInstancia,
@@ -672,6 +688,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
 
   const aoConectarWhatsapp = async (medicoId: string) => {
     const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+    codigosRecentesPareamento.delete(nomeInstancia);
+    revisoesPareamento.delete(nomeInstancia);
     await boasVindasInstancia(nomeInstancia);
   };
 
@@ -1241,11 +1259,15 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       });
 
       res.setHeader('Cache-Control', 'no-store');
-      const revisaoCodigo = resultado.pairingCode
-        ? revisaoPareamento(nomeInstancia, resultado.pairingCode)
+      // A pesquisa periódica nunca gera outro código. Para atualização
+      // automática, devolvemos o último QRCODE_UPDATED recebido e autenticado.
+      const rotacionado=resultado.state==='connecting'?codigoRecente(nomeInstancia):null;
+      const codigoAtual=rotacionado??resultado.pairingCode;
+      const revisaoCodigo = codigoAtual
+        ? revisaoPareamento(nomeInstancia,codigoAtual)
         : resultado.state === 'connecting' ? revisoesPareamento.get(nomeInstancia) : undefined;
-      return res.json({ ...resultado, medicoId, revisaoCodigo,
-        revisaoAntesDaConsulta: resultado.pairingCode ? revisaoAntesDaConsulta : undefined });
+      return res.json({ ...resultado, ...(codigoAtual?{pairingCode:codigoAtual}:{}), medicoId, revisaoCodigo,
+        revisaoAntesDaConsulta: codigoAtual ? revisaoAntesDaConsulta : undefined });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }
