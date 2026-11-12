@@ -38,6 +38,12 @@ describe('harness: retomada por evento do sistema',()=>{
     expect(entrada).toContain('eventoSistema');
     expect(entrada).toContain('naoEAutorizacao');
     expect(entrada).toContain('CONFIRMACAO_PENDENTE');
+    expect(JSON.stringify(modelo.calls[0]!.request.tools)).toContain('consultar_contexto_conta');
+    expect(JSON.stringify(modelo.calls[0]!.request.tools)).not.toContain('confirmar_profissionais_descobertos');
+    expect(JSON.stringify(modelo.calls[0]!.request.tools)).not.toContain('continuar_onboarding');
+    expect(JSON.stringify(modelo.calls[0]!.request.tools)).not.toContain('registrar_periodo_conferencia');
+    expect(JSON.stringify(modelo.calls[0]!.request.tools)).not.toContain('orientar_certificado_seguro');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
     modelo.assertComplete();
   });
 
