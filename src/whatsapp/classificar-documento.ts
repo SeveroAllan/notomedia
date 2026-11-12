@@ -59,7 +59,7 @@ export interface ClassificadorComprovante {
 }
 
 /** O modelo nunca recebe instrução para aprovar pagamento, alterar cadastro ou emitir. */
-export function criarClassificadorOpenAi(chave:string,modelo='gpt-4o-mini'):ClassificadorComprovante{
+export function criarClassificadorOpenAi(chave:string,modelo='gpt-4o-mini',aoUso?:(uso:{entrada:number;saida:number}|null)=>void):ClassificadorComprovante{
   const cliente=new OpenAI({apiKey:chave,timeout:25_000,maxRetries:0});
   return {async classificar(midia){
     try{
@@ -86,6 +86,9 @@ export function criarClassificadorOpenAi(chave:string,modelo='gpt-4o-mini'):Clas
         ]}],
         text:{format:{type:'json_object'}}
       });
+      const uso=resposta.usage;
+      aoUso?.(uso && Number.isSafeInteger(uso.input_tokens) && Number.isSafeInteger(uso.output_tokens)
+        ? {entrada:uso.input_tokens,saida:uso.output_tokens} : null);
       const dados=JSON.parse(resposta.output_text);
       return interpretarClassificacao(dados);
     }catch{
