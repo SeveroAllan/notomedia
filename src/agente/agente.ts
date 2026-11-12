@@ -1120,7 +1120,13 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         toolChoice:'revisar_registro_profissional'
       } : {})
     },
-    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
+    // Evento do sistema não é fala do usuário: nem uma ferramenta de criação
+    // de link, confirmação de vínculo, escrita fiscal ou agendamento entra
+    // no conjunto disponível. As ações devem ser solicitadas em turno próprio
+    // após a decisão humana necessária.
+    tools: entrada.eventoInterno
+      ? [consultarConta, consultarAgendas]
+      : [consultarConta, consultarAgendas, orientarConexao, ...extras],
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
