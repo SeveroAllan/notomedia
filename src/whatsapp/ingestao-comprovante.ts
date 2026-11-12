@@ -90,8 +90,8 @@ export async function processarMidiaRecebida(
   let resolvido=false;
   try{
     const original=await deps.carregarMidia(evento.instancia,evento.mensagemId);
-    if(!original||original.mimetype?.split(';')[0]?.toLowerCase()!==evento.mimetype.toLowerCase())return 'incerto';
-    const midia=validarMidiaComprovante(original.mimetype,original.base64);
+    if(!original||(original.mimetype&&original.mimetype.split(';')[0]?.toLowerCase()!==evento.mimetype.toLowerCase()))return 'incerto';
+    const midia=validarMidiaComprovante(original.mimetype??evento.mimetype,original.base64);
     if(!midia)return 'incerto';
     const classificacao=await deps.classificador.classificar(midia);
     if(!classificacao)return 'incerto';
