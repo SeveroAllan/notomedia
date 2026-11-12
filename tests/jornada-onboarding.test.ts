@@ -207,7 +207,9 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados 
     const rotacao=await chamar(rota);
     expect(rotacao.body.revisaoCodigo).toMatch(/^[a-f0-9]{64}$/);
     expect(rotacao.body.revisaoCodigo).not.toBe(parear.body.revisaoCodigo);
-    expect(JSON.stringify(rotacao.body)).not.toContain('NEWC0DE2');
+    // O código rotacionado é entregue somente no status do titular autenticado,
+    // sem pedir novo código por polling nem revelar a outra conta.
+    expect(rotacao.body.pairingCode).toBe('NEWC0DE2');
     expect((await chamar(rota+'&consultarCodigo=1',undefined,'token-outra-conta')).status).toBe(403);
     expect(rede.mock.calls.some(([url]: any[])=>String(url).includes('/instance/connect/'))).toBe(false);
     expect((await chamar(rota+'&consultarCodigo=1')).body).toMatchObject({pairingCode:'NEWC0DE2',revisaoCodigo:rotacao.body.revisaoCodigo});
