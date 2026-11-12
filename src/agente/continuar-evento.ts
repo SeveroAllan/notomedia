@@ -12,7 +12,7 @@ import { lerEstadoConversa } from './estado-conversa.js';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 
 type Banco = Pick<pg.Pool, 'query'>;
-export type TipoEventoTrabalho = 'descoberta_agenda' | 'conferencia_fiscal' | 'pesquisa_registro';
+export type TipoEventoTrabalho = 'descoberta_agenda' | 'conferencia_fiscal' | 'pesquisa_registro' | 'certificado_salvo';
 
 export interface EventoTrabalhoVerificado {
   tipo: TipoEventoTrabalho;
@@ -58,7 +58,7 @@ export async function continuarEventoComNoto(
 ): Promise<string | null> {
   if ((!deps.apiKey && !deps.modeloTeste) || !evento.textoComprovado.trim() ||
       evento.textoComprovado.length > 1100 ||
-      !['descoberta_agenda','conferencia_fiscal','pesquisa_registro'].includes(evento.tipo)) return null;
+      !['descoberta_agenda','conferencia_fiscal','pesquisa_registro','certificado_salvo'].includes(evento.tipo)) return null;
   if (deps.exigirControleCusto && !deps.controleCusto) return null;
   try {
     const medicos = await deps.pool.query(
