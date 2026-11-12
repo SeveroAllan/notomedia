@@ -31,6 +31,7 @@ import { contaDoCofreId, cofreIdDaConta } from './cofre/identidade-conta.js';
 import type { AgendaEscolhida } from './agente/estado-conversa.js';
 import { enfileirarTrabalhoNoto, listarTrabalhosNoto } from './agente/trabalhos-duraveis.js';
 import { iniciarTrabalhosNoto } from './agente/worker-trabalhos.js';
+import { continuarEventoComNoto, type EventoTrabalhoVerificado } from './agente/continuar-evento.js';
 import { adiarConfirmacaoRegistro,agendarPesquisaRegistro,proporCorrecaoPesquisa,concluirRevisaoPesquisa,aprovarRegistroProfissional } from './agente/pesquisa-profissional-conversa.js';
 import { registrarAceiteLink, diagnosticarRegistroEstadoEvolution, consultarEntregaLink } from './whatsapp/repositorio-entrega-link.js';
 import {diagnosticarAceiteSaida,diagnosticarReciboSaida} from './whatsapp/diagnostico-envio-conversa.js';
@@ -367,10 +368,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   const trabalhosHabilitados = process.env['NOTO_AGENT_TRABALHOS_ATIVO'] === 'true' &&
     config.notoPilotoRestrito === true && config.notoAgentAtivo === true &&
     config.notoAgentEnvioAtivo === true && (config.envioRealAllowlist?.length??0)===1;
+  // Opt-in sem migração: a fila durável já existente é a origem dos eventos.
+  // Nunca habilitar sem orçamento controlado e allowlist do piloto.
+  const continuarEvento = trabalhosHabilitados &&
+    process.env['NOTO_AGENT_CONTINUIDADE_EVENTOS_ATIVA'] === 'true'
+    ? (evento:EventoTrabalhoVerificado) => continuarEventoComNoto(evento,{
+        pool,consultarStatus:(referencia)=>cofres.statusAgendas(referencia),
+        ...(config.openaiApiKey ? {apiKey:config.openaiApiKey}:{}),
+        ...(config.openaiTextoModel ? {modeloNome:config.openaiTextoModel}:{}),
+        ...(orcamentoPiloto ? {controleCusto:orcamentoPiloto}:{}),
+        exigirControleCusto:true,
+        tracesAtivos:config.notoAgentTracesAtivos
+      })
+    : undefined;
   app.locals.iniciarTrabalhos = () => trabalhosHabilitados ?
     iniciarTrabalhosNoto({
       pool,instancia:config.evolutionAssistantInstanceName,
       ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
+      ...(continuarEvento ? {continuarEvento}:{}),
       descobrir:(contaId,medicoId,agenda) =>
         descobrirProfissionaisConta(medicoId??cofreIdDaConta(contaId),agenda),
       conferir:consultarConferenciaConta,
