@@ -10,7 +10,7 @@ export type PortalAgendamento = 'tribemd'|'amplimed';
 export type ObjetivoNavegacao = 'abrir_agenda'|'localizar_profissionais';
 export interface OpcaoNavegacao {
   indice:number;
-  tipo:'link'|'controle';
+  tipo:'link'|'controle'|'aba';
   nome:string;
   destino?:string;
 }
@@ -67,7 +67,7 @@ export async function navegarComAgente(
         return Array.from(document.querySelectorAll('a[href],button,[role="tab"]'))
           .filter((el):el is HTMLElement=>el instanceof HTMLElement&&el.getClientRects().length>0)
           .slice(0,150).map(el=>({
-            tipo:el.tagName.toLowerCase()==='a'?'link' as const:'controle' as const,
+            tipo:el.tagName.toLowerCase()==='a'?'link' as const:el.getAttribute('role')==='tab'?'aba' as const:'controle' as const,
             nome:(el.getAttribute('aria-label')||el.innerText||'').trim().replace(/\s+/g,' ').slice(0,80),
             ...(el.tagName.toLowerCase()==='a' && el.getAttribute('href') ?
               {destino: new URL(el.getAttribute('href')!,location.href).href}:{})
@@ -83,7 +83,7 @@ export async function navegarComAgente(
         await page.goto(escolha.destino,{waitUntil:'domcontentloaded',timeout:12_000});
       }else{
         // Texto do controle deve continuar visível e não ambíguo.
-        const candidatos=page.getByRole(escolha.tipo==='controle'?'button':'link',{name:escolha.nome,exact:true});
+        const candidatos=page.getByRole(escolha.tipo==='aba'?'tab':escolha.tipo==='controle'?'button':'link',{name:escolha.nome,exact:true});
         if(await candidatos.count()!==1)return navegou?'navegou':'sem_acao';
         await candidatos.click({timeout:5_000});
       }
