@@ -331,7 +331,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         await processarMidiaRecebida(evento,{
           pool,
           remetentesAutorizados:config.comprovantesRemetentesTeste??[],
-          operadorAutorizado:config.envioRealAllowlist?.[0]??'',
+          operadorAutorizado:gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist?.[0]??'').find(t=>/^55\d{10,11}$/.test(t))??'',
           carregarMidia:(instancia,mensagemId)=>evolutionClient.obterBase64MensagemMidia(instancia,mensagemId),
           classificador:{
             classificar:async midia=>{
