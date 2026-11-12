@@ -1662,12 +1662,16 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // Os fatos abaixo são do estado da conta; nenhuma data é prova de emissão.
     const confirmado=profissionalComVinculoConfirmado(entrada);
     const crmAdiado=Object.values(entrada.estadoConversa?.pesquisasRegistro??{}).some(p=>p.estado==='aguardando_confirmacao'&&p.confirmacaoAdiada===true);
-    const apenasClassificacao=Boolean(continuidadeTurno.atual)||ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO');
+    const apenasClassificacao=!entrada.eventoInterno&&(Boolean(continuidadeTurno.atual)||ferramentas.every(e=>e.nome==='registrar_periodo_conferencia'&&e.codigo==='ESCLARECIMENTO'));
     if(apenasClassificacao&&(confirmado||crmAdiado||entrada.estadoConversa?.perguntaPendente==='periodo')){
       registrar('RESPOSTA_POR_ESTADO',uso);
       return descreverEstadoSemAcao(entrada);
     }
-    if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
+    // Resultado de evento interno é uma evidência já persistida pelo worker.
+    // Só permita o comprovante literal como sufixo; o chamador ainda valida
+    // e restringe a eventual introdução antes de enviar ao WhatsApp.
+    if(resposta && !(entrada.eventoInterno&&resposta.trim().endsWith(entrada.texto.trim())) &&
+        !respostaCompativelComFerramentas(resposta,ferramentas)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
       return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
         ? 'A integração ainda não está configurada neste ambiente. É uma pendência local do Noto. Sua senha só entra na página segura.'
