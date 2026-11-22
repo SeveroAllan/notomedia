@@ -12,6 +12,7 @@ export class ErroTribemd extends Error {
 export interface ResultadoLeituraTribemd {
  consultas:ConsultaTribemd[]; cobertura:'somente_linhas_visiveis'|'intervalo_carregado_pelo_portal'; pagina:'agenda'|'pacientes';
  historicoCompleto:false; detalhe:string; detalhes?:ResumoDetalhesTribemd; agenda?:Omit<RecorteAgendaTribemd,'consultas'>;
+
 }
 export class NavegadorTribemd {
  private page?:Page; private autenticando=true; private autenticado=false; private fechado=false;
@@ -19,13 +20,14 @@ export class NavegadorTribemd {
  private diagnostico?:DiagnosticoRedeLoginTribemd; private etapa='abrindo_login'; private statusHttp?:number;
  private agenda?:LeitorAgendaTribemd;private leituraFalhou=false;
  private envioLogin=false;private ultimaTela?:EstadoTelaLoginTribemd;
- private constructor(private context:BrowserContext,private browser:Browser,private display:TelaVirtualTribemd){}
+ private constructor(private context:BrowserContext,private browser:Browser,private display?:TelaVirtualTribemd){}
  static async criar(opcoes:{executavel:string;xvfb?:string;estado?:EstadoNavegador;proxy?:string},signal:AbortSignal) {
-  signal.throwIfAborted();let display:TelaVirtualTribemd;
-  try{display=await TelaVirtualTribemd.iniciar(signal,opcoes.xvfb);}catch{throw new ErroTribemd('TELA_VIRTUAL_INDISPONIVEL');}
+  signal.throwIfAborted();let display:TelaVirtualTribemd|undefined;
+  const semXvfb=process.platform==='win32'&&!opcoes.xvfb;
+  if(!semXvfb){try{display=await TelaVirtualTribemd.iniciar(signal,opcoes.xvfb);}catch{throw new ErroTribemd('TELA_VIRTUAL_INDISPONIVEL');}}
   let browser:Browser|undefined;
   try {
-   browser=await chromium.launch({executablePath:opcoes.executavel,headless:false,env:{...process.env,DISPLAY:display.display},
+   browser=await chromium.launch({executablePath:opcoes.executavel,headless:false,env:display?{...process.env,DISPLAY:display.display}:process.env,
     proxy:opcoes.proxy?{server:opcoes.proxy}:undefined,
     args:['--no-sandbox','--disable-dev-shm-usage','--disable-gpu','--disable-logging','--disable-breakpad','--disable-crash-reporter','--disable-sync','--password-store=basic'],timeout:20000});
    const context=await browser.newContext({viewport:{width:1280,height:900},acceptDownloads:false,serviceWorkers:'block',storageState:opcoes.estado});
@@ -35,7 +37,7 @@ export class NavegadorTribemd {
    signal.addEventListener('abort',()=>{void n.encerrar();},{once:true});
    if(signal.aborted){await n.encerrar();signal.throwIfAborted();}
    return n;
-  }catch(e){await browser?.close().catch(()=>{});await display.encerrar();if(e instanceof ErroTribemd)throw e;throw new ErroTribemd('NAVEGADOR_INDISPONIVEL');}
+  }catch(e){await browser?.close().catch(()=>{});await display?.encerrar();if(e instanceof ErroTribemd)throw e;throw new ErroTribemd('NAVEGADOR_INDISPONIVEL');}
  }
  async abrir() {
   this.page=await this.context.newPage();const page=this.page;page.setDefaultTimeout(12000);
@@ -176,7 +178,7 @@ export class NavegadorTribemd {
  }
  diagnosticar(){return {etapa:this.etapa,statusHttp:this.statusHttp,rede:this.diagnostico,tela:this.ultimaTela};}
  async encerrar(){
-  if(!this.fechamento){this.fechado=true;this.agenda?.encerrar();this.fechamento=(async()=>{try{await this.observador?.concluir();await this.browser.close();}finally{await this.display.encerrar();}})();}
+  if(!this.fechamento){this.fechado=true;this.agenda?.encerrar();this.fechamento=(async()=>{try{await this.observador?.concluir();await this.browser.close();}finally{await this.display?.encerrar();}})();}
   return this.fechamento;
  }
 }

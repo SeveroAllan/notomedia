@@ -1,8 +1,10 @@
 import { FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, FALA_NOVO_LINK_AGENDA } from '../onboarding/falas.js';
 import { createHash, randomBytes } from 'node:crypto';
+import { nomeProfissionalValido, normalizarCrm } from '../conta/validar-dados-emissao.js';
 import type pg from 'pg';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { AGENDAS_SUPORTADAS, agendaSuportada, type AgendaSuportada } from '../agenda/agendas-suportadas.js';
+import { cofreIdDaConta, contaDoCofreId } from './identidade-conta.js';
 
 export interface ContextoConexaoAgenda {
     aguardandoConexao: boolean;
@@ -18,12 +20,52 @@ export function contemCredencialAgenda(texto: string): boolean {
 }
 
 export interface CofreAgenda { status(id: string): Promise<{ estado: string; ativo?: boolean; codigo?: string | null }>; iniciar(id: string, credencial?: { email: string; senha: string }): Promise<unknown> }
-export interface ConclusaoAgenda { agenda: AgendaSuportada; conectado: boolean; falhaAcesso?: boolean; chave: string; contatoTelefone?:string }
+export interface ConclusaoAgenda { agenda: AgendaSuportada; conectado: boolean; falhaAcesso?: boolean; motivoAcesso?: string; chave: string; contatoTelefone?:string }
 
 export interface TextoLinkAgendaEnviado { medicoId: string; telefoneMedico: string; linkId: string; indice: number; texto: string }
 
 export class LinksCofre {
     private aguardando = new Map<string, { id: string; agenda: string; contatoTelefone?:string }>();
+    private codigosPendentes = new Map<string, {
+        referencia: string; telefone: string; linkId: string; entregar: (codigo: string | null) => void
+    }>();
+
+    async pedirCodigoAmplimed(id: string): Promise<string | null> {
+        const link = this.aguardando.get(id);
+        if (link?.agenda !== 'amplimed' || !link.contatoTelefone || !contaDoCofreId(id) || this.codigosPendentes.has(id)) return null;
+        const referencia = randomBytes(4).toString('hex');
+        let entregar!: (codigo: string | null) => void;
+        const resposta = new Promise<string | null>(resolve => { entregar = resolve; });
+        const pendencia = { referencia, telefone: link.contatoTelefone, linkId: link.id, entregar };
+        this.codigosPendentes.set(id, pendencia);
+        const limite = setTimeout(() => entregar(null), 240_000);
+        try {
+            const envio = this.deps.enviar(id,
+                `A Amplimed enviou um código de verificação ao seu e-mail. Responda AMPLIMED ${referencia} seguido dos seis dígitos. Use somente o código da Amplimed para esta tentativa.`,
+                link.contatoTelefone).catch(() => 'erro');
+            // O prazo também limita a espera caso o transporte fique pendente.
+            const resultado = await Promise.race([envio, resposta]);
+            return resultado === 'enviado' ? await resposta : resultado === 'erro' || resultado === 'simulado' ? null : resultado;
+        } finally {
+            clearTimeout(limite);
+            if (this.codigosPendentes.get(id) === pendencia) this.codigosPendentes.delete(id);
+        }
+    }
+
+    receberCodigoAmplimed(contaId: string, telefone: string, texto: string): boolean {
+        if (!/^amplimed\s+[a-f0-9]{8}(?:\s|$)/i.test(texto.trim())) return false;
+        const dados = /^amplimed\s+([a-f0-9]{8})\s+(\d{6})$/i.exec(texto.trim());
+        const id = cofreIdDaConta(contaId);
+        const pendencia = this.codigosPendentes.get(id);
+        if (dados && pendencia && dados[1]!.toLowerCase() === pendencia.referencia &&
+            this.aguardando.get(id)?.id === pendencia.linkId &&
+            gerarVariantesTelefoneBrasileiro(pendencia.telefone).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v))) {
+            this.codigosPendentes.delete(id);
+            pendencia.entregar(dados[2]!);
+        }
+        return true; // Código de verificação nunca segue para a conversa.
+    }
+
     constructor(private deps: {
         pool: pg.Pool;
         origem: string;
@@ -31,8 +73,14 @@ export class LinksCofre {
         /** Cofres de outras agendas; a chave é a agenda do link. */
         cofres?: Partial<Record<AgendaSuportada, CofreAgenda>>;
         aoConcluir?: (medicoId: string, evento: ConclusaoAgenda) => Promise<void>;
+        aoConcluirConta?: (contaId: string, evento: ConclusaoAgenda) => Promise<void>;
         registrarTextoEnviado?: (entrada: TextoLinkAgendaEnviado) => Promise<void>;
         enviar: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
+        /** SÓ a URL sensível: aceita na Evolution, guarda ID sem guardar conteúdo.
+         * A ausência de ACK não permite repetir a URL automaticamente.
+         */
+        enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
+            Promise<'enviado' | 'erro' | 'incerto'>;
     }) {}
 
     private cofreDe(agenda: string): CofreAgenda | null {
@@ -111,7 +159,10 @@ export class LinksCofre {
             ];
             let motivo: 'simulado' | 'enviado' | undefined;
             for (const [indice, texto] of baloes.entries()) {
-                const envio = await this.deps.enviar(medicoId, texto, telefoneMedico);
+                const envio = texto === url && this.deps.enviarUrlComRecibo
+                    ? await this.deps.enviarUrlComRecibo({referenciaCofre:medicoId,url,linkId:link.id,telefone:telefoneMedico})
+                    : await this.deps.enviar(medicoId, texto, telefoneMedico);
+                if (envio === 'incerto') return {ok:false,motivo:'ENVIO_INCERTO'};
                 if (envio === 'erro' || motivo && motivo !== envio) return { ok: false, motivo: 'erro' };
                 motivo = envio;
                 if (envio === 'enviado') {
@@ -126,11 +177,85 @@ export class LinksCofre {
         } finally { token = ''; }
     }
 
+    /** Novo vínculo: conta autenticada -> Cofre. Não requer nem cria medicos.
+     * A FK de conta_id e a chave de envelope permanecem independentes de identidade clínica.
+     */
+    async solicitarLinkConta(
+      contaId: string,
+      agenda: string,
+      contatoTelefone: string,
+      opcoes?: { apenasUrl?: boolean }
+    ) {
+        const cofreAgenda = this.cofreDe(agenda);
+        if (!cofreAgenda) return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
+        const chaveCofre = cofreIdDaConta(contaId);
+        const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone);
+        if (!variantes.length) return { ok: false, motivo: 'OPERADOR_NAO_AUTORIZADO' };
+        const cliente = await this.deps.pool.connect();
+        let link: { id: string };
+        let token = '', confirmou = false;
+        try {
+            await cliente.query('begin');
+            // Serialização da própria conta (não da linha de médico).
+            const titular = await cliente.query('select id from contas where id=$1 for update',[contaId]);
+            if (titular.rows.length !== 1) return { ok: false, motivo: 'CONTA_INDISPONIVEL' };
+            const operadores = await cliente.query(`
+              select telefone from usuarios
+              where conta_id=$1 and ativo=true and auth_user_id is not null
+            `,[contaId]);
+            if (!operadores.rows.some(u => gerarVariantesTelefoneBrasileiro(String(u.telefone ?? ''))
+                  .some(v => variantes.includes(v)))) {
+                return { ok: false, motivo: 'OPERADOR_NAO_AUTORIZADO' };
+            }
+            const status = await cofreAgenda.status(chaveCofre);
+            if (!['vazio','desconectado','atencao'].includes(status.estado)) {
+                return { ok: false, motivo: 'COFRE_NAO_DISPONIVEL' };
+            }
+            const limite = await cliente.query(`
+                select count(*)::int as total from cofre_links
+                where conta_id=$1 and criado_em>clock_timestamp()-interval '1 hour'
+            `,[contaId]);
+            if (Number(limite.rows[0]?.total ?? 0) >= 3) {
+                return { ok: false, motivo: 'LIMITE_PEDIDOS' };
+            }
+            await cliente.query(`with expirados as (
+              update cofre_links set expira_em=least(expira_em,clock_timestamp())
+              where conta_id=$1 and agenda=$2 and usado_em is null returning id
+            ) insert into cofre_links_auditoria(link_id,evento)
+              select id,'expirado' from expirados on conflict do nothing`,[contaId,agenda]);
+            token = randomBytes(32).toString('base64url');
+            link = (await cliente.query(`insert into cofre_links
+              (conta_id,medico_id,agenda,token_hash,expira_em,criado_em,destino_telefone)
+              values ($1,null,$2,$3,clock_timestamp()+interval '15 minutes',clock_timestamp(),$4)
+              returning id`,[contaId,agenda,this.hash(token),contatoTelefone])).rows[0];
+            await cliente.query('insert into cofre_links_auditoria(link_id,evento) values ($1,$2)',[link.id,'criado']);
+            await cliente.query('commit');
+            confirmou = true;
+        } finally {
+            try { if (!confirmou) await cliente.query('rollback'); } finally { cliente.release(); }
+        }
+        try {
+            const url = `${this.deps.origem}/c/${token}`;
+            const textos = opcoes?.apenasUrl
+              ? [url]
+              : [FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, url];
+            for (const texto of textos) {
+                const envio = texto === url && this.deps.enviarUrlComRecibo
+                    ? await this.deps.enviarUrlComRecibo({referenciaCofre:chaveCofre,url,linkId:link!.id,telefone:contatoTelefone})
+                    : await this.deps.enviar(chaveCofre,texto,contatoTelefone);
+                if (envio !== 'enviado') return {ok:false,motivo:envio==='simulado'?'simulado':'erro'};
+            }
+            await this.auditar(link!.id,'enviado');
+            return {ok:true,motivo:'enviado'};
+        } catch { return {ok:false,motivo:'erro'}; }
+        finally { token=''; }
+    }
+
     async lerContextoConexao(medicoId: string, agora: Date): Promise<ContextoConexaoAgenda> {
         // O link mais recente define a agenda do contexto: renovação preserva a agenda já escolhida pelo médico.
         const link = (await this.deps.pool.query(`select l.agenda, l.usado_em, l.expira_em,
             (select a.criado_em from cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado' limit 1) as enviado_em
-            from cofre_links l where l.medico_id=$1 order by l.criado_em desc limit 1`, [medicoId])).rows[0];
+            from cofre_links l where l.medico_id=$1 and l.agenda in ('tribemd','amplimed') order by l.criado_em desc limit 1`, [medicoId])).rows[0];
         const cofreDoContexto = link ? this.cofreDe(link.agenda) ?? this.deps.cofre : this.deps.cofre;
         const status = await cofreDoContexto.status(medicoId);
         const agendaConectada = status.estado === 'conectado' && !!status.ativo;
@@ -143,6 +268,222 @@ export class LinksCofre {
         } : null };
     }
 
+    /** Cofre de dados profissionais: usa a MESMA tabela de links efêmeros,
+     * o mesmo mecanismo de recibo e a mesma proteção de origem. Finalidade
+     * isolada de credenciais das agendas. O link não confirma nem salva CRM.
+     */
+    /** Estado do link seguro baseado em transporte e recibo, nunca em timeout. */
+    async solicitarLinkRegistro(
+        contaId:string,medicoId:string,telefone:string,
+        acao:'solicitar'|'consultar'|'substituir'='solicitar',mensagemId?:string
+    ):Promise<{ok:boolean;motivo:string;anteriorInvalidado?:boolean}>{
+        const variantes=gerarVariantesTelefoneBrasileiro(telefone);
+        if(!variantes.length||!['solicitar','consultar','substituir'].includes(acao))
+            return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
+        if(mensagemId!==undefined&&!/^[A-Za-z0-9_-]{5,150}$/.test(mensagemId))
+            return {ok:false,motivo:'PEDIDO_INVALIDO'};
+        const client=await this.deps.pool.connect();
+        let token='',linkId='',confirmado=false;
+        try{
+            await client.query('begin');
+            const registro=(await client.query([
+              'select m.nome_completo,c.estado',
+              'from public.medicos m join public.noto_agent_conversas c on c.conta_id=m.conta_id',
+              'where m.id=$1::uuid and m.conta_id=$2 for update of c'
+            ].join('\n'),[medicoId,contaId])).rows[0];
+            const dados=registro?.estado?.pesquisasRegistro?.[medicoId];
+            if(!dados||!nomeProfissionalValido(registro.nome_completo)||
+                registro.nome_completo!==dados.nome||
+                registro.estado.profissionalConfirmadoId!==medicoId||
+                !['manual_pendente','aguardando_confirmacao','aguardando_preenchimento',
+                  'link_manual_reservado'].includes(dados.estado))
+                return {ok:false,motivo:'REVISAO_NAO_AUTORIZADA'};
+            const operadores=(await client.query(
+              'select telefone from public.usuarios where conta_id=$1 and ativo=true and auth_user_id is not null',
+              [contaId])).rows;
+            if(!operadores.some(u=>gerarVariantesTelefoneBrasileiro(String(u.telefone??'')).some(v=>variantes.includes(v))))
+                return {ok:false,motivo:'OPERADOR_NAO_AUTORIZADO'};
+            const ultimo=(await client.query([
+              'select l.id,l.usado_em,l.expira_em, (l.usado_em is null and l.expira_em>clock_timestamp()) as ativo,e.estado,',
+              "exists(select 1 from public.cofre_links_auditoria a where a.link_id=l.id and a.evento='enviado') as aceite_audit",
+              'from public.cofre_links l',
+              'left join public.cofre_links_entregas e on e.link_id=l.id',
+              "where l.medico_id=$1::uuid and l.agenda='registro_profissional'",
+              'order by l.criado_em desc,l.id desc limit 1'
+            ].join('\n'),[medicoId])).rows[0];
+            const vivo=Boolean(ultimo?.ativo);
+            const situacao=ultimo?.estado==='READ'?'LIDO':
+              ultimo?.estado==='DELIVERY_ACK'?'ENTREGUE':
+              ultimo?.estado==='ERROR'||(dados.resultadoEnvioLink==='falha_comprovada'&&dados.solicitacaoLinkId===ultimo?.id)?'FALHA_COMPROVADA':
+              ['ACEITO_API','PENDING','SERVER_ACK'].includes(ultimo?.estado)||
+                ultimo?.aceite_audit?'ACEITO_SEM_ENTREGA':'ENVIO_INCERTO';
+            if(acao==='consultar')return vivo
+              ? {ok:situacao!=='FALHA_COMPROVADA',motivo:situacao}
+              : {ok:false,motivo:situacao==='FALHA_COMPROVADA'?'FALHA_COMPROVADA':'SEM_LINK_ATIVO'};
+            // Reserva por ID da mensagem antes do I/O: crash/replay não reenvia.
+            if(mensagemId&&dados.solicitacaoLinkMensagemId===mensagemId)
+                return {ok:false,motivo:'PEDIDO_JA_PROCESSADO'};
+            if(vivo&&situacao!=='FALHA_COMPROVADA'){
+                if(acao!=='substituir')return {ok:false,motivo:situacao};
+                if(!['ENVIO_INCERTO','ACEITO_SEM_ENTREGA'].includes(situacao))
+                    return {ok:false,motivo:'LINK_ENTREGUE'};
+            }else if(acao==='substituir')return {ok:false,motivo:'SEM_LINK_ATIVO'};
+            const limite=(await client.query([
+              'select count(*)::int as total from public.cofre_links',
+              "where medico_id=$1::uuid and criado_em>now()-interval '1 hour'"
+            ].join('\n'),[medicoId])).rows[0];
+            if(Number(limite?.total??0)>=3)return {ok:false,motivo:'LIMITE_LINKS'};
+            // Antigo revogado + novo inserido na MESMA transação e só nesta finalidade.
+            await client.query([
+              'with antigos as (update public.cofre_links',
+              'set expira_em=least(expira_em,clock_timestamp())',
+              "where medico_id=$1::uuid and agenda='registro_profissional'",
+              'and usado_em is null and expira_em>clock_timestamp() returning id)',
+              'insert into public.cofre_links_auditoria(link_id,evento)',
+              "select id,'expirado' from antigos on conflict do nothing"
+            ].join('\n'),[medicoId]);
+            token=randomBytes(32).toString('base64url');
+            const criadoLink=await client.query([
+              'insert into public.cofre_links',
+              '(medico_id,agenda,token_hash,expira_em,criado_em,destino_telefone)',
+              "values ($1::uuid,'registro_profissional',$2,now()+interval '15 minutes',now(),$3)",
+              'returning id'
+            ].join('\n'),[medicoId,this.hash(token),telefone]);
+            linkId=criadoLink.rows[0].id;
+            await client.query("insert into public.cofre_links_auditoria(link_id,evento) values($1,'criado') on conflict do nothing",[linkId]);
+            await client.query([
+              'update public.noto_agent_conversas c set',
+              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+              "c.estado#>array['pesquisasRegistro',$2::text]||",
+              "jsonb_build_object('estado','link_manual_reservado',",
+              "'solicitacaoLinkMensagemId',$3::text,'solicitacaoLinkId',$4::text,", 
+              "'resultadoEnvioLink','incerto'),false),atualizado_em=now()",
+              'where c.conta_id=$1'
+            ].join('\n'),[contaId,medicoId,mensagemId??'',linkId]);
+            await client.query('commit');
+            confirmado=true;
+        }catch{return {ok:false,motivo:'LINK_INDISPONIVEL'};}
+        finally{
+            if(!confirmado)await client.query('rollback').catch(()=>undefined);
+            client.release();
+        }
+        // O indicador só existe após o commit atômico que revogou o link antigo.
+        const anteriorInvalidado=acao==='substituir';
+        // Erro ou crash após COMMIT não permite repetir URL automaticamente.
+        try{
+            const url=this.deps.origem+'/c/registro/'+token;
+            const envio=this.deps.enviarUrlComRecibo
+                ? await this.deps.enviarUrlComRecibo({referenciaCofre:medicoId,url,linkId,telefone})
+                : await this.deps.enviar(medicoId,url,telefone);
+            if(envio==='erro'&&this.deps.enviarUrlComRecibo){
+                // Rejeição explícita. Se já houve ACK, não podemos revogar
+                // sob uma falsa certeza de falha.
+                const c=await this.deps.pool.connect();let concluiu=false;
+                try{
+                    await c.query('begin');
+                    const falha=await c.query([
+                      'update public.cofre_links l',
+                      'set expira_em=least(l.expira_em,clock_timestamp())',
+                      'where l.id=$1 and l.usado_em is null',
+                      'and not exists(select 1 from public.cofre_links_entregas e',
+                      "where e.link_id=l.id and e.estado in ('ACEITO_API','PENDING','SERVER_ACK','DELIVERY_ACK','READ'))",
+                      'returning l.id'
+                    ].join('\n'),[linkId]);
+                    if(falha.rows.length){
+                        await c.query([
+                          'insert into public.cofre_links_auditoria(link_id,evento)',
+                          "values($1,'expirado') on conflict do nothing"
+                        ].join('\n'),[linkId]);
+                        await c.query([
+                          'update public.noto_agent_conversas c set',
+                          "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+                          "c.estado#>array['pesquisasRegistro',$2::text]||",
+                          "jsonb_build_object('estado','manual_pendente','resultadoEnvioLink','falha_comprovada'),false),atualizado_em=now()",
+                          'where c.conta_id=$1 and',
+                          "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
+                          "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
+                        ].join('\n'),[contaId,medicoId,linkId]);
+                    }
+                    await c.query('commit');concluiu=true;
+                    if(falha.rows.length)return {ok:false,motivo:'FALHA_COMPROVADA',anteriorInvalidado};
+                }finally{
+                    if(!concluiu)await c.query('rollback').catch(()=>undefined);
+                    c.release();
+                }
+                return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};
+            }
+            if(envio!=='enviado')return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};
+            await this.auditar(linkId,'enviado');
+            await this.deps.pool.query([
+              'update public.noto_agent_conversas c set',
+              "estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+              "c.estado#>array['pesquisasRegistro',$2::text]||",
+              "jsonb_build_object('estado','aguardando_preenchimento','resultadoEnvioLink','aceito_api'),false),atualizado_em=now()",
+              'where c.conta_id=$1 and',
+              "c.estado#>>array['pesquisasRegistro',$2::text,'estado']='link_manual_reservado'", 
+              "and c.estado#>>array['pesquisasRegistro',$2::text,'solicitacaoLinkId']=$3"
+            ].join('\n'),[contaId,medicoId,linkId]);
+            return {ok:true,motivo:'ACEITO_API',anteriorInvalidado};
+        }catch{return {ok:false,motivo:'ENVIO_INCERTO',anteriorInvalidado};}
+        finally{token='';}
+    }
+
+    async validarLinkRegistro(token:string):Promise<{nome:string}|null>{
+        if(!/^[A-Za-z0-9_-]{43}$/.test(token))return null;
+        const r=await this.deps.pool.query([
+          'select m.nome_completo',
+          'from public.cofre_links l join public.medicos m on m.id=l.medico_id',
+          'join public.noto_agent_conversas c on c.conta_id=m.conta_id',
+          "where l.token_hash=$1 and l.agenda='registro_profissional'",
+          'and l.usado_em is null and l.expira_em>now()',
+          "and c.estado#>>array['pesquisasRegistro',m.id::text,'nome']=m.nome_completo",
+          "and c.estado#>>array['pesquisasRegistro',m.id::text,'estado']",
+          "in ('link_manual_reservado','aguardando_preenchimento') limit 1"
+        ].join('\n'),[this.hash(token)]);
+        return nomeProfissionalValido(r.rows[0]?.nome_completo)?{nome:r.rows[0].nome_completo}:null;
+    }
+    async enviarRegistroManual(token:string,dados:{crm:string;rqe?:string}):Promise<boolean>{
+        if(!/^[A-Za-z0-9_-]{43}$/.test(token))return false;
+        const crm=normalizarCrm(dados.crm);
+        const rqe=dados.rqe?.trim()??'';
+        if(!crm?.includes('/')||(rqe&&!/^[1-9]\d{0,11}$/.test(rqe)))return false;
+        const client=await this.deps.pool.connect();
+        let confirmado=false;
+        try{
+            await client.query('begin');
+            const r=await client.query([
+              'select l.id,m.id as medico_id,m.conta_id,m.nome_completo',
+              'from public.cofre_links l join public.medicos m on m.id=l.medico_id',
+              "where l.token_hash=$1 and l.agenda='registro_profissional'",
+              'and l.usado_em is null and l.expira_em>now() for update of l'
+            ].join('\n'),[this.hash(token)]);
+            const registro=r.rows[0];
+            if(!registro)return false;
+            const proposta={crm,...(rqe?{rqe}:{}),origem:'manual'};
+            const state=await client.query([
+              'update public.noto_agent_conversas c',
+              "set estado=jsonb_set(c.estado,array['pesquisasRegistro',$2::text],",
+              "c.estado#>array['pesquisasRegistro',$2::text]||",
+              "jsonb_build_object('estado','resultado_pronto','razao','MANUAL_INFORMADO',",
+              "'proposta',$3::jsonb,'candidatos','[]'::jsonb),false),atualizado_em=now()",
+              'where c.conta_id=$1',
+              "and c.estado#>>array['pesquisasRegistro',$2::text,'nome']=$4",
+              "and c.estado#>>array['pesquisasRegistro',$2::text,'estado']",
+              "in ('link_manual_reservado','aguardando_preenchimento')",
+              'returning conta_id'
+            ].join('\n'),[registro.conta_id,registro.medico_id,JSON.stringify(proposta),registro.nome_completo]);
+            if(state.rows.length!==1)return false;
+            await client.query('update public.cofre_links set usado_em=now() where id=$1 and usado_em is null',[registro.id]);
+            await client.query('commit');
+            confirmado=true;
+            return true;
+        }catch{return false;}
+        finally{
+            if(!confirmado)await client.query('rollback').catch(()=>undefined);
+            client.release();
+        }
+    }
+
     private hash(token: string) { return createHash('sha256').update(token).digest('hex'); }
     private async auditar(id: string, evento: string) {
         await this.deps.pool.query('insert into cofre_links_auditoria (link_id, evento) values ($1,$2) on conflict do nothing', [id, evento]);
@@ -150,7 +491,7 @@ export class LinksCofre {
     async validar(token: string) {
         if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
         const link = (await this.deps.pool.query(`select id, usado_em, expira_em<=now() as expirado
-            from cofre_links where token_hash=$1`, [this.hash(token)])).rows[0];
+            from cofre_links where token_hash=$1 and agenda in ('tribemd','amplimed')`, [this.hash(token)])).rows[0];
         if (!link) return false;
         if (link.expirado && !link.usado_em) await this.auditar(link.id, 'expirado');
         if (link.expirado || link.usado_em) return false;
@@ -160,15 +501,17 @@ export class LinksCofre {
     async enviarCredencial(token: string, dados: { email: string; senha: string; consentimento: string }) {
         if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
         const link = (await this.deps.pool.query(`update cofre_links set usado_em=now()
-            where token_hash=$1 and usado_em is null and expira_em>now() returning medico_id, id, agenda, destino_telefone`, [this.hash(token)])).rows[0];
+            where token_hash=$1 and usado_em is null and expira_em>now() and agenda in ('tribemd','amplimed') returning medico_id, conta_id, id, agenda, destino_telefone`, [this.hash(token)])).rows[0];
         if (!link) { await this.validar(token); return false; }
-        this.aguardando.set(link.medico_id, { id: link.id, agenda: link.agenda, ...(link.destino_telefone?{contatoTelefone:link.destino_telefone}:{}) });
+        const chaveCofre = link.conta_id ? cofreIdDaConta(link.conta_id) : link.medico_id;
+        if (!chaveCofre) throw Error('COFRE_TITULAR_INVALIDO');
+        this.aguardando.set(chaveCofre, { id: link.id, agenda: link.agenda, ...(link.destino_telefone?{contatoTelefone:link.destino_telefone}:{}) });
         try {
             const c = this.cofreDe(link.agenda);
             if (!c || dados.consentimento !== AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].consentimento) throw Error();
-            await c.iniciar(link.medico_id, dados);
+            await c.iniciar(chaveCofre, dados);
         }
-        catch { await this.concluir(link.medico_id, false); throw Error('COFRE_INDISPONIVEL'); }
+        catch { await this.concluir(chaveCofre, false); throw Error('COFRE_INDISPONIVEL'); }
         return true;
     }
     async concluir(medicoId: string, conectado: boolean) {
@@ -177,15 +520,28 @@ export class LinksCofre {
         this.aguardando.delete(medicoId);
         const { rows } = await this.deps.pool.query(`insert into cofre_links_auditoria (link_id, evento) values ($1, 'concluido') on conflict do nothing returning link_id`, [link.id]);
         if (!rows.length) return;
-        const falhaAcesso = !conectado && (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo === 'ACESSO_PRECISA_VERIFICACAO';
-        if (this.deps.aoConcluir) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
+        const motivoAcesso = conectado ? undefined :
+            (await (this.cofreDe(link.agenda) ?? this.deps.cofre).status(medicoId).catch(() => null))?.codigo ?? undefined;
+        const falhaAcesso = motivoAcesso === 'ACESSO_PRECISA_VERIFICACAO';
+        // O sucesso da conta é um evento de onboarding, não de médico/emissão.
+        const contaId = contaDoCofreId(medicoId);
+        if (contaId && this.deps.aoConcluirConta) {
+            await this.deps.aoConcluirConta(contaId, {
+                agenda: link.agenda as AgendaSuportada, conectado, chave: link.id,
+                ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}),
+                ...(!conectado?{falhaAcesso,motivoAcesso}:{})
+            });
+            return;
+        }
+        // Notificações fiscais/por médico não recebem o ID da conta.
+        if (this.deps.aoConcluir && !contaId) { await this.deps.aoConcluir(medicoId, { agenda: link.agenda as AgendaSuportada, conectado, chave: link.id, ...(link.contatoTelefone?{contatoTelefone:link.contatoTelefone}:{}), ...(!conectado ? { falhaAcesso } : {}) }); return; }
         await this.deps.enviar(medicoId, conectado ? `Já recebi o seu acesso ao ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}.` : falhaAcesso ? `Não consegui conectar sua agenda ${AGENDAS_SUPORTADAS[link.agenda as AgendaSuportada].nome}: o serviço está exigindo uma etapa de verificação a mais na sua conta (como a verificação em duas etapas, 2FA). Sem concluir essa etapa na área segura da sua conta, não consigo acessar.` : 'Não consegui conectar sua agenda agora. Tive uma instabilidade e não consegui concluir agora.', link.contatoTelefone);
     }
     async tratarMensagem(medicoId: string, texto: string, classificar: (texto: string) => Promise<string | null>, contatoTelefone?:string) {
         const credencial = contemCredencialAgenda(texto);
         // Enquanto há link pendente, nem uma senha sem rótulo segue para memória ou IA.
         const pendente = (await this.deps.pool.query(`select id, agenda from cofre_links where medico_id=$1
-            and usado_em is null and expira_em>now() order by criado_em desc limit 1`, [medicoId])).rows[0];
+            and agenda in ('tribemd','amplimed') and usado_em is null and expira_em>now() order by criado_em desc limit 1`, [medicoId])).rows[0];
         if (credencial || pendente) {
             const agendaPendente=agendaSuportada(pendente?.agenda);
             if(agendaPendente)await this.solicitarLinkCofre(medicoId, agendaPendente,{contatoTelefone});

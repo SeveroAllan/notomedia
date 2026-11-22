@@ -21,6 +21,7 @@ import type {
   EnviarPdfDanfseParams,
   ResultadoEnvioPdf
 } from '../../whatsapp/enviar-pdf-danfse.js';
+import { repararMojibakeUtf8 } from '../../agente/humanizar-saida-whatsapp.js';
 
 export class EvolutionApiClient
   implements EnviarOtpWhatsapp, EnviarMensagemPaciente, EnviarPdfDanfse, LeitorMensagemWhatsApp
@@ -46,6 +47,59 @@ export class EvolutionApiClient
       await resp.body?.cancel().catch(() => {});
       return resp.ok ? { sucesso: true } : { sucesso: false, erro: `EVOLUTION_HTTP_${resp.status}` };
     } catch { return { sucesso: false, erro: 'EVOLUTION_LEITURA_INDISPONIVEL' }; }
+  }
+
+
+  /** Indicador visual, nunca confirmação de ação. Falha de presença não impede atendimento. */
+  async enviarPresenca(
+    instanciaNome: string,
+    telefone: string,
+    presenca: 'available' | 'composing' | 'paused' | 'unavailable'
+  ): Promise<boolean> {
+    if (!this.destinoDoAssistenteValido(instanciaNome, telefone)) return false;
+    try {
+      const resposta = await fetch(
+        this.baseUrl.replace(/\/$/, '') + '/chat/sendPresence/' + encodeURIComponent(instanciaNome), {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(2000),
+          headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+          body: JSON.stringify({ number: telefone.replace(/\D/g, ''), presence: presenca, delay: 0 })
+        });
+      await resposta.body?.cancel().catch(() => {});
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  /** Reage somente ao ID real da mensagem recebida (suporta JID tradicional e @lid da Evolution v2). */
+  async reagirMensagem(instanciaNome: string, chave: { id: string; remoteJid: string; fromMe: boolean }, emoji: string): Promise<boolean> {
+    const jidValido = /^\d{10,13}@s\.whatsapp\.net$/.test(chave?.remoteJid ?? '')
+      || /^\d{10,20}@lid$/.test(chave?.remoteJid ?? '');
+    if (!chave || chave.fromMe || !/^[A-Za-z0-9_-]{5,150}$/.test(chave.id) ||
+        !jidValido ||
+        !instanciaNome || instanciaNome === (this.instanciaSomenteOtp || this.instanciaOficialNome) ||
+        !['👍', '❤️', '🔎', '👀', '✅', '✍️', '📝', '👂'].includes(emoji)) return false;
+    try {
+      const url = this.baseUrl.replace(/\/$/, '') + '/message/sendReaction/' + encodeURIComponent(instanciaNome);
+      const key = { id: chave.id, remoteJid: chave.remoteJid, fromMe: false };
+      const postar = (corpo: object) => fetch(url, {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { 'Content-Type': 'application/json', apikey: this.apiKey },
+        body: JSON.stringify(corpo)
+      });
+      let resposta = await postar({ key, reaction: emoji });
+      const formatoAlternativo = resposta.status === 400 || resposta.status === 422;
+      await resposta.body?.cancel().catch(() => {});
+      if (formatoAlternativo) {
+        // Duas variantes publicadas da Evolution; só tenta outra se a primeira foi rejeitada.
+        resposta = await postar({ reactionKey: key, reactionMessage: emoji });
+        await resposta.body?.cancel().catch(() => {});
+      }
+      return resposta.ok;
+    } catch { return false; }
+  }
+
+  private destinoDoAssistenteValido(instancia: string, telefone: string): boolean {
+    return !!instancia && instancia !== (this.instanciaSomenteOtp || this.instanciaOficialNome) &&
+      /^\d{10,13}$/.test(telefone.replace(/\D/g, ''));
   }
 
   async obterBase64MensagemMidia(
@@ -94,10 +148,14 @@ export class EvolutionApiClient
 
   async enviarTexto(params: EnviarMensagemPacienteParams): Promise<ResultadoEnvioMensagemPaciente> {
     if(params.instanciaNome===this.instanciaSomenteOtp)return {sucesso:false,erro:'CANAL_OFICIAL_SOMENTE_OTP'};
-    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto);
+    return this.enviarTextoGenerico(params.instanciaNome, params.contatoTelefone, params.texto, params.linkPreview);
   }
 
   async enviarPdf(params: EnviarPdfDanfseParams): Promise<ResultadoEnvioPdf> {
+    return this.enviarDocumento(params, 'application/pdf');
+  }
+
+  async enviarDocumento(params: EnviarPdfDanfseParams, mimetype: 'application/pdf'|'application/xml'): Promise<ResultadoEnvioPdf> {
     if(params.instanciaNome===this.instanciaSomenteOtp)return {sucesso:false,erro:'CANAL_OFICIAL_SOMENTE_OTP'};
     const url = `${this.baseUrl.replace(/\/$/, '')}/message/sendMedia/${params.instanciaNome}`;
     try {
@@ -117,16 +175,16 @@ export class EvolutionApiClient
         method: 'POST',
         signal: AbortSignal.timeout(60_000),
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json; charset=utf-8',
           apikey: this.apiKey
         },
         body: JSON.stringify({
           number: telNormalizado,
           mediatype: 'document',
-          mimetype: 'application/pdf',
+          mimetype,
           media: mediaPayload,
           fileName: params.nomeArquivo,
-          caption: params.legenda || 'Segue sua Nota Fiscal de Serviços (NFS-e).'
+          caption: repararMojibakeUtf8(params.legenda || 'Segue sua Nota Fiscal de Serviços (NFS-e).')
         })
       });
 
@@ -175,6 +233,14 @@ export class EvolutionApiClient
         const txt = await resp.text();
         return { sucesso: false, erro: `HTTP ${resp.status}: ${txt}` };
       }
+      // Evolution Baileys embrulha botões em viewOnceMessage, descartado silenciosamente pelo WhatsApp atual.
+      const dados = (await resp.json().catch(() => null)) as {
+        messageType?: string;
+        message?: { viewOnceMessage?: unknown };
+      } | null;
+      if (dados?.messageType === 'viewOnceMessage' || dados?.message?.viewOnceMessage) {
+        return { sucesso: false, erro: 'BAILEYS_VIEW_ONCE_BOTAO_NAO_ENTREGUE' };
+      }
       return { sucesso: true };
     } catch (err: any) {
       return { sucesso: false, erro: err.message || 'Erro de conexão com Evolution API' };
@@ -184,7 +250,8 @@ export class EvolutionApiClient
   private async enviarTextoGenerico(
     instancia: string,
     telefone: string,
-    texto: string
+    texto: string,
+    linkPreview?: boolean
   ): Promise<ResultadoEnvioMensagemPaciente> {
     const url = `${this.baseUrl.replace(/\/$/, '')}/message/sendText/${instancia}`;
     try {
@@ -192,12 +259,13 @@ export class EvolutionApiClient
         method: 'POST',
         signal: AbortSignal.timeout(15_000),
         headers: {
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json; charset=utf-8',
           apikey: this.apiKey
         },
         body: JSON.stringify({
           number: this.normalizarTelefone(telefone),
-          text: texto
+          text: repararMojibakeUtf8(texto),
+          ...(linkPreview === undefined ? {} : { linkPreview })
         })
       });
 

@@ -48,6 +48,15 @@ describe('emissão de comprovante usa a fila sem enviar ao paciente', () => {
     expect(deps.notificadorAlertas.notificarDesenvolvedorEmail).not.toHaveBeenCalled();
     expect(deps.enviarPdfDanfse.enviarPdf).not.toHaveBeenCalled();
   });
+  it('falha ao entregar preserva a nota autorizada e não reemite', async () => {
+    const { deps, filaRepositorio } = preparar();
+    const aoAutorizarComprovante = vi.fn(async () => { throw new Error('WhatsApp indisponível'); });
+    expect(await processarItemFila(item, {...deps, aoAutorizarComprovante})).toMatchObject({status:'emitida'});
+    await processarItemFila(item, {...deps, aoAutorizarComprovante});
+    expect(filaRepositorio.registrarSucesso).toHaveBeenCalledTimes(1);
+    expect(filaRepositorio.registrarFalhaComprovante).not.toHaveBeenCalled();
+    expect(deps.emissorDps.emitir).toHaveBeenCalledTimes(1);
+  });
   it('erro ao persistir autorização nunca produz sucesso nem reenvio cego', async () => {
     const { deps, filaRepositorio } = preparar();
     filaRepositorio.registrarSucesso.mockRejectedValue(new Error('persistencia indisponivel'));

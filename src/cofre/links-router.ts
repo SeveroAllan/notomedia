@@ -3,8 +3,13 @@ import express, { type Request } from 'express';
 import { z } from 'zod';
 import { AGENDAS_SUPORTADAS } from '../agenda/agendas-suportadas.js';
 import type { LinksCofre } from './links.js';
+import type { LinksOnboardingService } from './links-onboarding-service.js';
+import { criarRouterLinksOnboarding } from './links-onboarding-router.js';
+import { renderizarPaginaAgendaAdaptativa } from './paginas-cofre-html.js';
+import { normalizarCrm } from '../conta/validar-dados-emissao.js';
 
 const credencial = z.object({ email: z.string().trim().email().max(254), senha: z.string().min(1).max(256), consentimento: z.enum([AGENDAS_SUPORTADAS.tribemd.consentimento, AGENDAS_SUPORTADAS.amplimed.consentimento]) }).strict();
+const credencialAdaptativa = z.object({ email: z.string().trim().min(2).max(254), senha: z.string().min(1).max(256), consentimento: z.string().trim().min(3).max(80) }).strict();
 const apagar = (req: Request) => { if (Buffer.isBuffer((req as any).rawBody)) (req as any).rawBody.fill(0); delete (req as any).rawBody; req.body = {}; };
 
 const estilo = `<style>:root{--bg:#F4F4F5;--text:#121C22;--text-secondary:rgba(18,28,34,0.72);--primary:#000000;--primary-hover:#202020;--font-family:"Geist",sans-serif;--headline-md-size:21.48px;--headline-md-line:31.15px;--body-lg-size:15px;--body-lg-line:21.75px}
@@ -62,35 +67,101 @@ export function guardaOrigem(origem: string, paginaRecusada: string) {
     };
 }
 
-export function criarRouterLinksCofre(links: LinksCofre | undefined, origem: string, obterWhatsappAssistente?: () => Promise<string | null>) {
+export function criarRouterLinksCofre(
+    links: LinksCofre | undefined,
+    origem: string,
+    obterWhatsappAssistente?: () => Promise<string | null>,
+    registroAtivo = false,
+    linksOnboarding?: LinksOnboardingService
+) {
     const app = express();
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
     app.use((req, res, next) => {
-        res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff' });
-        if (!links || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
+        res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options':'DENY' });
+        if ((!links && !linksOnboarding) || !origem) { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); return; }
         guardaOrigem(origem, origemRecusada)(req, res, next);
     });
+    if (linksOnboarding) {
+        app.use(criarRouterLinksOnboarding(linksOnboarding, obterWhatsappAssistente));
+    }
+    // Mesmo cofre, mesma guarda de origem e token de uso único da agenda;
+    // finalidade separada para jamais tratar CRM/RQE como senha de portal.
+    const cadastroManual=z.object({
+      crm:z.string().trim().min(1).max(60).refine(v=>!!normalizarCrm(v)?.includes('/')),
+      rqe:z.string().trim().max(12).regex(/^\d*$/)
+    }).strict();
+    const htmlSeguro=(s:string)=>s.replace(/[&<>"']/g,ch=>({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    })[ch]??'');
+    app.get('/registro/:token', async(req,res)=>{
+      if(!registroAtivo){res.status(404).send('Página indisponível.');return;}
+      try{
+        const r=await links!.validarLinkRegistro(req.params.token);
+        if(!r){res.status(410).type('html').send(expirado);return;}
+        const nome=htmlSeguro(r.nome);
+        res.type('html').send(pagina('Dados profissionais',`<h1>Dados profissionais</h1><p>Confira o nome: ${nome}. Preencha CRM com UF e, se tiver, o RQE. Nada será salvo no cadastro profissional antes da sua confirmação no WhatsApp.</p>
+<form method="post" onsubmit="this.action=location.pathname+'/enviar'">
+<label class="campo"><span>CRM com UF</span><input name="crm" type="text" minlength="4" maxlength="60" placeholder="12345/RS" required autocomplete="off"></label>
+<label class="campo"><span>RQE (se houver)</span><input name="rqe" type="text" maxlength="12" pattern="[0-9]*" autocomplete="off"></label>
+<button class="btn-action">Enviar dados para revisão</button></form>`));
+      }catch{res.status(503).type('html').send(pagina('Indisponível','<h1>Não consegui abrir a página agora</h1><p>Não alterei seus dados.</p>'));}
+    });
+    app.use(express.urlencoded({limit:'4kb',extended:false}),express.json({limit:'4kb'}));
+    app.post('/registro/:token/enviar',async(req,res)=>{
+      if(!registroAtivo){apagar(req);res.status(404).send('Página indisponível.');return;}
+      try{
+        const dados=cadastroManual.parse(req.body);
+        apagar(req);
+        const ok=await links!.enviarRegistroManual(req.params.token,dados);
+        if(!ok){res.status(410).type('html').send(expirado);return;}
+        res.status(202).type('html').send(pagina('Recebido para revisão',
+          '<h1>Dados recebidos</h1><p>O Noto vai apresentar CRM e RQE, se informado, para sua confirmação no WhatsApp. O cadastro profissional ainda não foi alterado.</p><p>Você pode fechar esta página; não precisa enviar outra mensagem.</p>'));
+      }catch(erro){
+        if(erro instanceof z.ZodError){
+          res.status(400).type('html').send(pagina('Dados inválidos',
+            '<h1>Confira os dados</h1><p>Informe o CRM com UF e, se houver, apenas os números do RQE. Nada foi cadastrado.</p>'));
+        }else{
+          res.status(503).type('html').send(pagina('Não concluído',
+            '<h1>Não concluí o preenchimento</h1><p>Não alterei seus dados profissionais.</p>'));
+        }
+      }finally{apagar(req);}
+    });
+
     app.get('/:token', async (req, res) => {
         try {
-            if (!await links!.validar(req.params.token)) { res.status(410).type('html').send(expirado); return; }
-            // A ação relativa conserva o token só na URL, sem copiá-lo para a resposta.
-            const ag = AGENDAS_SUPORTADAS[await links!.agendaDoLink(req.params.token) ?? 'tribemd'];
-            res.type('html').send(pagina('Conectar agenda', `<h1>Conectar agenda ${ag.nome}</h1><p>Digite o e-mail e a senha da sua agenda. A senha é digitada somente nesta página.</p>
+            const token = req.params.token;
+            if (links && await links.validar(token)) {
+                // A ação relativa conserva o token só na URL, sem copiá-lo para a resposta.
+                const ag = AGENDAS_SUPORTADAS[await links.agendaDoLink(token) ?? 'tribemd'];
+                res.type('html').send(pagina('Conectar agenda', `<h1>Conectar agenda ${ag.nome}</h1><p>Digite o e-mail e a senha da sua agenda. A senha é digitada somente nesta página.</p>
 <form method="post" onsubmit="this.action=location.pathname+'/enviar'">
 <label class="campo"><span>E-mail</span><input name="email" type="email" maxlength="254" required autocomplete="username"></label>
 <label class="campo"><span>Senha</span><input name="senha" type="password" maxlength="256" required autocomplete="current-password"></label>
 <label class="autoriza"><input name="consentimento" type="checkbox" value="${ag.consentimento}" required> <span>Autorizo o Noto a ler a minha agenda ${ag.nome}.</span></label>
 <button class="btn-action">Conectar</button></form>`));
+                return;
+            }
+            const adaptativa = linksOnboarding ? await linksOnboarding.validarLinkAgendaAdaptativa(token) : null;
+            if (adaptativa) {
+                res.type('html').send(renderizarPaginaAgendaAdaptativa(adaptativa));
+                return;
+            }
+            res.status(410).type('html').send(expirado);
         } catch { res.status(503).send('Estamos com uma instabilidade no sistema. Tente novamente em instantes.'); }
     });
     app.use(express.json({ limit: '4kb' }), express.urlencoded({ limit: '4kb', extended: false }));
     app.post('/:token/enviar', async (req, res) => {
-        let dados: z.infer<typeof credencial> | undefined;
+        let dados: { email: string; senha: string; consentimento: string } | undefined;
         try {
-            dados = credencial.parse(req.body);
+            const token = req.params.token as string;
+            const ehAdaptativa = linksOnboarding ? Boolean(await linksOnboarding.validarLinkAgendaAdaptativa(token)) : false;
+            dados = ehAdaptativa ? credencialAdaptativa.parse(req.body) : credencial.parse(req.body);
             apagar(req);
-            if (!await links!.enviarCredencial(req.params.token as string, dados)) { res.status(410).type('html').send(expirado); return; }
+            const consumiu = ehAdaptativa
+                ? await linksOnboarding!.consumirLinkAgendaAdaptativa(token, dados)
+                : Boolean(links && await links.enviarCredencial(token, dados));
+            if (!consumiu) { res.status(410).type('html').send(expirado); return; }
             const telefone = await obterWhatsappAssistente?.().catch(() => null);
             res.status(202).type('html').send(paginaAcessoSalvo(telefone));
         } catch (erro) {

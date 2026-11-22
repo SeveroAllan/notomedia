@@ -5,7 +5,7 @@ import { dominioAprovado } from '../agenda/agendas-suportadas.js';
 import type { EstadoNavegador } from './tribemd-perfil.js';
 
 export const loginAmplimed = 'https://app.amplimed.com.br/';
-export type CodigoLoginAmplimed = 'CONECTADO' | 'SENHA_RECUSADA' | 'PRECISA_VERIFICACAO' | 'CAPTCHA' | 'FORMULARIO_NAO_RECONHECIDO' | 'TEMPO_ESGOTADO' | 'NAVEGADOR_INDISPONIVEL';
+export type CodigoLoginAmplimed = 'CONECTADO' | 'SENHA_RECUSADA' | 'PRECISA_VERIFICACAO' | 'CAPTCHA' | 'CODIGO_EMAIL_PENDENTE' | 'ASSINATURA_INATIVA' | 'FORMULARIO_NAO_RECONHECIDO' | 'TEMPO_ESGOTADO' | 'NAVEGADOR_INDISPONIVEL';
 
 const acaoNoCaminho = /(?:^|\/)(?:logout|sair|delete|remove|update|create|save|excluir|salvar|editar|novo|cancelar|deletar)(?:\/|$)/i;
 
@@ -59,6 +59,10 @@ export function classificarTelaAmplimed(t: TelaAmplimed): CodigoLoginAmplimed | 
   const texto = t.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   let caminho = '';
   try { caminho = new URL(t.url).pathname; } catch { /* sem caminho */ }
+  if (t.senhasVisiveis === 0 && /^\/conta\/?$/.test(caminho) && dominioAprovado('amplimed', t.url) &&
+      /gestao de assinatura/.test(texto) && /assinar agora|sem assinatura ativa/.test(texto)) {
+    return 'ASSINATURA_INATIVA';
+  }
   if (/^\/2fa(\/|$)/.test(caminho)) return conviteDoisFatoresAmplimed(t) ? (conviteDoisFatoresObrigatorio(t) ? 'PRECISA_VERIFICACAO' : 'AGUARDANDO') : 'PRECISA_VERIFICACAO';
   if (desafioDoisFatoresAmplimed(t)) return 'PRECISA_VERIFICACAO';
   if (/recaptcha|nao sou (um )?robo|i'm not a robot/.test(texto) && t.senhasVisiveis > 0) return 'CAPTCHA';
@@ -106,7 +110,7 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
   /** Chamado com a sessão filtrada do domínio quando o login termina CONECTADO. */
   aoSalvarEstado?: (estado: EstadoNavegador) => void | Promise<void>;
   /** Fallback assistido do desafio de 2FA: devolve UM código transitório de 6 dígitos, ou null se ninguém respondeu. */
-  aoPedirCodigo2fa?: () => Promise<string | null>;
+  aoPedirCodigo2fa?: (canal?: 'email') => Promise<string | null>;
   aoConectar?: (page: Page) => Promise<void> }, signal?: AbortSignal): Promise<CodigoLoginAmplimed> {
   let browser: Browser | undefined;
   let { email, senha } = opcoes;
@@ -141,7 +145,9 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
       await page.waitForTimeout(2500);
       try {
         const tela0 = await page.evaluate(`(() => ({ url: location.href, texto: (document.body?.innerText || '').slice(0, 4000), senhasVisiveis: [...document.querySelectorAll('input[type=password]')].filter(e => e.offsetParent !== null).length }))()`) as TelaAmplimed;
-        if (classificarTelaAmplimed(tela0) === 'CONECTADO') {
+        const estadoInicial = classificarTelaAmplimed(tela0);
+        if (estadoInicial === 'ASSINATURA_INATIVA') return estadoInicial;
+        if (estadoInicial === 'CONECTADO') {
           console.warn('AMPLIMED_SESSAO reutilizada');
           if (opcoes.aoConectar) { try { await opcoes.aoConectar(page); } catch { console.warn('AMPLIMED_LEITURA etapa=falha'); } }
           if (opcoes.aoSalvarEstado) { try { await opcoes.aoSalvarEstado(filtrarEstadoAmplimed(await context.storageState())); } catch { console.warn('AMPLIMED_SESSAO salvar_falhou'); } }
@@ -186,26 +192,31 @@ export async function verificarLoginAmplimed(opcoes: { executavel: string; email
         continue;
       }
       if (desafioDoisFatoresAmplimed(tela)) {
-        if (!opcoes.aoPedirCodigo2fa || tentativasCodigo >= 2) { console.warn('AMPLIMED_2FA_DESAFIO sem_canal_codigo'); return 'PRECISA_VERIFICACAO'; }
+        if (!dominioAprovado('amplimed', tela.url)) return 'PRECISA_VERIFICACAO';
+        const texto = tela.texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+        const emailComprovado = /codigo foi enviado para .+via e-?mail/.test(texto.replace(/\s+/g, ' '));
+        const pendencia = emailComprovado ? 'CODIGO_EMAIL_PENDENTE' : 'PRECISA_VERIFICACAO';
+        if (!opcoes.aoPedirCodigo2fa || tentativasCodigo >= 2) { console.warn('AMPLIMED_2FA_DESAFIO sem_canal_codigo'); return pendencia; }
         tentativasCodigo++;
         console.warn('AMPLIMED_2FA_DESAFIO pedindo_codigo tentativa=' + tentativasCodigo);
         // A espera humana/assistida pelo código tem janela própria; o teto do login não pode expirar durante ela.
         limite = Math.max(limite, Date.now() + 300_000);
-        const codigo = await opcoes.aoPedirCodigo2fa().catch(() => null);
-        if (!codigo || !/^\d{6}$/.test(codigo)) { console.warn('AMPLIMED_2FA_DESAFIO sem_resposta'); return 'PRECISA_VERIFICACAO'; }
+        const codigo = await opcoes.aoPedirCodigo2fa(emailComprovado ? 'email' : undefined).catch(() => null);
+        if (!codigo || !/^\d{6}$/.test(codigo)) { console.warn('AMPLIMED_2FA_DESAFIO sem_resposta'); return pendencia; }
+        if (page.url() !== tela.url) return pendencia;
         if (!await preencherCodigo2fa(page, codigo)) { console.warn('AMPLIMED_2FA_DESAFIO formulario_nao_reconhecido'); return 'FORMULARIO_NAO_RECONHECIDO'; }
         await page.waitForTimeout(3000);
         continue;
       }
       const c = classificarTelaAmplimed(tela);
-      if (c === 'PRECISA_VERIFICACAO') console.warn('AMPLIMED_2FA tela=' + JSON.stringify(tela.texto.replace(/\s+/g, ' ').replace(/\d{6,}/g, '#').slice(0, 350)));
+      if (c === 'PRECISA_VERIFICACAO') console.warn('AMPLIMED_LOGIN_NAO_CONFIRMADO');
       if (c === 'CONECTADO' && opcoes.aoConectar) { try { await opcoes.aoConectar(page); } catch { console.warn('AMPLIMED_LEITURA etapa=falha'); } }
       if (c === 'CONECTADO' && opcoes.aoSalvarEstado) { try { await opcoes.aoSalvarEstado(filtrarEstadoAmplimed(await context.storageState())); } catch { console.warn('AMPLIMED_SESSAO salvar_falhou'); } }
       if (c !== 'AGUARDANDO') return c;
     }
     console.warn('AMPLIMED_LOGIN etapa=tempo_esgotado url=' + (() => { try { const u = new URL(page.url()); return u.host + u.pathname.split('/').slice(0, 2).join('/'); } catch { return '?'; } })() + ' bloqueados=' + JSON.stringify(bloqueados.filter(b => !/clarity|doubleclick|analytics|hubspot|google\.com\/(g|ccm|rmkt)/.test(b)).slice(0, 8)));
     return 'TEMPO_ESGOTADO';
-  } catch (erro) { console.warn('AMPLIMED_LOGIN etapa=excecao msg=' + String((erro as Error)?.message ?? erro).split('\n')[0]!.slice(0, 160)); return 'TEMPO_ESGOTADO'; }
+  } catch { console.warn('AMPLIMED_LOGIN etapa=excecao'); return 'TEMPO_ESGOTADO'; }
   finally { email = ''; senha = ''; await browser?.close().catch(() => {}); }
 }
 

@@ -38,8 +38,9 @@ export function mapearServicoFiscalDoXml(xmlObj: any): ServicoFiscalExtraido {
   const rawXDesc = cServ.xDescServ ? String(cServ.xDescServ).trim() : null;
   const especialidadeSugerida = inferirEspecialidadeDeXdescserv(rawXDesc);
 
-  const aliquotaIss = tribMun.pAliq !== undefined && tribMun.pAliq !== null && tribMun.pAliq !== ''
-    ? Number(tribMun.pAliq)
+  const aliqBruta = tribMun.pAliq ?? infNfse.valores?.pAliqAplic;
+  const aliquotaIss = aliqBruta !== undefined && aliqBruta !== null && aliqBruta !== ''
+    ? Number(aliqBruta)
     : null;
   const valorPadraoCentavos = vServ !== undefined && vServ !== null && vServ !== ''
     ? Math.round(Number(vServ) * 100)

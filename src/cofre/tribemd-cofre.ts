@@ -1,4 +1,5 @@
 import type { FonteAgenda, ResultadoFonteAgenda } from '../agenda/fonte-agenda.js';
+import { mereceSegundaLeituraPontual, preferirSegundaLeitura } from '../agenda/diagnostico-descoberta.js';
 import { PerfisTribemd, type PerfilTribemd } from '../desenvolvedor/tribemd-perfil.js';
 import { NavegadorTribemd, ErroTribemd, type ResultadoLeituraTribemd } from '../desenvolvedor/tribemd-navegador.js';
 export class ErroCofre extends Error {
@@ -6,6 +7,7 @@ export class ErroCofre extends Error {
 }
 interface Trabalho {
     janela?: { janelaDias: number; agora: Date };
+    detalhar?: boolean;
     controller: AbortController;
     finalizada: Promise<void>;
     concluir: () => void;
@@ -24,8 +26,11 @@ export const consentimentoCofre = 'tribemd-leitura-v1';
 export class CofreTribemd {
     private perfis: PerfisTribemd;
     private trabalhos = new Map<string, Trabalho>();
+    private filasLeitura = new Map<string, Promise<unknown>>();
     private parando = false;
     private alterando = new Set<string>();
+    private recuperacoes = new Map<string,'NAO_NECESSARIA'|'MELHOROU'|'SEM_MELHORIA'|'FALHOU'>();
+    recuperacao(id:string) { return this.recuperacoes.get(id)??'NAO_NECESSARIA'; }
     private resultados = new Map<string, {
         resultado: ResultadoLeituraTribemd;
         timer: NodeJS.Timeout;
@@ -33,7 +38,7 @@ export class CofreTribemd {
     constructor(private opcoes: OpcoesCofre) { this.perfis = new PerfisTribemd(opcoes.diretorio, opcoes.chave); }
     private limparCredencial(p: PerfilTribemd) { p.email = ''; p.senha = ''; }
     private limparResultado(id: string) { const anterior = this.resultados.get(id); if (anterior)
-        clearTimeout(anterior.timer); this.resultados.delete(id); }
+        clearTimeout(anterior.timer); this.resultados.delete(id); this.recuperacoes.delete(id); }
     /** Quando o médico consentiu a conexão (para escolher a agenda mais recente). Não faz parte do status público. */
     async consentimentoEm(id: string): Promise<string | null> {
         const p = await this.perfis.ler(id);
@@ -54,7 +59,7 @@ export class CofreTribemd {
     async iniciar(id: string, credencial?: {
         email: string;
         senha: string;
-    }, exigirAtivo = false, janela?: { janelaDias: number; agora: Date }) {
+    }, exigirAtivo = false, janela?: { janelaDias: number; agora: Date }, detalhar = true) {
         if (this.parando)
             throw new ErroCofre('COFRE_ENCERRANDO');
         if (this.trabalhos.has(id) || this.alterando.has(id))
@@ -63,7 +68,7 @@ export class CofreTribemd {
             throw new ErroCofre('NAVEGADORES_OCUPADOS');
         if (credencial || !janela) this.opcoes.aoAlterarAcesso?.(id);
         let concluir!: () => void;
-        const trabalho: Trabalho = { janela, controller: new AbortController(), finalizada: new Promise<void>(r => { concluir = r; }), concluir: () => concluir() };
+        const trabalho: Trabalho = { janela, detalhar, controller: new AbortController(), finalizada: new Promise<void>(r => { concluir = r; }), concluir: () => concluir() };
         this.trabalhos.set(id, trabalho);
         let liberar: (() => Promise<void>) | undefined, p: PerfilTribemd = {};
         try {
@@ -113,9 +118,10 @@ export class CofreTribemd {
         };
         try {
             let resultado: ResultadoLeituraTribemd;
+            const detalhar = t.detalhar !== false;
             try {
                 await autenticar(true);
-                resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
+                resultado = t.janela ? await navegador!.ler('agenda', detalhar, t.janela) : await navegador!.ler('agenda', detalhar);
             }
             catch (e) {
                 const expirou = e instanceof ErroTribemd && (e.codigo === 'SESSAO_EXPIRADA' || !entrouComSenha && e.diagnostico?.rede?.chamadas.some(c => c.statusHttp === 401 && c.rota !== '/api/usuarios/login'));
@@ -123,7 +129,27 @@ export class CofreTribemd {
                     throw e;
                 await navegador?.encerrar();
                 await autenticar(false);
-                resultado = t.janela ? await navegador!.ler('agenda', true, t.janela) : await navegador!.ler('agenda', true);
+                resultado = t.janela ? await navegador!.ler('agenda', detalhar, t.janela) : await navegador!.ler('agenda', detalhar);
+            }
+            t.controller.signal.throwIfAborted();
+            if (!t.janela && mereceSegundaLeituraPontual(resultado) && navegador!.estaAutenticado()) {
+                // No máximo UMA leitura adicional, na mesma sessão já autenticada.
+                // Nem segundo login, nem novo trabalho, nem loop de portal.
+                try {
+                    const segunda = t.janela
+                        ? await navegador!.ler('agenda', true, t.janela)
+                        : await navegador!.ler('agenda', true);
+                    t.controller.signal.throwIfAborted();
+                    if (preferirSegundaLeitura(resultado, segunda)) {
+                        resultado = segunda;
+                        this.recuperacoes.set(id,'MELHOROU');
+                    } else {
+                        this.recuperacoes.set(id,'SEM_MELHORIA');
+                    }
+                } catch (erro) {
+                    t.controller.signal.throwIfAborted();
+                    this.recuperacoes.set(id,'FALHOU');
+                }
             }
             t.controller.signal.throwIfAborted();
             p.estado = await navegador!.perfil();
@@ -189,7 +215,91 @@ export class CofreTribemd {
     }
     async desconectar(id: string) { await this.alterar(id, false); }
     async excluir(id: string) { await this.alterar(id, true); }
-    async consultar(id: string, janelaDias = 90, agora = new Date()) { return this.iniciar(id, undefined, true, { janelaDias, agora }); }
+    async consultar(id: string, janelaDias = 90, agora = new Date(), detalhar = true) { return this.iniciar(id, undefined, true, { janelaDias, agora }, detalhar); }
+    private enfileirarLeitura<T>(id: string, fn: () => Promise<T>): Promise<T> {
+        const anterior = this.filasLeitura.get(id) ?? Promise.resolve();
+        const proxima = anterior.catch(() => undefined).then(fn);
+        this.filasLeitura.set(id, proxima);
+        void proxima.finally(() => {
+            if (this.filasLeitura.get(id) === proxima) this.filasLeitura.delete(id);
+        });
+        return proxima;
+    }
+    /** Leitura leve da agenda sem abrir fichas individuais — ideal para perguntas conversacionais. */
+    async lerAgendaRapida(id: string, janelaDias = 30, agora = new Date()): Promise<
+        {
+            ok: true;
+            consultas: Array<{ data: string; paciente: string; profissional?: string | null; situacao?: string | null; atendimentoId?: string | null }>;
+            horariosHoje?: Array<{ atendimentoId?: string; paciente: string; inicioIso: string; fimIso?: string; finalizado: boolean }>;
+        }
+        | { ok: false; motivo: string }
+    > {
+        return this.enfileirarLeitura(id, async () => {
+            try {
+                await this.trabalhos.get(id)?.finalizada;
+                const status = await this.status(id);
+                if (!status.salvo || !status.ativo) return { ok: false, motivo: 'SEM_AGENDA_CONECTADA' };
+                await this.consultar(id, janelaDias, agora, false);
+                await this.trabalhos.get(id)?.finalizada;
+                const resultado = this.resultado(id);
+                if (!resultado) return { ok: false, motivo: 'LEITURA_INDISPONIVEL' };
+                return {
+                    ok: true,
+                    consultas: resultado.consultas
+                        .filter(c => Boolean(c.dataConsultaObservada || c.ultimaConsulta) && Boolean(c.nome))
+                        .map(c => ({
+                            data: c.dataConsultaObservada ?? c.ultimaConsulta ?? '',
+                            paciente: c.nome,
+                            profissional: c.profissional ?? null,
+                            situacao: c.situacao ?? 'finalizado',
+                            atendimentoId: c.atendimentoId ?? null
+                        })),
+                    horariosHoje: resultado.agenda?.horariosHoje ?? []
+                };
+            } catch {
+                return { ok: false, motivo: 'LEITURA_INDISPONIVEL' };
+            } finally {
+                this.limparResultado(id);
+            }
+        });
+    }
+    /** Leitura completa da janela (com CPF, telefone e valor cobrado) em uma única sessão do navegador. */
+    async lerAgendaComDetalhes(id: string, janelaDias = 30, agora = new Date()): Promise<
+        { ok: true; consultas: Array<{ data: string; paciente: string; profissional?: string | null; situacao?: string | null; atendimentoId?: string | null; cpf?: string | null; telefone?: string | null; valorCentavos?: number | null }> }
+        | { ok: false; motivo: string }
+    > {
+        return this.enfileirarLeitura(id, async () => {
+            try {
+                await this.trabalhos.get(id)?.finalizada;
+                const status = await this.status(id);
+                if (!status.salvo || !status.ativo) return { ok: false, motivo: 'SEM_AGENDA_CONECTADA' };
+                await this.consultar(id, janelaDias, agora, true);
+                await this.trabalhos.get(id)?.finalizada;
+                const resultado = this.resultado(id);
+                if (!resultado) return { ok: false, motivo: 'LEITURA_INDISPONIVEL' };
+                const paraCentavos = (v?: string | null) => v && /^\d+\.\d{2}$/.test(v) ? Number(v.replace('.', '')) : null;
+                return {
+                    ok: true,
+                    consultas: resultado.consultas
+                        .filter(c => Boolean(c.dataConsultaObservada || c.ultimaConsulta) && Boolean(c.nome || c.dados?.nomeCompleto))
+                        .map(c => ({
+                            data: c.dataConsultaObservada ?? c.ultimaConsulta ?? '',
+                            paciente: (c.dados?.nomeCompleto ?? c.nome ?? '').trim(),
+                            profissional: c.profissional ?? null,
+                            situacao: c.situacao ?? 'finalizado',
+                            atendimentoId: c.atendimentoId ?? null,
+                            cpf: c.dados?.cpf ?? null,
+                            telefone: c.dados?.contato?.celular ?? c.dados?.contato?.telefone ?? null,
+                            valorCentavos: paraCentavos(c.dados?.valorCobrado) ?? paraCentavos(c.dados?.valorConsulta)
+                        }))
+                };
+            } catch {
+                return { ok: false, motivo: 'LEITURA_INDISPONIVEL' };
+            } finally {
+                this.limparResultado(id);
+            }
+        });
+    }
     async detalheAoVivo(medicoId: string, atendimentoId: string) {
         const status = await this.status(medicoId);
         if (!status.salvo || !status.ativo) throw new ErroCofre('SEM_AGENDA_CONECTADA');
@@ -218,7 +328,11 @@ export class CofreTribemd {
                 resultado.agenda.intervalo.fim < hoje || !resultado.agenda.intervalo.inicio || resultado.agenda.intervalo.inicio > inicio.toISOString().slice(0, 10) || resultado.agenda.limitado || !resultado.detalhes || resultado.detalhes.pendentes) {
                 return { tipo: 'erro', codigo: 'SINCRONIZACAO_INCOMPLETA' };
             }
-            return { tipo: 'consultas', fonte: 'tribemd', consultas: resultado.consultas.map(c => {
+            return { tipo: 'consultas', fonte: 'tribemd', contagensBrutas: {
+                brutos: resultado.agenda.totalAtendimentos,
+                descartadosStatus: resultado.agenda.descartadosStatus,
+                descartadosData: resultado.agenda.descartadosData
+            }, consultas: resultado.consultas.map(c => {
                 if (!c.pacienteId || !c.atendimentoId || !c.dataConsultaObservada || c.dados?.codigo) throw new ErroCofre('LEITURA_INCOMPLETA');
                 const valor = c.dados?.valorConsulta;
                 const cobrado = c.dados?.valorCobrado;

@@ -45,10 +45,15 @@ export class SupabaseAuthAdminService implements AuthAdminService {
         or regexp_replace(coalesce(u.telefone, ''), '\\D', '', 'g') = any($1)
         or u.email = any($2)
       ) and u.ativo = true
-      limit 1
+      limit 2
     `;
     const { rows } = await this.pool.query(sql, [variantes, emailsFicticios]);
     if (rows.length === 0) return null;
+    // Variantes de telefone e e-mail técnico podem apontar para identidades
+    // diferentes. Nunca escolher arbitrariamente uma conta nesse caso.
+    if (rows.length !== 1) {
+      throw new Error('Identidade ambígua para o telefone informado.');
+    }
 
     let medicoId = rows[0].medico_id || undefined;
     if (!medicoId && rows[0].papel === 'medico') {

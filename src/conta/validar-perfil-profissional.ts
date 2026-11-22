@@ -11,6 +11,8 @@ const registro = texto.pipe(z.string().max(60, 'O registro deve ter até 60 cara
 export const perfilProfissionalSchema = z.object({
   medicoId: z.string().uuid('Identificador do médico inválido.'),
   usuarioId: z.string().uuid('Identificador do usuário inválido.').optional(),
+  // Somente o backend define essa opção depois de autenticar a conta.
+  atualizarUsuarioVinculado: z.boolean().optional(),
   nome: texto.pipe(z.string().min(2, 'Informe o nome completo.')
     .max(200, 'O nome deve ter até 200 caracteres.')).optional(),
   crm: registro,

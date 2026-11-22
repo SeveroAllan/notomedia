@@ -72,16 +72,16 @@ export async function generateDanfsePdf(options: DanfsePdfOptions = {}): Promise
   renderizarTributacaoMunicipal(ctx, options.servico, options.prestador);
 
   // 8. Tributação Federal (Exceto CBS)
-  renderizarTributacaoFederalExcetoCbs(ctx);
+  renderizarTributacaoFederalExcetoCbs(ctx, options.servico);
 
   // 9. Tributação IBS/CBS (RTC 2026)
-  renderizarTributacaoIbsCbs(ctx);
+  renderizarTributacaoIbsCbs(ctx, options.servico, options.prestador);
 
   // 10. Valores Totais da NFS-e
   renderizarValoresTotais(ctx, options.servico);
 
   // 11. Informações Complementares
-  renderizarInformacoesComplementares(ctx);
+  renderizarInformacoesComplementares(ctx, options.servico);
 
   // 12. Canhoto de Cientificação no rodapé
   renderizarCanhotoCientificacao(ctx, options);

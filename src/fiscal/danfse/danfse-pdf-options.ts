@@ -16,6 +16,8 @@ export interface DanfsePrestador {
   telefone?: string;
   email?: string;
   simplesNacional?: boolean;
+  opcaoSimplesNacional?: 'nao_optante' | 'mei' | 'me_epp';
+  regimeApuracaoSn?: 'regime_1' | 'regime_2' | 'regime_3' | null;
 }
 
 export interface DanfseTomador {
@@ -30,27 +32,55 @@ export interface DanfseTomador {
   email?: string;
 }
 
+export interface DanfseTotaisAproximados {
+  federalPct?: number;
+  federalValor?: number;
+  estadualPct?: number;
+  estadualValor?: number;
+  municipalPct?: number;
+  municipalValor?: number;
+  snPct?: number;
+  snValor?: number;
+}
+
 export interface DanfseServico {
   municipioPrestacao?: string;
   ufPrestacao?: string;
   tipoTributacao?: string;
   tipoRetencao?: string;
   cTribNac?: string;
+  cTribMun?: string;
   cNBS?: string;
+  descricaoAtividade?: string;
   discriminacao?: string;
   valor?: number;
+  baseCalculoIss?: number;
   aliquota?: number;
   issApurado?: number;
   desconto?: number;
   retencoes?: number;
   deducoes?: number;
+  cstPisCofins?: string;
+  aliquotaPis?: number;
+  valorPis?: number;
+  aliquotaCofins?: number;
+  valorCofins?: number;
+  retencaoPisCofinsTexto?: string;
   cstIbsCbs?: string;
   cClassTrib?: string;
   cIndOp?: string;
+  baseCalculoIbsCbs?: number;
+  aliquotaIbsUf?: number;
+  valorIbsUf?: number;
+  aliquotaIbsMun?: number;
+  valorIbsMun?: number;
+  valorIbsTotal?: number;
   aliquotaCbs?: number;
   valorCbs?: number;
   aliquotaIbs?: number;
   valorIbs?: number;
+  totalIbsCbs?: number;
+  totalTributosAproximados?: DanfseTotaisAproximados;
 }
 
 export interface DanfsePdfOptions {
@@ -60,7 +90,9 @@ export interface DanfsePdfOptions {
   dataEmissao?: string;
   competencia?: string;
   codigoVerificacao?: string;
+  finalidade?: string;
   ambiente?: 'producao' | 'homologacao';
+  contingenciaHomologacao?: boolean;
   cancelada?: boolean;
   prestador?: DanfsePrestador;
   tomador?: DanfseTomador;

@@ -33,6 +33,7 @@ scratch/
 
 
 # Cofres, certificados e gravações de rede: nunca versionar dados reais
+.dev-local-dados/
 secrets/
 .secrets/
 dados/

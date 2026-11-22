@@ -49,6 +49,14 @@ describe('adaptador real de emissão com SQL fake, sem prefeitura', () => {
       .toEqual({ sucesso: false, erro: 'Emissão real indisponível: integração fiscal não configurada.', codigoErroSefin: 'INTEGRACAO_FISCAL_INDISPONIVEL' });
     expect(banco.consultas).toHaveLength(1);
   });
+  it('carrega o perfil pelo médico mesmo sem usuário próprio', async () => {
+    const banco = cadastroFiscal();
+    await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item);
+    const perfil = banco.consultas.find(c => c.sql.includes('from medico_perfil_fiscal pf'))!;
+    expect(perfil.sql).toContain('left join usuarios u on u.id = m.usuario_id');
+    expect(perfil.sql).toContain('where pf.medico_id = $1');
+    expect(perfil.valores[0]).toBe(item.medicoId);
+  });
   it('perfil fiscal ausente bloqueia emissão', async () => {
     const banco = cadastroFiscal({ perfil: false });
     expect(await new PostgresEmissorDpsService(banco.pool, 'chave-ficticia').emitir(item)).toEqual({ sucesso: false, erro: 'Perfil fiscal não cadastrado para o médico medico-1', codigoErroSefin: 'PERFIL_FISCAL_INCOMPLETO' });

@@ -32,6 +32,9 @@ import { SefinNacionalClient } from './sefin-nacional-client.js';
 import { generateDanfsePdf } from '../../fiscal/danfse/gerar-danfse-pdf.js';
 import { comporChaveAcessoNacional } from '../../fiscal/danfse/formatadores-fiscais.js';
 import { montarXmlNfse } from '../../fiscal/danfse/montar-xml-nfse.js';
+import { descreverFinalidadeNfse, montarServicoDanfseComTributos } from '../../fiscal/danfse/calcular-tributos-danfse.js';
+import type { MetadadosDanfseReferencia } from '../../fiscal/danfse/extrair-metadados-danfse-xml.js';
+import { podeUsarContingenciaHomologacao } from '../../fiscal/regras/decidir-contingencia-homologacao.js';
 import type { MeuDanfeClient } from '../meudanfe/meu-danfe-client.js';
 import type { ConsultaCpfProvider } from '../../paciente/consulta-cpf-provider.js';
 import { ehNomeCivilValido } from '../../paciente/regras/validar-nome-civil.js';
@@ -52,7 +55,25 @@ export type ConfigPrestadorCompleto = ConfigPrestador & {
   email?: string;
   telefone?: string;
   proximoNumeroDps?: number;
+  opcaoSimplesNacional?: 'nao_optante' | 'mei' | 'me_epp';
+  regimeApuracaoSn?: 'regime_1' | 'regime_2' | 'regime_3' | null;
+  metadadosDanfse?: MetadadosDanfseReferencia;
 };
+
+export async function gravarXmlNota(
+  storage: SupabaseClient['storage'], caminho: string, xml: string, pilotoWhatsApp: boolean
+) {
+  const enviar = () => storage.from('notas').upload(caminho, Buffer.from(xml, 'utf8'), {
+    contentType: 'application/xml', upsert: true
+  });
+  let resultado = await enviar();
+  if (pilotoWhatsApp && /bucket.*not found/i.test(resultado.error?.message ?? '')) {
+    const { error } = await storage.createBucket('notas', { public: false });
+    if (error && Number(error.statusCode) !== 409 && !/already exists|duplicate/i.test(error.message)) throw error;
+    resultado = await enviar();
+  }
+  if (resultado.error && pilotoWhatsApp) throw resultado.error;
+}
 
 export class PostgresEmissorDpsService implements EmissorDpsService {
   constructor(
@@ -64,7 +85,10 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     private readonly sefinClient?: SefinNacionalClient,
     private readonly modoAgenteConservador = false,
     private readonly preparacaoFiscalAtiva = false,
-    private readonly retomadaRecusaAtiva = false
+    private readonly retomadaRecusaAtiva = false,
+    private readonly pilotoWhatsApp = false,
+    private readonly ambientePiloto?:'homologacao',
+    private readonly permitirContingenciaHomologacao = false
   ) {}
 
   /** Somente validação em memória: não reserva DPS, não escreve paciente, não transmite nem gera documento. */
@@ -129,7 +153,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     }
 
     const preparacao = this.preparacaoFiscalAtiva
-      ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }))
+      ? prepararEmissao(item, await carregarEvidenciasEmissao(this.pool, item), dataGeracao.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }), this.ambientePiloto)
       : undefined;
     if (preparacao && !preparacao.ok) {
       return { sucesso: false, erro: 'Há parâmetros fiscais pendentes de revisão antes do envio.', codigoErroSefin: 'PARAMETROS_FISCAIS_PENDENTES',
@@ -140,6 +164,9 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       return { sucesso: false, erro: `Paciente ${item.pacienteId} sem CPF válido para emissão`, codigoErroSefin: 'PACIENTE_CPF_INVALIDO' };
     }
 
+    if (this.pilotoWhatsApp && (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome))) {
+      return {sucesso:false,erro:'TOMADOR_NAO_VALIDADO',codigoErroSefin:'TOMADOR_NAO_VALIDADO'};
+    }
     // Se o nome ainda não foi validado, tenta obter via cadastro existente no banco ou API da Receita
     if (!tomador.nomeValidado || !ehNomeCivilValido(tomador.nome)) {
       // 1. Tenta reaproveitar de outro cadastro com o mesmo CPF que já tenha nome validado
@@ -215,7 +242,11 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const anoMes = (preparacao?.ok ? preparacao.competencia : dataGeracao.toISOString()).slice(0, 7);
     let chaveAcessoFinal = '';
     let respostaSefinRaw: Record<string, unknown> | undefined;
+    if (this.pilotoWhatsApp && (!item.emissaoComprovante || !this.supabaseClient || !this.sefinClient || prestadorConfig.ambiente !== 2))
+      return {sucesso:false,erro:'EMISSAO_WHATSAPP_BLOQUEADA',codigoErroSefin:'AMBIENTE_FISCAL_BLOQUEADO'};
     let xmlAutorizadoFinal: string | undefined;
+    let xmlAssinadoFinal: string | undefined;
+    let contingenciaHomologacaoAtiva = false;
     let dataEmissaoFinal = new Date();
 
     if (this.supabaseClient && this.sefinClient) {
@@ -235,6 +266,10 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           sucesso: false,
           erro: `Falha ao decodificar certificado A1 do médico: ${err?.message || err}`, codigoErroSefin: 'CERTIFICADO_INVALIDO'
         };
+      }
+
+      if (this.pilotoWhatsApp && chaves.documentoTitular !== prestadorConfig.cnpj.replace(/\D/g,'')) {
+        return {sucesso:false,erro:'CERTIFICADO_TITULAR_DIVERGENTE',codigoErroSefin:'CERTIFICADO_TITULAR_DIVERGENTE'};
       }
 
       let resSefinFinal: any;
@@ -257,7 +292,16 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           pemCert: chaves.pemCert,
           certBase64: chaves.certBase64
         });
+        xmlAssinadoFinal = xmlAssinado;
 
+        if (this.pilotoWhatsApp) {
+          const reserva = await this.pool.query(`
+            update public.noto_emissoes_comprovantes set dps_id=$2, atualizado_em=now()
+            where solicitacao_id=$1 and medico_id=$3 and origem='autorizacao_whatsapp'
+              and estado='emitindo' and dps_id is null
+          `,[item.id,dpsId,item.medicoId]);
+          if (reserva.rowCount !== 1) return {sucesso:false,erro:'DPS_JA_RESERVADA',codigoErroSefin:'DPS_JA_RESERVADA'};
+        }
         const resSefin = await this.sefinClient.transmitirDps({
           xmlAssinado,
           pfxBuffer: cert.pfxBuffer,
@@ -271,9 +315,9 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           break;
         }
 
-        if (this.modoAgenteConservador || this.preparacaoFiscalAtiva) break;
-
-        if (resSefin.codigoErro === 'E0014' || resSefin.motivo?.includes('E0014')) {
+        // E0014 (DPS duplicada) é colisão de sequência, não mudança de regime fiscal:
+        // avança a numeração automaticamente fora do modo piloto travado.
+        if (!this.pilotoWhatsApp && (resSefin.codigoErro === 'E0014' || resSefin.motivo?.includes('E0014'))) {
           console.warn(`[PostgresEmissorDpsService] DPS ${ndpsAtual} duplicada (E0014). Avançando para ${ndpsAtual + 1}...`);
           ndpsAtual++;
           await this.pool.query(
@@ -287,6 +331,8 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
             continue;
           }
         }
+
+        if (this.modoAgenteConservador || this.preparacaoFiscalAtiva) break;
 
         if (
           resSefin.codigoErro === 'E0676' ||
@@ -359,35 +405,73 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
 
       if (!resSefinFinal || !resSefinFinal.sucesso) {
         await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
-        const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
-        const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
-          prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
-          profissionais[0].nome_completo, profissionais[0].crm, profissionais[0].rqe,
-          String(item.valorServicoCentavos), (item.valorServicoCentavos / 100).toFixed(2), (item.valorServicoCentavos / 100).toFixed(2).replace('.', ',')];
-        return {
-          sucesso: false,
-          erro: item.origemLote ? sanitizarErroFiscal(motivo, identificadores) : motivo,
+        const usarContingencia = podeUsarContingenciaHomologacao({
+          permitirContingenciaHomologacao: this.permitirContingenciaHomologacao,
+          pilotoWhatsApp: this.pilotoWhatsApp,
+          ambiente: prestadorConfig.ambiente,
+          xmlAssinadoPresente: Boolean(xmlAssinadoFinal),
           codigoErroSefin: resSefinFinal?.codigoErro,
           httpStatus: resSefinFinal?.httpStatus,
-          xmlDpsOriginal: correcao ? undefined : xmlDpsOriginal,
-          falhaAntesDoEnvio: resSefinFinal?.falhaAntesDoEnvio,
-          contextoTecnico: {
-            origem: preparacao?.ok ? preparacao.origem : undefined,
-            dataGeracao: dataGeracao.toISOString(),
-            provedor: 'sefin_nacional', municipio: prestadorConfig.codMunicipio,
-            ambiente: prestadorConfig.ambiente, ndps: ndpsAtual, serie: prestadorConfig.serie,
-            valorCentavos: item.valorServicoCentavos, ctribNac: item.ctribNac,
-            cnbs: emissaoInput.cNBS, cclassTrib: emissaoInput.cClassTrib, cindOp: emissaoInput.cIndOp
-          },
-          respostaSefinRaw: resSefinFinal?.respostaRaw
-        };
+          falhaAntesDoEnvio: resSefinFinal?.falhaAntesDoEnvio
+        });
+        if (usarContingencia) {
+          contingenciaHomologacaoAtiva = true;
+          console.warn(
+            `[PostgresEmissorDpsService] SEFIN homologação indisponível (${resSefinFinal?.codigoErro ?? resSefinFinal?.httpStatus ?? 'erro'}); ativando contingência local de homologação com DPS assinada pelo A1 real (ndps=${ndpsAtual}).`
+          );
+          chaveAcessoFinal = comporChaveAcessoNacional({
+            codIbgeMunicipio: prestadorConfig.codMunicipio,
+            ambiente: 'homologacao',
+            anoMes,
+            cnpjOuCpf: prestadorConfig.cnpj,
+            serie: prestadorConfig.serie || '00001',
+            ndps: ndpsAtual
+          });
+          xmlAutorizadoFinal = xmlAssinadoFinal;
+          dataEmissaoFinal = dataGeracao;
+          respostaSefinRaw = {
+            contingenciaHomologacao: true,
+            assinadoComA1: true,
+            dpsId: dpsIdFinal,
+            motivoSefin: resSefinFinal?.motivo ?? resSefinFinal?.codigoErro ?? 'SEFIN_INDISPONIVEL'
+          };
+        } else {
+          if (this.pilotoWhatsApp && dpsIdFinal && (!resSefinFinal?.httpStatus || resSefinFinal.httpStatus>=500 || [408,409].includes(resSefinFinal.httpStatus))) {
+            const consulta = await this.sefinClient.consultarDpsGerada(dpsIdFinal, {
+              pfxBuffer:cert.pfxBuffer, senhaCertificado:cert.senhaCertificado, ambiente:2
+            });
+            return {sucesso:false,erro:'TRANSMISSAO_A_CONCILIAR',codigoErroSefin:'TRANSMISSAO_A_CONCILIAR_'+consulta.resultado.toUpperCase()};
+          }
+          const motivo = resSefinFinal?.motivo || 'Erro na transmissão à SEFIN';
+          const identificadores = [tomador.nome, tomador.cpf, prestadorConfig.razaoSocial, prestadorConfig.nomeFantasia,
+            prestadorConfig.cnpj, prestadorConfig.im, prestadorConfig.telefone, prestadorConfig.email,
+            profissionais[0].nome_completo, profissionais[0].crm, profissionais[0].rqe,
+            String(item.valorServicoCentavos), (item.valorServicoCentavos / 100).toFixed(2), (item.valorServicoCentavos / 100).toFixed(2).replace('.', ',')];
+          return {
+            sucesso: false,
+            erro: item.origemLote ? sanitizarErroFiscal(motivo, identificadores) : motivo,
+            codigoErroSefin: resSefinFinal?.codigoErro,
+            httpStatus: resSefinFinal?.httpStatus,
+            xmlDpsOriginal: correcao ? undefined : xmlDpsOriginal,
+            falhaAntesDoEnvio: resSefinFinal?.falhaAntesDoEnvio,
+            contextoTecnico: {
+              origem: preparacao?.ok ? preparacao.origem : undefined,
+              dataGeracao: dataGeracao.toISOString(),
+              provedor: 'sefin_nacional', municipio: prestadorConfig.codMunicipio,
+              ambiente: prestadorConfig.ambiente, ndps: ndpsAtual, serie: prestadorConfig.serie,
+              valorCentavos: item.valorServicoCentavos, ctribNac: item.ctribNac,
+              cnbs: emissaoInput.cNBS, cclassTrib: emissaoInput.cClassTrib, cindOp: emissaoInput.cIndOp
+            },
+            respostaSefinRaw: resSefinFinal?.respostaRaw
+          };
+        }
+      } else {
+        await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
+        chaveAcessoFinal = resSefinFinal.chaveAcesso;
+        respostaSefinRaw = resSefinFinal.respostaRaw;
+        xmlAutorizadoFinal = resSefinFinal.xmlAutorizado;
+        dataEmissaoFinal = resSefinFinal.dataAutorizacao;
       }
-
-      await this.registrarResultadoParaRetomada(item.id, dpsIdFinal, resSefinFinal, cert, prestadorConfig.ambiente);
-      chaveAcessoFinal = resSefinFinal.chaveAcesso;
-      respostaSefinRaw = resSefinFinal.respostaRaw;
-      xmlAutorizadoFinal = resSefinFinal.xmlAutorizado;
-      dataEmissaoFinal = resSefinFinal.dataAutorizacao;
     } else {
       // Modo de simulação local (quando executado sem credenciais do Supabase/SEFIN)
       emissaoInput.nDPS = String(ndpsAtual);
@@ -404,8 +488,22 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     }
 
     const valorServico = item.valorServicoCentavos / 100;
-    const aliquotaIss = this.preparacaoFiscalAtiva ? undefined : 2.0;
-    const issApurado = aliquotaIss === undefined ? undefined : (valorServico * aliquotaIss) / 100;
+    const servicoDanfse = montarServicoDanfseComTributos({
+      valorServico,
+      discriminacao: item.xdescServ,
+      cTribNac: emissaoInput.cTribNac,
+      cTribMun: emissaoInput.cTribMun,
+      cNBS: emissaoInput.cNBS,
+      municipioPrestacao: emissaoInput.fiscal?.municipioPrestacao ?? prestadorConfig.codMunicipio,
+      ufPrestacao: emissaoInput.fiscal
+        ? inferirUfDeMunicipioIbge(emissaoInput.fiscal.municipioPrestacao) ?? prestadorConfig.uf
+        : prestadorConfig.uf,
+      fiscal: emissaoInput.fiscal,
+      metadados: prestadorConfig.metadadosDanfse,
+      aliquotaIssFallback: this.preparacaoFiscalAtiva ? undefined : 2.0,
+      pTotTribSnFallback: prestadorConfig.regTrib.opSimpNac !== 1 ? prestadorConfig.pTotTribSN : undefined
+    });
+    const metaPrestador = prestadorConfig.metadadosDanfse?.prestador;
 
     const dadosDanfse = {
       chaveAcesso: chaveAcessoFinal,
@@ -413,17 +511,23 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       serie: prestadorConfig.serie || '00001',
       competencia: anoMes,
       dataEmissao: dataEmissaoFinal.toISOString(),
+      finalidade: descreverFinalidadeNfse(emissaoInput.fiscal?.ibscbs?.finNFSe),
       ambiente: (prestadorConfig.ambiente === 1 ? 'producao' : 'homologacao') as 'producao' | 'homologacao',
+      ...(contingenciaHomologacaoAtiva ? { contingenciaHomologacao: true } : {}),
       prestador: {
         razaoSocial: prestadorConfig.razaoSocial,
         nomeFantasia: prestadorConfig.nomeFantasia,
         cnpj: prestadorConfig.cnpj,
         inscricaoMunicipal: prestadorConfig.im,
+        endereco: metaPrestador?.endereco,
+        cep: metaPrestador?.cep,
         municipio: prestadorConfig.codMunicipio,
         uf: prestadorConfig.uf,
-        telefone: prestadorConfig.telefone,
-        email: prestadorConfig.email,
-        simplesNacional: prestadorConfig.regTrib.opSimpNac !== 1
+        telefone: metaPrestador?.telefone ?? prestadorConfig.telefone,
+        email: metaPrestador?.email ?? prestadorConfig.email,
+        simplesNacional: prestadorConfig.regTrib.opSimpNac !== 1,
+        opcaoSimplesNacional: prestadorConfig.opcaoSimplesNacional,
+        regimeApuracaoSn: prestadorConfig.regimeApuracaoSn
       },
       tomador: {
         nome: tomador.nome!,
@@ -431,26 +535,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         telefone: tomador.telefone,
         endereco: tomador.enderecoCompleto
       },
-      servico: {
-        municipioPrestacao: emissaoInput.fiscal?.municipioPrestacao,
-        ufPrestacao: emissaoInput.fiscal ? inferirUfDeMunicipioIbge(emissaoInput.fiscal.municipioPrestacao) ?? undefined : undefined,
-        tipoTributacao: emissaoInput.fiscal ? 'Operação Tributável' : undefined,
-        tipoRetencao: emissaoInput.fiscal ? 'Não Retido' : undefined,
-        cTribNac: emissaoInput.cTribNac,
-        cNBS: emissaoInput.cNBS || undefined,
-        discriminacao: item.xdescServ,
-        valor: valorServico,
-        aliquota: aliquotaIss,
-        issApurado,
-        cstIbsCbs: this.preparacaoFiscalAtiva ? emissaoInput.fiscal?.ibscbs?.CST : '000 - Tributável Integralmente',
-        cClassTrib: this.preparacaoFiscalAtiva ? emissaoInput.fiscal?.ibscbs?.cClassTrib : emissaoInput.cClassTrib,
-        cIndOp: this.preparacaoFiscalAtiva ? emissaoInput.fiscal?.ibscbs?.cIndOp : emissaoInput.cIndOp
-      }
+      servico: servicoDanfse
     };
 
     let pdfBytes: Uint8Array | Buffer | undefined;
 
-    if (!item.emissaoComprovante && this.meuDanfeClient && (!this.preparacaoFiscalAtiva || xmlAutorizadoFinal)) {
+    if (!contingenciaHomologacaoAtiva && !item.emissaoComprovante && this.meuDanfeClient && (!this.preparacaoFiscalAtiva || xmlAutorizadoFinal)) {
       try {
         const xmlString = xmlAutorizadoFinal || montarXmlNfse({
           chaveAcesso: chaveAcessoFinal,
@@ -461,7 +551,14 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
           codigoMunicipio: prestadorConfig.codMunicipio,
           prestador: dadosDanfse.prestador,
           tomador: dadosDanfse.tomador,
-          servico: { ...dadosDanfse.servico, aliquota: aliquotaIss ?? 0, issApurado: issApurado ?? 0 }
+          servico: {
+            cTribNac: emissaoInput.cTribNac,
+            cNBS: emissaoInput.cNBS || undefined,
+            discriminacao: item.xdescServ,
+            valor: valorServico,
+            aliquota: servicoDanfse.aliquota ?? 0,
+            issApurado: servicoDanfse.issApurado ?? 0
+          }
         });
 
         const resMeuDanfe = await this.meuDanfeClient.converterXmlParaPdf(xmlString);
@@ -473,7 +570,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       }
     }
 
-    if (!pdfBytes) {
+    if (!pdfBytes && !this.pilotoWhatsApp) {
       try { pdfBytes = await generateDanfsePdf(dadosDanfse); }
       catch (erro) {
         if (!item.emissaoComprovante) throw erro;
@@ -484,14 +581,9 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const xmlStoragePath = `notas/${item.medicoId}/${anoMes}/${chaveAcessoFinal}.xml`;
     if (this.supabaseClient && xmlAutorizadoFinal) {
       try {
-        await this.supabaseClient.storage
-          .from('notas')
-          .upload(xmlStoragePath, Buffer.from(xmlAutorizadoFinal, 'utf-8'), {
-            contentType: 'application/xml',
-            upsert: true
-          });
+        await gravarXmlNota(this.supabaseClient.storage, xmlStoragePath, xmlAutorizadoFinal, this.pilotoWhatsApp);
       } catch (err: any) {
-        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote ? 'XML_STORAGE_FALHOU' : err?.message || err);
+        console.warn('[PostgresEmissorDpsService] Aviso ao gravar XML no Storage:', item.origemLote || this.pilotoWhatsApp ? 'XML_STORAGE_FALHOU' : err?.message || err);
       }
     }
 
@@ -507,6 +599,7 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       valorServicosCentavos: item.valorServicoCentavos,
       xmlStoragePath,
       pdfStoragePath: pdfBase64,
+      ...(contingenciaHomologacaoAtiva ? { contingenciaHomologacao: true } : {}),
       respostaSefinRaw: preparacao?.ok ? { ...respostaSefinRaw, _notoPreparacao: preparacao.origem } : respostaSefinRaw
     };
   }
@@ -529,11 +622,12 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
         pf.regime_especial_tributacao,
         pf.percentual_tot_trib_sn,
         pf.dados_reforma_tributaria,
+        pf.confirmado_pelo_medico,
         u.email,
         u.telefone
       from medico_perfil_fiscal pf
       join medicos m on m.id = pf.medico_id
-      join usuarios u on u.id = m.usuario_id
+      left join usuarios u on u.id = m.usuario_id
       where pf.medico_id = $1
       limit 1
     `;
@@ -543,6 +637,13 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
     const r = rows[0];
     const opSimpNacMap: Record<string, 1 | 2 | 3> = { nao_optante: 1, mei: 2, me_epp: 3 };
     const regApMap: Record<string, 1 | 2 | 3> = { regime_1: 1, regime_2: 2, regime_3: 3 };
+
+    if (this.pilotoWhatsApp && (r.ambiente !== 'homologacao' || !r.confirmado_pelo_medico ||
+        r.dados_reforma_tributaria?.versao !== 2 || !r.documento_limpo || !r.cod_municipio_ibge ||
+        !r.serie_dps || !r.proximo_numero_dps || !opSimpNacMap[r.opcao_simples_nacional] ||
+        r.regime_especial_tributacao == null ||
+        (r.opcao_simples_nacional === 'me_epp' && !regApMap[r.regime_apuracao_sn]) ||
+        (r.opcao_simples_nacional !== 'nao_optante' && r.percentual_tot_trib_sn == null))) return null;
 
     return {
       referenciaImportada: r.dados_reforma_tributaria?.versao === 2,
@@ -557,12 +658,15 @@ export class PostgresEmissorDpsService implements EmissorDpsService {
       email: r.email,
       telefone: r.telefone,
       proximoNumeroDps: r.proximo_numero_dps ? Number(r.proximo_numero_dps) : undefined,
+      opcaoSimplesNacional: (['nao_optante', 'mei', 'me_epp'].includes(r.opcao_simples_nacional) ? r.opcao_simples_nacional : undefined) as ConfigPrestadorCompleto['opcaoSimplesNacional'],
+      regimeApuracaoSn: (['regime_1', 'regime_2', 'regime_3'].includes(r.regime_apuracao_sn) ? r.regime_apuracao_sn : null) as ConfigPrestadorCompleto['regimeApuracaoSn'],
+      metadadosDanfse: r.dados_reforma_tributaria?.metadadosDanfse,
       regTrib: {
         opSimpNac: opSimpNacMap[r.opcao_simples_nacional] || 3,
         regApTribSN: regApMap[r.regime_apuracao_sn] || 1,
         regEspTrib: (r.regime_especial_tributacao ?? 0) as any
       },
-      pTotTribSN: Number(r.percentual_tot_trib_sn || 6.0)
+      pTotTribSN: this.pilotoWhatsApp ? Number(r.percentual_tot_trib_sn ?? 0) : Number(r.percentual_tot_trib_sn || 6.0)
     };
   }
 

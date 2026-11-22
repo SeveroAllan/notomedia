@@ -19,28 +19,58 @@ export function descobrirProfissionais(consultas:ReadonlyArray<{profissional?:st
  return [...mapa.values()].sort((a,b)=>a.localeCompare(b,'pt-BR'));
 }
 export class ErroAgendaTribemd extends Error { constructor(public codigo:string){super(codigo);} }
+export interface HorarioAgendadoTribemd {
+ atendimentoId?:string;paciente:string;inicioIso:string;fimIso?:string;finalizado:boolean;
+}
 export interface RecorteAgendaTribemd {
  consultas:ConsultaTribemd[];totalAtendimentos:number;limitado:boolean;
+ descartadosStatus:number;descartadosData:number;
  intervalo:{inicio:string|null;fim:string|null};
+ horariosHoje?:HorarioAgendadoTribemd[];
 }
 const objeto=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const STATUS_CANCELADO_TRIBEMD=new Set(['3','4','5','6','7','cancelado','cancelada','faltou','desmarcado']);
+export function extrairHorariosDoDiaTribemd(dados:unknown,hoje:string):HorarioAgendadoTribemd[]{
+ const corpo=objeto(dados)&&objeto(dados.data)?dados.data:dados;
+ if(!objeto(corpo)||!Array.isArray(corpo.atendimentos))return [];
+ const saida:HorarioAgendadoTribemd[]=[];
+ for(const item of corpo.atendimentos.slice(0,100)){
+  if(!objeto(item))continue;
+  const st=String(item.status??'').trim().toLowerCase();
+  if(STATUS_CANCELADO_TRIBEMD.has(st))continue;
+  const paciente=objeto(item.pacientes)?item.pacientes:undefined;
+  const nome=typeof paciente?.nome==='string'?paciente.nome.trim().slice(0,200):'';
+  const inicioBruto=typeof item.datahora_marcada==='string'&&item.datahora_marcada?item.datahora_marcada
+    :typeof item.datahora_atendimento==='string'&&item.datahora_atendimento?item.datahora_atendimento:'';
+  const dia=inicioBruto?dataISOTribemd(inicioBruto):null;
+  if(!nome||dia!==hoje)continue;
+  const idVal=typeof item.id==='number'&&Number.isSafeInteger(item.id)&&item.id>0?String(item.id)
+    :typeof item.id==='string'&&/^[1-9]\d{0,15}$/.test(item.id)?item.id:undefined;
+  const fimBruto=typeof item.datahora_termino==='string'&&item.datahora_termino?item.datahora_termino
+    :typeof item.datahora_fim==='string'&&item.datahora_fim?item.datahora_fim:undefined;
+  saida.push({atendimentoId:idVal,paciente:nome,inicioIso:inicioBruto,...(fimBruto?{fimIso:fimBruto}:{}),finalizado:[8,10,'8','10'].includes(item.status as number|string)});
+ }
+ return saida;
+}
 export function extrairAgendaTribemd(dados:unknown,hoje:string):Omit<RecorteAgendaTribemd,'intervalo'> {
  const corpo=objeto(dados)&&objeto(dados.data)?dados.data:dados;
  if(!objeto(corpo)||!Array.isArray(corpo.atendimentos))throw new ErroAgendaTribemd('LEITURA_AGENDA_FORMATO_NAO_RECONHECIDO');
  const consultas:ConsultaTribemd[]=[];
+ let descartadosStatus=0,descartadosData=0;
  for(const item of corpo.atendimentos.slice(0,100)){
   if(!objeto(item))continue;
   // Valores confirmados no modelo público de atendimentos: 8=atendido; 10=finalizado.
-  if(![8,10,'8','10'].includes(item.status as number|string))continue;
+  if(![8,10,'8','10'].includes(item.status as number|string)){descartadosStatus++;continue;}
   const paciente=objeto(item.pacientes)?item.pacientes:undefined;
   const nome=typeof paciente?.nome==='string'?paciente.nome.trim().slice(0,200):'';
   const campo=typeof item.datahora_atendimento==='string'&&item.datahora_atendimento?'datahora_atendimento':'datahora_marcada';
   const valor=item[campo],data=typeof valor==='string'?dataISOTribemd(valor):null;
-  if(!nome||!data||data>hoje)continue;
+  if(data && data>hoje){descartadosData++;continue;}
+  if(!nome||!data)continue;
   const id=(v:unknown)=>typeof v==='number'&&Number.isSafeInteger(v)&&v>0?String(v):typeof v==='string'&&/^[1-9]\d{0,15}$/.test(v)?v:undefined;
   consultas.push({atendimentoId:id(item.id),pacienteId:id(item.paciente_id)??id(paciente?.id),situacao:Number(item.status)===10?'finalizado':'atendido',nome,ultimaConsulta:null,dataConsultaObservada:data,evidencia:'consulta_realizada_observada',origemData:campo,profissional:nomeProfissionalTribemd(item)});
  }
- return {consultas,totalAtendimentos:corpo.atendimentos.length,limitado:corpo.atendimentos.length>100};
+ return {consultas,totalAtendimentos:corpo.atendimentos.length,descartadosStatus,descartadosData,limitado:corpo.atendimentos.length>100};
 }
 interface ConsultaCarregada {request:Request;response?:Response;falhou?:boolean;resultado?:RecorteAgendaTribemd}
 const limiteBytes=2*1024*1024;
@@ -97,9 +127,10 @@ export class LeitorAgendaTribemd {
       if(tamanho>limiteBytes)throw new ErroAgendaTribemd('LEITURA_AGENDA_LIMITE_EXCEDIDO');
       bytes=await r.body();if(bytes.length>limiteBytes)throw new ErroAgendaTribemd('LEITURA_AGENDA_LIMITE_EXCEDIDO');
       if(this.fechado||this.atual!==atual||Date.now()>=prazo)throw new ErroAgendaTribemd('LEITURA_AGENDA_CANCELADA');
-      const dados=extrairAgendaTribemd(JSON.parse(bytes.toString('utf8')),hoje),u=new URL(atual.request.url());
+      const brutoJson=JSON.parse(bytes.toString('utf8'));
+      const dados=extrairAgendaTribemd(brutoJson,hoje),horariosHoje=extrairHorariosDoDiaTribemd(brutoJson,hoje),u=new URL(atual.request.url());
       const dia=(v:string|null)=>v&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&dataISOTribemd(v)?v:null;
-      return {...dados,intervalo:{inicio:dia(u.searchParams.get('inicio')),fim:dia(u.searchParams.get('fim'))}};
+      return {...dados,horariosHoje,intervalo:{inicio:dia(u.searchParams.get('inicio')),fim:dia(u.searchParams.get('fim'))}};
      }catch(e){throw e instanceof ErroAgendaTribemd?e:new ErroAgendaTribemd('LEITURA_AGENDA_FORMATO_NAO_RECONHECIDO');}
      finally{bytes?.fill(0);}
     };
@@ -120,16 +151,22 @@ export class LeitorAgendaTribemd {
   if(!dataISOTribemd(hoje)||!Number.isInteger(janelaDias)||janelaDias<1||janelaDias>365)throw new ErroAgendaTribemd('JANELA_AGENDA_INVALIDA');
   const inicio=new Date(hoje+'T12:00:00Z');inicio.setUTCDate(inicio.getUTCDate()-janelaDias);
   const desde=inicio.toISOString().slice(0,10),consultas=new Map<string,ConsultaTribemd>();
-  let recorte=await this.ler(hoje),fim=recorte.intervalo.fim,totalAtendimentos=0;
+  let recorte=await this.ler(hoje),fim=recorte.intervalo.fim,totalAtendimentos=0,descartadosStatus=0,descartadosData=0;
+  const horariosHoje=recorte.horariosHoje??[];
   if(!fim||fim<hoje||!recorte.intervalo.inicio||recorte.intervalo.inicio>hoje)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
   for(let pagina=0;pagina<55;pagina++){
    if(recorte.limitado)throw new ErroAgendaTribemd('LEITURA_AGENDA_LIMITE_EXCEDIDO');
    const inicioRecorte=recorte.intervalo.inicio;
    if(!inicioRecorte)throw new ErroAgendaTribemd('JANELA_AGENDA_NAO_CONFIRMADA');
    totalAtendimentos+=recorte.totalAtendimentos;
+   descartadosStatus+=recorte.descartadosStatus;
+   descartadosData+=recorte.descartadosData;
    const lidas=processar?await processar(recorte):recorte.consultas;
-   for(const c of lidas)if(c.atendimentoId&&c.dataConsultaObservada&&c.dataConsultaObservada>=desde&&c.dataConsultaObservada<=hoje)consultas.set(c.atendimentoId,c);
-   if(inicioRecorte<=desde)return {consultas:[...consultas.values()],totalAtendimentos,limitado:false,intervalo:{inicio:inicioRecorte,fim}};
+   for(const c of lidas){
+    if(c.dataConsultaObservada && (c.dataConsultaObservada<desde||c.dataConsultaObservada>hoje)){descartadosData++;continue;}
+    if(c.atendimentoId&&c.dataConsultaObservada)consultas.set(c.atendimentoId,c);
+   }
+   if(inicioRecorte<=desde)return {consultas:[...consultas.values()],totalAtendimentos,descartadosStatus,descartadosData,limitado:false,horariosHoje,intervalo:{inicio:inicioRecorte,fim}};
    const botao=this.page.getByRole('button',{name:/^(semana anterior|anterior|previous(?: week)?)$/i}).or(this.page.locator('button.fc-prev-button'));
    if(await botao.count()!==1||!await botao.isVisible()||!await botao.isEnabled())throw new ErroAgendaTribemd('PAGINACAO_AGENDA_NAO_RECONHECIDA');
    await Promise.all([this.page.waitForRequest(r=>r.method()==='GET'&&new URL(r.url()).origin==='https://app.tribemd.com'&&new URL(r.url()).pathname==='/api/atendimentos/agenda',{timeout:10000}),botao.click()]);

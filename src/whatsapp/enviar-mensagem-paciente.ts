@@ -9,6 +9,10 @@ export interface EnviarMensagemPacienteParams {
   instanciaNome: string;
   contatoTelefone: string;
   texto: string;
+  /** Somente para mensagens que explicitamente pedem controle da prévia.
+   * Ausente: mantém o payload legado {number,text} sem sobrescrever a Evolution.
+   */
+  linkPreview?: boolean;
 }
 
 export interface ResultadoEnvioMensagemPaciente {

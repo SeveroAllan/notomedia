@@ -108,6 +108,7 @@ export class SefinNacionalClient {
       return {
         sucesso: false,
         httpStatus: status,
+        codigoErro: status === 403 ? 'SEFIN_HTTP_403_IIS' : 'SEFIN_INDISPONIVEL',
         motivo: `Resposta HTTP ${status} da SEFIN não é JSON válido: ${corpo.slice(0, 300)}`
       };
     }
@@ -238,8 +239,10 @@ export class SefinNacionalClient {
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Connection': 'close'
         },
+        agent: false,
         pfx,
         passphrase,
         ca: combinarAutoridadesCertificadoras(caBundle),
