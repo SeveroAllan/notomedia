@@ -178,4 +178,13 @@ describe('dados fiscais extraídos de referência fictícia', () => {
     const dados = structuredClone(xml); delete (dados.NFSe.infNFSe.DPS.infDPS.prest.regTrib as any).opSimpNac;
     expect(() => mapearParametrosFiscaisDoXml(dados)).toThrow('O XML não contém a opção do Simples Nacional');
   });
+  it('normaliza série reservada do Portal Nacional (>= 50000) para série de aplicativo próprio 00001', () => {
+    const portal = structuredClone(xml);
+    portal.NFSe.infNFSe.DPS.infDPS.serie = '70000';
+    portal.NFSe.infNFSe.DPS.infDPS.nDPS = '772';
+    expect(mapearParametrosFiscaisDoXml(portal)).toMatchObject({
+      serieDps: '00001',
+      proximoNumeroSequencialSugerido: 1
+    });
+  });
 });

@@ -96,16 +96,20 @@ export async function confirmarPoliticaEmissao(pool: pg.Pool, input: { medicoId:
     if (input.opcaoSimplesNacional && input.opcaoSimplesNacional !== parametros.opcaoSimplesNacional) throw new Error('Regimes informados divergem.');
     const pendencias = validarReferenciaFiscal(p.dados_reforma_tributaria, { referenciaHash: input.referenciaHash, parametros, fidelidadeReferencia: input.usarReferencia, ctribNac: s.ctrib_nac, ctribMun: s.ctrib_mun, cnbs: s.cnbs });
     if (pendencias.length) throw new Error(pendencias.join(' '));
-    const serie = input.serieDps ?? p.serie_dps;
-    if (!/^\d{1,5}$/.test(serie)) throw new Error('Série da DPS inválida.');
-    if (input.proximoNumeroDps !== undefined && (!Number.isSafeInteger(input.proximoNumeroDps) || input.proximoNumeroDps < 1)) throw new Error('Número da DPS inválido.');
+    const serieBruta = input.serieDps ?? p.serie_dps;
+    if (!/^\d{1,5}$/.test(serieBruta)) throw new Error('Série da DPS inválida.');
+    const serieReservadaPortal = !input.serieDps && Number(serieBruta) > 49999;
+    const serie = serieReservadaPortal ? '00001' : serieBruta;
+    if (Number(serie) > 49999) throw new Error('Série da DPS deve estar entre 0 e 49999 para aplicativo próprio.');
+    const proximoNumeroDps = input.proximoNumeroDps ?? (serieReservadaPortal ? 1 : undefined);
+    if (proximoNumeroDps !== undefined && (!Number.isSafeInteger(proximoNumeroDps) || proximoNumeroDps < 1)) throw new Error('Número da DPS inválido.');
     if (!/^\d{6}$/.test(s.ctrib_nac)) throw new Error('Código de tributação do serviço inválido.');
     const ambiente = contaPilotoHomologacao ? 'homologacao' : parametros.ambiente;
     await client.query(`update medico_perfil_fiscal set confirmado_pelo_medico = true,
       ambiente = $8, serie_dps = $2, proximo_numero_dps = coalesce($3, proximo_numero_dps),
       opcao_simples_nacional = $4, regime_apuracao_sn = $5, regime_especial_tributacao = $6,
       percentual_tot_trib_sn = coalesce($7, percentual_tot_trib_sn), atualizado_em = now()
-      where medico_id = $1`, [input.medicoId, serie, input.proximoNumeroDps, parametros.opcaoSimplesNacional,
+      where medico_id = $1`, [input.medicoId, serie, proximoNumeroDps, parametros.opcaoSimplesNacional,
       parametros.regimeApuracaoSn ?? null, parametros.regimeEspecialTributacao, parametros.percentualTotTribSN, ambiente]);
     const politica = { parametros, referenciaHash: input.referenciaHash, confirmadoEm: new Date().toISOString(), origem: 'revisao_onboarding', fidelidadeReferencia: Boolean(input.usarReferencia),
       ctribNac: s.ctrib_nac, cnbs: s.cnbs, ctribMun: s.ctrib_mun,

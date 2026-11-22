@@ -1071,6 +1071,44 @@
     .cofre-autorizacao { display:flex;align-items:flex-start;gap:10px;margin-top:18px; }
     .cofre-autorizacao input { flex-shrink:0;margin-top:4px; }
     #cofreMensagem,#cofreCardMensagem,#cofreAmplimedMensagem { color:#b42318; }
+    /* Experiência enxuta de 2 telas: Login/OTP → Conectar WhatsApp → Continue pelo WhatsApp. */
+    #tabsNavigation, .painel-layout { display: none !important; }
+    .wa-conectado-card {
+      width: 100%;
+      max-width: 380px;
+      margin: 1rem auto 0;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      text-align: left;
+      gap: 1.25rem;
+    }
+    .wa-conectado-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.45rem 0.9rem;
+      border-radius: 999px;
+      background: rgba(37, 211, 102, 0.14);
+      color: #0b7330;
+      font-size: 13px;
+      font-weight: 500;
+    }
+    .wa-conectado-acoes {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+    .wa-conectado-links {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 0.25rem;
+    }
   </style>
 </head>
 <body class="onboarding-active">
@@ -1254,11 +1292,29 @@
         <button type="button" class="btn-link" id="btnVoltarPainelWhatsapp" hidden>← Voltar ao painel</button>
       </div>
 
-      <!-- ETAPA 5: LIBERADO / PAINEL FINAL -->
+      <!-- ETAPA 5: WHATSAPP CONECTADO — CONTINUAÇÃO 100% PELO WHATSAPP -->
       <div id="step5View" class="step-view hidden">
         <div id="avisoConexaoWhatsappPainel" hidden>
           <p>Confira a conexão para continuar conversando com o Noto.</p>
           <button type="button" class="btn-link" id="btnReconectarWhatsappPainel">Reconectar WhatsApp</button>
+        </div>
+        <div id="whatsappConectadoCard" class="wa-conectado-card">
+          <span class="wa-conectado-badge" id="whatsappConectadoBadge">✓ WhatsApp conectado</span>
+          <div class="access-header">
+            <h2 class="access-title">Continue pelo WhatsApp</h2>
+            <p class="access-subtitle">
+              Seu WhatsApp já está conectado ao Noto. A partir de agora, nossa inteligência artificial vai te chamar na conversa para conectar sua agenda, cadastrar os profissionais e salvar os certificados A1 pelos links seguros.
+            </p>
+          </div>
+          <div class="wa-conectado-acoes">
+            <a class="btn-action" id="btnAbrirWhatsappConectado" href="whatsapp://" style="text-decoration:none;color:#FFFFFF;">
+              Abrir conversa no WhatsApp
+            </a>
+            <div class="wa-conectado-links">
+              <button type="button" class="btn-link" id="btnReconectarWhatsappConectado">Reconectar WhatsApp</button>
+              <button type="button" class="btn-link" id="btnSairWhatsappConectado">Sair da conta</button>
+            </div>
+          </div>
         </div>
         <div class="painel-layout">
           <!-- LATERAL: CONTAMENU (230px) -->
@@ -2574,6 +2630,8 @@
         btn.disabled = data.conectado;
         btn.classList.toggle('is-connected', data.conectado);
         status.textContent = data.conectado ? 'Seu WhatsApp está conectado.' : 'WhatsApp desconectado. Reconecte para continuar conversando com o Noto.';
+        const badgeConectado = document.getElementById('whatsappConectadoBadge');
+        if (badgeConectado) badgeConectado.textContent = data.conectado ? '✓ WhatsApp conectado' : '⚠ WhatsApp desconectado';
         document.getElementById('avisoConexaoWhatsappPainel').hidden = !whatsappJaVinculado || data.conectado;
       } catch {
         if (geracao !== geracaoStatusWhatsapp || sessao !== sessaoAtual || !painelDisponivel) return;
@@ -2599,6 +2657,8 @@
     // FIM STATUS WHATSAPP
 
     document.getElementById('btnReconectarWhatsappPainel').addEventListener('click', () => mostrarPasso(4));
+    document.getElementById('btnReconectarWhatsappConectado')?.addEventListener('click', () => mostrarPasso(4));
+    document.getElementById('btnSairWhatsappConectado')?.addEventListener('click', efetuarLogout);
     document.getElementById('btnVoltarPainelWhatsapp').addEventListener('click', () => carregarFluxoOnboarding());
 
     // --- FATURAMENTO / STRIPE BILLING ---

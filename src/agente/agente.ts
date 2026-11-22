@@ -1,5 +1,5 @@
 import { extrairInicioConferencia, janelaConferencia } from './leitura-atendimentos.js';
-import { Agent, OpenAIProvider, Runner, tool, type Model } from '@openai/agents';
+import { Agent, assistant, OpenAIProvider, Runner, tool, user, type Model } from '@openai/agents';
 import OpenAI from 'openai';
 import type pg from 'pg';
 import {ProvedorAgenteComOrcamento} from './modelo-com-limite.js';
@@ -17,6 +17,33 @@ import { descreverConferencia, type ResultadoConferencia } from './conferencia-a
 import { contaDoCofreId } from '../cofre/identidade-conta.js';
 import { decidirVinculo, explicarVinculoNaoExecutado } from './confirmacao-contextual.js';
 import type { ResultadoEnfileirar, TipoTrabalhoNoto, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
+import {
+  criarFerramentasOnboardingAutonomo,
+  type DependenciasOnboardingAutonomo
+} from './ferramentas-onboarding-autonomo.js';
+import type { ContextoMemoriaAgente } from './memoria/memoria-repositorio.js';
+import type { MemoriaNucleoPrompt } from './memoria/blocos-memoria-config.js';
+import { humanizarSaidaWhatsApp } from './humanizar-saida-whatsapp.js';
+import { avaliarCortesiaTemporal } from './regras/cortesia-retomada-conversa.js';
+import {
+  acompanhamentoVerificado,
+  agendaDaPergunta,
+  descreverReconexao,
+  respostaCompativelComFerramentas
+} from './regras/validar-fala-com-evidencias.js';
+import {
+  descreverCertificado,
+  descreverEstadoSemAcao,
+  descreverPeriodoRegistrado,
+  descreverRevisaoRegistro,
+  explicarResultadoVinculo,
+  falaEnvioRegistro,
+  profissionalComVinculoConfirmado,
+  type DecisaoPeriodo,
+  type OrientacaoCertificado
+} from './regras/relatar-transicoes-piloto.js';
+
+export { acompanhamentoVerificado, respostaCompativelComFerramentas };
 
 export interface ProfissionalAgente { id: string; nome: string }
 export interface EstadoFonte { salvo: boolean; conectada: boolean; indisponivel?: boolean;
@@ -29,15 +56,19 @@ export interface EntradaAgente {
   semConta?: boolean;
   painelUrl?: string;
   contexto?: readonly string[];
+  memoriaLongoPrazo?: ContextoMemoriaAgente['resumosLongoPrazo'];
+  /** Blocos de memória núcleo (Letta): perfil do médico, estado vivo do banco e combinados. */
+  memoriaNucleo?: MemoriaNucleoPrompt;
   estadoConversa?: EstadoConversa;
   /** Estado consultado em banco, sem token/URL/ID; aceite nao e entrega. */
   verificacaoAgendaPendente?:boolean;
   situacaoUltimoLink?: {agenda:AgendaEscolhida;estado:string};
   trabalhos?: SituacaoTrabalhoNoto[];
+  /** Resultado já processado quando o médico encaminha um comprovante (imagem/PDF) neste turno. */
+  comprovanteRecebidoNoTurno?: Record<string, unknown>;
+  /** Timestamp ISO da última mensagem trocada na conversa para cálculo de cortesia pós-hiato. */
+  ultimaInteracaoIso?: string | null;
 }
-type OrientacaoCertificado = {nome:string;ok:true;certificadoValido:boolean;url?:string}|
-  {nome:string;ok:false;motivo:'IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA'|'PRONTIDAO_INDISPONIVEL'|'ORIGEM_NAO_CONFIAVEL'};
-type DecisaoPeriodo = {ok:true;nome:string;inicio:string;conferencia?:string}|{ok:false;motivo:string;rejeicao?:DiagnosticoAgente['rejeicaoPeriodo']};
 
 type ResultadoContinuidade={
   fatos:{vinculo:'confirmado';crm:'pendente'|'adiado'|'confirmado';crmValor:string|null;periodo:'pendente'|'registrado';inicioPeriodo:string|null;emitiuNota:false;consultouNotas:boolean};
@@ -102,6 +133,8 @@ export interface DependenciasAgente {
   registrarFerramenta?: (evento: EventoFerramenta) => void;
   /** Evidência de ferramenta real, privada ao turno; nunca exposta no diagnóstico. */
   aoComprovante?: (comprovante: ComprovanteTarefa) => void;
+  /** Ferramentas do onboarding autônomo via cofre (qualquer agenda, múltiplos médicos e A1 individual). */
+  onboardingAutonomo?: DependenciasOnboardingAutonomo;
 }
 
 function painelSeguro(origem?: string): string {
@@ -139,11 +172,6 @@ function exigeDecisaoVinculo(entrada:EntradaAgente,deps:DependenciasAgente):bool
     Array.isArray(fonte.nomes)&&fonte.nomes.length>0);
 }
 
-function profissionalComVinculoConfirmado(entrada:EntradaAgente){
-  if(entrada.semConta||entrada.estadoConversa?.faseAgenda!=='VINCULO_CONFIRMADO')return undefined;
-  return entrada.profissionais.find(p=>p.id===entrada.estadoConversa?.profissionalConfirmadoId&&nomeProfissionalValido(p.nome));
-}
-
 function exigeRegistroPeriodo(entrada:EntradaAgente,deps:DependenciasAgente):boolean{
   const e=entrada.estadoConversa;
   const medico=entrada.profissionais.find(p=>p.id===e?.profissionalConfirmadoId);
@@ -162,15 +190,6 @@ function exigeRevisaoRegistro(entrada:EntradaAgente,deps:DependenciasAgente):boo
     (deps.aprovarRegistroProfissional||deps.solicitarLinkRegistro)&&id&&
     entrada.profissionais.some(p=>p.id===id&&p.nome===pesquisa?.nome)&&
     pesquisa?.estado==='aguardando_confirmacao'&&!pesquisa.confirmacaoAdiada);
-}
-
-/** Cria ferramentas somente de leitura para a conta resolvida no webhook.
- * O modelo não recebe identificadores internos nem consegue escolhê-los. */
-function agendaDaPergunta(texto: string): AgendaEscolhida | undefined {
-  if (!texto.includes('?')) return;
-  const tribe = /\btribe(?:md)?\b/i.test(texto);
-  const amplimed = /\bamplimed\b/i.test(texto);
-  return tribe === amplimed ? undefined : tribe ? 'tribemd' : 'amplimed';
 }
 
 export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente) {
@@ -977,7 +996,7 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     execute:async(args)=>executarPeriodo(args)
   }));
 
-  if(profissionalComVinculoConfirmado(entrada))extras.push(tool({
+  if(profissionalComVinculoConfirmado(entrada) && !deps.onboardingAutonomo)extras.push(tool({
     name:'continuar_onboarding',
     description:'Interprete TODAS as intenções da mensagem atual para o médico já vinculado. Identidade e CRM são confirmações diferentes: «sim, é ela» não autoriza salvar CRM. CRM adiado pode ser aprovado quando o usuário retoma explicitamente; não cobre aprovação por iniciativa própria. Um pedido pode aprovar CRM E pedir certificado. Declare campos confirmados e números apenas quando presentes na fala, sem inventar. Período é escopo de conferência, nunca histórico de emissão. Use retomar_registro quando pedirem para validar ou continuar o CRM sem aprovar os valores. Use verificar_agenda para pedidos de conferir a agenda ou descobrir os profissionais da clínica, inclusive quando a fala retoma a tarefa de verificação pendente. Use conversar para outras dúvidas, sem executar ações.',
     parameters:z.object({
@@ -1097,11 +1116,15 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
     }
   }));
 
+  if (deps.onboardingAutonomo) {
+    extras.push(...criarFerramentasOnboardingAutonomo(deps.onboardingAutonomo, registrar, entrada.texto));
+  }
+
   return new Agent<unknown,typeof falaContinuidadeSchema|'text'>({
     name: 'Noto Assistente',
     model: deps.modeloTeste ?? deps.modeloNome ?? 'gpt-4o-mini',
     instructions: INSTRUCOES_NOTO,
-    outputType:profissionalComVinculoConfirmado(entrada)?falaContinuidadeSchema:'text',
+    outputType:profissionalComVinculoConfirmado(entrada) && !deps.onboardingAutonomo ? falaContinuidadeSchema : 'text',
     modelSettings:{
       maxTokens:1024,
       // O agente escolhe as ferramentas; chamadas sequenciais preservam a ordem
@@ -1116,7 +1139,16 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
         toolChoice:'revisar_registro_profissional'
       } : {})
     },
-    tools: [consultarConta, consultarAgendas, orientarConexao, ...extras],
+    tools: [
+      ...(deps.onboardingAutonomo?.consultarEstadoConta && deps.onboardingAutonomo?.enviarLinkAgendaQualquer
+        ? []
+        : [
+            consultarConta,
+            consultarAgendas,
+            ...(deps.onboardingAutonomo?.enviarLinkAgendaQualquer ? [] : [orientarConexao])
+          ]),
+      ...extras
+    ],
     // Vincular é um marco transacional: o resultado da ferramenta já é
     // narrado com base na evidência. Evita segunda inferência cara/lenta,
     // que estava abortando o turno de confirmação após 20 segundos.
@@ -1132,234 +1164,6 @@ export function criarAgenteNoto(entrada: EntradaAgente, deps: DependenciasAgente
       :{isFinalOutput:false,isInterrupted:undefined};
     }
   });
-}
-
-/**
- * Verifica afirmações concretas de ações/estados, não palavras isoladas.
- * O agent.md guia comunicação/decisão; permissões e capacidades são limites em código.
- * Cada oração é avaliada por conta própria: um "não" em outra oração NÃO
- * autoriza uma afirmação indevida (inclusive após "mas", ponto ou vírgula).
- */
-export function respostaCompativelComFerramentas(resposta: string, eventos: readonly EventoFerramenta[]): boolean {
-  const normalizada = resposta.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const oracoes = normalizada.split(/[.!?;\n]+|\b(?:mas|porem|contudo|entretanto|todavia|so que)\b/).filter(Boolean);
-  const incerta = (prefixo: string) =>
-    /\b(?:nao sei se|nao posso (?:confirmar|afirmar) se|nao consegui verificar se|nao tenho como confirmar se|nao tenho evidencia de que)(?:\s+(?:a|o|uma|um|minha|sua))?\s*$/.test(prefixo);
-  const negada = (prefixo: string) =>
-    /\b(?:nao|nunca|jamais)\s*$/.test(prefixo) || incerta(prefixo);
-  const naoConfigurada = eventos.some(e => e.codigo === 'INTEGRACAO_NAO_CONFIGURADA');
-  // Não converter falta de infraestrutura em culpa da plataforma ou retentativa.
-  if (naoConfigurada && /(?:tentar (?:de novo|novamente|mais tarde|depois)|tente (?:de novo|novamente|mais tarde|depois)|instabilidade|instavel|fora do ar|falha (?:da|na|do) (?:tribemd|tribe|amplimed)|(?:tribemd|tribe|amplimed) (?:falhou|esta fora|indisponivel))/.test(normalizada)) return false;
-  const estadosIndisponiveis = eventos.some(e =>
-    ['STATUS_INDISPONIVEL', 'STATUS_PARCIAL', 'FERRAMENTA_INDISPONIVEL', 'INTEGRACAO_NAO_CONFIGURADA'].includes(e.codigo));
-  const evidenciaConectada = eventos.some(e => e.codigo === 'STATUS_CONECTADO' || e.codigo === 'CONEXAO_EXISTENTE');
-  const evidenciaDesconectada = eventos.some(e => e.codigo === 'STATUS_NAO_CONECTADO');
-
-  for (const oracao of oracoes) {
-    // O modelo não tem ferramentas de emissão, cancelamento ou envio fiscal.
-    // Negações como "não emiti" e "a nota não foi emitida" não afirmam execução.
-    const acao = /\b(?:emiti|emitimos|cancelei|cancelamos|enviei|enviamos)\s+(?:(?:a|uma|o|um|as|os)\s+)?(?:notas?|documentos?|comprovantes?)\b/g;
-    for (const match of oracao.matchAll(acao)) {
-      const antes = oracao.slice(0, match.index).trimEnd();
-      if (!negada(antes)) return false;
-    }
-
-    // Formas passivas: "o documento foi enviado" vs. "não foi enviado".
-    const passivo = /\b(?:notas?|documentos?|comprovantes?)\s+(?:(?:ja|ainda|nao|nunca|jamais)\s+)*(?:foi|foram|esta|estao)\s+(?:(?:nao|nunca|jamais)\s+)?(?:emitid[ao]s?|cancelad[ao]s?|enviad[ao]s?)\b/g;
-    for (const match of oracao.matchAll(passivo)) {
-      const antes = oracao.slice(0, match.index).trimEnd();
-      if (!/\b(?:nao|nunca|jamais)\b/.test(match[0]) && !incerta(antes)) return false;
-    }
-
-    // Confirmações de ações do onboarding só podem aparecer após a
-    // ferramenta correspondente. Uma negação restrita à mesma oração passa.
-    const verificarAcao = (expressao: RegExp, codigo: CodigoFerramenta): boolean => {
-      for (const match of oracao.matchAll(expressao)) {
-        const antes = oracao.slice(0, match.index).trimEnd();
-        if (!negada(antes) && !eventos.some(e => e.codigo === codigo)) return false;
-      }
-      return true;
-    };
-    // Sem DELIVERY_ACK/READ na mesma mensagem, nao afirmar "enviei/recebeu".
-    if (/\b(?:enviei|mandei|enviamos|mandamos)\s+(?:(?:o|um)\s+)?link\b|\b(?:voce|tu)\s+(?:ja\s+)?(?:recebeu|recebeste)\s+(?:(?:o|um)\s+)?link\b/.test(oracao)) {
-      const match=oracao.match(/\b(?:enviei|mandei|enviamos|mandamos|recebeu|recebeste)\b/);
-      if (!negada(oracao.slice(0,match?.index??0).trimEnd())) return false;
-    }
-    if (/\b(?:o|esse|meu|seu)\s+link\b[^.!?;\n]{0,65}\b(?:foi|esta|chegou)\s+(?:ja\s+)?(?:entregue|recebido)\b|\b(?:whatsapp|aparelho)\s+(?:ja\s+)?(?:recebeu|confirmou a entrega)\s+(?:(?:o|do|um)\s+)?link\b/.test(oracao)
-        && !eventos.some(e=>e.codigo==='LINK_ENTREGUE'||e.codigo==='LINK_LIDO')) return false;
-    if (!verificarAcao(/\b(?:registrei|atualizei|salvei)\s+(?:(?:o|um|os)\s+)?(?:crm|rqe|nome completo|dados profissionais)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
-    if (!verificarAcao(/\b(?:crm|rqe|dados profissionais)\s+(?:(?:ja|esta|foi)\s+)*(?:registrad[oa]s?|atualizad[oa]s?|salv[oa]s?)\b/g, 'DADOS_PROFISSIONAIS_SALVOS')) return false;
-    if (!verificarAcao(/\b(?:foi adicionad[oa]|foram adicionad[oa]s|cadastrei|adicionei)\b[^.!?;\n]{0,65}\b(?:conta|medic[oa]s?|profissionais)\b/g, 'PROFISSIONAIS_CONFIRMADOS')) return false;
-    if (/\b(?:encontrei|identifiquei|localizei|achei|ha|tem)\b[^.!?;\n]{0,70}\b(?:profissionais|medic[oa]s)\b[^.!?;\n]{0,60}\b(?:agenda|clinica)\b/.test(oracao)
-      && !eventos.some(e=>e.codigo==='PROFISSIONAIS_ENCONTRADOS'||e.codigo==='PROFISSIONAIS_NAO_IDENTIFICADOS')) return false;
-    if (!verificarAcao(/\bencontrei\b[^.!?;\n]{0,100}\bna agenda\b/g, 'PROFISSIONAIS_ENCONTRADOS')) return false;
-
-    // Conexão é um estado verificável; uma negativa continua sendo afirmação
-    // sobre o estado ("a agenda não está conectada"), salvo dúvida explícita.
-    const estado = /\b(?:agenda|tribemd|amplimed)\b[^.!?;\n]{0,100}?\b(?:desconectad[ao]s?|conectad[ao]s?|ativ[ao]s?)\b/g;
-    for (const match of oracao.matchAll(estado)) {
-      const antes = oracao.slice(0, match.index).trimEnd();
-      if (incerta(antes) || /\b(?:pode|podem|talvez|possivelmente)\b/.test(match[0])) continue;
-      if (estadosIndisponiveis) return false;
-      const desconectada = /\bdesconectad[ao]s?\b/.test(match[0]) ||
-        /\b(?:nao|nunca|jamais)\b[^,;.!?\n]{0,40}\b(?:conectad[ao]s?|ativ[ao]s?)\b/.test(match[0]);
-      if (desconectada ? !evidenciaDesconectada || evidenciaConectada : !evidenciaConectada) return false;
-    }
-  }
-  return true;
-}
-
-/**
- * O transportador e as ferramentas são a autoridade dos MARCOS de ação.
- * Para transições executadas neste turno, o modelo não narra o estado do
- * transporte: a resposta vem de evidência tipada, não de frases proibidas.
- * Fora dessas transições, preserva integralmente a conversa livre.
- */
-function descreverReconexao(eventos:readonly EventoFerramenta[]):string|null {
-  if(!eventos.some(e=>e.nome==='descobrir_profissionais_agenda'&&e.codigo==='CONEXAO_PENDENTE'))return null;
-  const link=eventos.some(e=>e.nome==='solicitar_link_seguro_agenda'&&e.codigo==='LINK_ACEITO_PARA_ENVIO');
-  return 'A conexão com a agenda caiu. '+(link?'Abra a página segura para reconectar.':'Precisamos reconectar pela página segura para conferir os profissionais.');
-}
-
-export function acompanhamentoVerificado(
-  entrada: EntradaAgente, eventos: readonly EventoFerramenta[]
-): string | null {
-  const tem=(codigo:CodigoFerramenta)=>eventos.some(e=>e.codigo===codigo);
-  const agenda=escolhaAgendaExplicita(entrada.texto)??agendaDaPergunta(entrada.texto)??entrada.estadoConversa?.agendaEscolhida??entrada.situacaoUltimoLink?.agenda;
-  const nomeAgenda=agenda==='tribemd'?'TribeMD':agenda==='amplimed'?'Amplimed':'agenda';
-  if(tem('LINK_ACEITO_PARA_ENVIO')) return 'Depois de preencher a página segura, não precisa me avisar. A verificação da agenda começa ali.';
-  if(tem('CONEXAO_EXISTENTE')) return [
-    `A agenda ${nomeAgenda} já está conectada.`,
-    'Antes de vincular qualquer médico, precisamos verificar os profissionais na fonte.',
-    'Nenhum profissional será adicionado sem sua confirmação.'
-  ].join(' ');
-  if(tem('LINK_ENTREGUE')||tem('LINK_LIDO')) return [
-    tem('LINK_LIDO')?'O WhatsApp registrou a leitura do link seguro.':'O WhatsApp confirmou a entrega do link seguro.',
-    'Isso não confirma o login na agenda.',
-    'A verificação dos médicos começa depois da conexão autenticada.'
-  ].join(' ');
-  if (agenda && tem('AGENDA_FORA_DO_FOCO') &&
-      eventos.every(e => e.codigo === 'AGENDA_FORA_DO_FOCO' || e.nome === 'consultar_contexto_conta')) {
-    return agendaDaPergunta(entrada.texto) && agenda !== entrada.estadoConversa?.agendaEscolhida
-      ? `Posso conferir a conexão da ${nomeAgenda} para continuar.`
-      : `A agenda escolhida é a ${nomeAgenda}. Posso conferir a conexão dela para continuar.`;
-  }
-  if (tem('AGENDA_RECUSADA')) return 'Qual agenda você quer conectar agora?';
-  // Histórico de link e fases são contexto. Somente fatos deste turno entram no relato.
-  return null;
-}
-
-function descreverRevisaoRegistro(r:Parameters<NonNullable<DependenciasAgente['aoRevisaoRegistro']>>[0],entrada:EntradaAgente,ferramentas:readonly EventoFerramenta[],resposta:string,certificado?:OrientacaoCertificado):string{
-      if(r.ok&&r.tipo==='adiamento'){
-        const contexto='Deixei a confirmação do CRM/RQE pendente para você conferir depois. '+r.nome+' continua vinculada à sua conta.';
-        const etapaConsultada=ferramentas.some(e=>['CERTIFICADO_EXISTENTE','CERTIFICADO_PENDENTE','PRONTIDAO_VERIFICADA'].includes(e.codigo));
-        const continuacao=etapaConsultada&&resposta&&respostaCompativelComFerramentas(resposta,ferramentas)
-          ?resposta:(certificado?descreverCertificado(certificado)+'\n':'')+'Desde quando você quer conferir os atendimentos de '+r.nome+'?';
-        return contexto+'\n'+continuacao;
-      }
-      if(!r.ok && r.motivo==='NAO_APROVADO')return 'Entendi, não salvei CRM nem RQE. Podemos revisar os dados quando quiser.';
-      if(!r.ok)return r.motivo==='PESQUISA_OU_VINCULO_AINDA_PENDENTE'
-        ?'Primeiro preciso concluir o vínculo e a pesquisa pública do profissional. Ainda não fiz validação de CRM/RQE.'
-        : ['FALHA_COMPROVADA','ENVIO_INCERTO','ACEITO_SEM_ENTREGA','ENTREGUE','LIDO',
-          'PEDIDO_JA_PROCESSADO','LINK_ENTREGUE','LIMITE_LINKS'].includes(r.motivo)
-          ? falaEnvioRegistro(r.motivo,'')
-          : 'Não salvei os dados: a confirmação ou a identificação do registro ainda não está completa.';
-      if(r.tipo==='correcao')return falaEnvioRegistro(r.motivo,r.nome)+' Não alterei CRM nem RQE.';
-      return 'Registrei os dados confirmados de '+r.nome+': CRM '+r.crm+
-        (r.rqe&&r.rqeConfirmado!==false?', RQE '+r.rqe:'')+'.'+
-        (certificado?'\n'+descreverCertificado(certificado,true):'');
-}
-
-function descreverEstadoSemAcao(entrada:EntradaAgente):string{
-  const confirmado=profissionalComVinculoConfirmado(entrada);
-      if(!confirmado)return 'Não consegui conferir o vínculo do profissional no estado atual. Antes de avançar, precisamos verificar esse vínculo na conta. A data informada não permite concluir nada sobre emissão de notas.';
-      const e=entrada.estadoConversa!;
-      const periodo=e.periodoConferencia?.profissionalId===confirmado.id?e.periodoConferencia:null;
-      const vinculo=confirmado.nome+' já está vinculada à sua conta.';
-      const pesquisa=e.pesquisasRegistro?.[confirmado.id];
-      const crm=pesquisa?.estado==='aguardando_confirmacao'&&pesquisa.confirmacaoAdiada
-        ?' A confirmação do CRM/RQE continua adiada.':'';
-      return vinculo+crm+' Ainda não consultei atendimentos ou notas neste turno.\n'+
-        (periodo?'O início do período solicitado é '+periodo.inicio.split('-').reverse().join('/')+
-          '.'
-          :'Qual é a data inicial do período que você quer conferir nos atendimentos?');
-}
-
-function descreverPeriodoRegistrado(p:Extract<DecisaoPeriodo,{ok:true}>,certificado?:OrientacaoCertificado):string{
-      const data=p.inicio.split('-').reverse().join('/');
-      return 'O período solicitado para conferir os atendimentos de '+p.nome+' começa em '+data+'. '+(p.conferencia??'Ainda não consultei atendimentos ou notas.')+
-        (certificado?'\n'+descreverCertificado(certificado):'');
-}
-
-function descreverCertificado(r:OrientacaoCertificado,dadosConfirmados=false):string{
-  if(dadosConfirmados){
-    if(!r.ok)return 'Ainda não consegui verificar o certificado de '+r.nome+'.';
-    if(r.certificadoValido)return 'O certificado de '+r.nome+' está válido.';
-    return 'Para cadastrar o certificado de '+r.nome+', abra a página segura. O A1 e a senha entram somente nela.';
-  }
-  if(!r.ok){
-    if(r.motivo==='IDENTIDADE_PROFISSIONAL_NAO_CONFIRMADA')return 'Preciso identificar o médico confirmado antes de orientar o certificado. Qual profissional você quer configurar?';
-    if(r.motivo==='PRONTIDAO_INDISPONIVEL')return 'Não consegui consultar a situação do certificado. Isso não comprova que a página esteja indisponível. O próximo passo é recuperar essa consulta e retomar o certificado; o vínculo e o CRM pendente ficam preservados.';
-    return 'O endereço da página segura precisa ser corrigido na configuração do Noto. O próximo passo é conferir a origem HTTPS e retomar o certificado por essa página. O vínculo e o CRM pendente ficam preservados; não envie o A1 ou a senha pela conversa.';
-  }
-  if(r.certificadoValido)return 'O certificado está válido para '+r.nome+'. Podemos seguir com as demais pendências do onboarding, mantendo o CRM pendente.';
-  return 'Para cadastrar o certificado de '+r.nome+', abra esta página autenticada. O A1 e a senha entram somente nela. O CRM pode continuar pendente.\n'+r.url;
-}
-
-/** Traduz apenas evidência da ferramenta, mesmo quando o Runner é interrompido.
- * Não declara vínculo executado se só houve decisão ou erro de dependência. */
-function explicarResultadoVinculo(
-  v:{ok:true;nome:string;registrado:boolean;pesquisa:'agendada'|'ja_existe'|'indisponivel'}|
-    {ok:false;motivo:string},
-  descoberta:EstadoConversa['descoberta']
-):string{
-  if(!v.ok && v.motivo==='ESCLARECIMENTO' && descoberta?.nomes.length===1)
-    return 'Você confirma vincular '+descoberta.nomes[0]+' à sua conta?';
-  if(!v.ok)return v.motivo==='CONEXAO_PENDENTE'||v.motivo==='STATUS_INDISPONIVEL'
-    ?'Ainda não confirmei o acesso necessário para vincular o profissional. Não consultei nem validei CRM ou RQE.'
-    :v.motivo==='VINCULO_JA_PROCESSADO_NO_TURNO'
-      ?'A solicitação de vínculo já foi processada neste turno. Não repeti o cadastro nem a pesquisa.'
-      :explicarVinculoNaoExecutado(v.motivo);
-  if(!v.registrado)return 'O cadastro aceitou o vínculo de '+v.nome+
-    ', mas ainda não confirmei a gravação da etapa na conversa. Vou conferir essa etapa antes de pesquisar CRM/RQE.';
-  const confirmacao='Vinculei '+v.nome+' à sua conta.';
-  if(v.pesquisa!=='indisponivel')return confirmacao;
-  return confirmacao+
-    ' A consulta pública de CRM/RQE não está disponível para iniciar agora; não vou inventar esses dados.';
-}
-
-/** Relato coerente com o resultado do Cofre e os ACKs, não com regex do modelo. */
-function falaEnvioRegistro(motivo:string|undefined,nome:string,anteriorInvalidado=false):string{
-  const alvo=nome?' de '+nome:'';
-  const troca=anteriorInvalidado?'Invalidei o link anterior para que apenas o novo possa ser usado. ':'';
-  switch(motivo){
-    case 'ACEITO_API':
-    case 'ACEITO_SEM_ENTREGA':
-      return troca+'Se o link seguro'+alvo+' apareceu na conversa, use a página para preencher os dados. Se não apareceu, posso substituir o link com a sua autorização.';
-    case 'ENVIO_INCERTO':
-      return troca+'O resultado do envio do link seguro'+alvo+' ficou incerto. Não sei se a mensagem chegou e não vou reenviá-la às cegas. Posso conferir o recibo; se você preferir, podemos invalidar o link anterior e pedir outro com sua autorização.';
-    case 'FALHA_COMPROVADA':
-      return troca+'O envio do link seguro'+alvo+' falhou de forma comprovada. Posso solicitar outro agora, com sua autorização, sem manter o link anterior utilizável.';
-    case 'ENTREGUE':
-      return 'O WhatsApp confirmou a entrega do link seguro'+alvo+'. Isso ainda não significa que o formulário foi preenchido.';
-    case 'LIDO':
-      return 'O WhatsApp confirmou a leitura da mensagem com o link seguro'+alvo+'. Ainda aguardo o preenchimento.';
-    case 'LINK_ENTREGUE':
-      return 'O link seguro'+alvo+' já teve a entrega confirmada. Não gerei outro; posso ajudar se a página não abriu.';
-    case 'PEDIDO_JA_PROCESSADO':
-      return 'Esse pedido de link seguro'+alvo+' já foi processado. Não reenviei nada. Posso verificar o estado atual.';
-    case 'SEM_LINK_ATIVO':
-      return 'Não existe um link seguro ativo'+alvo+'. Se você autorizar, posso solicitar um novo.';
-    case 'LIMITE_LINKS':
-      return 'O limite de criação de links seguros foi atingido. Não fiz outro envio; precisamos respeitar esse limite.';
-    case 'SEM_AUTORIZACAO':
-      return 'Não solicitei outro link. Preciso da sua autorização para realizar essa ação.';
-    case 'REVISAO_NAO_AUTORIZADA':
-    case 'REVISAO_NAO_DISPONIVEL':
-      return 'A revisão dos dados'+alvo+' ainda não está confirmada. Não gerei outro link nem alterei o cadastro.';
-    default:
-      return 'Ainda não tenho um estado verificável para o link seguro'+alvo+'. Não repeti o envio. Podemos verificar o que ficou pendente.';
-  }
 }
 
 export async function responderAgente(entrada: EntradaAgente, deps: DependenciasAgente): Promise<string> {
@@ -1426,7 +1230,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
   const linkRegistroTurno:{atual?:{ok:boolean;nome:string;motivo?:string;anteriorInvalidado?:boolean}}={};
   const linkConsultado: { atual?: { agenda: AgendaEscolhida; estado: {estado:string;comId:boolean}|null } } = {};
   const abort = new AbortController();
-  const relogio = setTimeout(() => abort.abort(), 20_000);
+  const relogio = setTimeout(() => abort.abort(), 40_000);
   try {
     const panoramaTurno: { resultado?: ResultadoPanoramaFiscal } = {};
     const conferenciaTurno: { resultado?: ResultadoConferencia } = {};
@@ -1462,9 +1266,37 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       traceIncludeSensitiveData: false,
       workflowName: 'Noto Assistente - Entrega A'
     });
+    const historicoDialogo: Array<ReturnType<typeof user> | ReturnType<typeof assistant>> = [];
+    const contextoLegado: string[] = [];
+    for (const item of (entrada.contexto ?? []).slice(-24)) {
+      if (item.startsWith('Médico: ')) historicoDialogo.push(user(item.slice(8).slice(0, 600)));
+      else if (item.startsWith('Noto: ')) historicoDialogo.push(assistant(item.slice(6).slice(0, 600)));
+      else contextoLegado.push(item.slice(0, 500));
+    }
+    const agoraRef = new Date();
+    const hojeIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(agoraRef);
+    const diaSemana = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long' }).format(agoraRef);
+    const cortesiaTemporal = avaliarCortesiaTemporal({
+      agora: agoraRef,
+      ultimaInteracaoIso: entrada.ultimaInteracaoIso,
+      nomeProfissional: entrada.profissionais[0]?.nome ?? null
+    });
     const resultado = await runner.run(agent, [
+      ...historicoDialogo,
       { role: 'user', content: JSON.stringify({
         mensagem: entrada.texto.slice(0, 1500),
+        referenciaTemporal: {
+          hoje: hojeIso,
+          mesAtual: hojeIso.slice(0, 7),
+          anoAtual: Number(hojeIso.slice(0, 4)),
+          diaSemana,
+          horarioLocal: cortesiaTemporal.horarioBr,
+          periodoDia: cortesiaTemporal.periodoDia,
+          saudacaoPeriodo: cortesiaTemporal.saudacao,
+          minutosSemFalar: cortesiaTemporal.minutosSemFalar,
+          retomadaAposHiatoLongo: cortesiaTemporal.hiatoLongo,
+          orientacaoCortesia: cortesiaTemporal.orientacaoCortesiaTurno
+        },
         missaoOnboarding:{
           objetivo:'preparar cada medico autorizado para emissao fiscal com dados verificados',
           continuidade:'retomar com base no estado persistido e nos resultados das ferramentas',
@@ -1472,7 +1304,10 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
           faseAgenda:entrada.estadoConversa?.faseAgenda??'A_VERIFICAR',
           profissionalConfirmado:profissionalComVinculoConfirmado(entrada)?.nome??null
         },
-        contextoAnterior: (entrada.contexto ?? []).slice(-3).map(s => s.slice(0, 500)),
+        contextoAnterior: contextoLegado,
+        ...(entrada.memoriaNucleo ? { memoriaNucleo: entrada.memoriaNucleo } : {}),
+        ...(entrada.memoriaLongoPrazo?.length ? { memoriaConversacionalLongoPrazo: entrada.memoriaLongoPrazo } : {}),
+        ...(entrada.comprovanteRecebidoNoTurno ? { comprovanteRecebidoNoTurno: entrada.comprovanteRecebidoNoTurno } : {}),
         // IDs de mensagens e referências de tarefas ficam no orquestrador,
         // nunca no contexto enviado ao modelo externo.
         estadoConversacionalVerificado: Object.fromEntries(
@@ -1545,7 +1380,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     // Sem roteador obrigatório, o agente também pode responder ou consultar
     // ferramentas de leitura sem chamar continuar_onboarding. O JSON do SDK
     // nunca pode chegar bruto ao WhatsApp nem inventar efeitos.
-    const confirmadoSemContinuidade=profissionalComVinculoConfirmado(entrada);
+    const confirmadoSemContinuidade = !deps.onboardingAutonomo ? profissionalComVinculoConfirmado(entrada) : undefined;
     if(confirmadoSemContinuidade&&!continuidadeTurno.atual&&resposta.startsWith('{')){
       try{
         const fala=falaContinuidadeSchema.parse(JSON.parse(resposta));
@@ -1601,7 +1436,7 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
     }
     if(revisaoTurno.atual){
       registrar('RESPOSTA',uso);
-      return descreverRevisaoRegistro(revisaoTurno.atual,entrada,ferramentas,profissionalComVinculoConfirmado(entrada)?'':resposta,certificadoTurno.atual);
+      return descreverRevisaoRegistro(revisaoTurno.atual,ferramentas,profissionalComVinculoConfirmado(entrada)?'':resposta,certificadoTurno.atual);
     }
     // Recibo deste turno, não lembrança de um link antigo.
     if (linkConsultado.atual) {
@@ -1638,7 +1473,18 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA',uso);
       return textos.join('\n');
     }
-    const relato=acompanhamentoVerificado(entrada,ferramentas);
+    const ferramentasLinkAutonomo = new Set([
+      'preparar_link_agenda_inteligente',
+      'enviar_link_cadastro_profissionais',
+      'enviar_link_certificado_profissional'
+    ]);
+    const usouApenasLinkAutonomoSemMarcador =
+      Boolean(deps.onboardingAutonomo) &&
+      ferramentas.some(e => ferramentasLinkAutonomo.has(e.nome) && e.codigo === 'LINK_ACEITO_PARA_ENVIO') &&
+      !ferramentas.some(e => e.nome === 'solicitar_link_seguro_agenda') &&
+      Boolean(resposta.trim()) &&
+      !resposta.includes('[[RESULTADO_ACAO]]');
+    const relato = usouApenasLinkAutonomoSemMarcador ? null : acompanhamentoVerificado(entrada, ferramentas);
     if(relato) {
       // A abertura natural é livre, mas o relato da ação provém do
       // estado comprovado. Saída fora do contrato usa só o relato seguro.
@@ -1661,14 +1507,25 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA_POR_ESTADO',uso);
       return descreverEstadoSemAcao(entrada);
     }
-    if(resposta && !respostaCompativelComFerramentas(resposta,ferramentas)) {
+    const estadoVivo = entrada.memoriaNucleo?.estado_vivo_consultorio ?? '';
+    const evidenciasEstadoVivo: EventoFerramenta[] = estadoVivo.includes('Agenda conectada:')
+      ? [{ nome: 'consultar_estado_onboarding_conta', codigo: 'STATUS_CONECTADO', duracaoMs: 0 }]
+      : estadoVivo.includes('Agenda ainda não conectada')
+        ? [{ nome: 'consultar_estado_onboarding_conta', codigo: 'STATUS_NAO_CONECTADO', duracaoMs: 0 }]
+        : [];
+    const eventosParaValidacao = evidenciasEstadoVivo.length
+      ? [...ferramentas, ...evidenciasEstadoVivo]
+      : ferramentas;
+    if(resposta && !respostaCompativelComFerramentas(resposta,eventosParaValidacao)) {
       registrar('RESPOSTA_BLOQUEADA',uso);
       return ferramentas.some(e=>e.codigo==='INTEGRACAO_NAO_CONFIGURADA')
         ? 'A integração ainda não está configurada neste ambiente. É uma pendência local do Noto. Sua senha só entra na página segura.'
         : 'Não consegui confirmar isso pelas verificações disponíveis. Vou preservar a etapa atual sem afirmar que a ação foi concluída.';
     }
-    registrar(resposta ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
-    return resposta ? resposta.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
+    const respostaLimpa = resposta.replace(/\[\[RESULTADO_ACAO\]\]/g, '').trim();
+    const respostaHumanizada = respostaLimpa ? humanizarSaidaWhatsApp(respostaLimpa) : '';
+    registrar(respostaHumanizada ? 'RESPOSTA' : 'SEM_RESPOSTA', uso);
+    return respostaHumanizada ? respostaHumanizada.slice(0, 1200) : 'Não consegui concluir essa verificação. Podemos continuar com a conexão da agenda?';
   } catch (erro) {
     const reconexao=descreverReconexao(ferramentas);
     if(reconexao){registrar('RESPOSTA');return reconexao;}
@@ -1691,11 +1548,11 @@ export async function responderAgente(entrada: EntradaAgente, deps: Dependencias
       registrar('RESPOSTA');
       return 'A leitura da '+fonte+' foi registrada. Vou continuar a conferência fora desta conversa e volto com os dados verificados.';
     }
-    if(profissionalComVinculoConfirmado(entrada)){
+    if(profissionalComVinculoConfirmado(entrada) && !deps.onboardingAutonomo){
       rejeicaoFala='RUNNER_INTERROMPIDO';
       contratoFala='INVALIDO';registrar('FALA_FORA_CONTRATO');
       if(periodoTurno.atual?.ok)return descreverPeriodoRegistrado(periodoTurno.atual,certificadoTurno.atual);
-      if(revisaoTurno.atual)return descreverRevisaoRegistro(revisaoTurno.atual,entrada,ferramentas,'',certificadoTurno.atual);
+      if(revisaoTurno.atual)return descreverRevisaoRegistro(revisaoTurno.atual,ferramentas,'',certificadoTurno.atual);
       if(certificadoTurno.atual)return descreverCertificado(certificadoTurno.atual);
       registrar('RESPOSTA_POR_ESTADO');
       return descreverEstadoSemAcao(entrada);

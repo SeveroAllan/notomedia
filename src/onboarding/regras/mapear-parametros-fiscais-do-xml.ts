@@ -77,9 +77,13 @@ export function mapearParametrosFiscaisDoXml(xmlObj: any): ParametrosFiscaisExtr
     throw new Error(`Não foi possível determinar a UF do prestador para o município IBGE: ${codMunicipioIbge}.`);
   }
 
-  const serieDps = String(infDps.serie || '00001').trim();
+  const serieBruta = String(infDps.serie || '00001').trim();
+  // Séries 50000-99999 são reservadas ao Portal Web/App Nacional da NFS-e;
+  // aplicativo próprio deve emitir na faixa 00001-49999 com sequência própria.
+  const serieReservadaPortal = /^\d{1,5}$/.test(serieBruta) && Number(serieBruta) > 49999;
+  const serieDps = serieReservadaPortal ? '00001' : serieBruta;
   const nDpsNum = Number(infDps.nDPS || infNfse.nNFSe || infNfse.nDFSe || 0);
-  const proximoNumeroSequencialSugerido = nDpsNum > 0 ? nDpsNum + 1 : 1;
+  const proximoNumeroSequencialSugerido = serieReservadaPortal ? 1 : (nDpsNum > 0 ? nDpsNum + 1 : 1);
 
   const tpAmb = String(infDps.tpAmb || infNfse.ambGer || '1');
   const ambiente = tpAmb === '1' ? 'producao' : 'homologacao';

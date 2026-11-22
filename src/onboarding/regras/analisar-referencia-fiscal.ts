@@ -5,6 +5,7 @@
 import { extrairIbscbsReferencia } from './extrair-ibscbs-referencia.js';
 import { parametrosEmissaoSchema } from '../../fiscal/preparacao/parametros-emissao.js';
 import { extrairSugestaoEmissao } from './extrair-sugestao-emissao.js';
+import { extrairMetadadosDanfseDoXml } from '../../fiscal/danfse/extrair-metadados-danfse-xml.js';
 
 export function analisarReferenciaFiscal(xmlObj: any) {
   const nfse = xmlObj.NFSe?.infNFSe || xmlObj.compNFSe?.infNFSe || xmlObj.nfse?.infNFSe || {};
@@ -81,8 +82,10 @@ export function analisarReferenciaFiscal(xmlObj: any) {
   const cServ = dps.serv?.cServ || {};
   const servico = { ctribNac: String(cServ.cTribNac || '').padStart(6, '0'),
     ctribMun: cServ.cTribMun ? String(cServ.cTribMun).padStart(3, '0') : null, cnbs: cServ.cNBS ? String(cServ.cNBS) : null };
+  const metadadosDanfse = extrairMetadadosDanfseDoXml(xmlObj);
   return { versao: 2 as const, servico, numero: String(nfse.nNFSe || nfse.nDFSe || ''),
     emitidaEm: String(dps.dhEmi || ''), competencia: String(dps.dCompet || ''),
     layout: String(xmlObj.NFSe?.['@_versao'] || nfse.DPS?.['@_versao'] || ''),
-    ibscbsPresente: ibscbs.presente, parametrosSugeridos: extrairSugestaoEmissao(xmlObj), pendencias };
+    ibscbsPresente: ibscbs.presente, parametrosSugeridos: extrairSugestaoEmissao(xmlObj),
+    ...(metadadosDanfse ? { metadadosDanfse } : {}), pendencias };
 }

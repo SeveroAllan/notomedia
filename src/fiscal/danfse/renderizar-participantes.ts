@@ -46,14 +46,28 @@ export function renderizarPrestador(ctx: ContextoRenderizacaoDanfse, prestador: 
   y -= rowH;
 
   // Linha 4: Simples Nacional | Regime de Apuração
-  const optSimples = prestador.simplesNacional
-    ? 'Optante - Microempreendedor Individual (MEI)'
-    : 'Não Optante';
+  const optSimples = descreverOpcaoSimples(prestador);
+  const regApuracao = descreverRegimeApuracaoSn(prestador);
   desenharCelula(ctx, ctx.marginX, y, 270, rowH, 'Simples Nacional na Data de Competência', optSimples);
-  desenharCelula(ctx, ctx.marginX + 270, y, ctx.contentWidth - 270, rowH, 'Regime de Apuração Tributária pelo SN', '-');
+  desenharCelula(ctx, ctx.marginX + 270, y, ctx.contentWidth - 270, rowH, 'Regime de Apuração Tributária pelo SN', regApuracao);
   y -= rowH;
 
   ctx.currentY = y;
+}
+
+function descreverOpcaoSimples(prestador: DanfsePrestador): string {
+  if (prestador.opcaoSimplesNacional === 'nao_optante') return 'Não Optante';
+  if (prestador.opcaoSimplesNacional === 'mei') return 'Optante - Microempreendedor Individual (MEI)';
+  if (prestador.opcaoSimplesNacional === 'me_epp') return 'Optante - Microempresa ou Empresa de Pequeno Porte (ME/EPP)';
+  return prestador.simplesNacional ? 'Optante - Simples Nacional' : 'Não Optante';
+}
+
+function descreverRegimeApuracaoSn(prestador: DanfsePrestador): string {
+  if (prestador.opcaoSimplesNacional !== 'me_epp') return '-';
+  if (prestador.regimeApuracaoSn === 'regime_1') return 'Regime de apuração dos tributos federais e municipal pelo SN';
+  if (prestador.regimeApuracaoSn === 'regime_2') return 'Regime de apuração dos tributos federais pelo SN e ISSQN por fora';
+  if (prestador.regimeApuracaoSn === 'regime_3') return 'Regime de apuração dos tributos federais e municipal fora do SN';
+  return '-';
 }
 
 export function renderizarTomador(

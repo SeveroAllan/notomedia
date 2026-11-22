@@ -5,6 +5,7 @@ import type { BrowserContext } from 'playwright-core';
 export type EstadoNavegador = Awaited<ReturnType<BrowserContext['storageState']>>;
 export interface PerfilTribemd {
  email?:string;senha?:string;estado?:EstadoNavegador;
+ urlPortal?:string;nomeAgenda?:string;provedor?:string;
  cofre?:{ativo:boolean;estado:'salvo'|'conectado'|'desconectado'|'atencao';consentimentoEm:string;consentimentoVersao?:string;atualizadoEm:string;verificadoEm?:string;codigo?:string};
 }
 // Único conteúdo persistido: envelope autenticado. Nenhum perfil Chromium em disco.

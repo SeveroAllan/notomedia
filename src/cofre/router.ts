@@ -1,5 +1,14 @@
 import { LinksCofre, type ConclusaoAgenda, type TextoLinkAgendaEnviado } from './links.js';
 import { criarRouterLinksCofre } from './links-router.js';
+import { CofreAgendaGenerico } from './generico-cofre.js';
+import {
+  LinksOnboardingService,
+  type LinksOnboardingDeps,
+  type MedicoCadastradoLink
+} from './links-onboarding-service.js';
+import { verificarLoginPortalGenerico } from '../desenvolvedor/portal-generico-navegador.js';
+import { criarPlanejadorNavegacao } from '../desenvolvedor/navegador-planejador.js';
+import type { AgendaSuportada } from '../agenda/agendas-suportadas.js';
 import express, { type Request, type Response } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -55,13 +64,20 @@ export function criarCofreContas(deps: {
     enviarCofre?: (medicoId: string, texto: string, contatoTelefone?:string) => Promise<'simulado' | 'enviado' | 'erro'>;
     enviarUrlComRecibo?: (entrada: {referenciaCofre:string; url:string; linkId:string; telefone:string}) =>
         Promise<'enviado' | 'erro' | 'incerto'>;
+    enviarWhatsappOnboarding?: (telefone: string, texto: string) => Promise<boolean>;
+    processarCertificadoLink?: LinksOnboardingDeps['processarCertificado'];
+    processarXmlLink?: LinksOnboardingDeps['processarXml'];
+    aoConcluirAgendaGenerica?: (contaId: string, evento: { provedor: AgendaSuportada; nomeAgenda: string; conectado: boolean; telefone: string; motivoErro?: string }) => Promise<void>;
+    aoCadastrarProfissionaisLink?: (evento: { contaId: string; medicos: MedicoCadastradoLink[]; telefone: string }) => Promise<void>;
+    aoSalvarCertificadoLink?: LinksOnboardingDeps['aoSalvarCertificado'];
+    aoSalvarXmlLink?: LinksOnboardingDeps['aoSalvarXml'];
 }) {
     const env = deps.env ?? process.env, app = express();
     const homologacao = env['NOTO_PILOTO_RESTRITO'] === 'true';
     const cofreAutorizado = !homologacao || validarCofreHomologacao(env);
     app.disable('x-powered-by');
     app.set('trust proxy', 1);
-    let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, links: LinksCofre | undefined;
+    let origem = '', cofre: CofreTribemd | undefined, cofreAmplimed: CofreAmplimed | undefined, cofreGenerico: CofreAgendaGenerico | undefined, links: LinksCofre | undefined, linksOnboarding: LinksOnboardingService | undefined;
     // URL pública é requisito apenas dos links/páginas do Cofre. Status local
     // não deve depender de DNS, proxy, TLS ou exposição do app à internet.
     try {
@@ -89,6 +105,50 @@ export function criarCofreContas(deps: {
                 }
                 return dir2fa ? pedirCodigo2faPorArquivo(dir2fa, id) : null;
             } });
+        const planejadorGenerico = criarPlanejadorNavegacao({});
+        cofreGenerico = new CofreAgendaGenerico({
+            diretorio: raiz,
+            chave: env.COFRE_CHAVE || env.TRIBEMD_TESTE_CHAVE || '',
+            verificar: entrada => verificarLoginPortalGenerico({
+                executavel: chromiumAmplimed,
+                provedor: entrada.provedor,
+                urlPortal: entrada.urlPortal,
+                email: entrada.email,
+                senha: entrada.senha,
+                estado: entrada.estado,
+                planejar: planejadorGenerico,
+                aoSalvarEstado: entrada.aoSalvarEstado
+            }),
+            aoConcluir: async (id, conectado, info) => {
+                const contaId = contaDoCofreId(id);
+                if (!contaId || !deps.aoConcluirAgendaGenerica) return;
+                const telRes = await deps.pool.query(
+                    `select destino_telefone from public.cofre_links where conta_id = $1 and agenda = $2 order by criado_em desc limit 1`,
+                    [contaId, info.provedor]
+                ).catch(() => ({ rows: [] as any[] }));
+                const statusAtual = await cofreGenerico?.status(id).catch(() => null);
+                await deps.aoConcluirAgendaGenerica(contaId, {
+                    provedor: info.provedor,
+                    nomeAgenda: info.nomeAgenda,
+                    conectado,
+                    telefone: String(telRes.rows[0]?.destino_telefone ?? ''),
+                    motivoErro: statusAtual?.codigo ?? undefined
+                });
+            }
+        });
+        if (origem && deps.enviarWhatsappOnboarding) {
+            linksOnboarding = new LinksOnboardingService({
+                pool: deps.pool,
+                origem,
+                cofreGenerico,
+                enviarWhatsapp: deps.enviarWhatsappOnboarding,
+                processarCertificado: deps.processarCertificadoLink,
+                processarXml: deps.processarXmlLink,
+                aoCadastrarProfissionais: deps.aoCadastrarProfissionaisLink,
+                aoSalvarCertificado: deps.aoSalvarCertificadoLink,
+                aoSalvarXml: deps.aoSalvarXmlLink
+            });
+        }
         if (origem && deps.enviarCofre) links = new LinksCofre({
             pool: deps.pool, origem, cofre, cofres: { amplimed: cofreAmplimed },
             registrarTextoEnviado: deps.registrarTextoLink, enviar: deps.enviarCofre,
@@ -213,19 +273,25 @@ export function criarCofreContas(deps: {
         } catch { /* Retomar a referência médica antiga sem atribuir consultas. */ }
         return resolverReferenciaAgendaConta(deps.pool,id,agenda).catch(()=>id);
     };
-    return { app, links, configuracaoOk: !!cofre && !!origem && !!links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
+    return { app, links, cofreGenerico, linksOnboarding, configuracaoOk: !!cofre && !!origem && !!links, detalheAoVivo: async (medicoId: string, atendimentoId: string) => {
         if (!cofre) throw new ErroCofre('COFRE_INDISPONIVEL');
         return cofre.detalheAoVivo(await referencia(medicoId,'tribemd'), atendimentoId);
     }, appLinks: criarRouterLinksCofre(links, origem, deps.obterWhatsappAssistente,
             env['NOTO_PILOTO_RESTRITO']==='true' && env['NOTO_AGENT_ATIVO']==='true' &&
-            env['NOTO_AGENT_ENVIO_ATIVO']==='true' && env['NOTO_AGENT_TRABALHOS_ATIVO']==='true'), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
+            env['NOTO_AGENT_ENVIO_ATIVO']==='true' && env['NOTO_AGENT_TRABALHOS_ATIVO']==='true',
+            linksOnboarding), fonteAgenda: { consultar: async (entrada: import('../agenda/fonte-agenda.js').EntradaFonteAgenda) => {
         if(!cofre)return { tipo: 'erro' as const, codigo: 'SEM_AGENDA_CONECTADA' as const };
         const ref=await referencia(entrada.medicoId,'tribemd');
         return cofre.fonteAgenda.consultar({...entrada,medicoId:ref,referenciaCofre:ref});
     } }, encerrar: async () => { await cofre?.encerrar(); },
-        solicitarLinkConta: (contaId:string,agenda:'tribemd'|'amplimed',telefone:string) =>
-            links ? links.solicitarLinkConta(contaId,agenda,telefone) :
-                Promise.resolve({ok:false,motivo:'INTEGRACAO_NAO_CONFIGURADA'}),
+        solicitarLinkConta: (
+            contaId: string,
+            agenda: 'tribemd' | 'amplimed',
+            telefone: string,
+            opcoes?: { apenasUrl?: boolean }
+        ) =>
+            links ? links.solicitarLinkConta(contaId, agenda, telefone, opcoes) :
+                Promise.resolve({ ok: false, motivo: 'INTEGRACAO_NAO_CONFIGURADA' }),
         statusAgendas: (medicoId: string) => consultarStatusAgendasInterno({
             medicoId,
             cofreTribemd: homologacao && (!origem || !links) ? undefined : cofre,
@@ -249,6 +315,16 @@ export function criarCofreContas(deps: {
         lerAgendaAmplimed: async (medicoId: string, desde: string, hoje: string, comDetalhes = false, codigoProfissional?: string) => {
             const ref=await referencia(medicoId,'amplimed');
             return cofreAmplimed ? cofreAmplimed.lerAgendaPeriodo(ref, desde, hoje, comDetalhes, codigoProfissional) : { ok: false as const, motivo: 'LEITURA_INDISPONIVEL' };
+        },
+        lerAgendaTribemdRapida: async (medicoId: string, janelaDias = 30, agora = new Date()) => {
+            if (!cofre) return { ok: false as const, motivo: 'SEM_AGENDA_CONECTADA' };
+            const ref = await referencia(medicoId, 'tribemd');
+            return cofre.lerAgendaRapida(ref, janelaDias, agora);
+        },
+        lerAgendaTribemdComDetalhes: async (medicoId: string, janelaDias = 30, agora = new Date()) => {
+            if (!cofre) return { ok: false as const, motivo: 'SEM_AGENDA_CONECTADA' };
+            const ref = await referencia(medicoId, 'tribemd');
+            return cofre.lerAgendaComDetalhes(ref, janelaDias, agora);
         },
         listarProfissionaisAmplimed: async (medicoId: string) => {
             const ref=await referencia(medicoId,'amplimed');

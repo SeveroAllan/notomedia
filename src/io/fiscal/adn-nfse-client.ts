@@ -48,7 +48,19 @@ export class AdnNfseClient {
     documentoTitular: string
   ): Promise<ResultadoConsultaAdn> {
     const titular = documentoTitular.replace(/\D/g, '');
-    const loteInicial = await this.consultarLote(0, pfxBuffer, senhaCertificado);
+    let cnpjConsulta: string | undefined;
+    let loteInicial: LoteAdn;
+    try {
+      loteInicial = await this.consultarLote(0, pfxBuffer, senhaCertificado);
+    } catch (erroInicial: any) {
+      // Alguns certificados e-CNPJ são rejeitados em TipoConsulta=InscricaoCertificado
+      // (HTTP 400 REJEICAO sem detalhes), mas respondem HTTP 200 ao informar cnpjConsulta.
+      const msg = String(erroInicial?.message ?? '');
+      const rejeicaoInscricao = /HTTP 400|REJEI/i.test(msg);
+      if (!rejeicaoInscricao || titular.length !== 14) throw erroInicial;
+      cnpjConsulta = titular;
+      loteInicial = await this.consultarLote(0, pfxBuffer, senhaCertificado, cnpjConsulta);
+    }
     const documentos = [...loteInicial.documentos];
     const limite = loteInicial.maxNsu;
     let cursor = loteInicial.ultimoNsu;
@@ -57,10 +69,10 @@ export class AdnNfseClient {
     let quantidadeRecebida = loteInicial.quantidadeRecebida;
     let documentosConsultados = quantidadeRecebida;
     while (quantidadeRecebida > 0 && (limite === null || cursor < limite)) {
-      if (consultas >= 100 || Date.now() - inicio >= 45000) {
+      if (consultas >= 150 || Date.now() - inicio >= 90000) {
         throw new Error('Busca incompleta: o histórico é extenso. Nenhuma referência foi substituída; tente novamente mais tarde.');
       }
-      const lote = await this.consultarLote(cursor, pfxBuffer, senhaCertificado);
+      const lote = await this.consultarLote(cursor, pfxBuffer, senhaCertificado, cnpjConsulta);
       consultas++;
       quantidadeRecebida = lote.quantidadeRecebida;
       documentosConsultados += quantidadeRecebida;
@@ -114,12 +126,11 @@ export class AdnNfseClient {
   private async consultarLote(
     ultimoNsu: number,
     pfxBuffer: Buffer,
-    senhaCertificado: string
+    senhaCertificado: string,
+    cnpjConsulta?: string
   ): Promise<LoteAdn> {
-    // Sem cnpjConsulta, o ADN usa diretamente o titular autenticado pelo A1.
-    // Esse parametro se destina a filiais da mesma raiz e pode causar rejeicao
-    // quando inferido a partir de um certificado que contenha uma cadeia completa.
-    const url = `${this.baseUrl.replace(/\/$/, '')}/DFe/${ultimoNsu}?lote=true`;
+    const query = cnpjConsulta ? `cnpjConsulta=${encodeURIComponent(cnpjConsulta)}&lote=true` : 'lote=true';
+    const url = `${this.baseUrl.replace(/\/$/, '')}/DFe/${ultimoNsu}?${query}`;
     const resposta = this.transmissorHttp
       ? await this.transmissorHttp(url, pfxBuffer, senhaCertificado)
       : await this.executarRequisicaoMtls(url, pfxBuffer, senhaCertificado);
@@ -212,7 +223,7 @@ export class AdnNfseClient {
   }
 
   private extrairErro(json: Record<string, any>): string {
-    const erros = json.Erros ?? json.erros ?? json.Mensagens ?? json.mensagens;
+    const erros = json.Erros ?? json.erros ?? json.Mensagens ?? json.mensagens ?? json.Alertas ?? json.alertas;
     if (Array.isArray(erros) && erros.length > 0) {
       const erro = erros[0];
       return String(erro.Descricao ?? erro.descricao ?? erro.Mensagem ?? erro.mensagem ?? erro);
@@ -232,7 +243,8 @@ export class AdnNfseClient {
         port: url.port || 443,
         path: url.pathname + url.search,
         method: 'GET',
-        headers: { Accept: 'application/json' },
+        headers: { Accept: 'application/json', Connection: 'close' },
+        agent: false,
         pfx,
         passphrase,
         timeout: 45000,

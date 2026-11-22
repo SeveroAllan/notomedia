@@ -180,7 +180,12 @@ export class LinksCofre {
     /** Novo vínculo: conta autenticada -> Cofre. Não requer nem cria medicos.
      * A FK de conta_id e a chave de envelope permanecem independentes de identidade clínica.
      */
-    async solicitarLinkConta(contaId: string, agenda: string, contatoTelefone: string) {
+    async solicitarLinkConta(
+      contaId: string,
+      agenda: string,
+      contatoTelefone: string,
+      opcoes?: { apenasUrl?: boolean }
+    ) {
         const cofreAgenda = this.cofreDe(agenda);
         if (!cofreAgenda) return { ok: false, motivo: 'AGENDA_NAO_SUPORTADA' };
         const chaveCofre = cofreIdDaConta(contaId);
@@ -231,7 +236,9 @@ export class LinksCofre {
         }
         try {
             const url = `${this.deps.origem}/c/${token}`;
-            const textos = [FALA_PEDIDO_CONEXAO_AGENDA,FALA_SEGURANCA_LINK_AGENDA,url];
+            const textos = opcoes?.apenasUrl
+              ? [url]
+              : [FALA_PEDIDO_CONEXAO_AGENDA, FALA_SEGURANCA_LINK_AGENDA, url];
             for (const texto of textos) {
                 const envio = texto === url && this.deps.enviarUrlComRecibo
                     ? await this.deps.enviarUrlComRecibo({referenciaCofre:chaveCofre,url,linkId:link!.id,telefone:contatoTelefone})
