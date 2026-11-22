@@ -8,7 +8,7 @@ const ANA='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
 const estado:EstadoConversa={
   agendaEscolhida:'tribemd',faseAgenda:'CONFIRMACAO_PENDENTE',
   descoberta:{agenda:'tribemd',nomes:['Dra. Ana Souza']},
-  perguntaPendente:null
+  perguntaPendente:'confirmar_profissional'
 };
 const status=async()=>({
   tribemd:{salvo:true,conectada:true},

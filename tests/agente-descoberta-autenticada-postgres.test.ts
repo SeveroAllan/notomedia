@@ -79,6 +79,29 @@ testar('descoberta autenticada: caso da confirmação anunciada mas não persist
       await lerEstadoConversa(pool,CONTA))).toBe('VINCULO_PRESERVADO');
     expect((await lerEstadoConversa(pool,CONTA)).faseAgenda).toBe('VINCULO_CONFIRMADO');
 
+    const primeiroMedico=randomUUID();
+    const registro={nome,estado:'confirmada',candidatos:[]};
+    const preservar={profissionalConfirmadoId:primeiroMedico,
+      pesquisasRegistro:{[primeiroMedico]:registro},historicoTeste:{preservar:true}};
+    await pool.query('update public.noto_agent_conversas set estado=estado||$2::jsonb where conta_id=$1',
+      [CONTA,JSON.stringify(preservar)]);
+    const lerBruto=async()=>(await pool!.query(
+      'select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado;
+    const confirmado=await lerBruto();
+    expect(await persistirDescobertaComprovada(pool,CONTA,'tribemd',[nome])).toBe(false);
+    expect(await lerBruto()).toEqual(confirmado);
+    const segundo='Dr. Bruno Lima';
+    expect(await persistirDescobertaComprovada(pool,CONTA,'tribemd',[segundo])).toBe(true);
+    expect(await lerBruto()).toMatchObject({...preservar,faseAgenda:'CONFIRMACAO_PENDENTE',
+      descoberta:{agenda:'tribemd',nomes:[segundo]},perguntaPendente:'confirmar_profissional'});
+    const novo=await lerEstadoConversa(pool,CONTA);
+    expect(decidirVinculo(novo,{agenda:'tribemd',decisao:'confirmar',
+      nomes:[segundo],mensagem:'Vincula o Bruno Lima à conta'}))
+      .toEqual({ok:true,agenda:'tribemd',nomes:[segundo]});
+    expect(decidirVinculo(novo,{agenda:'tribemd',decisao:'confirmar',
+      nomes:[nome],mensagem:'Vincula a Ana Souza à conta'}))
+      .toMatchObject({ok:false,motivo:'NOME_NAO_COMPROVADO'});
+
     // A fila de outra conta e outro processo jamais reconstitui uma prova.
     await registrarJob(CONTA,'outra_instancia',{agenda:'tribemd',nomes:['Outra Medica']});
     await registrarJob(OUTRA,INSTANCIA,{agenda:'tribemd',nomes:['Outra Medica']});

@@ -1,3 +1,6 @@
+import { prepararEmissao } from '../src/fiscal/preparacao/preparar-emissao.js';
+import { SefinNacionalClient } from '../src/io/fiscal/sefin-nacional-client.js';
+import { gerarXmlDps } from '../src/io/fiscal/gerar-xml-dps.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 import { readFileSync } from 'node:fs';
@@ -20,17 +23,18 @@ const referencia = { versao: 2, hash: 'a'.repeat(64), pendencias: [] as string[]
 
 // Só a borda SQL é falsa: rota, confirmação e validador fiscal executam de verdade.
 function bancoFiscal() {
-  const estado = { referencia: structuredClone(referencia), politica: null as any, confirmado: false };
+  const estado = { referencia: structuredClone(referencia), politica: null as any, confirmado: false, ambiente:'homologacao' };
   const comandos: string[] = [];
   const query = async (sql: string, valores: any[] = []) => {
     const texto = sql.replace(/\s+/g, ' ').trim(); comandos.push(texto);
     if (['begin', 'commit', 'rollback'].includes(texto)) return { rows: [], rowCount: 0 };
     if (texto === 'select id from medicos where id = $1 limit 1') return { rows: [{ id: 'medico-1' }] };
+    if (texto.startsWith('select id from medicos where id=$1 and conta_id=$2')) return {rows:valores[1]==='conta-teste'?[{id:'medico-1'}]:[]};
     if (texto.startsWith('select cod_municipio_ibge')) return { rows: [{ cod_municipio_ibge: '4205407', serie_dps: '00007', xml_nota_referencia_url: 'xml-ficticio', dados_reforma_tributaria: estado.referencia }] };
     if (texto.startsWith('select id, ctrib_nac')) return { rows: [{ id: 'servico-1', ctrib_nac: '040101', ctrib_mun: null, cnbs: null, parametros_emissao: estado.politica }] };
-    if (texto.startsWith('update medico_perfil_fiscal set confirmado_pelo_medico')) { estado.confirmado = true; return { rows: [], rowCount: 1 }; }
+    if (texto.startsWith('update medico_perfil_fiscal set confirmado_pelo_medico')) { estado.confirmado = true; estado.ambiente=valores[7]; return { rows: [], rowCount: 1 }; }
     if (texto.startsWith('update medico_servicos_fiscais set parametros_emissao')) { estado.politica = JSON.parse(valores[2]); return { rows: [], rowCount: 1 }; }
-    if (texto.startsWith('insert into auditoria')) return { rows: [], rowCount: 1 };
+    if (texto.startsWith('insert into public.auditoria')) return { rows: [], rowCount: 1 };
     if (texto.includes('as cert_ativos')) return { rows: [{ medico_id: 'medico-1', medico_nome: 'Medica Ficticia',
       crm: '12345/SC', rqe: null, confirmado_pelo_medico: estado.confirmado, dados_reforma_tributaria: estado.referencia,
       parametros_emissao: estado.politica, extraido_automaticamente: true, cert_ativos: '1', whats_conectados: '1',
@@ -41,12 +45,13 @@ function bancoFiscal() {
 }
 let banco: ReturnType<typeof bancoFiscal>;
 const anterior = config.preparacaoFiscalAtiva;
+const ambienteAnterior=config.ambienteEmissaoWhatsApp;
 beforeEach(() => {
   banco = bancoFiscal(); config.preparacaoFiscalAtiva = false;
   borda.query.mockImplementation(banco.pool.query.bind(banco.pool));
   borda.connect.mockImplementation(banco.pool.connect.bind(banco.pool));
 });
-afterEach(() => { config.preparacaoFiscalAtiva = anterior; vi.restoreAllMocks(); });
+afterEach(() => { config.preparacaoFiscalAtiva = anterior; config.ambienteEmissaoWhatsApp=ambienteAnterior; vi.restoreAllMocks(); });
 async function confirmar(body: Record<string, unknown>) {
   const app = criarAppExpress();
   const handler = (app as any).router.stack.find((c: any) => c.route?.path === '/api/onboarding/confirmar-fiscal').route.stack[0].handle;
@@ -68,6 +73,39 @@ describe('confirmação explícita sem ativar emissão automática', () => {
     expect(banco.comandos.at(-1)).toBe('commit');
     expect((await consultarStatusOnboarding(banco.pool, 'medico-1')).passos.passo2FiscalConfirmado).toBe(true);
     expect(config.preparacaoFiscalAtiva).toBe(false);
+  });
+  it.each([false,true])('referência de produção preservada com configuração de piloto=%s',async piloto=>{
+    banco.estado.referencia.parametrosSugeridos.ambiente='producao';
+    const original=structuredClone(banco.estado.referencia);
+    config.ambienteEmissaoWhatsApp=piloto
+      ? {contaId:'conta-teste',medicoId:'medico-1',agendamentoId:'atendimento-teste',ambiente:'homologacao'} : undefined;
+    expect(await confirmar({usarReferencia:true,referenciaHash:referencia.hash})).toMatchObject({status:200,data:{ok:true}});
+    expect(banco.estado.referencia).toEqual(original);
+    expect(banco.estado.politica.parametros.ambiente).toBe('producao');
+    expect(banco.estado.ambiente).toBe(piloto?'homologacao':'producao');
+    const item={id:'solicitacao-teste',medicoId:'medico-1',pacienteId:'tomador-teste',ctribNac:'040101',
+      xdescServ:'Atendimento sintético',valorServicoCentavos:10000};
+    const evidencias={perfil:{...banco.estado.politica.perfil,confirmado:banco.estado.confirmado,referenciaFiscal:original},
+      servicos:[{id:'servico-1',ctribNac:'040101',cnbs:null,ctribMun:null,politica:banco.estado.politica}],
+      competenciaInformada:null,datasConsultas:[]};
+    const hoje=new Date().toLocaleDateString('sv-SE',{timeZone:'America/Sao_Paulo'});
+    const pronta=prepararEmissao(item,evidencias,hoje,config.ambienteEmissaoWhatsApp?.ambiente);
+    expect(pronta).toMatchObject({ok:true,parametros:{ambiente:piloto?'homologacao':'producao'}});
+    if (!piloto || !pronta.ok) return;
+    expect(prepararEmissao(item,evidencias,hoje)).toMatchObject({ok:false});
+    const ambiente=banco.estado.ambiente==='homologacao'?2:1;
+    const {xml}=gerarXmlDps({nDPS:'1',tomador:{CPF:'52998224725',xNome:'Tomador Sintético'},
+      xDescServ:item.xdescServ,vServ:100,cTribNac:'040101',cNBS:'',cIndOp:'',cClassTrib:'',
+      fiscal:{...pronta.parametros,competencia:pronta.competencia}},
+      {cnpj:'12345678000195',codMunicipio:'4205407',ambiente,serie:'00007',im:'12345',pTotTribSN:6,
+        regTrib:{opSimpNac:3,regApTribSN:1,regEspTrib:0}});
+    expect(xml).toContain('<tpAmb>2</tpAmb>');
+    const transporte=vi.fn(async(_url:string)=>({status:400,corpo:'{}'}));
+    await new SefinNacionalClient(transporte).transmitirDps({
+      ambiente,xmlAssinado:xml,pfxBuffer:Buffer.alloc(0),senhaCertificado:''
+    });
+    expect(transporte).toHaveBeenCalledOnce();
+    expect(transporte.mock.calls[0]?.[0]).toBe('https://sefin.producaorestrita.nfse.gov.br/SefinNacional/nfse');
   });
   it('permite editar sem pular o schema nem a correspondência da referência', async () => {
     const editados = { ...parametros, percentualTotTribSN: 7 };

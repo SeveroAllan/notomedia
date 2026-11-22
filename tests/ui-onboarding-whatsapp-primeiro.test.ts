@@ -116,6 +116,7 @@ describe('pareamento usa sessão autenticada do OTP', () => {
     const ctx = createContext({
       conexaoWhatsappEmAndamento: false,
       modoConexaoWhatsapp: 'codigo',
+      codigoPareamentoExibido: null,
       sessaoAtual: { tokenAcesso: 'sessao-validada' },
       document: { getElementById: el },
       fetch: async (url: string, opcoes?: any) => {
@@ -138,6 +139,7 @@ describe('pareamento usa sessão autenticada do OTP', () => {
   it('envia Bearer ao verificar conexão; sem interação fiscal', async () => {
     const chamadas: Array<{ url: string; opcoes?: any }> = [];
     const ctx = createContext({
+      codigoPareamentoExibido: null,
       sessaoAtual: { tokenAcesso: 'sessao-validada' },
       fetch: async (url: string, opcoes?: any) => {
         chamadas.push({ url, opcoes });
@@ -149,5 +151,33 @@ describe('pareamento usa sessão autenticada do OTP', () => {
     expect(chamadas).toHaveLength(1);
     expect(chamadas[0].url).toBe('/api/onboarding/whatsapp/status?medicoId=medico-de-teste');
     expect(chamadas[0].opcoes.headers.Authorization).toBe('Bearer sessao-validada');
+  });
+
+  it('avisa sobre rotação sem trocar caracteres até a consulta manual autenticada', async () => {
+    const elementos = new Map();
+    const el = (id: string) => {
+      if (!elementos.has(id)) elementos.set(id, { textContent: '', hidden: true, classList: { add() {}, remove() {} } });
+      return elementos.get(id);
+    };
+    const chamadas: Array<{url:string; opcoes:any}> = [];
+    const ctx = createContext({
+      conexaoWhatsappEmAndamento:false, codigoPareamentoExibido:null, modoConexaoWhatsapp:'codigo',
+      sessaoAtual:{tokenAcesso:'sessao-validada'}, document:{getElementById:el},
+      fetch:async (url:string,opcoes:any) => {
+        chamadas.push({url,opcoes});
+        return {ok:true,json:async()=>({ok:true,medicoId:'medico-de-teste',revisaoCodigo:'nova',
+          ...(url.endsWith('consultarCodigo=1')?{pairingCode:'NEWC0DE2'}:{})})};
+      }
+    });
+    runInContext(trecho('    async function verificarStatusWhatsapp(', '    function iniciarPollingConexao('),ctx);
+    runInContext("exibirConexaoWhatsapp({ok:true,medicoId:'medico-de-teste',pairingCode:'OLDC0DE1',revisaoCodigo:'antiga'})",ctx);
+    await runInContext("verificarStatusWhatsapp('medico-de-teste')",ctx);
+    expect(el('avisoCodigoPareamento').hidden).toBe(false);
+    expect(el('txtPairingCode').textContent).toBe('OLDC0DE1');
+    await runInContext("atualizarCodigoConexao('medico-de-teste')",ctx);
+    expect(chamadas[1]?.url).toBe('/api/onboarding/whatsapp/status?medicoId=medico-de-teste&consultarCodigo=1');
+    expect(chamadas[1]?.opcoes.headers.Authorization).toBe('Bearer sessao-validada');
+    expect(el('avisoCodigoPareamento').hidden).toBe(true);
+    expect(el('txtPairingCode').textContent).toBe('NEWC0DE2');
   });
 });

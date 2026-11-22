@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CofreAmplimed } from '../src/cofre/amplimed-cofre.js';
 import { dataDoCabecalhoAmplimed, diasAtrasAmplimed } from '../src/agenda/amplimed-leitor.js';
 
@@ -9,6 +9,20 @@ const chave = Buffer.alloc(32, 7).toString('base64');
 const id = '22222222-2222-4222-8222-222222222222';
 const ev = (h: string, cor: string, valor = 'R$ 180,00') => ({ texto: `${h} - 08:30\nPaciente Passado | Avaliação | Particular | ${valor} | 51990000009`, cor });
 const prof = 'Allan Severo (teste Noto)';
+
+it('persiste assinatura inativa como impedimento final e chama a conclusão sem refazer o login', async () => {
+  const verificar = vi.fn(async () => 'ASSINATURA_INATIVA' as const);
+  let concluir!: (conectado: boolean) => void;
+  const concluido = new Promise<boolean>(resolve => { concluir = resolve; });
+  const cofre = new CofreAmplimed({
+    diretorio: await mkdtemp(join(tmpdir(), 'ampl-')), chave, verificar,
+    aoConcluir: async (_id, conectado) => concluir(conectado)
+  });
+  await cofre.iniciar(id, { email: 'teste@example.invalid', senha: 'ficticia' });
+  await expect(concluido).resolves.toBe(false);
+  expect(verificar).toHaveBeenCalledOnce();
+  expect(await cofre.status(id)).toMatchObject({ salvo: true, ativo: false, estado: 'atencao', codigo: 'ASSINATURA_INATIVA' });
+});
 
 describe('cabeçalho e janela de dias', () => {
   it('lê a data do cabeçalho do Amplimed', () => {

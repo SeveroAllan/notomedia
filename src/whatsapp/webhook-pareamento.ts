@@ -15,12 +15,25 @@ function segredoConfere(recebido: string | undefined, esperado: string): boolean
   return timingSafeEqual(a, b);
 }
 
+export interface MensagemPacienteConsultorio {
+  instancia: string;
+  mensagemId: string;
+  telefoneRemetente: string;
+  tipoMidia: 'texto' | 'imagem' | 'documento' | 'audio';
+  texto: string;
+  mimetype?: string;
+  nomeArquivo?: string;
+}
+
 export function criarRouterWebhookPareamento(deps: {
   pool: Pick<pg.Pool, 'query'>;
   segredo: string;
   /** Consulta o estado REAL na Evolution, não confia no evento isoladamente. */
   confirmarConexao?: (instancia: string) => Promise<boolean>;
+  aoAtualizarCodigo?: (instancia: string, codigo: string) => void;
   aoConectar?: (instancia: string) => Promise<void>;
+  /** Escuta silenciosa de comprovantes (imagem/PDF) e respostas de CPF de casos abertos. */
+  aoReceberMensagemPaciente?: (msg: MensagemPacienteConsultorio) => Promise<void>;
 }) {
   const router = Router();
   router.post('/', async (req, res) => {
@@ -30,12 +43,66 @@ export function criarRouterWebhookPareamento(deps: {
       return;
     }
 
-    // Eventos de mensagens/contatos são reconhecidos, mas não processados.
-    if (String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.') !== 'connection.update') {
+    const evento = String(req.body?.event ?? '').toLowerCase().replace(/_/g, '.');
+    const instancia = req.body?.instance;
+    if (evento === 'qrcode.updated') {
+      const qr = req.body?.data?.qrcode;
+      if (typeof instancia === 'string' && /^medico_[a-f0-9]{12}$/i.test(instancia) &&
+          qr?.instance === instancia && typeof qr.pairingCode === 'string' &&
+          /^[A-Z0-9-]{8,12}$/i.test(qr.pairingCode)) {
+        deps.aoAtualizarCodigo?.(instancia, qr.pairingCode);
+      }
       res.sendStatus(204);
       return;
     }
-    const instancia = req.body?.instance;
+    if (evento === 'messages.upsert' && deps.aoReceberMensagemPaciente && typeof instancia === 'string' && instancia) {
+      const key = req.body?.data?.key;
+      const jidBruto = String(key?.remoteJid ?? '');
+      const jidAlt = String(key?.remoteJidAlt ?? key?.senderPn ?? '');
+      const ignorar = Boolean(key?.fromMe) || jidBruto.endsWith('@g.us') || jidBruto === 'status@broadcast';
+      const matchTel = !ignorar
+        ? (/^(\d{10,13})@s\.whatsapp\.net$/.exec(jidBruto)
+          ?? (jidBruto.endsWith('@lid') ? /^(\d{10,13})@s\.whatsapp\.net$/.exec(jidAlt) : null))
+        : null;
+      const msgBruta = (req.body?.data?.message ?? {}) as Record<string, any>;
+      if (matchTel?.[1] && key?.id) {
+        const tipoMidia = msgBruta['imageMessage'] ? 'imagem'
+          : msgBruta['documentMessage'] ? 'documento'
+          : msgBruta['audioMessage'] ? 'audio'
+          : 'texto';
+        const texto = String(
+          msgBruta['conversation']
+          || msgBruta['extendedTextMessage']?.['text']
+          || msgBruta['imageMessage']?.['caption']
+          || msgBruta['documentMessage']?.['caption']
+          || ''
+        ).slice(0, 1500);
+        const mimetype = String(
+          msgBruta['imageMessage']?.['mimetype']
+          || msgBruta['documentMessage']?.['mimetype']
+          || msgBruta['audioMessage']?.['mimetype']
+          || ''
+        ) || undefined;
+        const nomeArquivo = typeof msgBruta['documentMessage']?.['fileName'] === 'string'
+          ? msgBruta['documentMessage']['fileName']
+          : undefined;
+        void deps.aoReceberMensagemPaciente({
+          instancia,
+          mensagemId: String(key.id),
+          telefoneRemetente: matchTel[1],
+          tipoMidia,
+          texto,
+          mimetype,
+          nomeArquivo
+        }).catch(() => undefined);
+      }
+      res.sendStatus(204);
+      return;
+    }
+    if (evento !== 'connection.update') {
+      res.sendStatus(204);
+      return;
+    }
     const estado = req.body?.data?.state ?? req.body?.data?.instance?.state;
     if (typeof instancia !== 'string' || !instancia || (estado !== 'open' && estado !== 'close')) {
       res.sendStatus(204);

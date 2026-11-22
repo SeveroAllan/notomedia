@@ -103,6 +103,11 @@ testar('PostgreSQL descartável: vínculo contextual e fila OpenSerp já existen
       pesquisasRegistro:{[ANA]:{confirmacaoAdiada:true,estado:'aguardando_confirmacao'}}});
     expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-02')).toBe(false);
 
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-02','2026-10-20')).toBe(false);
+    expect(await registrarPeriodoConferencia(db as unknown as pg.Pool,CONTA,ANA,'2026-11-02','2026-11-01')).toBe(true);
+    expect((await db.query('select estado from public.noto_agent_conversas where conta_id=$1',[CONTA])).rows[0].estado.periodoConferencia)
+      .toEqual({profissionalId:ANA,inicio:'2026-11-02'});
+
     // Mesmo snapshot observado em homolog: vínculo e CRM adiado, pergunta perdida.
     for(const pergunta of [undefined,null]){
       const legado=structuredClone(depoisAdiamento);

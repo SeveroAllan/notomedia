@@ -19,7 +19,7 @@ export interface DependenciasTrabalhos {
   instancia:string;
   descobrir:(contaId:string,medicoId:string|null,agenda:AgendaEscolhida)=>
     Promise<{ok:boolean;nomes?:string[];motivo?:string}>;
-  conferir:(contaId:string,medicoId:string,agenda:AgendaEscolhida)=>Promise<ResultadoConferencia>;
+  conferir:(contaId:string,medicoId:string,agenda:AgendaEscolhida,inicioPeriodo?:string)=>Promise<ResultadoConferencia>;
   enviar:(telefone:string,texto:string)=>Promise<boolean>;
   relatar?:(codigo:string, duracaoMs:number, tipo:string)=>void;
   pesquisarRegistro?:ConsultaRegistro;
@@ -45,7 +45,7 @@ export async function executarLeituraPendente(deps:DependenciasTrabalhos,executo
       resultado=r.ok ? {ok:true,nomes,agenda:trabalho.agenda} :
         {ok:false,motivo:causaSegura(r.motivo)};
     } else if(trabalho.tipo==='conferencia_fiscal'&&trabalho.medicoId){
-      const r=await deps.conferir(trabalho.contaId,trabalho.medicoId,trabalho.agenda);
+      const r=await deps.conferir(trabalho.contaId,trabalho.medicoId,trabalho.agenda,...(trabalho.inicioPeriodo?[trabalho.inicioPeriodo] as const:[]));
       // Resultado é estritamente agregado e nunca inclui pacientes.
       resultado=r;
     } else throw Error('TRABALHO_INVALIDO');
@@ -79,7 +79,7 @@ function textoResultado(job:TrabalhoParaNotificar):string {
   }
   if(job.tipo==='conferencia_fiscal' &&
     d['agenda']===job.agenda&&typeof d['profissional']==='string' &&
-    d['janelaDias']===30 && d['limite']==='VINCULOS_EXATOS_NAO_COMPROVAM_AUSENCIA_DE_NOTA'){
+    (d['janelaDias']===30 || (typeof d['inicioPeriodo']==='string' && /^\d{4}-\d{2}-\d{2}$/.test(d['inicioPeriodo']) && Number.isInteger(d['janelaDias']))) && d['limite']==='VINCULOS_EXATOS_NAO_COMPROVAM_AUSENCIA_DE_NOTA'){
     const numericos=['realizados','comReferencia','semReferencia','comVinculoConfirmado',
       'comSolicitacaoVinculada','comNotaAutorizadaVinculada','semVinculoConfirmado'];
     if(numericos.every(k=>Number.isSafeInteger(d[k])&&(d[k] as number)>=0)){

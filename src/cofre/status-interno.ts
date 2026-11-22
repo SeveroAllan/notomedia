@@ -1,4 +1,3 @@
-import type { AgendaSuportada } from '../agenda/agendas-suportadas.js';
 import type { CofreTribemd } from './tribemd-cofre.js';
 import type { CofreAmplimed } from './amplimed-cofre.js';
 
@@ -21,7 +20,7 @@ export async function consultarStatusAgendasInterno(deps: {
   medicoId: string;
   cofreTribemd?: Pick<CofreTribemd, 'status' | 'consentimentoEm'>;
   cofreAmplimed?: Pick<CofreAmplimed, 'status'>;
-  resolver: (medicoId: string, agenda: AgendaSuportada) => Promise<string>;
+  resolver: (medicoId: string, agenda: 'tribemd' | 'amplimed') => Promise<string>;
 }): Promise<{ tribemd: EstadoFonteInterna; amplimed: EstadoFonteInterna }> {
   const [tribemd, amplimed] = await Promise.all([
     (async (): Promise<EstadoFonteInterna> => {

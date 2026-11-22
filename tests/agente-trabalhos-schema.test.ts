@@ -6,6 +6,7 @@ import {enfileirarTrabalhoNoto,reservarTrabalhoNoto,concluirLeituraNoto,reservar
 
 const executarBanco=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']?it:it.skip;
 const sql=readFileSync(new URL('../scripts/migrations/20261108-noto-trabalhos-duraveis.sql',import.meta.url),'utf8');
+const sqlRecorte=readFileSync(new URL('../scripts/migrations/20261109-noto-trabalho-recorte.sql',import.meta.url),'utf8');
 executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, escopo real e status de aceite API',async()=>{
   const url=process.env['NOTO_SCHEMA_TEST_DATABASE_URL']!;
   if(!/127\.0\.0\.1|localhost/.test(url))throw Error('TESTE_EXIGE_BANCO_LOCAL_DESCARTAVEL');
@@ -36,6 +37,8 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
     ].join('\n'));
     await client.query(sql);
     await client.query(sql);
+    await client.query(sqlRecorte);
+    await client.query(sqlRecorte);
     const props=await client.query([
       "select relrowsecurity from pg_class where oid='public.noto_agent_trabalhos'::regclass"
     ].join(''));
@@ -49,7 +52,7 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
     const pedido={
       contaId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',instancia:'assistente',
       telefone:'5551999998888',mensagemId:'msg-0000001',
-      tipo:'conferencia_fiscal' as const,agenda:'tribemd' as const,
+      tipo:'conferencia_fiscal' as const,agenda:'tribemd' as const,inicioPeriodo:'2026-10-20',
       medicoId:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
     };
     expect(await enfileirarTrabalhoNoto(client as unknown as pg.Pool,pedido))
@@ -60,7 +63,7 @@ executarBanco('fila de agente: migração reaplicável no PostgreSQL isolado, es
       {...pedido,mensagemId:'msg-0000003',medicoId:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'}))
       .toEqual({ok:false,motivo:'SEM_AUTORIZACAO'});
     const job=await reservarTrabalhoNoto(client as unknown as pg.Pool,'ci-executor');
-    expect(job).toMatchObject({contaId:pedido.contaId,medicoId:pedido.medicoId,estado:'executando'});
+    expect(job).toMatchObject({contaId:pedido.contaId,medicoId:pedido.medicoId,inicioPeriodo:pedido.inicioPeriodo,estado:'executando'});
     expect(await concluirLeituraNoto(client as unknown as pg.Pool,job!.id,'ci-executor',
       {ok:false,motivo:'LEITURA_INCOMPLETA'})).toBe(true);
     const notify=await reservarNotificacaoNoto(client as unknown as pg.Pool);

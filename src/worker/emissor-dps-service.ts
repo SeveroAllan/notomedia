@@ -30,6 +30,7 @@ export type ResultadoEmissaoDps =
       valorServicosCentavos: number;
       xmlStoragePath: string;
       pdfStoragePath: string | null;
+      contingenciaHomologacao?: boolean;
       respostaSefinRaw?: Record<string, unknown>;
     }
   | {

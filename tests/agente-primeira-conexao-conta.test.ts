@@ -15,6 +15,71 @@ const modelo=(ferramenta:string,args:Record<string,unknown>,resposta:string)=>ne
 );
 
 describe('primeira conexão por conta sem médico confirmado',()=>{
+  it.each([false,true])('descoberta sem conexão encaminha para reconexão, salvo=%s',async salvo=>{
+    const args={agenda:'tribemd',profissional:null};
+    const scripted=new ScriptedModel([
+      [functionCall('descobrir_profissionais_agenda',args,{callId:'descobrir'})],
+    ]);
+    const descobrirProfissionais=vi.fn();
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
+    const resposta=await responderAgente({texto:'Confira os profissionais da TribeMD',profissionais:[],estadoConversa:origem},
+      {modeloTeste:scripted,consultarStatus:async()=>({...vazio,tribemd:{salvo,conectada:false}}),
+        referenciaContaAgenda:async()=>referencia,descobrirProfissionais,solicitarLinkAgenda});
+    expect(resposta).toContain('reconectar');
+    expect(descobrirProfissionais).not.toHaveBeenCalled();
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
+    expect(scripted.calls).toHaveLength(1);
+    scripted.assertComplete();
+  });
+  it.each(['Não, é a TribeMD', 'não é a Amplimed, é a TribeMD', 'É TribeMD, não Amplimed', 'TribeMD, não Amplimed', 'a minha agenda é a TribeMD', 'Podemos usar a TribeMD?', 'Pode trocar para a TribeMD?'])('correção prevalece sobre a Amplimed salva no mesmo turno: %s',async texto=>{
+    const scripted=new ScriptedModel([
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'amplimed',profissional:null},{callId:'antigo'})],
+      [functionCall('solicitar_link_seguro_agenda',{agenda:'tribemd',profissional:null},{callId:'atual'})],
+      [assistantMessage('Use a página segura.')]
+    ]);
+    const solicitarLinkAgenda=vi.fn().mockResolvedValue({aceitoParaEnvio:true});
+    await responderAgente({texto,profissionais:[],estadoConversa:{agendaEscolhida:'amplimed'}},
+      {modeloTeste:scripted,consultarStatus:async()=>vazio,
+        referenciaContaAgenda:async()=>referencia,solicitarLinkAgenda});
+    expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith(referencia,'tribemd');
+    scripted.assertComplete();
+  });
+  it('não consome a cota de link da agenda que o operador recusou', async () => {
+    const scripted = modelo('solicitar_link_seguro_agenda', {agenda:'amplimed',profissional:null},
+      'Enviei o link da Amplimed. [[RESULTADO_ACAO]]');
+    const solicitarLinkAgenda = vi.fn();
+    const resposta = await responderAgente({
+      texto:'pode sim, eu nem uso Amplimed', profissionais:[], estadoConversa:{agendaEscolhida:'amplimed'}
+    }, {modeloTeste:scripted, consultarStatus:async()=>vazio,
+      referenciaContaAgenda:async()=>referencia, solicitarLinkAgenda});
+    expect(solicitarLinkAgenda).not.toHaveBeenCalled();
+    expect(resposta).toBe('Qual agenda você quer conectar agora?');
+    scripted.assertComplete();
+  });
+
+  it('consulta a TribeMD quando a pergunta a nomeia, mesmo com Amplimed salva',async()=>{
+    const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},'A TribeMD está conectada.');
+    const consultarStatus=vi.fn().mockResolvedValue(conectado);
+    const resposta=await responderAgente({
+      texto:'e aí, conseguiu confirmar a TribeMD?',profissionais:[],estadoConversa:{agendaEscolhida:'amplimed'}
+    },{modeloTeste:scripted,consultarStatus,referenciaContaAgenda:async()=>referencia});
+    expect(consultarStatus).toHaveBeenCalledExactlyOnceWith(referencia);
+    expect(resposta).toContain('A agenda TribeMD já está conectada.');
+    scripted.assertComplete();
+  });
+
+  it('divergência de foco não vira indisponibilidade da agenda', async () => {
+    const scripted = modelo('orientar_conexao_agenda', {agenda:'amplimed',profissional:null},
+      'A TribeMD está indisponível. [[RESULTADO_ACAO]]');
+    const consultarStatus = vi.fn();
+    const resposta = await responderAgente({
+      texto:'O link era da Amplimed de novo', profissionais:[], estadoConversa:origem
+    }, {modeloTeste:scripted, consultarStatus, referenciaContaAgenda:async()=>referencia});
+    expect(resposta).toBe('A agenda escolhida é a TribeMD. Posso conferir a conexão dela para continuar.');
+    expect(consultarStatus).not.toHaveBeenCalled();
+    scripted.assertComplete();
+  });
+
   it('orienta Cofre seguro sem escolher cadastro provisório nem perguntar qual médico',async()=>{
     const scripted=modelo('orientar_conexao_agenda',{agenda:'tribemd',profissional:null},
       'Posso enviar a página segura para conectar sua TribeMD. Lá você informa a senha.');
@@ -83,8 +148,9 @@ describe('primeira conexão por conta sem médico confirmado',()=>{
   });
 
   it('não descobre ninguém antes do login confirmado',async()=>{
-    const scripted=modelo('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:null},
-      'A conexão ainda não foi confirmada. Vou aguardar o acesso seguro.');
+    const scripted=new ScriptedModel([
+      [functionCall('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:null},{callId:'sem-login'})]
+    ]);
     const descobrirProfissionais=vi.fn();
     await responderAgente({texto:'Quem está na TribeMD?',profissionais:[medicoProvisorio]},
       {modeloTeste:scripted,consultarStatus:vi.fn().mockResolvedValue(vazio),

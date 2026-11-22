@@ -152,9 +152,22 @@ describe('decisões de retomada: a última conversa não pode autorizar por men�
     expect(novo.agendaEscolhida).toBe('tribemd');
     expect(novo.profissionalConfirmadoId).toBe('m2');
   });
-  it('correção declarativa troca a agenda, sem apagar outros fatos confirmados',()=>{
+  it('preserva a troca pedida em pergunta quando o turno seguinte relata o link errado',()=>{
     const anterior={agendaEscolhida:'amplimed' as const,profissionalConfirmadoId:'m2'};
-    const novo=evoluirEstadoConversa(anterior,'Não, é TribeMD','Certo, verificarei.',prof);
+    const escolha=evoluirEstadoConversa(anterior,'Podemos usar a TribeMD?','Certo.',prof);
+    const retomada=evoluirEstadoConversa(escolha,'O link era da Amplimed de novo','Vou conferir.',prof);
+    expect(retomada).toMatchObject({agendaEscolhida:'tribemd',profissionalConfirmadoId:'m2'});
+  });
+  it.each(['Talvez seja a TribeMD', 'É a TribeMD ou a Amplimed', 'Não é a TribeMD, é a TribeMD'])(
+    'preserva a agenda salva quando a escolha não está clara: %s', texto => {
+      const anterior = {agendaEscolhida:'amplimed' as const};
+      expect(evoluirEstadoConversa(anterior, texto, 'Certo.', prof).agendaEscolhida).toBe('amplimed');
+    }
+  );
+  it.each(['Não, é TribeMD', 'não é a Amplimed, é a TribeMD'])(
+    'correção declarativa troca a agenda sem apagar fatos confirmados: %s', texto => {
+    const anterior={agendaEscolhida:'amplimed' as const,profissionalConfirmadoId:'m2'};
+    const novo=evoluirEstadoConversa(anterior,texto,'Certo, verificarei.',prof);
     expect(novo.agendaEscolhida).toBe('tribemd');
     expect(novo.profissionalConfirmadoId).toBe('m2');
   });

@@ -50,7 +50,7 @@ testeBanco('migração em PostgreSQL real: zero médicos, links conta/legado, FK
           id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           medico_id uuid REFERENCES public.medicos(id),
           status text,
-          valido_ate date
+          valido_de date, valido_ate date
         );
         INSERT INTO public.contas VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
         INSERT INTO public.contas VALUES ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');

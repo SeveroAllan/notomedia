@@ -9,7 +9,7 @@ const BRUNO='cccccccc-cccc-4ccc-8ccc-cccccccccccc';
 const base='conta_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const unico:EstadoConversa={agendaEscolhida:'tribemd',faseAgenda:'CONFIRMACAO_PENDENTE',
   descoberta:{agenda:'tribemd',nomes:['Dra. Ana Souza']},
-  perguntaPendente:null}; // a resposta NÃO depende do texto da pergunta anterior
+  perguntaPendente:'confirmar_profissional'}; // categoria da pergunta, sem guardar o texto anterior
 const multiplo:EstadoConversa={...unico,descoberta:{agenda:'tribemd',
   nomes:['Dra. Ana Souza','Dr. Bruno Lima']}};
 const status=vi.fn().mockResolvedValue({
@@ -45,14 +45,14 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       expect(r.confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(base,['Dra. Ana Souza']);
       expect(r.aoVinculo).toHaveBeenCalledExactlyOnceWith('tribemd',{id:ANA,nome:'Dra. Ana Souza'});
       expect(r.resposta).toContain('Vinculei Dra. Ana Souza');
-      expect(r.resposta).toContain('antes de salvar');
+      expect(r.resposta).not.toContain('pesquisa pública');
       expect(r.resposta).not.toMatch(/999|não foi validado|digitar tudo/);
     });
   }
   it('confirma sem segunda inferência, sem reler CRM e sem depender do tempo de resposta humana',async()=>{
     const diagnosticos:import('../src/agente/diagnostico.js').DiagnosticoAgente[]=[];
     const confirmado=await simular('Sim, sou eu!','confirmar',[],{
-      ...unico,perguntaPendente:null
+      ...unico,perguntaPendente:'confirmar_profissional'
     },{
       aoDiagnostico:(x:import('../src/agente/diagnostico.js').DiagnosticoAgente)=>diagnosticos.push(x)
     });
@@ -93,6 +93,29 @@ describe('consentimento contextual com alvo autenticado, sem frases fixas',()=>{
       nomes:['Dra. Ana Souza','Dr. Bruno Lima'],mensagem:'Pode vincular os dois'}))
       .toEqual({ok:false,motivo:'ALVO_AMBIGUO'});
   });
+  it('antecipa o vínculo único ao escolher a agenda, sem pergunta pendente', async () => {
+    const r = await simular('a minha agenda é a TribeMD', 'confirmar', [], {...unico, perguntaPendente:null});
+    expect(r.confirmarProfissionais).toHaveBeenCalledExactlyOnceWith(base,['Dra. Ana Souza']);
+    expect(r.resposta).toContain('Vinculei Dra. Ana Souza');
+    expect(r.resposta).not.toContain('pesquisa pública');
+  });
+  it('um novo profissional após vínculo existente exige confirmação explícita do alvo',async()=>{
+    const estado:EstadoConversa={...unico,profissionalConfirmadoId:ANA,
+      descoberta:{agenda:'tribemd',nomes:['Dr. Bruno Lima']}};
+    const r=await simular('a minha agenda é a TribeMD','confirmar',[],estado);
+    expect(r.confirmarProfissionais).not.toHaveBeenCalled();
+    expect(r.aoVinculo).not.toHaveBeenCalled();
+    expect(decidirVinculo(estado,{agenda:'tribemd',decisao:'confirmar',
+      nomes:[],mensagem:'Vincula o Bruno Lima à conta'}))
+      .toEqual({ok:true,agenda:'tribemd',nomes:['Dr. Bruno Lima']});
+  });
+  it.each(['Não quero vincular', 'Sim, mas ainda tenho dúvida', 'Pode vincular?', 'Esse nome está errado'])(
+    'uma decisão confirmatória não prevalece sobre: %s', async texto => {
+      const r = await simular(texto, 'confirmar', []);
+      expect(r.confirmarProfissionais).not.toHaveBeenCalled();
+      expect(r.aoVinculo).not.toHaveBeenCalled();
+    }
+  );
   it('negação, dúvida, correção ou mudança de assunto não criam vínculos',async()=>{
     for(const [texto,decisao] of [
       ['Não, não sou essa pessoa','negar'],
@@ -175,7 +198,8 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     const resposta=await responderAgente({texto:'Não sei confirmar esses dados agora.',
       profissionais,estadoConversa:sugestao},{modeloTeste:modelo,consultarStatus:status,
       adiarConfirmacaoRegistro,aprovarRegistroProfissional,solicitarLinkRegistro,salvarDadosProfissionais});
-    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+    expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
     expect(adiarConfirmacaoRegistro).toHaveBeenCalledExactlyOnceWith(ANA);
     expect(aprovarRegistroProfissional).not.toHaveBeenCalled();
     expect(solicitarLinkRegistro).not.toHaveBeenCalled();
@@ -212,7 +236,8 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
     estado.pesquisasRegistro![ANA]!.confirmacaoAdiada=true;
     const agente=criarAgenteNoto({texto:'Vamos ver o certificado.',profissionais,estadoConversa:estado},
       {consultarStatus:status,adiarConfirmacaoRegistro:async()=>true,aprovarRegistroProfissional:vi.fn()});
-    expect(agente.modelSettings.toolChoice).toBe('continuar_onboarding');
+    expect(agente.modelSettings.toolChoice).toBeUndefined();
+    expect(agente.modelSettings.parallelToolCalls).toBe(false);
   });
   it('falha ao registrar adiamento não anuncia persistência nem aprova',async()=>{
     const aprovarRegistroProfissional=vi.fn();
@@ -288,7 +313,7 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
       const resposta=await responderAgente({texto,profissionais,estadoConversa:estado},{
         modeloTeste:modelo,consultarStatus:status,solicitarLinkRegistro
       });
-      expect(resposta).toMatch(/aceitou o link seguro/i);
+      expect(resposta).toContain('use a página para preencher os dados');
       expect(resposta).not.toContain('Já recebi seus dados');
       modelo.assertComplete();
     }
@@ -318,7 +343,7 @@ describe('CRM/RQE: sugestão pública e preenchimento apenas pelo cofre',()=>{
       {decisao:'consultar',motivo:'ENVIO_INCERTO',ok:true,revo:false,
         trecho:'não vou reenviá-la às cegas'},
       {decisao:'consultar',motivo:'ACEITO_SEM_ENTREGA',ok:true,revo:false,
-        trecho:'ainda não confirmou entrega'},
+        trecho:'posso substituir o link com a sua autorização'},
       {decisao:'consultar',motivo:'FALHA_COMPROVADA',ok:false,revo:false,
         trecho:'falhou de forma comprovada'},
       {decisao:'consultar',motivo:'ENTREGUE',ok:true,revo:false,

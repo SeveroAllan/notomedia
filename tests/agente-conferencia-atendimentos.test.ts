@@ -1,3 +1,5 @@
+import { concluirLeituraNoto } from '../src/agente/trabalhos-duraveis.js';
+import { extrairAgendaTribemd } from '../src/desenvolvedor/tribemd-agenda.js';
 import { describe, expect, it, vi } from 'vitest';
 import type pg from 'pg';
 import { ScriptedModel, assistantMessage, functionCall } from '@openai/agents/testing';
@@ -47,6 +49,27 @@ describe('reconciliação agenda fiscal somente por vínculo comprovado',()=>{
     expect(comunicado).toContain('Sem vínculo fiscal comprovado aqui: 1');
     expect(comunicado).toContain('Isso não significa que estejam sem nota');
     expect(comunicado).not.toContain('tribe-1');
+  });
+
+  it.each([0, 4])('persiste só contagens, distinguindo zero bruto de zero filtrado (%s)', async brutos => {
+    const respostaPortal = extrairAgendaTribemd({atendimentos: brutos ? [
+      {status:1}, {status:8,datahora_atendimento:'2026-11-04',pacientes:{nome:'Sintético'}},
+      {status:8,id:1,paciente_id:1,datahora_atendimento:'2026-10-20',pacientes:{nome:'Sintético'}}, null
+    ] : []}, janela.fim);
+    const leitura = leituraTribemdParaConferencia({
+      tipo:'consultas', fonte:'tribemd', consultas:brutos ? [consulta('tribe-1','Dr. Bruno Lima')] : [],
+      contagensBrutas:{brutos:respostaPortal.totalAtendimentos,
+        descartadosStatus:respostaPortal.descartadosStatus, descartadosData:respostaPortal.descartadosData}
+    },'Dra. Alice Silva',janela);
+    const resultado = await conferirAgendaComFiscal(banco().pool, CONTA, ALICE, 'tribemd', async()=>leitura);
+    const query = vi.fn().mockResolvedValue({rows:[{id:'job'}]});
+    expect(await concluirLeituraNoto({query},'job','executor',resultado)).toBe(true);
+    const serializado = query.mock.calls[0]![1][2] as string;
+    expect(JSON.parse(serializado)).toMatchObject({ok:true,realizados:0,contagensLeitura:{
+      brutos,realizados:0,descartadosStatus:brutos?1:0,descartadosData:brutos?1:0,
+      descartadosProfissional:brutos?1:0,outrosDescartados:brutos?1:0
+    }});
+    expect(serializado).not.toMatch(/PACIENTE-NUNCA-EXPOSTO|tribe-1|Sintético/);
   });
 
   it('profissional fora da conta nunca chama o leitor; banco indisponível não informa zero',async()=>{

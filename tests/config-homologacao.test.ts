@@ -32,6 +32,20 @@ describe('configuracao fail-closed da homologacao', () => {
     expect(config.envioRealAllowlist).toEqual(['5511999990000']);
   });
 
+  it('ambiente fiscal opcional exige homologação e escopo completo, sem ligar produtor ou worker',()=>{
+    const env={...homologacao,NOTO_EMISSAO_WHATSAPP_AMBIENTE:'homologacao',
+      NOTO_EMISSAO_WHATSAPP_CONTA_ID:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      NOTO_EMISSAO_WHATSAPP_MEDICO_ID:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      NOTO_EMISSAO_WHATSAPP_AGENDAMENTO_ID:'cccccccc-cccc-4ccc-8ccc-cccccccccccc'};
+    expect(carregarConfig(homologacao).ambienteEmissaoWhatsApp).toBeUndefined();
+    const carregada=carregarConfig(env);
+    expect(carregada.ambienteEmissaoWhatsApp).toMatchObject({ambiente:'homologacao',medicoId:env.NOTO_EMISSAO_WHATSAPP_MEDICO_ID});
+    expect(carregada.emissaoWhatsAppProdutor).toBeUndefined();
+    expect(carregada.emissaoWhatsAppWorker).toBeUndefined();
+    expect(()=>carregarConfig({...env,NOTO_EMISSAO_WHATSAPP_AMBIENTE:'producao'})).toThrow('AMBIENTE_INVALIDO');
+    expect(()=>carregarConfig({...env,NOTO_EMISSAO_WHATSAPP_MEDICO_ID:''})).toThrow('ESCOPO_ISOLADO');
+  });
+
   it('permite a instancia oficial existente como remetente OTP somente-saida', () => {
     const config = carregarConfig({ ...homologacao, EVOLUTION_OFFICIAL_INSTANCE_NAME: 'notomed_oficial' });
     expect(config.evolutionOfficialInstanceName).toBe('notomed_oficial');

@@ -5,6 +5,7 @@ on:
       - 'src/agente/**'
       - 'src/server.ts'
       - 'src/whatsapp/webhook-pareamento.ts'
+      - 'src/onboarding/io/confirmar-politica-emissao.ts'
       - 'src/onboarding/io/conectar-instancia-whatsapp-medico.ts'
       - 'src/onboarding/io/consultar-status-instancia-whatsapp.ts'
       - 'agent.md'

@@ -25,15 +25,15 @@ testar('resposta após 3 dias e novo processo mantém descoberta confirmável se
     await pool.query([
       'insert into noto_agent_conversas(conta_id,estado,atualizado_em)',
       "values($1,jsonb_build_object('faseAgenda','CONFIRMACAO_PENDENTE',",
-      "'descoberta',$2::jsonb,'perguntaPendente',null),",
+      "'descoberta',$2::jsonb,'perguntaPendente','confirmar_profissional'),",
       "now()-interval '3 days')"
     ].join('\n'),[conta,JSON.stringify(descoberta)]);
     const estado=await lerEstadoConversa(pool,conta);
     expect(decidirVinculo(estado,{
       agenda:'tribemd',decisao:'confirmar',nomes:[],mensagem:'Sim, sou eu!'
     })).toEqual({ok:true,agenda:'tribemd',nomes:['Dra. Ana Souza']});
-    // Uma pergunta intermediária não remove a descoberta nem põe prazo.
-    await salvarEstadoConversa(pool,conta,{...estado,perguntaPendente:null});
+    // A confirmação permanece pendente mesmo após reiniciar.
+    await salvarEstadoConversa(pool,conta,{...estado,perguntaPendente:'confirmar_profissional'});
     const reiniciado=new pg.Pool({connectionString:temp.toString()});
     try{
       const reaberto=await lerEstadoConversa(reiniciado,conta);

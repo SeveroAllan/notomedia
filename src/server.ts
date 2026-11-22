@@ -1,3 +1,6 @@
+import { registrarDiagnosticoAuditoria } from './agente/diagnostico.js';
+import { tratarComandoEmissaoWhatsApp, tratarPropostaEmissaoWhatsApp } from './io/postgres/postgres-emissao-whatsapp-repositorio.js';
+import { createHmac, randomBytes } from 'node:crypto';
 import { solicitarOtpEmail, autenticarComOtpEmail, type EnviarOtpEmail } from './otp/login-otp-email.js';
 import { EnviarOtpEmailResend } from './io/resend/enviar-otp-email.js';
 import { ComunicacaoHomologacao } from './whatsapp/comunicacao-homologacao.js';
@@ -10,11 +13,43 @@ import { criarRouterCadastroPainel } from './cadastro/router-painel.js';
 import { OpenSerpConsultaRegistro } from './cadastro/openserp-registro.js';
 import { criarRouterNfse } from './api/nfse/nfse-router.js';
 import { criarRouterWebhookAgente } from './agente/webhook.js';
+import { consultarEstadoProntidaoConta } from './agente/estado-prontidao-conta.js';
+import {
+  notificarAgendaConectadaEIniciarProfissionais,
+  notificarCertificadoSalvoEProximoPasso,
+  notificarProfissionaisEEnviarLinksCertificados,
+  notificarXmlSalvoEProximoPasso,
+  type PortaEnvioOrquestracao
+} from './agente/orquestrar-pos-cofre.js';
+import { salvarPreferenciasEmissaoConta } from './conta/preferencias-emissao-repositorio.js';
+import { criarCompactadorMemoriaOpenAi } from './agente/memoria/compactador-openai.js';
+import { criarServicoMemoriaConversa } from './agente/memoria/gerenciar-memoria-conversa.js';
+import { PostgresMemoriaRepositorio } from './agente/memoria/postgres-memoria-repositorio.js';
+import { criarFonteBuscaOpenSerp, descobrirUrlAgendaOnline } from './agenda/descobrir-url-agenda-online.js';
+import { criarConsultorAgendaConta } from './agenda/consultar-agenda-conta.js';
+import { calcularJanelaDiasConsulta } from './agenda/filtrar-atendimentos-agenda.js';
+import { criarTranscritorAudioOpenAi } from './midia/transcrever-audio-openai.js';
+import { criarLeitorComprovanteOpenAi } from './midia/ler-comprovante-openai.js';
+import { montarInfraEmissaoConta } from './emissao/montar-emissao-conta-infra.js';
+import { iniciarWorkerCasosEmissao } from './emissao/worker-casos-emissao.js';
+import { PostgresEmissorDpsService } from './io/fiscal/postgres-emissor-dps-service.js';
+import { SefinNacionalClient } from './io/fiscal/sefin-nacional-client.js';
+import {
+  processarCertificadoViaCofre,
+  processarXmlViaCofre,
+  reconsultarFiscalPeloCertificadoSalvo
+} from './onboarding/fluxos/processar-certificado-cofre.js';
 import { criarRouterWebhookPareamento } from './whatsapp/webhook-pareamento.js';
 import { localizarContaExistentePorTelefone } from './agente/conta-existente.js';
 import { enviarBoasVindasAposPareamento } from './agente/boas-vindas-pareamento.js';
 import { gerarVariantesTelefoneBrasileiro } from './whatsapp/variantes-telefone-brasileiro.js';
 import { separarBaloes } from './agente/baloes.js';
+import { criarFiltroSaidaHumano } from './agente/filtro-saida-humano.js';
+import { montarBlocoEstadoVivo } from './agente/memoria/blocos-memoria-config.js';
+import { PostgresBlocosMemoriaRepositorio } from './agente/memoria/blocos-memoria-repositorio.js';
+import { criarServicoBlocosMemoria } from './agente/memoria/gerenciar-blocos-memoria.js';
+import { criarConsolidadorBlocosOpenAi, criarConsolidadorSleepTime } from './agente/memoria/sleep-time-consolidacao.js';
+import { criarMotorRotinaProativa } from './agente/rotina-proativa-worker.js';
 import {persistirDescobertaComprovada,persistirDescobertaAindaPendente} from './agente/descoberta-autenticada.js';
 import { profissionaisIdentificados, descobrirProfissionaisDoFiltroAmplimed } from './agenda/profissionais-agenda.js';
 import { confirmarMedicosDaConta } from './conta/medicos-conta.js';
@@ -57,7 +92,7 @@ import { completarNvidia, completarOpenAi } from './io/nvidia/chat-client.js';
 import { processarOnboardingXml } from './onboarding/fluxos/processar-onboarding-xml.js';
 import { ErroAdocaoReferencia } from './onboarding/io/confirmar-politica-emissao.js';
 import { confirmarParametrosFiscais } from './onboarding/fluxos/confirmar-parametros-fiscais.js';
-import { registrarConsentimentoFiscal, adotarReferenciaConsentida, versaoConsentimentoFiscal } from './onboarding/fluxos/consentimento-fiscal.js';
+import { adotarReferenciaConsentida, versaoConsentimentoFiscal } from './onboarding/fluxos/consentimento-fiscal.js';
 import { salvarCertificadoMedico } from './onboarding/fluxos/salvar-certificado-medico.js';
 import { conectarInstanciaWhatsappMedico } from './onboarding/io/conectar-instancia-whatsapp-medico.js';
 import { consultarStatusInstanciaWhatsapp } from './onboarding/io/consultar-status-instancia-whatsapp.js';
@@ -99,8 +134,57 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     config.supabaseServiceRoleKey,
     pool
   );
+  const adnNfseClient = new AdnNfseClient();
+  const escopoFiscalPiloto = (medicoId: string) =>
+    config.ambienteEmissaoWhatsApp?.medicoId === medicoId
+      ? { contaPilotoHomologacao: config.ambienteEmissaoWhatsApp.contaId } : {};
+  const transporteAgente = new EvolutionApiClient(
+    config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
+    config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
+  );
+  const enviarWhatsappAssistente = async (telefone: string, texto: string, opcoes?: { linkPreview?: boolean }): Promise<boolean> => {
+    const r = await transporteAgente.enviarTexto({
+      instanciaNome: config.evolutionAssistantInstanceName,
+      contatoTelefone: telefone,
+      texto,
+      ...(opcoes ? { linkPreview: opcoes.linkPreview } : {})
+    });
+    return r.sucesso;
+  };
+  const depsCertificadoCofre = {
+    pool,
+    supabase: authAdminService.supabaseClient,
+    adnNfseClient,
+    encryptionKey: config.encryptionKey,
+    appPepper: config.appPepper,
+    preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva),
+    escopoFiscalPiloto
+  };
+  let portaOrquestracao!: PortaEnvioOrquestracao;
   const cofres = criarCofreContas({
-    pool, enviarCofre: async (id, texto, contatoTelefone) => {
+    pool,
+    enviarWhatsappOnboarding: (telefone, texto) => enviarWhatsappAssistente(telefone, texto, { linkPreview: false }),
+    processarCertificadoLink: entrada => processarCertificadoViaCofre(depsCertificadoCofre, entrada),
+    processarXmlLink: entrada => processarXmlViaCofre(depsCertificadoCofre, entrada),
+    aoConcluirAgendaGenerica: async (contaId, evento) => {
+      await notificarAgendaConectadaEIniciarProfissionais(portaOrquestracao, {
+        contaId,
+        nomeAgenda: evento.nomeAgenda,
+        conectado: evento.conectado,
+        telefone: evento.telefone,
+        motivoErro: evento.motivoErro
+      });
+    },
+    aoCadastrarProfissionaisLink: async evento => {
+      await notificarProfissionaisEEnviarLinksCertificados(portaOrquestracao, evento);
+    },
+    aoSalvarCertificadoLink: async evento => {
+      await notificarCertificadoSalvoEProximoPasso(portaOrquestracao, evento);
+    },
+    aoSalvarXmlLink: async evento => {
+      await notificarXmlSalvoEProximoPasso(portaOrquestracao, evento);
+    },
+    enviarCofre: async (id, texto, contatoTelefone) => {
       if (!config.notoPilotoRestrito) return contaDoCofreId(id) ? 'erro' : comunicacaoHomologacao.cofre(id, texto);
       const permitidos = config.envioRealAllowlist ?? [];
       const variantes = gerarVariantesTelefoneBrasileiro(contatoTelefone ?? '');
@@ -164,7 +248,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       // Navegador autenticado da CONTA: uma única operação atômica grava
       // nomes comprovados + CONFIRMACAO_PENDENTE, antes de qualquer balão.
       // Não copiar estado antigo nem usar merge genérico para autorizar vínculo.
-      if (evento.conectado) {
+      if (evento.conectado && (evento.agenda === 'tribemd' || evento.agenda === 'amplimed')) {
         const persistido=nomes.length
           ? await persistirDescobertaComprovada(pool,contaId,evento.agenda,nomes,'cofre_sessao')
           : await persistirDescobertaAindaPendente(pool,contaId,evento.agenda);
@@ -183,8 +267,18 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       const andamento=recuperacao==='MELHOROU' ? 'Concluí uma verificação adicional na mesma sessão.' :
         recuperacao==='SEM_MELHORIA' ? 'Fiz uma segunda leitura, mas ela ainda não ficou completa.' :
         recuperacao==='FALHOU' ? 'A tentativa adicional de leitura não terminou; o acesso continua conectado.' : null;
+      const falhaAmplimed = evento.motivoAcesso === 'ASSINATURA_INATIVA'
+        ? 'Consegui entrar na Amplimed. A conta está sem assinatura ativa, e a Amplimed bloqueia a agenda. Para eu conseguir ler os atendimentos, a assinatura precisa estar ativa.'
+        : evento.motivoAcesso === 'ACESSO_CAPTCHA'
+        ? 'A Amplimed pediu uma confirmação de que você é humano. Abra a Amplimed no seu navegador, conclua essa etapa e depois peça um novo link seguro para tentar a conexão novamente.'
+        : evento.motivoAcesso === 'ACESSO_CODIGO_EMAIL_PENDENTE'
+          ? 'A verificação por e-mail da Amplimed ficou pendente. Peça um novo link seguro para iniciar outra tentativa e espere eu pedir o código antes de responder.'
+          : evento.motivoAcesso === 'ACESSO_RECUSADO'
+            ? 'A Amplimed recusou o acesso. Confira se você consegue entrar na Amplimed e peça um novo link seguro para corrigir os dados.'
+            : 'Ainda não consegui confirmar o login na Amplimed. Abra a Amplimed, confira se há alguma etapa pendente no acesso e peça um novo link seguro para tentar novamente.';
       const mensagens=!evento.conectado
-        ? ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
+        ? evento.agenda==='amplimed' ? [falhaAmplimed]
+          : ['Ainda não consegui confirmar o acesso à agenda pela página segura.','A senha continua somente na página protegida.']
         : nomes.length
           ? [`Conexão com a ${plataforma} confirmada.`,
             ...(andamento?[andamento]:[]),
@@ -198,6 +292,16 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
               ? explicarLeituraPendente(diagnostico)
               : 'A conexão não trouxe uma lista autenticada de médicos na Amplimed.',
             'Mantive a conexão e a descoberta pendente, sem vincular profissionais por suposição.'];
+      if (evento.conectado && cofres.linksOnboarding) {
+        const nomeAgenda = evento.agenda === 'tribemd' ? 'TribeMD' : 'Amplimed';
+        await notificarAgendaConectadaEIniciarProfissionais(portaOrquestracao, {
+          contaId,
+          nomeAgenda,
+          conectado: true,
+          telefone
+        });
+        return;
+      }
       for(const frase of mensagens) for(const balao of separarBaloes(frase)){
         const enviado=await new EvolutionApiClient(config.evolutionAssistantUrl,config.evolutionAssistantApiKey,
           config.evolutionOfficialInstanceName,config.evolutionOfficialInstanceName).enviarTexto({
@@ -215,6 +319,75 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   app.use('/api/conta/cofre', cofres.app);
   if (cofres.appLinks) app.use('/c', cofres.appLinks);
   app.locals.encerrarCofres = cofres.encerrar;
+  const consultarAgendaGenericaDaConta = async (contaId: string) => {
+    if (!cofres.cofreGenerico) return { conectada: false, provedor: null, nomeAgenda: null };
+    const st = await cofres.cofreGenerico.status(cofreIdDaConta(contaId));
+    return {
+      conectada: st.salvo && st.ativo && st.estado === 'conectado',
+      provedor: st.provedor,
+      nomeAgenda: st.nomeAgenda
+    };
+  };
+  portaOrquestracao = {
+    enviarTexto: enviarWhatsappAssistente,
+    criarLinkProfissionais: (contaId, telefone) =>
+      cofres.linksOnboarding
+        ? cofres.linksOnboarding.criarLinkCadastroProfissionais({ contaId, telefone, enviarMensagem: false })
+        : Promise.resolve({ ok: false }),
+    criarLinkCertificado: (contaId, medicoId, telefone) =>
+      cofres.linksOnboarding
+        ? cofres.linksOnboarding.criarLinkCertificadoProfissional({ contaId, medicoId, telefone, enviarMensagem: false })
+        : Promise.resolve({ ok: false }),
+    criarLinkXml: (contaId, medicoId, telefone) =>
+      cofres.linksOnboarding
+        ? cofres.linksOnboarding.criarLinkXmlProfissional({ contaId, medicoId, telefone, enviarMensagem: false })
+        : Promise.resolve({ ok: false }),
+    listarProfissionaisCadastrados: async contaId => {
+      const est = await consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      });
+      return est.profissionais.map(p => ({
+        id: p.id,
+        nome: p.nomeCompleto,
+        certificadoValido: p.certificadoValido,
+        dadosFiscaisProntos: p.dadosFiscaisProntos
+      }));
+    },
+    listarProfissionaisSemCertificado: async contaId => {
+      const est = await consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      });
+      return est.profissionaisSemCertificado;
+    },
+    obterNomeAgendaConectada: async contaId => {
+      const est = await consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      });
+      return est.agenda.nomeAgenda;
+    },
+    preferenciasJaConfiguradas: async contaId => {
+      const est = await consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      });
+      return Boolean(est.preferenciasEmissao?.completas);
+    },
+    retomarCasosPendentes: contaId => infraEmissaoConta
+      ? infraEmissaoConta.orquestrador.retomarCasosAguardandoProntidaoFiscal(contaId)
+      : Promise.resolve({ retomados: 0, enfileirados: 0, pacientesEnfileirados: [] })
+  };
+  const fonteBuscaAgenda = config.openserpBaseUrl ? criarFonteBuscaOpenSerp(config.openserpBaseUrl) : null;
   app.use(
     express.json({
       limit: '10mb',
@@ -260,10 +433,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     : new PesquisaRegistroIndisponivel();
   // Primeiro corte do Noto Agent: apenas leitura de conexões, com liberação explícita.
   // A instância de emissão/pacientes não é encaminhada para o agente.
-  const transporteAgente = new EvolutionApiClient(
-    config.evolutionAssistantUrl, config.evolutionAssistantApiKey,
-    config.evolutionOfficialInstanceName, config.evolutionOfficialInstanceName
-  );
   const boasVindasInstancia = async (nomeInstancia: string) => {
     // O piloto não pode reutilizar o canal de pacientes nem alcançar outros números.
     if (config.notoPilotoRestrito !== true || !config.notoAgentAtivo || !config.notoAgentEnvioAtivo ||
@@ -279,6 +448,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
     });
   };
+  // O polling expõe só a revisão opaca do último evento da própria instância.
+  const chaveRevisaoPareamento = randomBytes(32);
+  const revisoesPareamento = new Map<string, string>();
+  const revisaoPareamento = (instancia: string, codigo: string) =>
+    createHmac('sha256', chaveRevisaoPareamento).update(instancia + ':' + codigo.replace(/-/g, '').toUpperCase()).digest('hex');
+
+  let infraEmissaoConta: ReturnType<typeof montarInfraEmissaoConta> | undefined;
   // Canal independente: mensagens do WhatsApp pareado jamais acionam o agente.
   app.use('/webhook/evolution/pareamento', criarRouterWebhookPareamento({
     pool, segredo: config.evolutionWebhookSecret,
@@ -293,13 +469,26 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return corpo?.instance?.state === 'open';
       } catch { return false; }
     },
-    aoConectar: boasVindasInstancia
+    aoAtualizarCodigo: (instancia, codigo) => {
+      revisoesPareamento.delete(instancia);
+      revisoesPareamento.set(instancia, revisaoPareamento(instancia, codigo));
+      if (revisoesPareamento.size > 256) {
+        const maisAntiga = revisoesPareamento.keys().next().value;
+        if (maisAntiga) revisoesPareamento.delete(maisAntiga);
+      }
+    },
+    aoConectar: boasVindasInstancia,
+    ...(config.notoPilotoRestrito !== true ? {
+      aoReceberMensagemPaciente: msg => infraEmissaoConta?.tratarMensagemPacienteConsultorio(msg) ?? Promise.resolve()
+    } : {})
   }));
-  const consultarConferenciaConta = (contaId: string, medicoId: string, agenda: AgendaEscolhida) =>
-      conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
-        const janela=janelaConferencia();
+  const consultarConferenciaConta = async (contaId: string, medicoId: string, agenda: AgendaEscolhida, desde?:string) => {
+      const janela=janelaConferencia(new Date(),desde);
+      const dias=1+(Date.parse(janela.fim)-Date.parse(janela.inicio))/86_400_000;
+      if(!Number.isInteger(dias)||dias<1||dias>365)return {ok:false,motivo:'RECORTE_MUITO_GRANDE'} as const;
+      return conferirAgendaComFiscal(pool, contaId, medicoId, agenda, async (id,nome,fonte): Promise<LeituraParaConferencia> => {
         if (fonte==='tribemd') {
-          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:30});
+          const r=await cofres.fonteAgenda.consultar({medicoId:id,referenciaCofre:id,janelaDias:desde?Math.max(1,dias-1):30});
           return leituraTribemdParaConferencia(r,nome,janela);
         }
         // Amplimed já valida a escolha do código no filtro e o resourceId
@@ -316,7 +505,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         const r=await cofres.lerAgendaAmplimed(id,janela.inicio,janela.fim,false,codigo);
         if (!r.ok) return {ok:false,motivo:'LEITURA_INCOMPLETA'};
         return leituraAmplimedParaConferencia(r.dias,janela);
-      });
+      },desde?{inicio:desde,dias}:undefined);
+  };
   const descobrirProfissionaisConta = async (medicoId: string, agenda: AgendaEscolhida) => {
       // Autoridade já verificada no webhook e estado confirmado na ferramenta;
       // devolver somente nomes, nunca o conteúdo de uma consulta.
@@ -360,6 +550,204 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       relatar:(codigo,duracaoMs,tipo)=>
         console.info('NOTO_AGENT_TRABALHO',JSON.stringify({codigo,duracaoMs,tipo}))
     }) : {parar:async()=>{}};
+  let proximoLogSemNumeroPn = 0;
+  const memoriaConversaAgente = criarServicoMemoriaConversa({
+    repositorio: new PostgresMemoriaRepositorio(pool),
+    compactador: config.openaiApiKey ? criarCompactadorMemoriaOpenAi(config.openaiApiKey, config.openaiTextoModel || 'gpt-4.1-mini') : null
+  });
+  const consultarAgendaConta = criarConsultorAgendaConta({
+    obterAgendaConectada: async contaId => {
+      const padrao = await cofres.statusAgendas(cofreIdDaConta(contaId));
+      if (padrao.tribemd.conectada) return { conectada: true, provedor: 'tribemd', nomeAgenda: 'TribeMD' };
+      if (padrao.amplimed.conectada) return { conectada: true, provedor: 'amplimed', nomeAgenda: 'Amplimed' };
+      return consultarAgendaGenericaDaConta(contaId);
+    },
+    lerTribemdRapido: (contaId, janelaDias, agora) => cofres.lerAgendaTribemdRapida(cofreIdDaConta(contaId), janelaDias, agora),
+    lerAmplimed: async (contaId, inicio, fim) => {
+      const r = await cofres.lerAgendaAmplimed(cofreIdDaConta(contaId), inicio, fim, false);
+      if (!r.ok) return { ok: false, motivo: r.motivo };
+      return {
+        ok: true,
+        consultas: r.dias.flatMap(d => d.consultas
+          .filter(c => c.status === 'realizada')
+          .map(c => ({ data: c.dataHora || d.data, paciente: c.paciente, situacao: c.status, valorCentavos: c.valorCentavos })))
+      };
+    }
+  });
+  const transcritorAudio = config.openaiApiKey ? criarTranscritorAudioOpenAi(config.openaiApiKey) : null;
+  const leitorComprovante = config.openaiApiKey ? criarLeitorComprovanteOpenAi(config.openaiApiKey, config.openaiTextoModel || 'gpt-4.1-mini') : null;
+  infraEmissaoConta = montarInfraEmissaoConta({
+    pool,
+    chaveCriptografia: config.encryptionKey,
+    pepper: config.appPepper,
+    permitirProducao: false,
+    obterAtendimentosAgenda: async (contaId, inicioIso, fimIso) => {
+      const r = await consultarAgendaConta({ contaId, filtro: { dataInicio: inicioIso, dataFim: fimIso } });
+      return r.ok && !r.emAndamento ? r.resumo.atendimentos : [];
+    },
+    obterAtendimentosDetalhados: async (contaId, inicioIso, fimIso) => {
+      const agora = new Date();
+      const hojeIso = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(agora);
+      const padrao = await cofres.statusAgendas(cofreIdDaConta(contaId));
+      if (padrao.tribemd.conectada) {
+        const r = await cofres.lerAgendaTribemdComDetalhes(cofreIdDaConta(contaId), calcularJanelaDiasConsulta(inicioIso, hojeIso), agora);
+        if (!r.ok) throw new Error(r.motivo || 'LEITURA_INDISPONIVEL');
+        return r.consultas;
+      }
+      if (padrao.amplimed.conectada) {
+        const r = await cofres.lerAgendaAmplimed(cofreIdDaConta(contaId), inicioIso, fimIso, true);
+        if (!r.ok) throw new Error(r.motivo || 'LEITURA_INDISPONIVEL');
+        return r.dias.flatMap(d => d.elegiveis.map(e => ({
+          data: e.dataHora || d.data,
+          paciente: e.paciente,
+          valorCentavos: e.valorCentavos,
+          atendimentoId: e.idExterno,
+          cpf: e.detalhe?.cpf ?? null,
+          telefone: e.detalhe?.celular ?? null
+        })));
+      }
+      return [];
+    },
+    obterDetalheTribemd: async (contaId, atendimentoId) => {
+      const d = await cofres.detalheAoVivo(cofreIdDaConta(contaId), atendimentoId).catch(() => null);
+      if (!d) return null;
+      return { nome: d.nome, cpf: d.cpf, telefone: d.contato.celular ?? d.contato.telefone ?? null, valorCentavos: d.valorCobradoCentavos };
+    },
+    enviarTextoMedico: async (contaId, tel, texto) => {
+      const ok = await enviarWhatsappAssistente(tel, texto);
+      if (ok) await memoriaConversaAgente.registrarMensagem(contaId, 'noto', texto).catch(() => false);
+      return ok;
+    },
+    enviarPdfMedico: async (contaId, tel, pdfBase64, nomeArquivo, legenda) => {
+      const r = await transporteAgente.enviarPdf({
+        instanciaNome: config.evolutionAssistantInstanceName,
+        contatoTelefone: tel,
+        pdfPathOuUrl: `data:application/pdf;base64,${pdfBase64}`,
+        nomeArquivo,
+        legenda
+      });
+      if (r.sucesso) await memoriaConversaAgente.registrarMensagem(contaId, 'noto', legenda).catch(() => false);
+      return r.sucesso;
+    },
+    enviarTextoConsultorio: async (instancia, telPaciente, texto) => {
+      const r = await evolutionClient.enviarTexto({ instanciaNome: instancia, contatoTelefone: telPaciente, texto });
+      return r.sucesso;
+    },
+    enviarPdfConsultorio: async (instancia, telPaciente, pdfBase64, nomeArquivo, legenda) => {
+      const r = await evolutionClient.enviarPdf({
+        instanciaNome: instancia,
+        contatoTelefone: telPaciente,
+        pdfPathOuUrl: `data:application/pdf;base64,${pdfBase64}`,
+        nomeArquivo,
+        legenda
+      });
+      return r.sucesso;
+    },
+    reagirMensagemMedico: (chave, emoji) => transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji),
+    baixarMidia: (inst, msgId) => evolutionClient.obterBase64MensagemMidia(inst, msgId),
+    lerComprovante: leitorComprovante ? midia => leitorComprovante.ler(midia) : undefined
+  });
+  const filtroSaidaAgente = criarFiltroSaidaHumano({ janelaDedupMs: 120_000 });
+  const blocosMemoriaRepo = new PostgresBlocosMemoriaRepositorio(pool);
+  const obterEstadoVivoConta = async (contaId: string) => {
+    const [estado, casos] = await Promise.all([
+      consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      }).catch(() => null),
+      infraEmissaoConta ? infraEmissaoConta.orquestrador.consultarEmissoesConta(contaId).catch(() => []) : Promise.resolve([])
+    ]);
+    return montarBlocoEstadoVivo(estado, casos);
+  };
+  const blocosMemoriaAgente = criarServicoBlocosMemoria({
+    repositorio: blocosMemoriaRepo,
+    obterEstadoVivo: obterEstadoVivoConta
+  });
+  const sleepTimeAgente = criarConsolidadorSleepTime({
+    blocosRepo: blocosMemoriaRepo,
+    memoriaConversa: memoriaConversaAgente,
+    obterEstadoVivo: obterEstadoVivoConta,
+    // No piloto restrito, nunca fazer chamada paga fora do ledger de orçamento.
+    consolidadorIa: config.notoPilotoRestrito !== true && config.openaiApiKey
+      ? criarConsolidadorBlocosOpenAi(config.openaiApiKey, config.openaiTextoModel || 'gpt-4.1-mini')
+      : null
+  });
+  if (process.env.NODE_ENV !== 'test' && config.workerEmbutidoAtivo !== false && config.notoPilotoRestrito !== true) {
+    const emissorCasos = new PostgresEmissorDpsService(
+      pool, config.encryptionKey, undefined, undefined, authAdminService.supabaseClient, new SefinNacionalClient(), false, true, false, false, 'homologacao'
+    );
+    iniciarWorkerCasosEmissao({
+      pool,
+      emissorDps: emissorCasos,
+      storage: authAdminService.supabaseClient,
+      permitirProducao: false,
+      aoAutorizarNota: entrada => infraEmissaoConta!.orquestrador.entregarNotaAutorizada(entrada),
+      aoFalharEmissao: async falha => {
+        const ctx = await infraEmissaoConta!.obterContextoConta(falha.contaId);
+        if (!ctx.telefoneMedico) return;
+        const erroConta = [
+          'PARAMETROS_FISCAIS_PENDENTES', 'PERFIL_FISCAL_INCOMPLETO',
+          'CERTIFICADO_AUSENTE', 'AMBIENTE_FISCAL_BLOQUEADO',
+          'SEFIN_TIMEOUT', 'SEFIN_INDISPONIVEL', 'SEFIN_HTTP_403_IIS'
+        ].includes(falha.codigoErro ?? '');
+        const cat = erroConta ? `erro_fiscal_conta:${falha.codigoErro}` : `erro_nota:${falha.casoId}`;
+        if (filtroSaidaAgente.deveSuprimirRepeticao(ctx.telefoneMedico, falha.mensagemHumana, cat)) return;
+        await enviarWhatsappAssistente(ctx.telefoneMedico, falha.mensagemHumana);
+      }
+    });
+    const motorProativoServer = criarMotorRotinaProativa({
+      pool,
+      repositorioCasos: infraEmissaoConta!.repositorio,
+      lerHorariosDoDia: async (contaId, diaIso, agora) => {
+        const padrao = await cofres.statusAgendas(cofreIdDaConta(contaId));
+        if (padrao.tribemd.conectada) {
+          const r = await cofres.lerAgendaTribemdRapida(cofreIdDaConta(contaId), 1, agora);
+          return r.ok ? (r.horariosHoje ?? []) : [];
+        }
+        if (padrao.amplimed.conectada) {
+          const r = await cofres.lerAgendaAmplimed(cofreIdDaConta(contaId), diaIso, diaIso, false);
+          if (!r.ok) return [];
+          return r.dias.flatMap(d => d.consultas
+            .filter(c => c.status !== 'cancelada' && c.status !== 'faltou')
+            .map(c => ({
+              paciente: c.paciente,
+              inicioIso: c.dataHora || `${d.data}T09:00:00-03:00`,
+              finalizado: c.status === 'realizada'
+            })));
+        }
+        return [];
+      },
+      lerFinalizadosDoDiaDetalhado: async (contaId, diaIso, agora) => {
+        const padrao = await cofres.statusAgendas(cofreIdDaConta(contaId));
+        if (padrao.tribemd.conectada) {
+          const r = await cofres.lerAgendaTribemdComDetalhes(cofreIdDaConta(contaId), 1, agora);
+          return r.ok ? r.consultas.filter(c => c.data.slice(0, 10) === diaIso) : [];
+        }
+        if (padrao.amplimed.conectada) {
+          const r = await cofres.lerAgendaAmplimed(cofreIdDaConta(contaId), diaIso, diaIso, true);
+          if (!r.ok) return [];
+          return r.dias.flatMap(d => d.elegiveis.map(e => ({
+            data: e.dataHora || d.data,
+            paciente: e.paciente,
+            valorCentavos: e.valorCentavos,
+            atendimentoId: e.idExterno,
+            cpf: e.detalhe?.cpf ?? null,
+            telefone: e.detalhe?.celular ?? null
+          })));
+        }
+        return [];
+      },
+      prepararEmissaoProativa: entrada => infraEmissaoConta!.orquestrador.prepararEmissaoPeloMedico(entrada),
+      enviarTextoMedico: async (contaId, tel, texto) => {
+        const ok = await enviarWhatsappAssistente(tel, texto);
+        if (ok) await memoriaConversaAgente.registrarMensagem(contaId, 'noto', texto).catch(() => false);
+        return ok;
+      }
+    });
+    motorProativoServer.iniciar();
+  }
   app.use('/webhook/evolution', criarRouterWebhookAgente({
     pool,
     ativo: Boolean(config.notoAgentAtivo),
@@ -373,7 +761,25 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     ...(orcamentoPiloto?{controleCusto:orcamentoPiloto}:{}),
     exigirControleCusto:Boolean(config.notoPilotoRestrito),
     tracesAtivos: config.notoAgentTracesAtivos,
-    diagnosticoAtivo: config.notoAgentDiagnosticoAtivo,
+    diagnosticoAtivo: config.notoPilotoRestrito && config.notoAgentDiagnosticoAtivo,
+    registrarDiagnostico: (registro, contaId) =>
+      registrarDiagnosticoAuditoria(pool, contaId, registro, config.notoAgentBuildRevisao ?? ''),
+    ...(config.emissaoWhatsAppPropostaAtiva && config.emissaoWhatsAppProdutor ? {
+      propostaEmissaoWhatsApp: (
+        entrada:Parameters<typeof tratarPropostaEmissaoWhatsApp>[2],
+        publicar:Parameters<typeof tratarPropostaEmissaoWhatsApp>[3]
+      )=>tratarPropostaEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,entrada,publicar),
+      enviarPropostaEmissao: async (telefone:string,texto:string)=>{
+        const resultado = await transporteAgente.enviarTexto({
+          instanciaNome:config.evolutionAssistantInstanceName,contatoTelefone:telefone,texto,linkPreview:false
+        });
+        return resultado.sucesso ? resultado.mensagemId ?? null : null;
+      }
+    } : {}),
+    ...(config.emissaoWhatsAppProdutor ? {
+      autorizarEmissaoWhatsApp: (contaId:string,texto:string,mensagemRef:string) =>
+        tratarComandoEmissaoWhatsApp(pool,config.emissaoWhatsAppProdutor!,contaId,texto,mensagemRef)
+    } : {}),
     consultarStatus: medicoId => cofres.statusAgendas(medicoId),
     consultarPanorama: (contaId, medicoIds) => consultarPanoramaFiscalDaConta(pool, contaId, medicoIds),
     ...(trabalhosHabilitados && pesquisaCrmConfigurada ? {
@@ -412,6 +818,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       }
       return consultarEntregaLink(pool,contaId,agenda);
     },
+    ...(config.notoPilotoRestrito ? { receberCodigoAmplimed: (contaId: string | null, telefone: string, texto: string) => {
+      const candidato = texto.trim();
+      if (/^\d{6}$/.test(candidato)) return true;
+      if (!/^amplimed\s+[a-f0-9]{8}(?:\s|$)/i.test(candidato)) return false;
+      if (contaId) cofres.links?.receberCodigoAmplimed(contaId, telefone, candidato);
+      return true;
+    } } : {}),
     atualizarEstadoLink: async entrada => {
       const codigo=await diagnosticarRegistroEstadoEvolution(pool,entrada,
         config.evolutionAssistantInstanceName,config.evolutionAssistantWebhookSecret);
@@ -423,60 +836,88 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         if(recibo)console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(recibo));
       }
       // Log classificado SEM ID, numero, token, URL, payload ou corpo da mensagem.
-      console.info('NOTO_RECIBO_LINK',codigo);
+      if (codigo !== 'SEM_NUMERO_PN' || Date.now() >= proximoLogSemNumeroPn) {
+        console.info('NOTO_RECIBO_LINK', codigo);
+        if (codigo === 'SEM_NUMERO_PN') proximoLogSemNumeroPn = Date.now() + 60_000;
+      }
       return codigo==='ATUALIZADO';
     },
-    descobrirProfissionais: descobrirProfissionaisConta,
-    confirmarProfissionais: async (medicoBaseId, nomes) => {
-      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CONFIRMACAO_DESLIGADA' };
-      const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
-      return resultado.ok ? { ok: true, nomes: resultado.medicos.map(m => m.nomeCompleto),
-          medicos:resultado.medicos.map(m=>({id:m.id,nome:m.nomeCompleto})) }
-        : { ok: false, motivo: resultado.motivo };
-    },
-    solicitarLinkAgenda: async (medicoId, agenda, telefone) => {
-      // A criação exige operador autenticado pela mesma conta, destino autorizado
-      // e a instância fiscal de pacientes permanece desligada.
-      const seguro = config.envioRealAllowlist?.length === 1 &&
-        gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
-      if (!seguro || !cofres.links) return { aceitoParaEnvio: false, motivo:
-        !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL' };
-      const r = contaDoCofreId(medicoId)
-        ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)
-        : await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
-      return {
-        aceitoParaEnvio: Boolean(r.ok && r.motivo === 'enviado'),
-        ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {})
-      };
-    },
-    salvarDadosProfissionais: async (medicoId, dados) => {
-      if (!config.notoPilotoRestrito) return { ok: false, motivo: 'CADASTRO_CONVERSACIONAL_DESLIGADO' };
-      try {
-        const resultado = await salvarPerfilProfissional(pool, {
-          medicoId, ...dados
-        });
-        return { ok: true, nome: resultado.nome, crm: resultado.crm, rqe: resultado.rqe };
-      } catch {
-        return { ok: false, motivo: 'DADOS_PROFISSIONAIS_NAO_GRAVADOS' };
+    ...(config.notoPilotoRestrito ? {
+      descobrirProfissionais: descobrirProfissionaisConta,
+      confirmarProfissionais: async (medicoBaseId: string, nomes: string[]) => {
+        const resultado = await confirmarMedicosDaConta(pool, medicoBaseId, nomes);
+        return resultado.ok
+          ? {
+              ok: true,
+              nomes: resultado.medicos.map(m => m.nomeCompleto),
+              medicos: resultado.medicos.map(m => ({ id: m.id, nome: m.nomeCompleto }))
+            }
+          : { ok: false, motivo: resultado.motivo };
+      },
+      solicitarLinkAgenda: async (medicoId: string, agenda: 'tribemd' | 'amplimed', telefone: string) => {
+        const seguro = config.envioRealAllowlist?.length === 1 &&
+          gerarVariantesTelefoneBrasileiro(config.envioRealAllowlist[0]!).some(v => gerarVariantesTelefoneBrasileiro(telefone).includes(v));
+        if (!seguro || !cofres.links) {
+          return {
+            aceitoParaEnvio: false,
+            motivo: !seguro ? 'ENVIO_INDISPONIVEL' : !cofres.configuracaoOk ? 'INTEGRACAO_NAO_CONFIGURADA' : 'ENVIO_INDISPONIVEL'
+          };
+        }
+        const r = contaDoCofreId(medicoId)
+          ? await cofres.solicitarLinkConta(contaDoCofreId(medicoId)!, agenda, telefone)
+          : await cofres.links.solicitarLinkCofre(medicoId, agenda, { contatoTelefone: telefone });
+        return {
+          aceitoParaEnvio: Boolean(r.ok && r.motivo === 'enviado'),
+          ...(!r.ok || r.motivo !== 'enviado' ? { motivo: String(r.motivo) } : {})
+        };
+      },
+      salvarDadosProfissionais: async (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => {
+        try {
+          const resultado = await salvarPerfilProfissional(pool, { medicoId, ...dados });
+          return { ok: true, nome: resultado.nome, crm: resultado.crm, rqe: resultado.rqe };
+        } catch {
+          return { ok: false, motivo: 'DADOS_PROFISSIONAIS_NAO_GRAVADOS' };
+        }
+      },
+      consultarProntidao: async (medicoId: string) => {
+        const status = await consultarStatusOnboarding(pool, medicoId, false);
+        return {
+          certificadoValido: status.passos.passo3CertificadoValido,
+          dadosProfissionaisCompletos: status.dadosProfissionaisCompletos && status.passos.passoProfissionalAprovado,
+          dadosFiscaisConfirmados: status.passos.passo2FiscalConfirmado,
+          liberadoParaEmitir: false
+        };
       }
-    },
-    consultarProntidao: async medicoId => {
-      const status = await consultarStatusOnboarding(pool, medicoId, false);
-      return {
-        certificadoValido: status.passos.passo3CertificadoValido,
-        dadosProfissionaisCompletos: status.dadosProfissionaisCompletos && status.passos.passoProfissionalAprovado,
-        dadosFiscaisConfirmados: status.passos.passo2FiscalConfirmado,
-        liberadoParaEmitir: false // piloto: emissão sempre desligada, independentemente do cadastro.
-      };
-    },
+    } : {}),
     persistirConversa: Boolean(config.notoPilotoRestrito),
+    memoriaConversa: memoriaConversaAgente,
+    carregarMemoriaNucleo: contaId => blocosMemoriaAgente.carregarParaPrompt(contaId),
+    dispararSleepTime: contaId => sleepTimeAgente.notificarTurno(contaId),
     marcarLida: async chave => (await transporteAgente.marcarLida({
       instanciaNome: config.evolutionAssistantInstanceName,
       contatoTelefone: chave.remoteJid.split('@')[0] ?? '',
       mensagemId: chave.id, chaveMensagem: chave
     })).sucesso,
     reagir: (chave, emoji) => transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chave, emoji),
+    reacoesSeletivas: true,
     presenca: (telefone, estado) => transporteAgente.enviarPresenca(config.evolutionAssistantInstanceName, telefone, estado),
+    serializarEnvio: (tel, fn) => filtroSaidaAgente.enfileirarEnvio(tel, fn),
+    ...(config.notoPilotoRestrito !== true ? { janelaCoalescenciaMs: 1400, mostrarOnline: true, pausaEntreBaloesMs: 350 } : {}),
+    baixarMidia: (inst, msgId) => transporteAgente.obterBase64MensagemMidia(inst, msgId),
+    ...(transcritorAudio ? { transcreverAudio: midia => transcritorAudio.transcrever(midia) } : {}),
+    ...(leitorComprovante && config.notoPilotoRestrito !== true ? {
+      lerComprovante: midia => leitorComprovante.ler(midia),
+      processarComprovanteMedico: async entrada => {
+        const r = await infraEmissaoConta!.orquestrador.processarComprovanteRecebido({
+          contaId: entrada.contaId,
+          origem: 'comprovante_medico',
+          comprovante: entrada.comprovante,
+          mensagemId: entrada.mensagemId,
+          chaveMensagemMedico: entrada.chaveMensagem
+        });
+        return r as unknown as Record<string, unknown>;
+      }
+    } : {}),
     enviar: async (telefone, texto, opcoes) => {
       const resultado = await transporteAgente.enviarTexto({
         instanciaNome: config.evolutionAssistantInstanceName, contatoTelefone: telefone, texto,
@@ -488,7 +929,75 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         console.info('NOTO_MENSAGEM_SAIDA',JSON.stringify(aceite));
       }
       return resultado.sucesso;
-    }
+    },
+    onboardingAutonomo: (contaId, telefone, chaveMensagem) => ({
+      consultarEstadoConta: () => consultarEstadoProntidaoConta({
+        pool,
+        contaId,
+        consultarAgendasPadrao: () => cofres.statusAgendas(cofreIdDaConta(contaId)),
+        consultarAgendaGenerica: () => consultarAgendaGenericaDaConta(contaId)
+      }),
+      descobrirUrlAgendaOnline: nomeAgenda => descobrirUrlAgendaOnline(nomeAgenda, { fonteBusca: fonteBuscaAgenda }),
+      enviarLinkAgendaQualquer: async entrada => {
+        if (entrada.provedor === 'tribemd' || entrada.provedor === 'amplimed') {
+          const r = await cofres.solicitarLinkConta(contaId, entrada.provedor, telefone, { apenasUrl: true });
+          return { ok: Boolean(r.ok && r.motivo === 'enviado'), motivo: String(r.motivo ?? '') };
+        }
+        if (!cofres.linksOnboarding) return { ok: false, motivo: 'COFRE_INDISPONIVEL' };
+        return cofres.linksOnboarding.criarLinkAgendaAdaptativa({
+          contaId,
+          provedor: entrada.provedor,
+          nomeAgenda: entrada.nomeAgenda,
+          urlPortal: entrada.urlPortal,
+          telefone
+        });
+      },
+      enviarLinkCadastroProfissionais: () =>
+        cofres.linksOnboarding
+          ? cofres.linksOnboarding.criarLinkCadastroProfissionais({ contaId, telefone })
+          : Promise.resolve({ ok: false, motivo: 'COFRE_INDISPONIVEL' }),
+      enviarLinkCertificadoIndividual: medicoId =>
+        cofres.linksOnboarding
+          ? cofres.linksOnboarding.criarLinkCertificadoProfissional({ contaId, medicoId, telefone })
+          : Promise.resolve({ ok: false, motivo: 'COFRE_INDISPONIVEL' }),
+      enviarLinkXmlIndividual: medicoId =>
+        cofres.linksOnboarding
+          ? cofres.linksOnboarding.criarLinkXmlProfissional({ contaId, medicoId, telefone })
+          : Promise.resolve({ ok: false, motivo: 'COFRE_INDISPONIVEL' }),
+      reconsultarDadosFiscaisCertificado: medicoId => reconsultarFiscalPeloCertificadoSalvo(depsCertificadoCofre, { contaId, medicoId }),
+      salvarPreferenciasEmissao: (atualizacao, falaMedico) => salvarPreferenciasEmissaoConta(pool, contaId, atualizacao, falaMedico),
+      buscarMemoriaConversa: entrada => memoriaConversaAgente.buscar({ contaId, ...entrada }),
+      atualizarMemoriaNucleo: entrada => blocosMemoriaAgente.atualizarPeloAgente(contaId, entrada),
+      consultarAgendaAtendimentos: filtro => consultarAgendaConta({
+        contaId,
+        filtro,
+        aoConcluirAssincrono: async (texto, sucesso) => {
+          for (const balao of separarBaloes(texto)) {
+            await enviarWhatsappAssistente(telefone, balao);
+          }
+          await memoriaConversaAgente.registrarMensagem(contaId, 'noto', texto).catch(() => false);
+          if (sucesso && chaveMensagem) {
+            await transporteAgente.reagirMensagem(config.evolutionAssistantInstanceName, chaveMensagem, '✅').catch(() => false);
+          }
+        }
+      }),
+      ...(config.notoPilotoRestrito !== true && infraEmissaoConta ? {
+        prepararEmissaoNota: entrada => infraEmissaoConta!.orquestrador.prepararEmissaoPeloMedico({
+          contaId,
+          ...entrada,
+          chaveMensagemMedico: chaveMensagem ?? null
+        }),
+        prepararEmissaoPeriodoAgenda: entrada => infraEmissaoConta!.prepararEmissaoPeriodoComEspera({
+          contaId,
+          telefoneMedico: telefone,
+          ...entrada,
+          chaveMensagemMedico: chaveMensagem ?? null
+        }),
+        confirmarOuCancelarEmissao: entrada => infraEmissaoConta!.orquestrador.confirmarOuCancelarEmissao({ contaId, ...entrada }),
+        vincularPagadorSecundario: entrada => infraEmissaoConta!.orquestrador.vincularPagadorSecundario({ contaId, ...entrada }),
+        consultarEmissoesConta: () => infraEmissaoConta!.orquestrador.consultarEmissoesConta(contaId)
+      } : {})
+    })
   }));
 
   const cadastroCertificado = new CadastroCertificado(new PostgresCadastro(pool), criarConsultaEmpresa(config.hubDesenvolvedorToken), consultaRegistro,
@@ -504,8 +1013,6 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
     }, 5000);
     timer.unref();
   }
-
-  const adnNfseClient = new AdnNfseClient();
 
   const aoConectarWhatsapp = async (medicoId: string) => {
     const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
@@ -827,10 +1334,10 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
       console.info('[ADN] Busca de referência concluída:', consulta.resumo);
       const fiscal = await processarOnboardingXml({
         pool, supabase: authAdminService.supabaseClient,
-        documentoTitularEsperado: titular.documentoTitular, chaveCriptografia: config.encryptionKey, pepperCpf: config.appPepper
+        documentoTitularEsperado: titular.documentoTitular, chaveCriptografia: config.encryptionKey, ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
       },
         medicoId, consulta.documento.xml);
-      const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
+      const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
         medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
       return res.json({ ...fiscal, medicoId, fonte: 'adn', nsu: consulta.documento.nsu, adocaoFiscal });
@@ -858,7 +1365,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           documentoTitularEsperado,
           supabase: authAdminService.supabaseClient,
           chaveCriptografia: config.encryptionKey,
-          pepperCpf: config.appPepper
+          ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
         },
         medicoId,
         xmlString
@@ -889,6 +1396,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const { medicoId } = medicoAutorizado(res);
+      const {contaPilotoHomologacao}=escopoFiscalPiloto(medicoId);
       await confirmarParametrosFiscais(pool, usarReferencia === true ? { medicoId, referenciaHash, usarReferencia: true } : {
         medicoId,
         razaoSocial,
@@ -900,7 +1408,7 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         parametrosEmissao,
         referenciaHash,
         usarReferencia: usarReferencia === true
-      });
+      }, ...(contaPilotoHomologacao?[contaPilotoHomologacao] as const:[]));
 
       return res.json({ ok: true, mensagem: 'Parâmetros fiscais confirmados com sucesso', medicoId });
     } catch (err: any) {
@@ -920,23 +1428,19 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
   // Passo 2: Certificado A1 + importacao automatica da ultima NFS-e pelo ADN
   app.post('/api/onboarding/certificado', async (req: Request, res: Response) => {
     try {
-      const { medicoId: medicoIdRaw, arquivoBase64, nomeArquivo, senha, consentimentoFiscal } = req.body || {};
-      if (consentimentoFiscal !== undefined && consentimentoFiscal !== versaoConsentimentoFiscal) {
+      const { medicoId: medicoIdRaw, arquivoBase64, senha, consentimentoFiscal } = req.body || {};
+      if (consentimentoFiscal !== versaoConsentimentoFiscal) {
         return res.status(400).json({ ok: false, detalhe: 'Atualize a página antes de continuar com o certificado.' });
       }
       if (!medicoIdRaw || !arquivoBase64 || !senha) {
         return res.status(400).json({ ok: false, detalhe: 'medicoId, arquivo e senha são obrigatórios' });
       }
-      const { medicoId } = medicoAutorizado(res);
+      const { medicoId, usuarioId } = medicoAutorizado(res);
       const arquivoBuffer = Buffer.from(arquivoBase64, 'base64');
 
-      let documentoTitular: string | undefined;
+      let certificado: ReturnType<typeof extrairChavesCertificado>;
       try {
-        const certificado = extrairChavesCertificado(arquivoBuffer, senha);
-        if (certificado.validoAte && certificado.validoAte.getTime() < Date.now()) {
-          return res.status(400).json({ ok: false, detalhe: 'O certificado A1 informado esta vencido.' });
-        }
-        documentoTitular = certificado.documentoTitular;
+        certificado = extrairChavesCertificado(arquivoBuffer, senha);
       } catch (err: any) {
         return res.status(400).json({
           ok: false,
@@ -944,19 +1448,24 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       }
 
+      const { validoDe, validoAte, documentoTitular } = certificado;
+      const agora = Date.now();
+      if (!validoDe || !validoAte || !Number.isFinite(validoDe.getTime()) || !Number.isFinite(validoAte.getTime())) {
+        return res.status(400).json({ ok: false, detalhe: 'Não consegui verificar as datas do certificado A1.' });
+      }
+      if (validoDe.getTime() > agora || validoAte.getTime() <= agora) {
+        return res.status(400).json({ ok: false, detalhe: 'O certificado A1 está fora do período de validade.' });
+      }
+
       const resultado = await salvarCertificadoMedico(pool, authAdminService.supabaseClient, {
         medicoId,
         arquivoBuffer,
-        nomeArquivoOriginal: nomeArquivo || 'certificado.pfx',
+        usuarioId, validoDe, validoAte,
         senhaCertificado: senha
       });
 
       await cadastroCertificado.agendar({medicoId, certificadoId:resultado.certificadoId, documentoTitular}).catch(() =>
         console.warn('[Cadastro automático]', {codigo:'AGENDAMENTO_FALHOU'}));
-
-      if (consentimentoFiscal === versaoConsentimentoFiscal) {
-        await registrarConsentimentoFiscal(pool, medicoId, resultado.certificadoId);
-      }
 
       try {
         if (!documentoTitular) {
@@ -970,13 +1479,13 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
             documentoTitularEsperado: documentoTitular,
             supabase: authAdminService.supabaseClient,
             chaveCriptografia: config.encryptionKey,
-            pepperCpf: config.appPepper
+            ...escopoFiscalPiloto(medicoId), pepperCpf: config.appPepper
           },
           medicoId,
           consulta.documento.xml
         );
 
-        const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva) },
+        const adocaoFiscal = await adotarReferenciaConsentida({ pool, preparacaoFiscalAtiva: Boolean(config.preparacaoFiscalAtiva), ...escopoFiscalPiloto(medicoId) },
           medicoId, fiscal.parametros.dadosReformaTributaria.hash);
 
         return res.json({
@@ -1004,8 +1513,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         });
       }
     } catch (err: any) {
-      console.error('Erro ao salvar certificado:', err);
-      return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao processar certificado digital' });
+      console.error('Erro ao salvar certificado:', { codigo: err?.code, mensagem: err?.message });
+      return res.status(500).json({ ok: false, detalhe: 'Não foi possível salvar o certificado. Tente novamente.' });
     }
   });
 
@@ -1026,6 +1535,8 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(503).json({ ok: false, detalhe: 'APP_PUBLIC_ORIGIN HTTPS é obrigatório para pareamento.' });
       }
 
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await conectarInstanciaWhatsappMedico(pool, {
         medicoId,
         telefoneConsultorio,
@@ -1042,7 +1553,9 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
           medicoId, modoConexao: modoConexao || 'codigo', diagnostico: resultado.diagnostico
         });
       }
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      return res.json({ ...resultado, medicoId, revisaoAntesDaConsulta, revisaoCodigo: resultado.pairingCode
+        ? revisaoPareamento(resultado.nomeInstancia, resultado.pairingCode) : undefined });
     } catch (err: any) {
       console.error('Erro ao iniciar conexão WhatsApp:', err);
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao conectar WhatsApp' });
@@ -1057,14 +1570,22 @@ export function criarAppExpress(opcoes: { enviadorOtpEmail?: EnviarOtpEmail } = 
         return res.status(400).json({ ok: false, detalhe: 'medicoId é obrigatório' });
       }
       const { medicoId } = medicoAutorizado(res);
+      const nomeInstancia = `medico_${medicoId.replace(/-/g, '').slice(0, 12)}`;
+      const revisaoAntesDaConsulta = revisoesPareamento.get(nomeInstancia);
       const resultado = await consultarStatusInstanciaWhatsapp(pool, {
+        consultarCodigo: req.query['consultarCodigo'] === '1',
         medicoId,
         evolutionUrl: config.evolutionApiUrl,
         evolutionApiKey: config.evolutionGlobalApiKey,
         aoConectar: aoConectarWhatsapp
       });
 
-      return res.json({ ...resultado, medicoId });
+      res.setHeader('Cache-Control', 'no-store');
+      const revisaoCodigo = resultado.pairingCode
+        ? revisaoPareamento(nomeInstancia, resultado.pairingCode)
+        : resultado.state === 'connecting' ? revisoesPareamento.get(nomeInstancia) : undefined;
+      return res.json({ ...resultado, medicoId, revisaoCodigo,
+        revisaoAntesDaConsulta: resultado.pairingCode ? revisaoAntesDaConsulta : undefined });
     } catch (err: any) {
       return res.status(500).json({ ok: false, detalhe: err?.message || 'Erro ao consultar status do WhatsApp' });
     }

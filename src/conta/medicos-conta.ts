@@ -23,6 +23,7 @@ export async function listarMedicosDaConta(pool: pg.Pool, medicoId: string): Pro
       exists(
         select 1 from medico_certificados c
         where c.medico_id=m.id and c.status='ativo'
+          and (c.valido_de is null or c.valido_de <= current_date)
           and (c.valido_ate is null or c.valido_ate >= current_date)
       ) as certificado_valido
     from medicos m
@@ -116,7 +117,8 @@ export async function confirmarMedicosDaConta(
       const {rows}=await client.query(`
         select m.id,m.nome_completo,m.crm,
           exists(select 1 from medico_certificados c where c.medico_id=m.id and c.status='ativo'
-            and (c.valido_ate is null or c.valido_ate>=current_date)) as certificado_valido
+            and (c.valido_de is null or c.valido_de <= current_date)
+          and (c.valido_ate is null or c.valido_ate>=current_date)) as certificado_valido
         from medicos m where m.conta_id=$1 order by m.nome_completo,m.id
       `,[base.conta_id]);
       const correspondentes=rows.filter(m=>normalizarNomeMedico(String(m.nome_completo??''))===chave);

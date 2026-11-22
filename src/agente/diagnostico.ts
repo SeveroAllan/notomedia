@@ -1,6 +1,7 @@
+import type pg from 'pg';
 import { createHmac } from 'node:crypto';
 
-export type FerramentaNoto = 'continuar_onboarding' | 'registrar_periodo_conferencia' | 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'revisar_registro_profissional' | 'solicitar_link_seguro_registro' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas';
+export type FerramentaNoto = 'continuar_onboarding' | 'registrar_periodo_conferencia' | 'consultar_contexto_conta' | 'consultar_status_agendas' | 'orientar_conexao_agenda' | 'descobrir_profissionais_agenda' | 'solicitar_link_seguro_agenda' | 'consultar_status_entrega_link_agenda' | 'consultar_prontidao_onboarding' | 'orientar_certificado_seguro' | 'confirmar_profissionais_descobertos' | 'confirmar_dados_profissionais' | 'revisar_registro_profissional' | 'solicitar_link_seguro_registro' | 'consultar_panorama_operacional' | 'conferir_atendimentos_e_notas' | 'consultar_estado_onboarding_conta' | 'preparar_link_agenda_inteligente' | 'enviar_link_cadastro_profissionais' | 'enviar_link_certificado_profissional' | 'reconsultar_dados_fiscais_certificado' | 'salvar_preferencias_emissao' | 'buscar_memoria_conversa' | 'atualizar_memoria_nucleo' | 'consultar_agenda_atendimentos' | 'preparar_emissao_nota' | 'preparar_emissao_periodo_agenda' | 'confirmar_ou_cancelar_emissao' | 'vincular_pagador_secundario' | 'consultar_emissoes_conta';
 export type CodigoFerramenta =
   | 'CONTINUIDADE_SEM_ACAO' | 'CONTINUIDADE_PROCESSADA' | 'PERIODO_REGISTRADO' | 'CONTA_AUTORIZADA' | 'CONTA_NAO_ENCONTRADA'
   | 'STATUS_CONECTADO' | 'STATUS_NAO_CONECTADO' | 'STATUS_PARCIAL'
@@ -9,7 +10,10 @@ export type CodigoFerramenta =
   | 'DEPENDENCIA_PROFISSIONAL' | 'CONEXAO_EXISTENTE'
   | 'CONEXAO_PENDENTE' | 'FERRAMENTA_INDISPONIVEL' | 'PROFISSIONAIS_ENCONTRADOS'
   | 'SEM_DESCOBERTA' | 'OUTRA_AGENDA' | 'ALVO_AMBIGUO' | 'NOME_NAO_COMPROVADO'
-  | 'NAO_AUTORIZOU' | 'ESCLARECIMENTO' | 'LINK_ACEITO_PARA_ENVIO' | 'ENTREGA_CONSULTADA' | 'LINK_ENTREGUE' | 'LINK_LIDO' | 'PRONTIDAO_VERIFICADA' | 'CERTIFICADO_EXISTENTE' | 'CERTIFICADO_PENDENTE' | 'PROFISSIONAIS_CONFIRMADOS' | 'DEPENDENCIA_CONFIRMACAO' | 'DADOS_PROFISSIONAIS_SALVOS' | 'PANORAMA_FISCAL_CONSULTADO' | 'PANORAMA_FISCAL_INDISPONIVEL' | 'CONFERENCIA_REALIZADA' | 'CONFERENCIA_PENDENTE' | 'TRABALHO_REGISTRADO' | 'TRABALHO_INDISPONIVEL';
+  | 'NAO_AUTORIZOU' | 'ESCLARECIMENTO' | 'LINK_ACEITO_PARA_ENVIO' | 'ENTREGA_CONSULTADA' | 'LINK_ENTREGUE' | 'LINK_LIDO' | 'PRONTIDAO_VERIFICADA' | 'CERTIFICADO_EXISTENTE' | 'CERTIFICADO_PENDENTE' | 'PROFISSIONAIS_CONFIRMADOS' | 'AGENDA_RECUSADA' | 'AGENDA_FORA_DO_FOCO' | 'DEPENDENCIA_CONFIRMACAO' | 'DADOS_PROFISSIONAIS_SALVOS' | 'PANORAMA_FISCAL_CONSULTADO' | 'PANORAMA_FISCAL_INDISPONIVEL' | 'CONFERENCIA_REALIZADA' | 'CONFERENCIA_PENDENTE' | 'TRABALHO_REGISTRADO' | 'TRABALHO_INDISPONIVEL'
+  | 'ONBOARDING_CONSULTADO' | 'URL_AGENDA_NAO_ENCONTRADA' | 'PREFERENCIAS_SALVAS' | 'MEMORIA_CONSULTADA' | 'MEMORIA_NUCLEO_ATUALIZADA' | 'AGENDA_ATENDIMENTOS_CONSULTADOS' | 'AGENDA_LEITURA_INICIADA'
+  | 'EMISSAO_PREPARADA' | 'EMISSAO_ENFILEIRADA' | 'EMISSAO_PENDENTE_DADOS' | 'EMISSAO_PENDENTE_A1' | 'EMISSAO_CANCELADA' | 'EMISSOES_CONSULTADAS' | 'PAGADOR_SECUNDARIO_SALVO'
+  | 'FISCAL_IMPORTADO_ADN' | 'FISCAL_ADN_NAO_ENCONTRADO';
 export type CodigoExecucao = 'FALA_FORA_CONTRATO' | 'PERIODO_SEM_FERRAMENTA' | 'RESPOSTA_POR_ESTADO' | 'RESPOSTA' | 'CREDENCIAL_BLOQUEADA'
   | 'SEM_MODELO' | 'LIMITE_PROFISSIONAIS' | 'FALLBACK_MODELO' | 'SEM_RESPOSTA' | 'ENTRADA_VAZIA' | 'RESPOSTA_BLOQUEADA' | 'CONFIRMACAO_SEM_FERRAMENTA';
 
@@ -28,8 +32,12 @@ export interface DiagnosticoAgente {
     tokensTotal: number | null;
   };
   duracaoMs: number;
+  rejeicaoPeriodo?: {
+    motivo: 'INTERVALO_OU_MULTIPLAS_DATAS'|'DATA_NAO_IDENTIFICADA'|'DATA_INVALIDA'|'DATA_FUTURA'|'ANO_NECESSARIO_PARA_SUBSTITUIR'|
+      'MULTIPLOS_ANOS'|'DATA_NEGADA'|'DATA_SEM_ESCOPO_CLARO'|'ANO_DIVERGENTE';
+  };
   contratoFala?:'VALIDO'|'INVALIDO';
-  rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO';
+  rejeicaoFala?:'JSON_INVALIDO'|'FORMATO_INVALIDO'|'FATOS_DIVERGENTES'|'ACOES_DIVERGENTES'|'FATOS_E_ACOES_DIVERGENTES'|'RUNNER_INTERROMPIDO'|'AFIRMACAO_SEM_EVIDENCIA';
   continuidade?:{
     intencoes:string[];
     camposConfirmados:('crm'|'rqe')[];
@@ -79,4 +87,18 @@ export function referenciaDiagnostica(segredo: string, tipo: 'mensagem' | 'respo
 
 export function semUso(): DiagnosticoAgente['uso'] {
   return { requisicoes: null, tokensEntrada: null, tokensSaida: null, tokensTotal: null };
+}
+
+export async function registrarDiagnosticoAuditoria(
+  pool: Pick<pg.Pool,'query'>, contaId:string, registro:DiagnosticoMensagem, revisao:string
+):Promise<void>{
+  const {codigo,ferramentas,uso,contratoFala,rejeicaoFala}=registro.agente;
+  const {requisicoes,tokensEntrada,tokensSaida,tokensTotal}=uso;
+  await pool.query(`insert into public.auditoria (conta_id,evento,dados)
+    values ($1,'noto_agent_execucao',$2::jsonb)`,[contaId,JSON.stringify({
+    codigo,ferramentas:ferramentas.map(({nome,codigo,duracaoMs})=>({nome,codigo,duracaoMs})),
+    uso:{requisicoes,tokensEntrada,tokensSaida,tokensTotal},contratoFala,rejeicaoFala,
+    mensagemRef:registro.mensagemRef,respostaRef:registro.respostaRef,
+    revisao:/^[a-f0-9]{7,64}$/i.test(revisao)?revisao:'desconhecido'
+  })]);
 }

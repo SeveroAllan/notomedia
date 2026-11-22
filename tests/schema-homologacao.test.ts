@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { expect, it } from 'vitest';
+import { registrarConsentimentoFiscal } from '../src/onboarding/fluxos/consentimento-fiscal.js';
 import { consultarStatusOnboarding } from '../src/onboarding/io/consultar-status-onboarding.js';
 import { codigoSeguroFalhaReady } from '../src/http/diagnostico-ready.js';
 import { enviarBoasVindasAposPareamento } from '../src/agente/boas-vindas-pareamento.js';
@@ -11,6 +12,9 @@ const sql = readFileSync(fileURLToPath(new URL(
   '../scripts/migrations/20261101-homologacao-onboarding-schema-reconcile.sql',
   import.meta.url
 )), 'utf8');
+
+const fiscal = readFileSync(new URL('../scripts/migrations/noto-intelligence-02-fiscal-protegido.sql', import.meta.url), 'utf8');
+const auditoria = fiscal.slice(fiscal.indexOf('CREATE TABLE public.auditoria'), fiscal.indexOf('CREATE INDEX auditoria_conta'));
 
 it('diagnostico de readiness nunca mostra mensagens ou credenciais', () => {
   expect(codigoSeguroFalhaReady({ code: '42703', message: 'postgres://usuario:senha@banco' })).toBe('42703');
@@ -37,16 +41,19 @@ testarBanco('migração reconcilia estado mínimo do Supabase novo, sem inferir 
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN
           CREATE ROLE service_role; END IF;
       END $$;
+      CREATE TABLE public.contas (id uuid PRIMARY KEY);
       CREATE TABLE public.usuarios (
         id uuid PRIMARY KEY, nome text, telefone text, email text, ativo boolean DEFAULT true
       );
+      ${auditoria}
       CREATE TABLE public.medicos (
         id uuid PRIMARY KEY, usuario_id uuid REFERENCES public.usuarios(id),
         nome_completo text NOT NULL, crm text, rqe text, especialidade text
       );
       CREATE TABLE public.medico_certificados (
         id uuid PRIMARY KEY, medico_id uuid REFERENCES public.medicos(id),
-        status text, criado_em timestamptz DEFAULT now()
+        status text, valido_de date, valido_ate date NOT NULL,
+        criado_em timestamptz DEFAULT now()
       );
       CREATE TABLE public.medico_perfil_fiscal (
         medico_id uuid PRIMARY KEY REFERENCES public.medicos(id),
@@ -138,7 +145,6 @@ testarBanco('boas-vindas: aplica migration duas vezes e disputa atomicamente no 
   const pool = new pg.Pool({ connectionString: url, max: 4 });
   try {
     await pool.query(`
-      CREATE TABLE public.contas (id uuid PRIMARY KEY);
       ALTER TABLE public.usuarios ADD COLUMN conta_id uuid REFERENCES public.contas(id);
       ALTER TABLE public.usuarios ADD COLUMN auth_user_id uuid;
       ALTER TABLE public.medicos ADD COLUMN conta_id uuid REFERENCES public.contas(id);
@@ -164,6 +170,16 @@ testarBanco('boas-vindas: aplica migration duas vezes e disputa atomicamente no 
     const porConta=await consultarStatusOnboarding(pool,alice);
     expect(porConta).toMatchObject({medicoId:alice,usuarioId:null,nomeUsuario:'Alice Castro Menezes Xavier',
       crm:null,rqe:null,liberadoParaEmitir:false,passos:{passo3CertificadoValido:false,passoProfissionalAprovado:false}});
+    const certificado='00000000-0000-4000-8000-000000000098';
+    await pool.query(`insert into medico_certificados (id,medico_id,status,valido_de,valido_ate)
+      values ($1,$2,'ativo',current_date-1,current_date+1)`,[certificado,alice]);
+    const prontidao=async()=>(await consultarStatusOnboarding(pool,alice)).passos.passo3CertificadoValido;
+    expect(await prontidao()).toBe(false);
+    await registrarConsentimentoFiscal(pool,alice,certificado,'00000000-0000-4000-8000-000000000010');
+    // Este fixture não possui A1 ou prova de titularidade: o passo mede consentimento e vigência.
+    expect(await prontidao()).toBe(true);
+    await pool.query("delete from auditoria where dados->>'certificadoId'=$1",[certificado]);
+    await pool.query('delete from medico_certificados where id=$1',[certificado]);
     await pool.query('delete from medicos where id=$1',[alice]);
     await pool.query(sqlBoasVindas);
     await pool.query(sqlBoasVindas);

@@ -177,8 +177,9 @@ function renderizarGrade3x3(
   const dataApenas = dataEmissao.slice(0, 10).split('-').reverse().join('/');
 
   // Linha 1
+  const competenciaFmt = formatarCompetencia(options.competencia) || dataApenas;
   desenharCelula(ctx, ctx.marginX, rY, cW3, rowH, 'NÚMERO DA NFS-e', options.numero || '1', true);
-  desenharCelula(ctx, ctx.marginX + cW3, rY, cW3, rowH, 'COMPETÊNCIA DA NFS-e', options.competencia || dataApenas);
+  desenharCelula(ctx, ctx.marginX + cW3, rY, cW3, rowH, 'COMPETÊNCIA DA NFS-e', competenciaFmt);
   desenharCelula(ctx, ctx.marginX + cW3 * 2, rY, cW3, rowH, 'DATA E HORA DA EMISSÃO DA NFS-e', dataFmt);
 
   // Linha 2
@@ -189,10 +190,21 @@ function renderizarGrade3x3(
 
   // Linha 3
   rY -= rowH;
-  const situacao = options.cancelada ? 'CANCELADA' : (options.prestador?.simplesNacional ? 'NFS-e MEI' : 'EMITIDA COM SUCESSO');
+  const situacao = options.cancelada
+    ? 'CANCELADA'
+    : options.contingenciaHomologacao
+      ? 'HOMOLOGAÇÃO (CONTINGÊNCIA)'
+      : 'EMITIDA COM SUCESSO';
   desenharCelula(ctx, ctx.marginX, rY, cW3, 21, 'EMITENTE DA NFS-e', 'Prestador', false);
   desenharCelula(ctx, ctx.marginX + cW3, rY, cW3, 21, 'SITUAÇÃO DA NFS-e', situacao, true);
-  desenharCelula(ctx, ctx.marginX + cW3 * 2, rY, cW3, 21, 'FINALIDADE', '-');
+  desenharCelula(ctx, ctx.marginX + cW3 * 2, rY, cW3, 21, 'FINALIDADE', options.finalidade || 'NFS-e Regular');
+}
+
+function formatarCompetencia(competencia?: string): string {
+  if (!competencia) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(competencia)) return competencia.split('-').reverse().join('/');
+  if (/^\d{4}-\d{2}$/.test(competencia)) return `${competencia.slice(5, 7)}/${competencia.slice(0, 4)}`;
+  return competencia;
 }
 
 function formatarDataHora(isoString: string): string {

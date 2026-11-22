@@ -8,6 +8,8 @@ RUN npm ci --omit=dev
 COPY tsconfig.json ./
 COPY agent.md ./agent.md
 COPY onboarding-noto.md ./onboarding-noto.md
+COPY bloco-ferramentas.md ./bloco-ferramentas.md
+COPY contrato-continuar-onboarding.md ./contrato-continuar-onboarding.md
 COPY .agents/skills/noto-acesso-agendas/SKILL.md ./.agents/skills/noto-acesso-agendas/SKILL.md
 COPY src ./src
 ENV PORT=3000

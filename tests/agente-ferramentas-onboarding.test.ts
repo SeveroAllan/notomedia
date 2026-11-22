@@ -35,14 +35,13 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
   it('acesso salvo sem conexão confirmada não inicia descoberta nem apresenta lista falsa',async()=>{
     const modelo=new ScriptedModel([
       [functionCall('descobrir_profissionais_agenda',{agenda:'tribemd',profissional:'Alice'},{callId:'acesso-salvo'})],
-      [assistantMessage('Há acesso salvo, mas não confirmei a conexão. Vou orientar o próximo passo seguro.')]
     ]);
     const descobrirProfissionais=vi.fn();
     const diagnostico=vi.fn();
     const resposta=await responderAgente({texto:'Pode listar quem está na TribeMD da Alice?',profissionais},
       {modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(acessoSalvo),descobrirProfissionais,aoDiagnostico:diagnostico});
     expect(descobrirProfissionais).not.toHaveBeenCalled();
-    expect(resposta).toContain('não confirmei');
+    expect(resposta).toContain('A conexão com a agenda caiu');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('CONEXAO_PENDENTE');
     modelo.assertComplete();
   });
@@ -75,7 +74,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     },{modeloTeste:modelo,consultarStatus:vi.fn().mockResolvedValue(acessoSalvo),
       solicitarLinkAgenda,aoDiagnostico:diagnostico});
     expect(solicitarLinkAgenda).toHaveBeenCalledExactlyOnceWith('m1','amplimed');
-    expect(resposta).toContain('link seguro');
+    expect(resposta).toContain('A verificação da agenda começa ali.');
     expect(diagnostico.mock.calls[0][0].ferramentas[0].codigo).toBe('LINK_ACEITO_PARA_ENVIO');
     modelo.assertComplete();
   });
@@ -120,7 +119,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     modelo.assertComplete();
   });
 
-  it('período informado define escopo, não ausência de notas, e continua no certificado sem cobrar CRM',async()=>{
+  it('período informado define escopo, não ausência de notas, sem abrir certificado nem cobrar CRM',async()=>{
     const modelo=new ScriptedModel([[functionCall('registrar_periodo_conferencia',{
       decisao:'definir',inicio:'2026-11-01'
     },{callId:'periodo'})]]);
@@ -135,11 +134,11 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
     expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('registrar_periodo_conferencia');
     expect(modelo.calls).toHaveLength(1);
     expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
-    expect(consultarProntidao).toHaveBeenCalledExactlyOnceWith('m1');
+    expect(consultarProntidao).not.toHaveBeenCalled();
     expect(resposta).toContain('período solicitado');
     expect(resposta).toContain('01/11/2026');
-    expect(resposta).toContain('Ainda não consultei atendimentos ou notas');
-    expect(resposta).toContain('etapa=certificado');
+    expect(resposta).toContain('Qual agenda devo conferir?');
+    expect(resposta).not.toContain('etapa=certificado');
     expect(resposta).not.toMatch(/não emite|não emitiu|parou de emitir|Quer que eu siga com a confirmação|36948/);
     expect(JSON.stringify(modelo.calls[0]!.request.input)).not.toContain('36948/RS');
     modelo.assertComplete();
@@ -156,19 +155,24 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
           ...(pergunta===null?{perguntaPendente:null}:{}),
           pesquisasRegistro:{m1:{nome:'Dra. Alice Silva',estado:'aguardando_confirmacao',confirmacaoAdiada:true}}}},
         {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia,aoDiagnostico:diagnostico});
-      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBe('continuar_onboarding');
+      expect(modelo.calls[0]!.request.modelSettings.toolChoice).toBeUndefined();
+      expect(modelo.calls[0]!.request.modelSettings.parallelToolCalls).toBe(false);
       expect(registrarPeriodoConferencia).toHaveBeenCalledExactlyOnceWith('m1','2026-11-01');
       expect(resposta).toContain('período solicitado');
       expect(resposta).not.toMatch(/não emite|não emitiu|confirmar.*vincul/);
       expect(diagnostico.mock.calls.at(-1)?.[0]).toMatchObject({
         estadoVinculo:{fase:'VINCULO_CONFIRMADO'},
         estadoOnboarding:{vinculoConfirmadoNaConta:true,perguntaPendente:pergunta===null?null:'AUSENTE',
-          crmAdiado:true,ferramentaPeriodoObrigatoria:false,ferramentaContinuidadeObrigatoria:true}
+          crmAdiado:true,ferramentaPeriodoObrigatoria:false,ferramentaContinuidadeObrigatoria:false}
       });
       const primeiraEntrada=modelo.calls[0]!.request.input[0];
       if(!primeiraEntrada||typeof primeiraEntrada==='string'||!('content' in primeiraEntrada))throw Error('Contexto não enviado');
       const contexto=JSON.parse(String(primeiraEntrada.content));
       expect(contexto.vinculoProfissionalVerificado).toEqual({nome:'Dra. Alice Silva',estado:'CONFIRMADO',novaConfirmacaoNecessaria:false});
+      expect(contexto.missaoOnboarding).toMatchObject({
+        objetivo:'preparar cada medico autorizado para emissao fiscal com dados verificados',
+        faseAgenda:'VINCULO_CONFIRMADO',profissionalConfirmado:'Dra. Alice Silva'
+      });
       modelo.assertComplete();
     }
   });
@@ -212,7 +216,7 @@ describe('onboarding usa ferramentas existentes apenas com evidência real',()=>
       {modeloTeste:modelo,consultarStatus:vi.fn(),registrarPeriodoConferencia:vi.fn()});
     expect(resposta).not.toMatch(/parou de emitir|precisa ser vinculada/);
     expect(resposta).toContain('período solicitado é 01/11/2026');
-    expect(resposta).toContain('verificação do certificado');
+    expect(resposta).not.toContain('Podemos seguir com a verificação do certificado?');
     modelo.assertComplete();
   });
   it('modelo sem ferramenta de período não pode transformar a data em conclusão fiscal',async()=>{

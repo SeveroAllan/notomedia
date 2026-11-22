@@ -25,9 +25,9 @@ const authId='00000000-0000-4000-8000-000000000010', token='sessao-jornada-ficti
 const senha='senha-apenas-fixture';
 const xml = (data:string, numero=12) => `<NFSe xmlns="http://www.sped.fazenda.gov.br/nfse" versao="1.01"><infNFSe><nNFSe>${numero}</nNFSe><emit><CNPJ>${documento}</CNPJ><xNome>Consultorio Ficticio Ltda</xNome><IM>123</IM><enderNac><UF>SC</UF></enderNac></emit><DPS versao="1.01"><infDPS><tpAmb>2</tpAmb><dhEmi>${data}</dhEmi><serie>1</serie><nDPS>${numero}</nDPS><dCompet>2026-10-01</dCompet><tpEmit>1</tpEmit><cLocEmi>4205407</cLocEmi><prest><CNPJ>${documento}</CNPJ><regTrib><opSimpNac>3</opSimpNac><regApTribSN>1</regApTribSN><regEspTrib>0</regEspTrib></regTrib></prest><serv><locPrest><cLocPrestacao>4205407</cLocPrestacao></locPrest><cServ><cTribNac>040101</cTribNac><xDescServ>Consulta medica</xDescServ></cServ></serv><valores><vServPrest><vServ>200.00</vServ></vServPrest><trib><tribMun><tribISSQN>1</tribISSQN><tpRetISSQN>1</tpRetISSQN></tribMun><tribFed><piscofins><CST>08</CST></piscofins></tribFed><totTrib><pTotTribSN>6.00</pTotTribSN></totTrib></trib></valores></infDPS></DPS></infNFSe></NFSe>`;
 const xmlRecente=xml('2026-10-17T12:00:00-03:00');
-function pfxFicticio() {
+function pfxFicticio(inicio = '2020-01-01') {
   const chaves=forge.pki.rsa.generateKeyPair(1024), cert=forge.pki.createCertificate();
-  cert.publicKey=chaves.publicKey;cert.serialNumber='01';cert.validity.notBefore=new Date('2020-01-01');cert.validity.notAfter=new Date('2040-01-01');
+  cert.publicKey=chaves.publicKey;cert.serialNumber='01';cert.validity.notBefore=new Date(inicio);cert.validity.notAfter=new Date('2040-01-01');
   cert.setSubject([{name:'commonName',value:`TESTE FICTICIO ${documento}`}]);cert.setIssuer(cert.subject.attributes);cert.sign(chaves.privateKey);
   return Buffer.from(forge.asn1.toDer(forge.pkcs12.toPkcs12Asn1(chaves.privateKey,[cert],senha,{algorithm:'3des'})).getBytes(),'binary');
 }
@@ -63,8 +63,12 @@ beforeEach(async()=>{
     const body=init?.body?JSON.parse(String(init.body)):{};
     if(url.pathname.includes('/message/sendButtons/')){codigo=JSON.stringify(body).match(/\b\d{6}\b/)?.[0]??'';return Response.json({key:{id:'otp-ficticio'}});}
     if(url.pathname.includes('/message/sendText/')||url.pathname.includes('/message/sendMedia/'))throw Error('ENVIO_REAL_PROIBIDO');
-    if(url.pathname==='/instance/create')return Response.json(body.qrcode?{qrcode:{base64:'cXI='}}:{pairingCode:'1234-5678'});
+    if(url.pathname==='/instance/create') {
+      if (!body.qrcode) return Response.json({instance:{state:'close'}});
+      return Response.json({qrcode:{base64:'cXI=',pairingCode:body.number ? '1234-5678' : null}});
+    }
     if(url.pathname.startsWith('/instance/connectionState/'))return Response.json({instance:{state:conectado?'open':'connecting'}});
+    if(url.pathname.startsWith('/instance/connect/'))return Response.json({pairingCode:'NEWC0DE2'});
     if(url.pathname.startsWith('/settings/set/')||url.pathname.startsWith('/webhook/set/'))return Response.json({ok:true});
     if(url.pathname.startsWith('/chat/findMessages/'))return Response.json({messages:{records:[],pages:1}});
     throw Error(`EVOLUTION_FORA_DO_CONTRATO: ${url.pathname}`);
@@ -183,6 +187,31 @@ it.each(['codigo','qrcode'] as const)('jornada OTP, WhatsApp %s antes dos dados 
   expect(rede.mock.calls.some(([url]: any[]) => String(url).includes('/instance/create'))).toBe(false);
   const parear=await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao});expect(parear.status).toBe(200);expect(parear.body.ok).toBe(true);
   expect(parear.body[modoConexao==='codigo'?'pairingCode':'qrcodeBase64']).toBe(modoConexao==='codigo'?'1234-5678':'data:image/png;base64,cXI=');
+  const criacao=rede.mock.calls.find(([url]: any[])=>String(url).endsWith('/instance/create'));
+  expect(JSON.parse(String(criacao?.[1]?.body))).toMatchObject({qrcode:true,
+    ...(modoConexao==='codigo'?{number:telefone}:{})});
+  expect(rede.mock.calls.some(([url]: any[])=>String(url).includes('/instance/connect/'))).toBe(false);
+  if (modoConexao==='codigo') {
+    expect(parear.body.qrcodeBase64).toBeNull();
+    const webhook=rede.mock.calls.find(([url]: any[])=>String(url).includes('/webhook/set/'));
+    expect(JSON.parse(String(webhook?.[1]?.body)).webhook.events).toContain('QRCODE_UPDATED');
+    const rota=`/api/onboarding/whatsapp/status?medicoId=${medicoId}`;
+    const instancia=parear.body.nomeInstancia;
+    const evento={instance:instancia,event:'qrcode.updated',data:{qrcode:{instance:instancia,pairingCode:'NEWC0DE2'}}};
+    const enviarEvento=(segredo:string)=>fetch(origem+'/webhook/evolution/pareamento',{
+      method:'POST',headers:{'Content-Type':'application/json','x-webhook-secret':segredo},body:JSON.stringify(evento)
+    });
+    expect((await enviarEvento('invalido')).status).toBe(401);
+    expect((await chamar(rota)).body.revisaoCodigo).toBeUndefined();
+    expect((await enviarEvento('ficticio')).status).toBe(204);
+    const rotacao=await chamar(rota);
+    expect(rotacao.body.revisaoCodigo).toMatch(/^[a-f0-9]{64}$/);
+    expect(rotacao.body.revisaoCodigo).not.toBe(parear.body.revisaoCodigo);
+    expect(JSON.stringify(rotacao.body)).not.toContain('NEWC0DE2');
+    expect((await chamar(rota+'&consultarCodigo=1',undefined,'token-outra-conta')).status).toBe(403);
+    expect(rede.mock.calls.some(([url]: any[])=>String(url).includes('/instance/connect/'))).toBe(false);
+    expect((await chamar(rota+'&consultarCodigo=1')).body).toMatchObject({pairingCode:'NEWC0DE2',revisaoCodigo:rotacao.body.revisaoCodigo});
+  }
   expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-invalido')).status).toBe(401);
   expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`,undefined,'token-outra-conta')).status).toBe(403);
   conectado=true;expect((await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`)).body.conectado).toBe(true);
@@ -217,13 +246,58 @@ it('ADN indisponível preserva o A1 e permite XML como alternativa; nova tentati
   expect(banco.certificados).toHaveLength(1);expect(fronteiras.adn).toHaveBeenCalledTimes(2);
 });
 
+it('não ativa A1 sem consentimento e não expõe erro SQL no upload',async()=>{
+  const medicoId=await entrar();
+  const query=banco.query.bind(banco);
+  const erro='column acao does not exist';
+  const falha=vi.spyOn(banco,'query').mockImplementation(async(sql,p)=>{
+    if(sql.includes('insert into public.auditoria'))throw new Error(erro);
+    return query(sql,p);
+  });
+  expect(await upload(medicoId)).toMatchObject({status:500,
+    body:{ok:false,detalhe:'Não foi possível salvar o certificado. Tente novamente.'}});
+  expect(banco.certificados).toHaveLength(0);
+  expect(banco.trabalhos).toHaveLength(0);
+  expect(erros).toHaveBeenCalledWith('Erro ao salvar certificado:',expect.objectContaining({mensagem:erro}));
+  falha.mockRestore();
+  expect((await upload(medicoId)).status).toBe(200);
+  expect(banco.certificados).toHaveLength(1);
+  expect(banco.trabalhos).toHaveLength(1);
+});
+
+it('recupera o upload legado ativo com caminho por UUID e sem consentimento',async()=>{
+  const medicoId=await entrar();
+  const primeiro=await upload(medicoId);
+  expect(primeiro.status).toBe(200);
+  const cert=banco.certificados[0];
+  const caminhoLegado=`certificados/${medicoId}/${cert.id}.pfx`;
+  objetos.delete('certificados/'+cert.arquivo_storage_path);
+  objetos.set('certificados/'+caminhoLegado,pfx);
+  cert.arquivo_storage_path=caminhoLegado;
+  banco.auditoria=[];
+  expect(await upload(medicoId)).toMatchObject({status:200,body:{certificadoId:cert.id,storagePath:caminhoLegado}});
+  expect(banco.certificados).toHaveLength(1);
+  expect(banco.trabalhos).toHaveLength(1);
+  expect(banco.auditoria.filter(a=>a.sql.includes('consentimento_parametros_fiscais'))).toHaveLength(1);
+});
+
+it('rejeita A1 antes de notBefore mesmo com notAfter futuro',async()=>{
+  const medicoId=await entrar();
+  const r=await chamar('/api/onboarding/certificado',{medicoId,
+    arquivoBase64:pfxFicticio('2039-01-01').toString('base64'),senha,consentimentoFiscal:'continuar-a1-v1'});
+  expect(r).toMatchObject({status:400,body:{ok:false,detalhe:'O certificado A1 está fora do período de validade.'}});
+  expect(banco.certificados).toHaveLength(0);
+});
+
 it('reenvio do A1 do mesmo titular mantém aprovação profissional e conexão já concluída',async()=>{
   const medicoId=await entrar();await upload(medicoId);await pesquisarProfissional();await aprovar();
   await chamar('/api/onboarding/whatsapp/iniciar',{medicoId,modoConexao:'codigo'});conectado=true;await chamar(`/api/onboarding/whatsapp/status?medicoId=${medicoId}`);
   const antes=(await chamar('/api/conta/cadastro/')).body.revisao;
   const reenvio=await upload(medicoId);expect(reenvio.body.ok).toBe(true);
   const depois=(await chamar('/api/conta/cadastro/')).body.revisao;
-  expect(depois.trabalhoId).not.toBe(antes.trabalhoId);expect(depois).toMatchObject({aprovado:true,nome,crm:'54321/SC',rqe:'9876',whatsappConectado:true});
+  expect(depois.trabalhoId).toBe(antes.trabalhoId);
+  expect(banco.certificados).toHaveLength(1);expect(banco.trabalhos).toHaveLength(1);
+  expect(banco.certificados[0]).toMatchObject({valido_de:'2020-01-01',valido_ate:'2040-01-01'});expect(depois).toMatchObject({aprovado:true,nome,crm:'54321/SC',rqe:'9876',whatsappConectado:true});
   expect((await chamar(`/api/onboarding/status?medicoId=${medicoId}`)).body.status.passos).toMatchObject({passoProfissionalAprovado:true,passo4WhatsappConectado:true});
 });
 

@@ -1,3 +1,4 @@
+import type { ContagensBrutasAgenda } from '../agenda/fonte-agenda.js';
 import type pg from 'pg';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import type { AgendaEscolhida } from './estado-conversa.js';
@@ -7,14 +8,21 @@ export type MotivoConferencia =
   'IDENTIDADE_INCOMPLETA' | 'REFERENCIAS_AMBIGUAS' | 'RECORTE_MUITO_GRANDE' |
   'INTEGRACAO_INDISPONIVEL' | 'AGENDA_AMBIGUA' | 'CONCILIACAO_INDISPONIVEL';
 
+export type ContagensLeituraConferencia = ContagensBrutasAgenda & {
+  realizados: number;
+  descartadosProfissional: number;
+  outrosDescartados: number;
+};
+
 export type LeituraParaConferencia =
   | { ok: true; agenda: AgendaEscolhida; totalRealizados: number;
       /** Apenas IDs de consultas verificadas do profissional, nunca dados de pacientes. */
-      referencias: string[]; semReferencia: number }
+      referencias: string[]; semReferencia: number; contagensLeitura?: ContagensLeituraConferencia }
   | { ok: false; motivo: MotivoConferencia };
 
 export type ResultadoConferencia =
-  | { ok: true; agenda: AgendaEscolhida; profissional: string; janelaDias: 30;
+  | { ok: true; agenda: AgendaEscolhida; profissional: string; janelaDias: number; inicioPeriodo?: string;
+      contagensLeitura?: ContagensLeituraConferencia;
       realizados: number; comReferencia: number; semReferencia: number;
       comVinculoConfirmado: number; comSolicitacaoVinculada: number;
       comNotaAutorizadaVinculada: number; semVinculoConfirmado: number;
@@ -37,7 +45,8 @@ function seguroInteiro(valor: unknown): number | null {
  */
 export async function conferirAgendaComFiscal(
   pool: Banco, contaId: string, medicoId: string, agenda: AgendaEscolhida,
-  lerAgenda: (medicoId: string, nome: string, agenda: AgendaEscolhida) => Promise<LeituraParaConferencia>
+  lerAgenda: (medicoId: string, nome: string, agenda: AgendaEscolhida) => Promise<LeituraParaConferencia>,
+  recorte?: {inicio:string;dias:number}
 ): Promise<ResultadoConferencia> {
   if (!contaId || !medicoId || !['tribemd', 'amplimed'].includes(agenda)) {
     return { ok: false, motivo: 'ESCOPO_NAO_CONFERIDO' };
@@ -119,7 +128,8 @@ export async function conferirAgendaComFiscal(
     }
   }
   return {
-    ok: true, agenda, profissional: nome, janelaDias: 30,
+    ok: true, agenda, profissional: nome, janelaDias: recorte?.dias ?? 30, ...(recorte ? {inicioPeriodo:recorte.inicio} : {}),
+    ...(leitura.contagensLeitura ? {contagensLeitura:leitura.contagensLeitura} : {}),
     realizados: leitura.totalRealizados, comReferencia: referencias.length,
     semReferencia: leitura.semReferencia, comVinculoConfirmado: comVinculo,
     comSolicitacaoVinculada: comSolicitacao, comNotaAutorizadaVinculada: comNota,
@@ -150,7 +160,8 @@ export function descreverConferencia(resultado: ResultadoConferencia): string {
     }
   }
   const fonte = resultado.agenda === 'tribemd' ? 'TribeMD' : 'Amplimed';
-  return 'Na ' + fonte + ', conferi os últimos 30 dias de ' + resultado.profissional + '. ' +
+  return 'Na ' + fonte + ', conferi os atendimentos de ' + resultado.profissional +
+    (resultado.inicioPeriodo ? ' desde '+resultado.inicioPeriodo.split('-').reverse().join('/') : ' nos últimos 30 dias') + '. ' +
     'Atendimentos realizados identificados: ' + resultado.realizados + '. ' +
     'Com vínculo exato e confirmado no Noto: ' + resultado.comVinculoConfirmado + '. ' +
     'Com solicitação fiscal ligada: ' + resultado.comSolicitacaoVinculada + '. ' +

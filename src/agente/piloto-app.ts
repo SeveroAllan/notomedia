@@ -2,6 +2,7 @@ import express from 'express';
 import type pg from 'pg';
 import type { Model } from '@openai/agents';
 import { criarRouterWebhookAgente, type ChaveMensagemRecebida } from './webhook.js';
+import type { ReacaoWhatsApp } from './baloes.js';
 import type { StatusFontes } from './agente.js';
 import type { DiagnosticoMensagem } from './diagnostico.js';
 
@@ -23,8 +24,8 @@ export function criarAppPilotoLeitura(deps: {
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   enviar: (telefone: string, texto: string) => Promise<boolean>;
   marcarLida?: (chave: ChaveMensagemRecebida) => Promise<boolean>;
-  reagir?: (chave: ChaveMensagemRecebida, emoji: '👍' | '❤️' | '🔎' | '👀' | '✅') => Promise<boolean>;
-  presenca?: (telefone: string, estado: 'composing' | 'paused') => Promise<boolean>;
+  reagir?: (chave: ChaveMensagemRecebida, emoji: ReacaoWhatsApp) => Promise<boolean>;
+  presenca?: (telefone: string, estado: 'available' | 'composing' | 'paused' | 'unavailable') => Promise<boolean>;
 }) {
   const app = express();
   app.disable('x-powered-by');

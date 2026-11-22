@@ -1,29 +1,42 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { Router } from 'express';
 import type pg from 'pg';
 import { z } from 'zod';
 import { gerarVariantesTelefoneBrasileiro } from '../whatsapp/variantes-telefone-brasileiro.js';
 import { responderAgente, type StatusFontes } from './agente.js';
+import type { DependenciasOnboardingAutonomo } from './ferramentas-onboarding-autonomo.js';
 import type { AgendaEscolhida, EstadoConversa } from './estado-conversa.js';
 import {
   alvoExplicito, cancelouTarefas, classificarPedidoTarefa, finalizarPedido,
   registrarPedido, selecionarConclusao, validarTarefas,
   type ComprovanteTarefa, type TarefaPendente
 } from './tarefas.js';
-import { separarBaloes, reacaoContextual } from './baloes.js';
+import {
+  ehReacaoAcaoAtiva,
+  reacaoContextual,
+  separarBaloes,
+  type ReacaoWhatsApp,
+  type TipoMidiaMensagem
+} from './baloes.js';
 import {
   registrarPeriodoConferencia,lerEstadoConversa, reservarMensagemConversa, registrarBalaoConversa,
-  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa
+  finalizarMensagemConversa, evoluirEstadoConversa, salvarEstadoConversa, escolhaAgendaExplicita
 } from './estado-conversa.js';
 import type { Model } from '@openai/agents';
 import { referenciaDiagnostica, type DiagnosticoAgente, type DiagnosticoMensagem } from './diagnostico.js';
 import { nomeProfissionalValido } from '../conta/validar-dados-emissao.js';
 import { cofreIdDaConta } from '../cofre/identidade-conta.js';
+import { contemCredencialAgenda } from '../cofre/links.js';
+import type { ServicoMemoriaConversa } from './memoria/gerenciar-memoria-conversa.js';
+import type { MemoriaNucleoPrompt } from './memoria/blocos-memoria-config.js';
 import type { ResultadoPanoramaFiscal, PanoramaFiscal } from './panorama-operacional.js';
 import type { ResultadoConferencia } from './conferencia-atendimentos.js';
 import type { PedidoTrabalhoNoto, ResultadoEnfileirar, SituacaoTrabalhoNoto } from './trabalhos-duraveis.js';
 import { registrarVinculoConversa } from './vinculo-conversa.js';
 import {recuperarDescobertaComprovada} from './descoberta-autenticada.js';
+import { resolverMidiaMensagemAgente, type ResolverMidiaDeps } from '../midia/resolver-midia-mensagem.js';
+import { criarCoalescedorMensagens } from './coalescer-mensagens.js';
+import { criarFilaTurnosConversa } from './fila-turnos-conversa.js';
 
 export interface ChaveMensagemRecebida { id: string; remoteJid: string; fromMe: boolean }
 const eventoSchema = z.object({
@@ -35,7 +48,7 @@ const eventoSchema = z.object({
     }).passthrough(),
     message: z.object({
       conversation: z.string().optional(),
-      extendedTextMessage: z.object({ text: z.string().optional() }).passthrough().optional()
+      extendedTextMessage: z.object({ text: z.string().optional(), contextInfo: z.object({stanzaId:z.string().max(200).optional()}).passthrough().optional() }).passthrough().optional()
     }).passthrough().optional()
   }).passthrough()
 }).passthrough();
@@ -63,10 +76,16 @@ export function criarRouterWebhookAgente(deps: {
   controleCusto?:pg.Pool;
   exigirControleCusto?:boolean;
   diagnosticoAtivo?: boolean;
-  registrarDiagnostico?: (registro: DiagnosticoMensagem) => void;
+  registrarDiagnostico?: (registro: DiagnosticoMensagem, contaId: string) => void | Promise<void>;
+  propostaEmissaoWhatsApp?: (
+    entrada:{contaId:string;texto:string;mensagemRef:string;conversaRef:string;citadaRef?:string},
+    publicar:(texto:string)=>Promise<string|null>
+  )=>Promise<string|null>;
+  enviarPropostaEmissao?: (telefone:string,texto:string)=>Promise<string|null>;
+  autorizarEmissaoWhatsApp?: (contaId:string, texto:string, mensagemRef:string)=>Promise<string|null>;
   consultarStatus: (medicoId: string) => Promise<StatusFontes>;
   consultarPanorama?: (contaId: string, medicoIds: string[]) => Promise<ResultadoPanoramaFiscal>;
-  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida) => Promise<ResultadoConferencia>;
+  consultarConferencia?: (contaId: string, medicoId: string, agenda: AgendaEscolhida, inicioPeriodo?:string) => Promise<ResultadoConferencia>;
   solicitarTrabalho?: (pedido: PedidoTrabalhoNoto) => Promise<ResultadoEnfileirar>;
   listarTrabalhos?: (contaId: string, telefone: string, instancia: string) => Promise<SituacaoTrabalhoNoto[]>;
   descobrirProfissionais?: (medicoId: string, agenda: AgendaEscolhida) => Promise<{ ok: boolean; nomes?: string[]; motivo?: string }>;
@@ -83,14 +102,33 @@ export function criarRouterWebhookAgente(deps: {
   salvarDadosProfissionais?: (medicoId: string, dados: { nome?: string; crm?: string; rqe?: string }) => Promise<{ ok: boolean; nome?: string; crm?: string | null; rqe?: string | null; motivo?: string }>;
   solicitarLinkAgenda?: (medicoId: string, agenda: AgendaEscolhida, telefone: string) => Promise<{ aceitoParaEnvio: boolean; motivo?: string }>;
   consultarEntregaLink?: (referencia: string, agenda: AgendaEscolhida) => Promise<{estado:string; comId:boolean; segundosDesdeAceite:number}|null>;
+  receberCodigoAmplimed?: (contaId: string | null, telefone: string, texto: string) => boolean;
   atualizarEstadoLink?: (evento:unknown) => Promise<boolean>;
   consultarProntidao?: (medicoId: string) => Promise<{ certificadoValido: boolean; dadosProfissionaisCompletos: boolean; dadosFiscaisConfirmados: boolean; liberadoParaEmitir: boolean }>;
   enviar: (telefone: string, texto: string, opcoes?:{linkPreview:false}) => Promise<boolean>;
+  /** Opcional: serializa todo o lote de balões de um turno no mesmo canal do destinatário. */
+  serializarEnvio?: <T>(telefone: string, fn: () => Promise<T>) => Promise<T>;
+  /** Opcional: agrupa mensagens curtas consecutivas do mesmo médico (ms). Padrão 0 (imediato). */
+  janelaCoalescenciaMs?: number;
+  /** Opcional: emite presença 'available' ao receber mensagem (visualização imediata, sem atraso). */
+  mostrarOnline?: boolean;
+  /** Opcional: pausa natural de digitação entre balões consecutivos (ms base). Padrão 0. */
+  pausaEntreBaloesMs?: number;
   painelUrl?: string;
   persistirConversa?: boolean;
   marcarLida?: (chave: ChaveMensagemRecebida) => Promise<boolean>;
-  reagir?: (chave: ChaveMensagemRecebida, emoji: '👍' | '❤️' | '🔎' | '👀' | '✅') => Promise<boolean>;
-  presenca?: (telefone: string, estado: 'composing' | 'paused') => Promise<boolean>;
+  reagir?: (chave: ChaveMensagemRecebida, emoji: ReacaoWhatsApp) => Promise<boolean>;
+  reacoesSeletivas?: boolean;
+  presenca?: (telefone: string, estado: 'available' | 'composing' | 'paused' | 'unavailable') => Promise<boolean>;
+  onboardingAutonomo?: (contaId: string, telefone: string, chaveMensagem?: ChaveMensagemRecebida) => DependenciasOnboardingAutonomo;
+  obterHistoricoExtra?: (contaId: string, telefone: string) => string[];
+  memoriaConversa?: ServicoMemoriaConversa;
+  carregarMemoriaNucleo?: (contaId: string) => Promise<MemoriaNucleoPrompt | null>;
+  dispararSleepTime?: (contaId: string) => void;
+  baixarMidia?: ResolverMidiaDeps['baixarMidia'];
+  transcreverAudio?: ResolverMidiaDeps['transcreverAudio'];
+  lerComprovante?: ResolverMidiaDeps['lerComprovante'];
+  processarComprovanteMedico?: ResolverMidiaDeps['processarComprovanteMedico'];
 }) {
   const router = Router();
   // Compatibilidade de testes e processo de leitura sem permissão de escrita.
@@ -99,6 +137,8 @@ export function criarRouterWebhookAgente(deps: {
   const contextoPorConta = new Map<string, string[]>();
   // Somente no piloto read-only; no modo durável o banco é a autoridade.
   const tarefasEmMemoria = new Map<string, TarefaPendente[]>();
+  const coalescedorTexto = criarCoalescedorMensagens({ janelaMs: deps.janelaCoalescenciaMs ?? 0 });
+  const filaTurnos = criarFilaTurnosConversa();
 
   // byEvents=true adiciona /messages-update. Mesmo handler autenticado
   // da rota-base, sem mudar a configuracao ativa da Evolution.
@@ -134,13 +174,42 @@ export function criarRouterWebhookAgente(deps: {
     const parsed = eventoSchema.safeParse(req.body);
     if (!parsed.success) { res.sendStatus(204); return; }
     const evento = parsed.data;
-    if (evento.instance !== deps.instancia || evento.event?.toLowerCase() !== 'messages.upsert' || evento.data.key.fromMe) {
+    if (evento.instance !== deps.instancia || evento.event?.toLowerCase().replace(/_/g, '.') !== 'messages.upsert' || evento.data.key.fromMe) {
       res.sendStatus(204); return;
     }
-    const jid = /^(\d{10,13})@s\.whatsapp\.net$/.exec(evento.data.key.remoteJid);
+    const jidBruto = String(evento.data.key.remoteJid || '');
+    const jidAlt = String((evento.data.key as Record<string, unknown>)['remoteJidAlt'] || (evento.data.key as Record<string, unknown>)['senderPn'] || '');
+    const jid = /^(\d{10,13})@s\.whatsapp\.net$/.exec(jidBruto)
+      ?? (jidBruto.endsWith('@lid') ? /^(\d{10,13})@s\.whatsapp\.net$/.exec(jidAlt) : null);
     const telefone = jid?.[1];
-    const texto = evento.data.message?.conversation || evento.data.message?.extendedTextMessage?.text || '';
-    if (!telefone || !texto.trim() || texto.length > 1500) { res.sendStatus(204); return; }
+    const msgBruta = (evento.data.message ?? {}) as Record<string, Record<string, unknown> | string | undefined>;
+    const tipoMidia: TipoMidiaMensagem = msgBruta['audioMessage'] ? 'audio'
+      : msgBruta['imageMessage'] ? 'imagem'
+      : msgBruta['documentMessage'] ? 'documento'
+      : 'texto';
+    const mimetypeHint = String(
+      (typeof msgBruta['audioMessage'] === 'object' ? msgBruta['audioMessage']?.['mimetype'] : '')
+      || (typeof msgBruta['imageMessage'] === 'object' ? msgBruta['imageMessage']?.['mimetype'] : '')
+      || (typeof msgBruta['documentMessage'] === 'object' ? msgBruta['documentMessage']?.['mimetype'] : '')
+      || ''
+    ) || undefined;
+    const nomeArquivoMidia = typeof msgBruta['documentMessage'] === 'object' && typeof msgBruta['documentMessage']?.['fileName'] === 'string'
+      ? String(msgBruta['documentMessage']['fileName'])
+      : undefined;
+    let texto = String(
+      evento.data.message?.conversation
+      || evento.data.message?.extendedTextMessage?.text
+      || (typeof msgBruta['imageMessage'] === 'object' ? msgBruta['imageMessage']?.['caption'] : '')
+      || (typeof msgBruta['documentMessage'] === 'object' ? msgBruta['documentMessage']?.['caption'] : '')
+      || ''
+    );
+    const aceitaMidiaSemTexto = Boolean(
+      deps.baixarMidia && (
+        (tipoMidia === 'audio' && deps.transcreverAudio)
+        || ((tipoMidia === 'imagem' || tipoMidia === 'documento') && deps.lerComprovante)
+      )
+    );
+    if (!telefone || (!texto.trim() && !aceitaMidiaSemTexto) || texto.length > 1500) { res.sendStatus(204); return; }
     const variantes = gerarVariantesTelefoneBrasileiro(telefone);
     if (deps.allowlist.length !== 1 ||
         !gerarVariantesTelefoneBrasileiro(deps.allowlist[0]!).some(v => variantes.includes(v))) {
@@ -181,6 +250,13 @@ export function criarRouterWebhookAgente(deps: {
       );
       if (conta.rows.length > 1) { res.sendStatus(204); return; }
       contaId = conta.rows[0]?.conta_id ?? null;
+      if (deps.receberCodigoAmplimed?.(contaId, telefone, texto)) {
+        const bruto = (req as typeof req & { rawBody?: Buffer }).rawBody;
+        bruto?.fill(0);
+        req.body = {};
+        res.sendStatus(204);
+        return;
+      }
       // Somente SELECT sem resultado é evidência de conta ausente.
       // Uma falha de consulta cai no catch e jamais é tratada como ausência.
       const medicos = contaId ? await deps.pool.query(
@@ -196,6 +272,40 @@ export function criarRouterWebhookAgente(deps: {
           res.sendStatus(200); return;
         }
         reservada = true;
+        if (deps.propostaEmissaoWhatsApp && deps.enviarPropostaEmissao) {
+          const ref = (tipo:'mensagem'|'conversa', id?:string) => createHmac('sha256',deps.segredo)
+            .update(JSON.stringify(['proposta_fiscal',tipo,evento.instance,telefone,id])).digest('hex');
+          const citada = evento.data.message?.extendedTextMessage?.contextInfo?.stanzaId;
+          const resposta = await deps.propostaEmissaoWhatsApp({
+            contaId,texto,mensagemRef:ref('mensagem',evento.data.key.id),
+            conversaRef:ref('conversa'),
+            ...(citada ? {citadaRef:ref('mensagem',citada)} : {})
+          },async textoProposta=>{
+            const id = await deps.enviarPropostaEmissao!(telefone,textoProposta);
+            return id ? ref('mensagem',id) : null;
+          });
+          if (resposta !== null) {
+            enviado = resposta === '' || await deps.enviar(telefone,resposta);
+            await finalizarMensagemConversa(deps.pool,contaId,evento.instance,evento.data.key.id,enviado);
+            res.sendStatus(enviado?200:503);
+            return;
+          }
+        }
+        if (deps.autorizarEmissaoWhatsApp) {
+          const respostaFiscal = await deps.autorizarEmissaoWhatsApp(contaId, texto,
+            referenciaDiagnostica(deps.segredo, 'mensagem', [evento.instance, evento.data.key.id, telefone]));
+          if (respostaFiscal !== null) {
+            enviado = await deps.enviar(telefone, respostaFiscal);
+            await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+            res.sendStatus(enviado ? 200 : 503);
+            return;
+          }
+        }
+        const agendaEscolhida = escolhaAgendaExplicita(texto);
+        if (agendaEscolhida && agendaEscolhida !== estado.agendaEscolhida) {
+          await salvarEstadoConversa(deps.pool, contaId, { agendaEscolhida });
+          estado = await lerEstadoConversa(deps.pool, contaId);
+        }
         // Reconciliar resultados REAIS da fila antiga (pré-correção)
         // somente da mesma conta/instância, sem usar texto anterior como
         // prova e sem consultar portal ou IA. Estado concluído não reabre.
@@ -243,19 +353,54 @@ export function criarRouterWebhookAgente(deps: {
       } else if (!deps.persistirConversa) {
         tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
       }
-      const marcar = async () => {
-        try { await deps.marcarLida?.(evento.data.key); } catch { /* Sem impacto sobre resposta. */ }
-      };
-      await marcar();
-      const emoji = reacaoContextual(texto);
-      if (emoji) {
-        try { await deps.reagir?.(evento.data.key, emoji); } catch { /* Sem impacto. */ }
+      if (deps.mostrarOnline && deps.presenca) {
+        void deps.presenca(telefone, 'available').catch(() => false);
       }
-      if (deps.presenca) {
-        digitando = true;
-        await renovarPresenca();
-        intervalo = setInterval(() => { void renovarPresenca(); }, 1500);
+      try { await deps.marcarLida?.(evento.data.key); } catch { /* Sem impacto sobre resposta. */ }
+      if (tipoMidia === 'texto' && (deps.janelaCoalescenciaMs ?? 0) > 0) {
+        const agrupado = await coalescedorTexto.aguardar(chaveContexto, texto);
+        if (!agrupado.executar) {
+          if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, true);
+          res.sendStatus(200);
+          return;
+        }
+        texto = agrupado.textoUnificado;
       }
+
+      const statusFinal = await filaTurnos.executar(chaveContexto, async aguardouAnterior => {
+        try {
+          if (aguardouAnterior && deps.persistirConversa && contaId) {
+            estado = await lerEstadoConversa(deps.pool, contaId);
+          }
+          const emoji = reacaoContextual(texto, { tipoMidia, seletiva: Boolean(deps.reacoesSeletivas) });
+          if (emoji) {
+            try { await deps.reagir?.(evento.data.key, emoji); } catch { /* Sem impacto. */ }
+          }
+          if (deps.presenca) {
+            digitando = true;
+            await renovarPresenca();
+            intervalo = setInterval(() => { void renovarPresenca(); }, 1500);
+          }
+
+          const midiaResolvida = await resolverMidiaMensagemAgente({
+            instancia: evento.instance,
+            contaId,
+            chaveMensagem: evento.data.key,
+            tipoMidia,
+            textoOriginal: texto,
+            mimetypeHint,
+            nomeArquivo: nomeArquivoMidia
+          }, deps);
+          if (midiaResolvida.respostaDiretaErro) {
+            enviado = await deps.enviar(telefone, midiaResolvida.respostaDiretaErro);
+            if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+            return enviado ? 200 : 503;
+          }
+          texto = midiaResolvida.textoEfetivo;
+          if (!texto.trim()) {
+            if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, true);
+            return 204;
+          }
 
       const urlsCertificado=new Set<string>();
       let linksCertificadoAceitos=0;
@@ -273,11 +418,40 @@ export function criarRouterWebhookAgente(deps: {
       // O agente consulta recibo pela ferramenta se houver necessidade.
       const trabalhos=contaId&&deps.listarTrabalhos
         ? await deps.listarTrabalhos(contaId,telefone,evento.instance):[];
+      const [memoriaCarregada, memoriaNucleo] = await Promise.all([
+        contaId && deps.memoriaConversa
+          ? deps.memoriaConversa.carregarContexto(contaId).catch(() => null)
+          : Promise.resolve(null),
+        contaId && deps.carregarMemoriaNucleo
+          ? deps.carregarMemoriaNucleo(contaId).catch(() => null)
+          : Promise.resolve(null)
+      ]);
+      const contextoTurnos = memoriaCarregada
+        ? memoriaCarregada.turnosCurtoPrazo
+        : [
+            ...(contaId && deps.obterHistoricoExtra ? deps.obterHistoricoExtra(contaId, telefone) : []),
+            ...(contextoPorConta.get(chaveContexto) ?? [])
+          ].slice(-8);
+      const autonomia = contaId && deps.onboardingAutonomo
+        ? deps.onboardingAutonomo(contaId, telefone, evento.data.key)
+        : undefined;
       const resposta = await responderAgente({
         texto, profissionais, semConta: !contaId, estadoConversa: estado,
         trabalhos,
+        verificacaoAgendaPendente:tarefasPendentes.some(t=>t.tipo==='verificar_agenda'&&
+          t.instancia===evento.instance&&t.remetenteRef===remetenteRef),
         painelUrl: deps.painelUrl,
-        contexto: contextoPorConta.get(chaveContexto) ?? []
+        contexto: contextoTurnos,
+        ...(memoriaNucleo ? { memoriaNucleo } : {}),
+        ...(memoriaCarregada?.resumosLongoPrazo.length
+          ? { memoriaLongoPrazo: memoriaCarregada.resumosLongoPrazo }
+          : {}),
+        ...(midiaResolvida.comprovanteRecebidoNoTurno
+          ? { comprovanteRecebidoNoTurno: midiaResolvida.comprovanteRecebidoNoTurno }
+          : {}),
+        ...(memoriaCarregada?.ultimaInteracaoEm
+          ? { ultimaInteracaoIso: memoriaCarregada.ultimaInteracaoEm }
+          : {})
       }, {
         apiKey: deps.apiKey, modeloNome: deps.modeloNome, tracesAtivos: deps.tracesAtivos,
         modeloTeste: deps.modeloTeste,controleCusto:deps.controleCusto,
@@ -327,9 +501,9 @@ export function criarRouterWebhookAgente(deps: {
           solicitarLinkRegistro:(medicoId:string,acao:'solicitar'|'consultar'|'substituir'='solicitar')=>
             deps.solicitarLinkRegistro!(contaId!,medicoId,telefone,acao,evento.data.key.id)
         }:{}),
-        ...(contaId&&deps.persistirConversa?{
-          registrarPeriodoConferencia:async(profissionalId:string,inicio:string)=>{
-            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio);
+        ...(contaId&&deps.persistirConversa&&!autonomia?.consultarAgendaAtendimentos?{
+          registrarPeriodoConferencia:async(profissionalId:string,inicio:string,substituirInicio?:string)=>{
+            const gravado=await registrarPeriodoConferencia(deps.pool,contaId!,profissionalId,inicio,substituirInicio);
             if(gravado)periodoDaMensagem=true;
             return gravado;
           }
@@ -360,30 +534,52 @@ export function criarRouterWebhookAgente(deps: {
           }
         } : {}),
         ...(contaId && deps.solicitarTrabalho ? {
-          solicitarTrabalho: (tipo, fonte, medicoId) =>
+          solicitarTrabalho: (tipo, fonte, medicoId, inicioPeriodo) =>
             deps.solicitarTrabalho!({contaId:contaId!,instancia:evento.instance,
-              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId})
+              mensagemId:evento.data.key.id,telefone,tipo,agenda:fonte,medicoId,...(inicioPeriodo?{inicioPeriodo}:{})})
         } : {}),
         ...(contaId && deps.consultarConferencia ? {
-          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida) =>
-            deps.consultarConferencia!(contaId!,medicoId,fonte),
+          consultarConferencia: (medicoId: string, fonte: AgendaEscolhida, inicioPeriodo?:string) =>
+            deps.consultarConferencia!(contaId!,medicoId,fonte,...(inicioPeriodo?[inicioPeriodo] as const:[])),
           aoConferencia: (resultado: ResultadoConferencia) => {
             if (resultado.ok) conferenciaDaMensagem.atual=resultado;
           }
+        } : {}),
+        ...(autonomia ? {
+          onboardingAutonomo: autonomia
         } : {})
       });
 
-      const baloes = separarBaloes(resposta).filter((b,i,todos)=>!urlsCertificado.has(b)||todos.indexOf(b)===i);
-      // O link real não depende da redação do modelo nem do resultado de outra ação.
-      for(const url of urlsCertificado)if(!baloes.includes(url))baloes.push(url);
+      // Envie o link antes da fala que pode orientar o usuário a abri-lo.
+      const baloes = [
+        ...urlsCertificado,
+        ...separarBaloes(resposta).filter(balao => !urlsCertificado.has(balao))
+      ];
+      if (intervalo) {
+        clearInterval(intervalo);
+        intervalo = undefined;
+      }
       enviado = baloes.length > 0;
-      for (const balao of baloes) {
-        if (deps.presenca) await renovarPresenca();
-        const linkCertificado=urlsCertificado.has(balao);
-        const ok = linkCertificado?await deps.enviar(telefone,balao,{linkPreview:false}):await deps.enviar(telefone,balao);
-        if(ok&&linkCertificado)linksCertificadoAceitos++;
-        if (!ok) { enviado = false; break; }
-        if (reservada && contaId) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
+      const enviarTodosBaloes = async () => {
+        const pausaBase = deps.pausaEntreBaloesMs ?? 0;
+        for (let i = 0; i < baloes.length; i++) {
+          const balao = baloes[i]!;
+          if (i > 0 && pausaBase > 0) {
+            void renovarPresenca();
+            const espera = Math.min(700, Math.max(250, Math.round(pausaBase * 0.5 + balao.length * 4)));
+            await new Promise(r => setTimeout(r, espera));
+          }
+          const linkCertificado=urlsCertificado.has(balao);
+          const ok = linkCertificado?await deps.enviar(telefone,balao,{linkPreview:false}):await deps.enviar(telefone,balao);
+          if(ok&&linkCertificado)linksCertificadoAceitos++;
+          if (!ok) { enviado = false; break; }
+          if (reservada && contaId) await registrarBalaoConversa(deps.pool, contaId, evento.instance, evento.data.key.id);
+        }
+      };
+      if (deps.serializarEnvio) {
+        await deps.serializarEnvio(telefone, enviarTodosBaloes);
+      } else {
+        await enviarTodosBaloes();
       }
 
       if (enviado) {
@@ -423,6 +619,16 @@ export function criarRouterWebhookAgente(deps: {
               tarefasPendentes = finalizarPedido(tarefasPendentes, concluida);
             }
           } catch { /* Falha de reação não apaga a pendência nem impede o atendimento. */ }
+        } else if (!pedidoTipo && ehReacaoAcaoAtiva(emoji) && diagnostico?.codigo === 'RESPOSTA') {
+          const concluiuAcao = diagnostico.ferramentas.some(f => [
+            'PREFERENCIAS_SALVAS', 'MEMORIA_CONSULTADA', 'AGENDA_ATENDIMENTOS_CONSULTADOS',
+            'EMISSAO_ENFILEIRADA', 'EMISSAO_PREPARADA', 'EMISSAO_CANCELADA', 'EMISSOES_CONSULTADAS', 'PAGADOR_SECUNDARIO_SALVO',
+            'LINK_ACEITO_PARA_ENVIO', 'PROFISSIONAIS_ENCONTRADOS', 'DADOS_PROFISSIONAIS_SALVOS',
+            'PANORAMA_FISCAL_CONSULTADO', 'CONFERENCIA_REALIZADA', 'PERIODO_REGISTRADO'
+          ].includes(f.codigo)) || Boolean(midiaResolvida.comprovanteRecebidoNoTurno?.['ehComprovante']);
+          if (concluiuAcao) {
+            try { await deps.reagir?.(evento.data.key, '✅'); } catch { /* Sem impacto. */ }
+          }
         }
         if (reservada && contaId) {
           // Resposta genérica NÃO é autoridade para regravar um snapshot
@@ -430,6 +636,7 @@ export function criarRouterWebhookAgente(deps: {
           // o fato diretamente; saves tardios não podem desfazer o progresso.
           const delta:EstadoConversa={...novo,tarefasPendentes};
           // A revisão é persistida pela ferramenta; snapshot antigo não a desfaz.
+          delete delta.agendaEscolhida; // A escolha é gravada antes das ferramentas.
           delete delta.pesquisasRegistro;
           delete delta.periodoConferencia;
           if(periodoDaMensagem||estado.perguntaPendente==='periodo')delete delta.perguntaPendente;
@@ -445,7 +652,23 @@ export function criarRouterWebhookAgente(deps: {
           await salvarEstadoConversa(deps.pool, contaId, delta);
         } else {
           tarefasEmMemoria.set(chaveContexto, tarefasPendentes);
-          contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), resposta.slice(0, 500)].slice(-3));
+        }
+        // Persiste memória conversacional sanitizada (curto prazo do dia + compactação progressiva).
+        if (contaId && deps.memoriaConversa) {
+          await deps.memoriaConversa.registrarMensagem(contaId, 'medico', texto).catch(() => false);
+          await deps.memoriaConversa.registrarMensagem(contaId, 'noto', resposta).catch(() => false);
+          void deps.memoriaConversa.compactarSeNecessario(contaId).catch(() => false);
+        }
+        if (contaId) {
+          deps.dispararSleepTime?.(contaId);
+        }
+        // Mantém memória curta em RAM como fallback quando o repositório durável não estiver injetado.
+        const novasTrocas = [
+          ...(!contemCredencialAgenda(texto) ? [`Médico: ${texto.slice(0, 300)}`] : []),
+          ...(!contemCredencialAgenda(resposta) ? [`Noto: ${resposta.slice(0, 400)}`] : [])
+        ];
+        if (novasTrocas.length) {
+          contextoPorConta.set(chaveContexto, [...(contextoPorConta.get(chaveContexto) ?? []), ...novasTrocas].slice(-24));
           if (contextoPorConta.size > 300) {
             const primeiro = contextoPorConta.keys().next().value;
             if (primeiro) { contextoPorConta.delete(primeiro); tarefasEmMemoria.delete(primeiro); }
@@ -462,25 +685,30 @@ export function criarRouterWebhookAgente(deps: {
           conta: contaId ? 'CADASTRADA' : 'SEM_CADASTRO', envio: enviado ? 'ENVIADO' : 'FALHOU', agente: diagnostico
         };
         try {
-          if (deps.registrarDiagnostico) deps.registrarDiagnostico(registro);
-          else console.info('[Noto Agent diagnóstico]', JSON.stringify(registro));
+          if (contaId) await deps.registrarDiagnostico?.(registro, contaId);
         } catch { /* Observabilidade não bloqueia atendimento. */ }
       }
-      if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
-      res.sendStatus(enviado ? 200 : 503);
+          if (reservada && contaId) await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, enviado);
+          return enviado ? 200 : 503;
+        } finally {
+          if (intervalo) {
+            clearInterval(intervalo);
+            intervalo = undefined;
+          }
+          if (digitando) {
+            digitando = false;
+            await presencaPendente.catch(() => {});
+            await deps.presenca?.(telefone, 'paused').catch(() => false);
+          }
+        }
+      });
+      res.sendStatus(statusFinal);
     } catch {
       // Incerto: nenhum replay automático de balões possivelmente enviados.
       if (reservada && contaId) {
         await finalizarMensagemConversa(deps.pool, contaId, evento.instance, evento.data.key.id, false).catch(() => {});
       }
       res.sendStatus(503);
-    } finally {
-      if (intervalo) clearInterval(intervalo);
-      if (digitando) {
-        digitando = false;
-        await presencaPendente.catch(() => {});
-        await deps.presenca?.(telefone, 'paused').catch(() => false);
-      }
     }
   });
   return router;
